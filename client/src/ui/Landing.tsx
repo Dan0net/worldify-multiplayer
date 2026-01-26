@@ -48,94 +48,57 @@ export function Landing({ onJoin }: LandingProps) {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-        color: '#fff',
-        zIndex: 100,
-      }}
-    >
-      <h1 style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>Worldify</h1>
-      <p style={{ fontSize: '1.2rem', opacity: 0.8, marginBottom: '1rem' }}>
+    <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-[#1a1a2e] to-[#16213e] text-white z-[100]">
+      <h1 className="text-5xl mb-2">Worldify</h1>
+      <p className="text-xl opacity-80 mb-4">
         Rapid Survival
       </p>
 
       {/* Room info display */}
-      <div
-        style={{
-          marginBottom: '1.5rem',
-          padding: '1rem 2rem',
-          background: 'rgba(255, 255, 255, 0.1)',
-          borderRadius: '8px',
-          textAlign: 'center',
-          minWidth: '200px',
-        }}
-      >
+      <div className="mb-6 py-4 px-8 bg-white/10 rounded-lg text-center min-w-[200px]">
         {roomInfo ? (
           <>
-            <div style={{ fontSize: '0.85rem', opacity: 0.7, marginBottom: '0.5rem' }}>
+            <div className="text-sm opacity-70 mb-2">
               {roomInfo.currentRoomId ? 'Current Room' : 'No Active Room'}
             </div>
             {roomInfo.currentRoomId && (
               <>
-                <div style={{ fontSize: '1.1rem', fontFamily: 'monospace', marginBottom: '0.5rem' }}>
+                <div className="text-lg font-mono mb-2">
                   {roomInfo.currentRoomId}
                 </div>
-                <div style={{ fontSize: '1rem' }}>
+                <div className="text-base">
                   {roomInfo.rooms.find(r => r.id === roomInfo.currentRoomId)?.playerCount || 0} player(s) online
                 </div>
               </>
             )}
             {!roomInfo.currentRoomId && (
-              <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>
+              <div className="text-sm opacity-80">
                 A new room will be created when you join
               </div>
             )}
           </>
         ) : (
-          <div style={{ fontSize: '0.9rem', opacity: 0.5 }}>Loading...</div>
+          <div className="text-sm opacity-50">Loading...</div>
         )}
       </div>
 
       <button
         onClick={handleJoin}
         disabled={isConnecting}
-        style={{
-          padding: '1rem 3rem',
-          fontSize: '1.2rem',
-          background: isConnecting ? '#6b7280' : '#4f46e5',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '8px',
-          cursor: isConnecting ? 'wait' : 'pointer',
-          transition: 'transform 0.1s, background 0.2s',
-          opacity: isConnecting ? 0.7 : 1,
-        }}
-        onMouseOver={(e) => !isConnecting && (e.currentTarget.style.background = '#6366f1')}
-        onMouseOut={(e) => !isConnecting && (e.currentTarget.style.background = '#4f46e5')}
+        className={`py-4 px-12 text-xl text-white border-none rounded-lg transition-all duration-100 ${
+          isConnecting
+            ? 'bg-gray-500 cursor-wait opacity-70'
+            : 'bg-indigo-600 cursor-pointer hover:bg-indigo-500'
+        }`}
       >
         {isConnecting ? 'Connecting...' : 'Join Game'}
       </button>
       {error && (
-        <p style={{ marginTop: '1rem', color: '#f87171', fontSize: '0.9rem' }}>
+        <p className="mt-4 text-red-400 text-sm">
           {error}
         </p>
       )}
-      <p
-        style={{
-          marginTop: '2rem',
-          opacity: 0.5,
-          fontSize: '0.9rem',
-          maxWidth: '400px',
-          textAlign: 'center',
-        }}
-      >
+      <p className="mt-8 opacity-50 text-sm max-w-md text-center">
         Click to capture mouse • WASD to move • Space to jump • Shift to sprint
       </p>
     </div>

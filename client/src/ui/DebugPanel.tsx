@@ -4,20 +4,7 @@ export function DebugPanel() {
   const { ping, fps, tickMs, connectionStatus, serverTick, playerCount } = useGameStore();
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: '20px',
-        left: '20px',
-        padding: '10px 15px',
-        background: 'rgba(0,0,0,0.6)',
-        color: '#0f0',
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        borderRadius: '8px',
-        zIndex: 50,
-      }}
-    >
+    <div className="fixed top-5 left-5 py-2.5 px-4 bg-black/60 text-green-500 font-mono text-xs rounded-lg z-50">
       <div>Status: {connectionStatus}</div>
       <div>Players: {playerCount}</div>
       <div>Ping: {ping}ms</div>

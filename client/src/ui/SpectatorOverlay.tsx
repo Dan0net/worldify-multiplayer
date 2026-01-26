@@ -23,37 +23,13 @@ export function SpectatorOverlay() {
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.3) 100%)',
-        zIndex: 50,
-        pointerEvents: 'none',
-      }}
-    >
+    <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/30 z-50 pointer-events-none">
       {/* Room info at top */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '20px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: '12px 24px',
-          background: 'rgba(0, 0, 0, 0.7)',
-          borderRadius: '8px',
-          color: '#fff',
-          textAlign: 'center',
-        }}
-      >
-        <div style={{ fontSize: '0.9rem', opacity: 0.7, marginBottom: '4px' }}>
+      <div className="absolute top-5 left-1/2 -translate-x-1/2 py-3 px-6 bg-black/70 rounded-lg text-white text-center">
+        <div className="text-sm opacity-70 mb-1">
           Room: {roomId}
         </div>
-        <div style={{ fontSize: '1.1rem' }}>
+        <div className="text-lg">
           {playerCount} player{playerCount !== 1 ? 's' : ''} in game
         </div>
       </div>
@@ -61,41 +37,13 @@ export function SpectatorOverlay() {
       {/* Start button */}
       <button
         onClick={handleStart}
-        style={{
-          padding: '1.5rem 4rem',
-          fontSize: '1.5rem',
-          background: '#4f46e5',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '12px',
-          cursor: 'pointer',
-          pointerEvents: 'auto',
-          boxShadow: '0 4px 20px rgba(79, 70, 229, 0.5)',
-          transition: 'transform 0.1s, background 0.2s',
-        }}
-        onMouseOver={(e) => {
-          e.currentTarget.style.background = '#6366f1';
-          e.currentTarget.style.transform = 'scale(1.05)';
-        }}
-        onMouseOut={(e) => {
-          e.currentTarget.style.background = '#4f46e5';
-          e.currentTarget.style.transform = 'scale(1)';
-        }}
+        className="py-6 px-16 text-2xl bg-indigo-600 text-white border-none rounded-xl cursor-pointer pointer-events-auto shadow-[0_4px_20px_rgba(79,70,229,0.5)] transition-all duration-100 hover:bg-indigo-500 hover:scale-105"
       >
         ▶ Start
       </button>
 
       {/* Controls hint */}
-      <p
-        style={{
-          marginTop: '2rem',
-          color: '#fff',
-          opacity: 0.7,
-          fontSize: '0.95rem',
-          textAlign: 'center',
-          maxWidth: '400px',
-        }}
-      >
+      <p className="mt-8 text-white opacity-70 text-base text-center max-w-md">
         WASD to move • Space to jump • Shift to sprint<br />
         1/2/3 for build tools • Click to place • Q/E to rotate
       </p>
