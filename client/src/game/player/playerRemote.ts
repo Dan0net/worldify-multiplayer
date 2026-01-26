@@ -18,32 +18,35 @@ export class PlayerRemote {
     this.playerId = playerId;
 
     // Create player group
+    // Note: Server sends eye position (1.6m from ground), so we offset mesh down
     this.mesh = new THREE.Group();
 
-    // Body (capsule)
-    const bodyGeo = new THREE.CapsuleGeometry(0.4, 1.2, 4, 8);
+    // Body (capsule) - total height ~1.6m (radius 0.3 * 2 + length 1.0)
+    // Centered at y=0 relative to eye, so bottom is at -0.8, top at +0.8
+    // Eye is at 1.6m, body center should be at ~0.9m, so offset = 0.9 - 1.6 = -0.7
+    const bodyGeo = new THREE.CapsuleGeometry(0.3, 1.0, 4, 8);
     const bodyMat = new THREE.MeshStandardMaterial({ 
       color: this.getPlayerColor(playerId)
     });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.position.y = 1;
+    body.position.y = -0.7; // Body center relative to eye position
     this.mesh.add(body);
 
-    // Head (sphere)
-    const headGeo = new THREE.SphereGeometry(0.25, 8, 8);
+    // Head (sphere) - at eye level
+    const headGeo = new THREE.SphereGeometry(0.2, 8, 8);
     const headMat = new THREE.MeshStandardMaterial({ 
       color: 0xffdbac // Skin tone
     });
     const head = new THREE.Mesh(headGeo, headMat);
-    head.position.y = 1.8;
+    head.position.y = 0.1; // Slightly above eye level
     this.mesh.add(head);
 
-    // Eyes direction indicator (small cube on front)
-    const eyeGeo = new THREE.BoxGeometry(0.1, 0.05, 0.05);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-    const eye = new THREE.Mesh(eyeGeo, eyeMat);
-    eye.position.set(0, 1.85, -0.25);
-    this.mesh.add(eye);
+    // Direction indicator - nose/visor sticking out front
+    const visorGeo = new THREE.BoxGeometry(0.15, 0.08, 0.15);
+    const visorMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
+    const visor = new THREE.Mesh(visorGeo, visorMat);
+    visor.position.set(0, 0.05, -0.25); // In front of head at eye level
+    this.mesh.add(visor);
   }
 
   private getPlayerColor(playerId: number): number {

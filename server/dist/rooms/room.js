@@ -1,4 +1,7 @@
 import { TERRITORY_GRID_SIZE } from '@worldify/shared';
+// Physics constants
+export const PLAYER_EYE_HEIGHT = 1.6;
+export const GROUND_LEVEL = 0;
 export function createRoom(id) {
     return {
         id,
@@ -24,10 +27,11 @@ export function createPlayerState(playerId) {
     return {
         playerId,
         x: Math.cos(angle) * radius,
-        y: 1.8, // Eye height
+        y: GROUND_LEVEL + PLAYER_EYE_HEIGHT, // Ground + eye height
         z: Math.sin(angle) * radius,
         yaw: -angle + Math.PI, // Face center
         pitch: 0,
+        velocityY: 0,
         buttons: 0,
         flags: 0,
         lastInputSeq: 0,

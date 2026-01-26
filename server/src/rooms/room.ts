@@ -1,6 +1,10 @@
 import type { WebSocket } from 'ws';
 import { TERRITORY_GRID_SIZE } from '@worldify/shared';
 
+// Physics constants
+export const PLAYER_EYE_HEIGHT = 1.6;
+export const GROUND_LEVEL = 0;
+
 /**
  * Server-side player state (authoritative)
  */
@@ -11,6 +15,7 @@ export interface PlayerState {
   z: number;
   yaw: number;
   pitch: number;
+  velocityY: number; // Vertical velocity for jump/gravity
   buttons: number;
   flags: number;
   lastInputSeq: number;
@@ -58,10 +63,11 @@ export function createPlayerState(playerId: number): PlayerState {
   return {
     playerId,
     x: Math.cos(angle) * radius,
-    y: 1.8, // Eye height
+    y: GROUND_LEVEL + PLAYER_EYE_HEIGHT, // Ground + eye height
     z: Math.sin(angle) * radius,
     yaw: -angle + Math.PI, // Face center
     pitch: 0,
+    velocityY: 0,
     buttons: 0,
     flags: 0,
     lastInputSeq: 0,

@@ -9,12 +9,12 @@ import { Controls } from './controls';
 
 export class PlayerLocal {
   // Position from server
-  public position = new THREE.Vector3(0, 1.8, 0);
+  public position = new THREE.Vector3(0, 1.6, 0);
   public yaw = 0;
   public pitch = 0;
 
   // Target position for interpolation
-  private targetPosition = new THREE.Vector3(0, 1.8, 0);
+  private targetPosition = new THREE.Vector3(0, 1.6, 0);
 
   // Velocity is not used client-side (server authoritative)
   public velocity = new THREE.Vector3();

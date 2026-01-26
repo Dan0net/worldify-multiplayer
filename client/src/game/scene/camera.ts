@@ -10,7 +10,7 @@ export function createCamera(): THREE.PerspectiveCamera {
     0.1,
     1000
   );
-  camera.position.set(0, 1.8, 0);
+  camera.position.set(0, 1.6, 0); // Eye height
   return camera;
 }
 

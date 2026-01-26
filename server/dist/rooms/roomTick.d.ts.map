@@ -1,1 +1,1 @@
-{"version":3,"file":"roomTick.d.ts","sourceRoot":"","sources":["../../src/rooms/roomTick.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAGH,OAAO,EAAE,IAAI,EAAe,MAAM,WAAW,CAAC;AAsB9C,wBAAgB,aAAa,CAAC,IAAI,EAAE,IAAI,GAAG,IAAI,CAY9C;AAED,wBAAgB,YAAY,CAAC,IAAI,EAAE,IAAI,GAAG,IAAI,CAU7C"}
+{"version":3,"file":"roomTick.d.ts","sourceRoot":"","sources":["../../src/rooms/roomTick.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAGH,OAAO,EAAE,IAAI,EAAgD,MAAM,WAAW,CAAC;AAyB/E,wBAAgB,aAAa,CAAC,IAAI,EAAE,IAAI,GAAG,IAAI,CAY9C;AAED,wBAAgB,YAAY,CAAC,IAAI,EAAE,IAAI,GAAG,IAAI,CAU7C"}

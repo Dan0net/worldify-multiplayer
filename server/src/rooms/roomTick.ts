@@ -5,7 +5,7 @@
  */
 
 import { WebSocket } from 'ws';
-import { Room, PlayerState } from './room.js';
+import { Room, PlayerState, PLAYER_EYE_HEIGHT, GROUND_LEVEL } from './room.js';
 import { 
   SERVER_TICK_HZ, 
   SNAPSHOT_HZ,
@@ -13,6 +13,7 @@ import {
   INPUT_BACKWARD,
   INPUT_LEFT,
   INPUT_RIGHT,
+  INPUT_JUMP,
   INPUT_SPRINT,
   PlayerSnapshot,
   FLAG_GROUNDED,
@@ -26,6 +27,8 @@ const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_HZ;
 // Movement constants
 const MOVE_SPEED = 5.0; // meters per second
 const SPRINT_MULTIPLIER = 1.6;
+const GRAVITY = 20.0; // meters per second squared
+const JUMP_VELOCITY = 8.0; // meters per second
 
 export function startRoomTick(room: Room): void {
   // Start game tick
@@ -68,8 +71,32 @@ function tick(room: Room): void {
 
 function processPlayerMovement(player: PlayerState, dt: number): void {
   const buttons = player.buttons;
+  const groundY = GROUND_LEVEL + PLAYER_EYE_HEIGHT;
+  
+  // Check if grounded
+  const isGrounded = player.y <= groundY + 0.01;
+  
+  // Handle jump - only if grounded and jump pressed
+  if (isGrounded && (buttons & INPUT_JUMP)) {
+    player.velocityY = JUMP_VELOCITY;
+    player.flags &= ~FLAG_GROUNDED;
+  }
+  
+  // Apply gravity
+  player.velocityY -= GRAVITY * dt;
+  player.y += player.velocityY * dt;
+  
+  // Ground collision
+  if (player.y <= groundY) {
+    player.y = groundY;
+    player.velocityY = 0;
+    player.flags |= FLAG_GROUNDED;
+  } else {
+    player.flags &= ~FLAG_GROUNDED;
+  }
   
   // Calculate movement direction relative to player yaw
+  // In Three.js: -Z is forward, +X is right
   let moveX = 0;
   let moveZ = 0;
   
@@ -84,11 +111,12 @@ function processPlayerMovement(player: PlayerState, dt: number): void {
     moveX /= length;
     moveZ /= length;
     
-    // Rotate by player yaw
+    // Rotate by player yaw to get world direction
+    // Rotation matrix: [cos, -sin; sin, cos]
     const cos = Math.cos(player.yaw);
     const sin = Math.sin(player.yaw);
-    const worldX = moveX * cos - moveZ * sin;
-    const worldZ = moveX * sin + moveZ * cos;
+    const worldX = moveX * cos + moveZ * sin;
+    const worldZ = -moveX * sin + moveZ * cos;
     
     // Apply speed
     let speed = MOVE_SPEED;
@@ -102,10 +130,6 @@ function processPlayerMovement(player: PlayerState, dt: number): void {
     player.x += worldX * speed * dt;
     player.z += worldZ * speed * dt;
   }
-  
-  // Keep player grounded for now (no jump/gravity yet)
-  player.y = 1.8;
-  player.flags |= FLAG_GROUNDED;
 }
 
 function broadcastSnapshot(room: Room): void {

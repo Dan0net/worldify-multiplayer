@@ -1,4 +1,6 @@
 import type { WebSocket } from 'ws';
+export declare const PLAYER_EYE_HEIGHT = 1.6;
+export declare const GROUND_LEVEL = 0;
 /**
  * Server-side player state (authoritative)
  */
@@ -9,6 +11,7 @@ export interface PlayerState {
     z: number;
     yaw: number;
     pitch: number;
+    velocityY: number;
     buttons: number;
     flags: number;
     lastInputSeq: number;
