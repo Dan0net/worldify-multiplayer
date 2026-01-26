@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Landing } from './ui/Landing';
 import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
+import { SpectatorOverlay } from './ui/SpectatorOverlay';
 import { useGameStore } from './state/store';
 import { createGame } from './game/createGame';
 
@@ -25,6 +26,7 @@ function App() {
       {connectionStatus === 'disconnected' && <Landing onJoin={handleJoin} />}
       {connectionStatus !== 'disconnected' && (
         <>
+          <SpectatorOverlay />
           <Hud />
           <DebugPanel />
         </>

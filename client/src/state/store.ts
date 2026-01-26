@@ -11,6 +11,9 @@ interface GameState {
   playerCount: number;
   ping: number;
 
+  // Game mode
+  isSpectating: boolean;
+
   // Build system
   selectedTool: BuildPieceType;
   lastBuildSeqSeen: number;
@@ -25,6 +28,7 @@ interface GameState {
   setRoomInfo: (roomId: string, playerId: number) => void;
   setPlayerCount: (count: number) => void;
   setPing: (ping: number) => void;
+  setIsSpectating: (spectating: boolean) => void;
   setSelectedTool: (tool: BuildPieceType) => void;
   setLastBuildSeqSeen: (seq: number) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
@@ -38,6 +42,7 @@ export const useGameStore = create<GameState>((set) => ({
   playerId: null,
   playerCount: 0,
   ping: 0,
+  isSpectating: true, // Start in spectator mode
   selectedTool: BuildPieceType.FLOOR,
   lastBuildSeqSeen: 0,
   fps: 0,
@@ -49,6 +54,7 @@ export const useGameStore = create<GameState>((set) => ({
   setRoomInfo: (roomId, playerId) => set({ roomId, playerId }),
   setPlayerCount: (count) => set({ playerCount: count }),
   setPing: (ping) => set({ ping }),
+  setIsSpectating: (spectating) => set({ isSpectating: spectating }),
   setSelectedTool: (tool) => set({ selectedTool: tool }),
   setLastBuildSeqSeen: (seq) => set({ lastBuildSeqSeen: seq }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),

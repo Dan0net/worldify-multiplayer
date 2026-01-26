@@ -30,6 +30,10 @@ class StoreBridge {
     useGameStore.getState().setSelectedTool(tool);
   }
 
+  updateIsSpectating(spectating: boolean): void {
+    useGameStore.getState().setIsSpectating(spectating);
+  }
+
   updateLastBuildSeq(seq: number): void {
     useGameStore.getState().setLastBuildSeqSeen(seq);
   }

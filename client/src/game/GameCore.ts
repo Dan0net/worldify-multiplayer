@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
-import { createCamera, getCamera, updateCameraFromPlayer } from './scene/camera';
+import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
 import { setupLighting } from './scene/lighting';
 import { storeBridge } from '../state/bridge';
 import { PlayerLocal } from './player/playerLocal';
@@ -11,6 +11,7 @@ import { onSnapshot, onBuildCommit } from '../net/decode';
 import { sendBinary, setOnReconnected, requestBuildSync } from '../net/netClient';
 import { encodeInput } from '../net/encode';
 import { CLIENT_INPUT_HZ, RoomSnapshot, BuildCommit } from '@worldify/shared';
+import { useGameStore } from '../state/store';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -18,6 +19,7 @@ export class GameCore {
   private lastTime = 0;
   private frameCount = 0;
   private fpsAccumulator = 0;
+  private elapsedTime = 0; // Total time for spectator camera animation
 
   // Player management
   private localPlayer!: PlayerLocal;
@@ -53,9 +55,11 @@ export class GameCore {
     // Create build controller
     this.buildController = new BuildController();
 
-    // Request pointer lock on canvas click
+    // Request pointer lock on canvas click (only if not spectating)
     canvas.addEventListener('click', () => {
-      controls.requestPointerLock();
+      if (!useGameStore.getState().isSpectating) {
+        controls.requestPointerLock();
+      }
     });
 
     // Register for snapshot updates
@@ -153,6 +157,7 @@ export class GameCore {
   private loop = (time: number): void => {
     const deltaMs = time - this.lastTime;
     this.lastTime = time;
+    this.elapsedTime += deltaMs / 1000; // Track total time in seconds
 
     // FPS calculation
     this.frameCount++;
@@ -164,21 +169,29 @@ export class GameCore {
       this.fpsAccumulator = 0;
     }
 
-    // Update local player (for camera)
-    this.localPlayer.update(deltaMs, controls);
+    const isSpectating = useGameStore.getState().isSpectating;
+    const camera = getCamera();
 
-    // Update remote players (interpolation)
-    for (const remote of this.remotePlayers.values()) {
-      remote.update(deltaMs);
+    if (isSpectating) {
+      // Spectator mode: orbit camera looking at game area
+      if (camera) {
+        updateSpectatorCamera(camera, deltaMs, this.elapsedTime);
+      }
+    } else {
+      // FPS mode: update player and camera
+      this.localPlayer.update(deltaMs, controls);
+      
+      // Update build preview (only in FPS mode)
+      this.buildController.update();
+
+      if (camera) {
+        updateCameraFromPlayer(camera, this.localPlayer);
+      }
     }
 
-    // Update build preview
-    this.buildController.update();
-
-    // Update camera to follow local player
-    const camera = getCamera();
-    if (camera) {
-      updateCameraFromPlayer(camera, this.localPlayer);
+    // Always update remote players (visible in both modes)
+    for (const remote of this.remotePlayers.values()) {
+      remote.update(deltaMs);
     }
 
     // Render

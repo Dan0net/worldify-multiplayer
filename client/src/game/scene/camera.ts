@@ -3,6 +3,11 @@ import type { PlayerLocal } from '../player/playerLocal';
 
 let camera: THREE.PerspectiveCamera | null = null;
 
+// Spectator camera settings
+const SPECTATOR_HEIGHT = 80;
+const SPECTATOR_DISTANCE = 40;
+const SPECTATOR_ROTATION_SPEED = 0.1; // radians per second
+
 export function createCamera(): THREE.PerspectiveCamera {
   camera = new THREE.PerspectiveCamera(
     75,
@@ -10,7 +15,9 @@ export function createCamera(): THREE.PerspectiveCamera {
     0.1,
     1000
   );
-  camera.position.set(0, 1.6, 0); // Eye height
+  // Start in spectator position
+  camera.position.set(0, SPECTATOR_HEIGHT, SPECTATOR_DISTANCE);
+  camera.lookAt(0, 0, 0);
   return camera;
 }
 
@@ -29,8 +36,26 @@ export function updateCameraFromPlayer(
   // Position camera at player eye height
   camera.position.copy(player.position);
 
-  // Reset camera rotation and apply yaw (Y) then pitch (X)
+  // Reset camera rotation completely for FPS mode
+  // Must set rotation order BEFORE setting values, and reset z to avoid roll from lookAt
   camera.rotation.order = 'YXZ';
-  camera.rotation.y = player.yaw;
-  camera.rotation.x = player.pitch;
+  camera.rotation.set(player.pitch, player.yaw, 0);
+}
+
+/**
+ * Update spectator camera - orbits around game area looking down
+ */
+export function updateSpectatorCamera(
+  camera: THREE.PerspectiveCamera,
+  _deltaMs: number,
+  elapsedTime: number
+): void {
+  // Orbit around the origin
+  const angle = elapsedTime * SPECTATOR_ROTATION_SPEED;
+  camera.position.x = Math.sin(angle) * SPECTATOR_DISTANCE;
+  camera.position.z = Math.cos(angle) * SPECTATOR_DISTANCE;
+  camera.position.y = SPECTATOR_HEIGHT;
+  
+  // Always look at center
+  camera.lookAt(0, 0, 0);
 }

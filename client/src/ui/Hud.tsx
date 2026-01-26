@@ -3,7 +3,12 @@ import { useGameStore } from '../state/store';
 import { BuildPieceType } from '@worldify/shared';
 
 export function Hud() {
-  const { playerCount, roomId, selectedTool, setSelectedTool } = useGameStore();
+  const { playerCount, roomId, selectedTool, setSelectedTool, isSpectating } = useGameStore();
+
+  // Hide HUD when spectating
+  if (isSpectating) {
+    return null;
+  }
 
   const tools = [
     { type: BuildPieceType.FLOOR, label: 'Floor', key: '1' },
