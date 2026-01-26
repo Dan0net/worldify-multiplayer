@@ -104,6 +104,21 @@ class RoomManager {
     };
   }
 
+  getRooms(): Array<{ id: string; playerCount: number }> {
+    const rooms: Array<{ id: string; playerCount: number }> = [];
+    for (const room of this.rooms.values()) {
+      rooms.push({
+        id: room.id,
+        playerCount: room.connections.size, // Active connections, not reserved spots
+      });
+    }
+    return rooms;
+  }
+
+  getCurrentRoomId(): string | null {
+    return this.currentRoomId;
+  }
+
   private createNewRoom(): string {
     const roomId = this.generateRoomId();
     const room = createRoom(roomId);

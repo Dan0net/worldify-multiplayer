@@ -1,5 +1,12 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameStore } from '../state/store';
+
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+
+interface RoomInfo {
+  currentRoomId: string | null;
+  rooms: Array<{ id: string; playerCount: number }>;
+}
 
 interface LandingProps {
   onJoin: () => void;
@@ -8,8 +15,28 @@ interface LandingProps {
 export function Landing({ onJoin }: LandingProps) {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   const [error, setError] = useState<string | null>(null);
+  const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
 
   const isConnecting = connectionStatus === 'connecting';
+
+  // Fetch room info on mount and poll every 2 seconds
+  useEffect(() => {
+    const fetchRooms = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/rooms`);
+        if (res.ok) {
+          const data = await res.json();
+          setRoomInfo(data);
+        }
+      } catch {
+        // Silently ignore fetch errors
+      }
+    };
+
+    fetchRooms();
+    const interval = setInterval(fetchRooms, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleJoin = async () => {
     setError(null);
@@ -35,9 +62,47 @@ export function Landing({ onJoin }: LandingProps) {
       }}
     >
       <h1 style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>Worldify</h1>
-      <p style={{ fontSize: '1.2rem', opacity: 0.8, marginBottom: '2rem' }}>
+      <p style={{ fontSize: '1.2rem', opacity: 0.8, marginBottom: '1rem' }}>
         Rapid Survival
       </p>
+
+      {/* Room info display */}
+      <div
+        style={{
+          marginBottom: '1.5rem',
+          padding: '1rem 2rem',
+          background: 'rgba(255, 255, 255, 0.1)',
+          borderRadius: '8px',
+          textAlign: 'center',
+          minWidth: '200px',
+        }}
+      >
+        {roomInfo ? (
+          <>
+            <div style={{ fontSize: '0.85rem', opacity: 0.7, marginBottom: '0.5rem' }}>
+              {roomInfo.currentRoomId ? 'Current Room' : 'No Active Room'}
+            </div>
+            {roomInfo.currentRoomId && (
+              <>
+                <div style={{ fontSize: '1.1rem', fontFamily: 'monospace', marginBottom: '0.5rem' }}>
+                  {roomInfo.currentRoomId}
+                </div>
+                <div style={{ fontSize: '1rem' }}>
+                  {roomInfo.rooms.find(r => r.id === roomInfo.currentRoomId)?.playerCount || 0} player(s) online
+                </div>
+              </>
+            )}
+            {!roomInfo.currentRoomId && (
+              <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>
+                A new room will be created when you join
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: '0.9rem', opacity: 0.5 }}>Loading...</div>
+        )}
+      </div>
+
       <button
         onClick={handleJoin}
         disabled={isConnecting}

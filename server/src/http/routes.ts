@@ -29,6 +29,18 @@ export function setupRoutes(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // Rooms info endpoint (for landing page)
+  if (url.pathname === '/api/rooms' && req.method === 'GET') {
+    const rooms = roomManager.getRooms();
+    const currentRoomId = roomManager.getCurrentRoomId();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      currentRoomId,
+      rooms,
+    }));
+    return;
+  }
+
   // Join endpoint
   if (url.pathname === '/api/join' && req.method === 'POST') {
     let body = '';
