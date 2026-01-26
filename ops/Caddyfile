@@ -1,0 +1,25 @@
+{
+  email admin@worldify.xyz
+}
+
+api.worldify.xyz {
+  # API routes
+  handle /api/* {
+    reverse_proxy server:8080
+  }
+
+  # WebSocket
+  handle /ws {
+    reverse_proxy server:8080
+  }
+
+  # Health check
+  handle /healthz {
+    reverse_proxy server:8080
+  }
+
+  # Default response
+  handle {
+    respond "Worldify API" 200
+  }
+}

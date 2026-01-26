@@ -1,0 +1,1 @@
+{"version":3,"file":"territory.d.ts","sourceRoot":"","sources":["../../src/protocol/territory.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,MAAM,WAAW,aAAa;IAC5B,OAAO,EAAE,MAAM,CAAC;CACjB;AAED,MAAM,WAAW,eAAe;IAC9B,KAAK,EAAE,KAAK,CAAC;QACX,KAAK,EAAE,MAAM,CAAC;QACd,KAAK,EAAE,MAAM,CAAC;QACd,OAAO,EAAE,MAAM,CAAC;KACjB,CAAC,CAAC;CACJ"}

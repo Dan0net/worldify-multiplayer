@@ -1,0 +1,29 @@
+{
+  "name": "@worldify/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./protocol/*": {
+      "types": "./dist/protocol/*.d.ts",
+      "import": "./dist/protocol/*.js"
+    },
+    "./util/*": {
+      "types": "./dist/util/*.d.ts",
+      "import": "./dist/util/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}
