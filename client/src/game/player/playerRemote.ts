@@ -21,32 +21,102 @@ export class PlayerRemote {
     // Note: Server sends eye position (1.6m from ground), so we offset mesh down
     this.mesh = new THREE.Group();
 
-    // Body (capsule) - total height ~1.6m (radius 0.3 * 2 + length 1.0)
-    // Centered at y=0 relative to eye, so bottom is at -0.8, top at +0.8
-    // Eye is at 1.6m, body center should be at ~0.9m, so offset = 0.9 - 1.6 = -0.7
-    const bodyGeo = new THREE.CapsuleGeometry(0.3, 1.0, 4, 8);
+    const playerColor = this.getPlayerColor(playerId);
+
+    // Body (rounded capsule) - friendly blob shape
+    const bodyGeo = new THREE.CapsuleGeometry(0.35, 0.8, 8, 16);
     const bodyMat = new THREE.MeshStandardMaterial({ 
-      color: this.getPlayerColor(playerId)
+      color: playerColor,
+      roughness: 0.6,
+      metalness: 0.1,
     });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.position.y = -0.7; // Body center relative to eye position
+    body.position.y = -0.65;
     this.mesh.add(body);
 
-    // Head (sphere) - at eye level
-    const headGeo = new THREE.SphereGeometry(0.2, 8, 8);
+    // Head (larger, rounder for friendly look)
+    const headGeo = new THREE.SphereGeometry(0.28, 16, 16);
     const headMat = new THREE.MeshStandardMaterial({ 
-      color: 0xffdbac // Skin tone
+      color: 0xffdbac,
+      roughness: 0.7,
+      metalness: 0,
     });
     const head = new THREE.Mesh(headGeo, headMat);
-    head.position.y = 0.1; // Slightly above eye level
+    head.position.y = 0.08;
     this.mesh.add(head);
 
-    // Direction indicator - nose/visor sticking out front
-    const visorGeo = new THREE.BoxGeometry(0.15, 0.08, 0.15);
-    const visorMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
-    const visor = new THREE.Mesh(visorGeo, visorMat);
-    visor.position.set(0, 0.05, -0.25); // In front of head at eye level
-    this.mesh.add(visor);
+    // --- Face elements ---
+    
+    // Left eye white
+    const eyeWhiteGeo = new THREE.SphereGeometry(0.07, 8, 8);
+    const eyeWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const leftEyeWhite = new THREE.Mesh(eyeWhiteGeo, eyeWhiteMat);
+    leftEyeWhite.position.set(-0.09, 0.12, -0.22);
+    leftEyeWhite.scale.z = 0.5;
+    this.mesh.add(leftEyeWhite);
+
+    // Right eye white
+    const rightEyeWhite = new THREE.Mesh(eyeWhiteGeo, eyeWhiteMat);
+    rightEyeWhite.position.set(0.09, 0.12, -0.22);
+    rightEyeWhite.scale.z = 0.5;
+    this.mesh.add(rightEyeWhite);
+
+    // Left pupil
+    const pupilGeo = new THREE.SphereGeometry(0.035, 8, 8);
+    const pupilMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
+    const leftPupil = new THREE.Mesh(pupilGeo, pupilMat);
+    leftPupil.position.set(-0.09, 0.12, -0.26);
+    this.mesh.add(leftPupil);
+
+    // Right pupil
+    const rightPupil = new THREE.Mesh(pupilGeo, pupilMat);
+    rightPupil.position.set(0.09, 0.12, -0.26);
+    this.mesh.add(rightPupil);
+
+    // Smile (curved line using torus)
+    const smileGeo = new THREE.TorusGeometry(0.08, 0.015, 8, 16, Math.PI);
+    const smileMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
+    const smile = new THREE.Mesh(smileGeo, smileMat);
+    smile.position.set(0, 0.0, -0.24);
+    smile.rotation.x = Math.PI; // Flip to make it a smile
+    smile.rotation.z = Math.PI; // Orient correctly
+    this.mesh.add(smile);
+
+    // Cheek blush (left)
+    const blushGeo = new THREE.CircleGeometry(0.04, 16);
+    const blushMat = new THREE.MeshBasicMaterial({ 
+      color: 0xffaaaa, 
+      transparent: true, 
+      opacity: 0.5 
+    });
+    const leftBlush = new THREE.Mesh(blushGeo, blushMat);
+    leftBlush.position.set(-0.18, 0.02, -0.21);
+    leftBlush.rotation.y = 0.4;
+    this.mesh.add(leftBlush);
+
+    // Cheek blush (right)
+    const rightBlush = new THREE.Mesh(blushGeo, blushMat);
+    rightBlush.position.set(0.18, 0.02, -0.21);
+    rightBlush.rotation.y = -0.4;
+    this.mesh.add(rightBlush);
+
+    // Little hat/cap in player color for personality
+    const hatGeo = new THREE.CylinderGeometry(0.15, 0.2, 0.12, 16);
+    const hatMat = new THREE.MeshStandardMaterial({ 
+      color: playerColor,
+      roughness: 0.5,
+    });
+    const hat = new THREE.Mesh(hatGeo, hatMat);
+    hat.position.set(0, 0.32, -0.02);
+    hat.rotation.x = -0.15;
+    this.mesh.add(hat);
+
+    // Hat brim
+    const brimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.03, 16);
+    const brim = new THREE.Mesh(brimGeo, hatMat);
+    brim.position.set(0, 0.26, -0.08);
+    brim.rotation.x = -0.15;
+    this.mesh.add(brim);
   }
 
   private getPlayerColor(playerId: number): number {
