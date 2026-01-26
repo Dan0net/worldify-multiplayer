@@ -6,10 +6,11 @@ import { storeBridge } from '../state/bridge';
 import { PlayerLocal } from './player/playerLocal';
 import { PlayerRemote } from './player/playerRemote';
 import { controls } from './player/controls';
-import { onSnapshot } from '../net/decode';
-import { sendBinary } from '../net/netClient';
+import { BuildController } from './world/buildController';
+import { onSnapshot, onBuildCommit } from '../net/decode';
+import { sendBinary, setOnReconnected, requestBuildSync } from '../net/netClient';
 import { encodeInput } from '../net/encode';
-import { CLIENT_INPUT_HZ, RoomSnapshot } from '@worldify/shared';
+import { CLIENT_INPUT_HZ, RoomSnapshot, BuildCommit } from '@worldify/shared';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -22,6 +23,9 @@ export class GameCore {
   private localPlayer!: PlayerLocal;
   private remotePlayers = new Map<number, PlayerRemote>();
   private localPlayerId: number | null = null;
+
+  // Build system
+  private buildController!: BuildController;
 
   // Input sending
   private inputInterval: ReturnType<typeof setInterval> | null = null;
@@ -46,6 +50,9 @@ export class GameCore {
     // Create local player
     this.localPlayer = new PlayerLocal();
 
+    // Create build controller
+    this.buildController = new BuildController();
+
     // Request pointer lock on canvas click
     canvas.addEventListener('click', () => {
       controls.requestPointerLock();
@@ -53,6 +60,12 @@ export class GameCore {
 
     // Register for snapshot updates
     onSnapshot(this.handleSnapshot);
+
+    // Register for build commits
+    onBuildCommit(this.handleBuildCommit);
+
+    // Register for reconnect events
+    setOnReconnected(this.handleReconnected);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
@@ -121,6 +134,17 @@ export class GameCore {
     }
   };
 
+  private handleBuildCommit = (commit: BuildCommit): void => {
+    this.buildController.handleBuildCommit(commit);
+  };
+
+  private handleReconnected = (): void => {
+    // Request any builds we may have missed during disconnect
+    const lastSeq = this.buildController.getLastAppliedSeq();
+    console.log(`[game] Reconnected, requesting builds since seq ${lastSeq}`);
+    requestBuildSync(lastSeq);
+  };
+
   private startLoop(): void {
     this.lastTime = performance.now();
     this.animationId = requestAnimationFrame(this.loop);
@@ -147,6 +171,9 @@ export class GameCore {
     for (const remote of this.remotePlayers.values()) {
       remote.update(deltaMs);
     }
+
+    // Update build preview
+    this.buildController.update();
 
     // Update camera to follow local player
     const camera = getCamera();
@@ -179,6 +206,9 @@ export class GameCore {
     if (this.inputInterval !== null) {
       clearInterval(this.inputInterval);
     }
+
+    // Clean up build controller
+    this.buildController.dispose();
 
     // Clean up remote players
     for (const remote of this.remotePlayers.values()) {

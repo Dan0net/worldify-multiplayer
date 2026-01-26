@@ -48,7 +48,7 @@
  * Total per commit: 8 bytes
  */
 import { ByteWriter } from '../util/bytes.js';
-import { MSG_BUILD_INTENT, MSG_BUILD_COMMIT, MSG_BUILD_SYNC } from './msgIds.js';
+import { MSG_BUILD_INTENT, MSG_BUILD_COMMIT, MSG_BUILD_SYNC, MSG_ACK_BUILD } from './msgIds.js';
 export var BuildPieceType;
 (function (BuildPieceType) {
     BuildPieceType[BuildPieceType["FLOOR"] = 0] = "FLOOR";
@@ -142,5 +142,22 @@ export function decodeBuildSync(reader) {
         });
     }
     return commits;
+}
+/**
+ * Encode ACK_BUILD to request missed builds (Client -> Server)
+ * Binary Layout:
+ * ┌─────────────┬────────┬──────────────────────────────────────────┐
+ * │ Byte Offset │ Type   │ Description                              │
+ * ├─────────────┼────────┼──────────────────────────────────────────┤
+ * │ 0           │ uint8  │ MSG_ACK_BUILD (0x04)                     │
+ * │ 1-4         │ uint32 │ Last seen build sequence                 │
+ * └─────────────┴────────┴──────────────────────────────────────────┘
+ * Total: 5 bytes
+ */
+export function encodeAckBuild(lastSeenSeq) {
+    const writer = new ByteWriter(5);
+    writer.writeUint8(MSG_ACK_BUILD);
+    writer.writeUint32(lastSeenSeq);
+    return writer.toUint8Array();
 }
 //# sourceMappingURL=build.js.map

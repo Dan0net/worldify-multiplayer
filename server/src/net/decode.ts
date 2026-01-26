@@ -6,13 +6,16 @@ import {
   MSG_JOIN,
   MSG_INPUT,
   MSG_BUILD_INTENT,
+  MSG_ACK_BUILD,
   MSG_PING,
   ByteReader,
   decodeInput,
   decodeBuildIntent,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
-import { encodePong } from './encode.js';
+import { encodePong, encodeBuildSync, encodeBuildCommit } from './encode.js';
+import { commitBuild, getBuildsSince } from '../rooms/buildLog.js';
+import { broadcast } from '../ws/wsServer.js';
 
 export function decodeMessage(roomId: string, playerId: number, data: Uint8Array): void {
   if (data.length === 0) return;
@@ -29,6 +32,9 @@ export function decodeMessage(roomId: string, playerId: number, data: Uint8Array
       break;
     case MSG_BUILD_INTENT:
       handleBuildIntent(roomId, playerId, reader);
+      break;
+    case MSG_ACK_BUILD:
+      handleAckBuild(roomId, playerId, reader);
       break;
     case MSG_PING:
       handlePing(roomId, playerId, reader);
@@ -72,11 +78,53 @@ function handleInput(roomId: string, playerId: number, reader: ByteReader): void
 function handleBuildIntent(roomId: string, playerId: number, reader: ByteReader): void {
   const intent = decodeBuildIntent(reader);
   
-  // TODO: validate placement and commit build
   const room = roomManager.getRoom(roomId);
   if (!room) return;
   
-  console.log(`[build] Player ${playerId} wants to place ${intent.pieceType} at (${intent.gridX}, ${intent.gridZ})`);
+  // Validate placement (basic bounds check)
+  if (intent.gridX < 0 || intent.gridX >= 128 || intent.gridZ < 0 || intent.gridZ >= 128) {
+    console.warn(`[build] Invalid placement from player ${playerId}: (${intent.gridX}, ${intent.gridZ})`);
+    return;
+  }
+  
+  // Validate rotation
+  if (intent.rotation < 0 || intent.rotation > 3) {
+    console.warn(`[build] Invalid rotation from player ${playerId}: ${intent.rotation}`);
+    return;
+  }
+  
+  // Commit the build
+  const commit = commitBuild(room, playerId, intent);
+  
+  // Broadcast BUILD_COMMIT to all clients in room
+  const commitData = encodeBuildCommit(commit);
+  broadcast(roomId, commitData);
+  
+  console.log(`[build] Player ${playerId} placed ${intent.pieceType} at (${intent.gridX}, ${intent.gridZ}), seq=${commit.buildSeq}`);
+}
+
+function handleAckBuild(roomId: string, playerId: number, reader: ByteReader): void {
+  // Client reports its last seen build sequence
+  const lastSeenSeq = reader.readUint32();
+  
+  const room = roomManager.getRoom(roomId);
+  if (!room) return;
+  
+  // Get builds the client hasn't seen yet
+  const missedBuilds = getBuildsSince(room, lastSeenSeq);
+  
+  if (missedBuilds.length === 0) {
+    return; // Client is up to date
+  }
+  
+  // Send BUILD_SYNC with all missed builds
+  const ws = room.connections.get(playerId);
+  if (ws) {
+    const startSeq = missedBuilds[0].buildSeq;
+    const syncData = encodeBuildSync(startSeq, missedBuilds);
+    ws.send(syncData);
+    console.log(`[build] Sent BUILD_SYNC to player ${playerId}: ${missedBuilds.length} builds from seq ${startSeq}`);
+  }
 }
 
 function handlePing(roomId: string, playerId: number, reader: ByteReader): void {

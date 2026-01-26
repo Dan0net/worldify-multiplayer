@@ -10,6 +10,7 @@ import {
   BuildIntent,
   encodeInput as sharedEncodeInput,
   encodeBuildIntent as sharedEncodeBuildIntent,
+  encodeAckBuild as sharedEncodeAckBuild,
 } from '@worldify/shared';
 
 export function encodeJoin(protocolVersion: number, playerId: number): Uint8Array {
@@ -26,6 +27,10 @@ export function encodeInput(input: MovementInput): Uint8Array {
 
 export function encodeBuildIntent(intent: BuildIntent): Uint8Array {
   return sharedEncodeBuildIntent(intent);
+}
+
+export function encodeAckBuild(lastSeenSeq: number): Uint8Array {
+  return sharedEncodeAckBuild(lastSeenSeq);
 }
 
 export function encodePing(): Uint8Array {

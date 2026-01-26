@@ -92,4 +92,16 @@ export declare function encodeBuildSync(startSeq: number, commits: BuildCommit[]
  * Decode build sync from network data
  */
 export declare function decodeBuildSync(reader: ByteReader): BuildCommit[];
+/**
+ * Encode ACK_BUILD to request missed builds (Client -> Server)
+ * Binary Layout:
+ * ┌─────────────┬────────┬──────────────────────────────────────────┐
+ * │ Byte Offset │ Type   │ Description                              │
+ * ├─────────────┼────────┼──────────────────────────────────────────┤
+ * │ 0           │ uint8  │ MSG_ACK_BUILD (0x04)                     │
+ * │ 1-4         │ uint32 │ Last seen build sequence                 │
+ * └─────────────┴────────┴──────────────────────────────────────────┘
+ * Total: 5 bytes
+ */
+export declare function encodeAckBuild(lastSeenSeq: number): Uint8Array;
 //# sourceMappingURL=build.d.ts.map

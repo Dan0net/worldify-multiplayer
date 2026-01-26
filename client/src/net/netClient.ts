@@ -5,13 +5,26 @@
 import { storeBridge } from '../state/bridge';
 import { PROTOCOL_VERSION } from '@worldify/shared';
 import { decodeMessage } from './decode';
-import { encodeJoin } from './encode';
+import { encodeJoin, encodeAckBuild } from './encode';
 
 let ws: WebSocket | null = null;
 let localPlayerId: number | null = null;
 
+// Reconnect configuration
+const RECONNECT_DELAY_MS = 2000;
+const MAX_RECONNECT_ATTEMPTS = 5;
+let reconnectAttempts = 0;
+let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// Callback for reconnect to request build sync
+let onReconnectedCallback: (() => void) | null = null;
+
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080/ws';
+
+export function setOnReconnected(callback: () => void): void {
+  onReconnectedCallback = callback;
+}
 
 export async function connectToServer(): Promise<void> {
   // First, join via HTTP
@@ -27,30 +40,99 @@ export async function connectToServer(): Promise<void> {
 
   const { roomId, playerId, token } = await response.json();
   localPlayerId = playerId;
+  reconnectAttempts = 0;
 
-  // Then connect via WebSocket
-  ws = new WebSocket(`${WS_URL}?token=${token}`);
-  ws.binaryType = 'arraybuffer';
+  await connectWebSocket(roomId, playerId, token, false);
+}
 
-  ws.onopen = () => {
-    storeBridge.updateConnectionStatus('connected');
-    storeBridge.updateRoomInfo(roomId, playerId);
-    ws?.send(encodeJoin(PROTOCOL_VERSION, playerId));
-  };
+async function connectWebSocket(
+  roomId: string,
+  playerId: number,
+  token: string,
+  isReconnect: boolean
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ws = new WebSocket(`${WS_URL}?token=${token}`);
+    ws.binaryType = 'arraybuffer';
 
-  ws.onmessage = (event) => {
-    const data = event.data as ArrayBuffer;
-    decodeMessage(new Uint8Array(data));
-  };
+    ws.onopen = () => {
+      storeBridge.updateConnectionStatus('connected');
+      storeBridge.updateRoomInfo(roomId, playerId);
+      ws?.send(encodeJoin(PROTOCOL_VERSION, playerId));
+      reconnectAttempts = 0;
+      
+      if (isReconnect && onReconnectedCallback) {
+        // Trigger build sync request
+        onReconnectedCallback();
+      }
+      
+      resolve();
+    };
 
-  ws.onclose = () => {
-    storeBridge.updateConnectionStatus('disconnected');
-    ws = null;
-  };
+    ws.onmessage = (event) => {
+      const data = event.data as ArrayBuffer;
+      decodeMessage(new Uint8Array(data));
+    };
 
-  ws.onerror = () => {
-    storeBridge.updateConnectionStatus('disconnected');
-  };
+    ws.onclose = () => {
+      storeBridge.updateConnectionStatus('disconnected');
+      ws = null;
+      
+      // Attempt reconnect
+      scheduleReconnect();
+    };
+
+    ws.onerror = () => {
+      storeBridge.updateConnectionStatus('disconnected');
+      reject(new Error('WebSocket connection failed'));
+    };
+  });
+}
+
+function scheduleReconnect(): void {
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    console.error('[net] Max reconnect attempts reached');
+    return;
+  }
+  
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+  }
+  
+  reconnectAttempts++;
+  console.log(`[net] Scheduling reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
+  
+  reconnectTimeout = setTimeout(async () => {
+    try {
+      // Get a fresh token
+      const response = await fetch(`${API_BASE}/api/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ protocolVersion: PROTOCOL_VERSION }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Reconnect join failed: ${response.status}`);
+      }
+
+      const { roomId, playerId, token } = await response.json();
+      localPlayerId = playerId;
+      
+      await connectWebSocket(roomId, playerId, token, true);
+    } catch (err) {
+      console.error('[net] Reconnect failed:', err);
+      scheduleReconnect();
+    }
+  }, RECONNECT_DELAY_MS);
+}
+
+/**
+ * Request build sync from server (called after reconnect)
+ */
+export function requestBuildSync(lastSeenSeq: number): void {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(encodeAckBuild(lastSeenSeq));
+  }
 }
 
 export function getPlayerId(): number | null {
@@ -64,6 +146,12 @@ export function sendBinary(data: ArrayBuffer | Uint8Array): void {
 }
 
 export function disconnect(): void {
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
+  
   if (ws) {
     ws.close();
     ws = null;

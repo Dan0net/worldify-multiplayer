@@ -49,7 +49,7 @@
  */
 
 import { ByteReader, ByteWriter } from '../util/bytes.js';
-import { MSG_BUILD_INTENT, MSG_BUILD_COMMIT, MSG_BUILD_SYNC } from './msgIds.js';
+import { MSG_BUILD_INTENT, MSG_BUILD_COMMIT, MSG_BUILD_SYNC, MSG_ACK_BUILD } from './msgIds.js';
 
 export enum BuildPieceType {
   FLOOR = 0,
@@ -170,4 +170,22 @@ export function decodeBuildSync(reader: ByteReader): BuildCommit[] {
   }
   
   return commits;
+}
+
+/**
+ * Encode ACK_BUILD to request missed builds (Client -> Server)
+ * Binary Layout:
+ * ┌─────────────┬────────┬──────────────────────────────────────────┐
+ * │ Byte Offset │ Type   │ Description                              │
+ * ├─────────────┼────────┼──────────────────────────────────────────┤
+ * │ 0           │ uint8  │ MSG_ACK_BUILD (0x04)                     │
+ * │ 1-4         │ uint32 │ Last seen build sequence                 │
+ * └─────────────┴────────┴──────────────────────────────────────────┘
+ * Total: 5 bytes
+ */
+export function encodeAckBuild(lastSeenSeq: number): Uint8Array {
+  const writer = new ByteWriter(5);
+  writer.writeUint8(MSG_ACK_BUILD);
+  writer.writeUint32(lastSeenSeq);
+  return writer.toUint8Array();
 }
