@@ -49,7 +49,7 @@ async function connectWebSocket(
   roomId: string,
   playerId: number,
   token: string,
-  isReconnect: boolean
+  _isReconnect: boolean
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     ws = new WebSocket(`${WS_URL}?token=${token}`);
@@ -61,8 +61,8 @@ async function connectWebSocket(
       ws?.send(encodeJoin(PROTOCOL_VERSION, playerId));
       reconnectAttempts = 0;
       
-      if (isReconnect && onReconnectedCallback) {
-        // Trigger build sync request
+      // Always request build sync (for both initial join and reconnect)
+      if (onReconnectedCallback) {
         onReconnectedCallback();
       }
       

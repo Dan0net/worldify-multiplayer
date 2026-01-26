@@ -13,11 +13,13 @@ export class BuildPieces {
     const scene = getScene();
     if (!scene) return;
 
+    // Convert grid coords back to world coords (grid 64,64 = world 0,0)
+    const GRID_OFFSET = 64;
     const mesh = this.createMesh(commit.pieceType);
     mesh.position.set(
-      commit.gridX * TERRITORY_CELL_SIZE,
+      (commit.gridX - GRID_OFFSET) * TERRITORY_CELL_SIZE,
       commit.pieceType === BuildPieceType.FLOOR ? 0.05 : 1,
-      commit.gridZ * TERRITORY_CELL_SIZE
+      (commit.gridZ - GRID_OFFSET) * TERRITORY_CELL_SIZE
     );
     mesh.rotation.y = (commit.rotation * Math.PI) / 2;
 

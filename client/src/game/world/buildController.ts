@@ -65,11 +65,13 @@ export class BuildController {
     const intersects = this.raycaster.ray.intersectPlane(this.groundPlane, this.intersectPoint);
     
     if (intersects) {
-      // Snap to grid
-      this.previewGridX = Math.floor(this.intersectPoint.x / TERRITORY_CELL_SIZE + 0.5);
-      this.previewGridZ = Math.floor(this.intersectPoint.z / TERRITORY_CELL_SIZE + 0.5);
+      // Snap to grid - offset by half grid size to center around origin
+      // World (0,0) maps to grid (64,64)
+      const GRID_OFFSET = 64;
+      this.previewGridX = Math.floor(this.intersectPoint.x / TERRITORY_CELL_SIZE + 0.5) + GRID_OFFSET;
+      this.previewGridZ = Math.floor(this.intersectPoint.z / TERRITORY_CELL_SIZE + 0.5) + GRID_OFFSET;
       
-      // Clamp to valid range
+      // Clamp to valid range (0-127)
       this.previewGridX = Math.max(0, Math.min(127, this.previewGridX));
       this.previewGridZ = Math.max(0, Math.min(127, this.previewGridZ));
       

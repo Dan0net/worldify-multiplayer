@@ -23,10 +23,12 @@ export class BuildPreview {
     }
 
     if (this.mesh) {
+      // Convert grid coords back to world coords (grid 64,64 = world 0,0)
+      const GRID_OFFSET = 64;
       this.mesh.position.set(
-        gridX * TERRITORY_CELL_SIZE,
+        (gridX - GRID_OFFSET) * TERRITORY_CELL_SIZE,
         type === BuildPieceType.FLOOR ? 0.05 : 1,
-        gridZ * TERRITORY_CELL_SIZE
+        (gridZ - GRID_OFFSET) * TERRITORY_CELL_SIZE
       );
       this.mesh.rotation.y = (rotation * Math.PI) / 2;
       this.mesh.visible = true;
