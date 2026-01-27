@@ -55,9 +55,10 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.OVH_HOST }}
-          username: deploy
+          username: ubuntu
           key: ${{ secrets.OVH_SSH_KEY }}
           script: |
             cd /opt/worldify
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            ./deploy_server.sh
+            docker compose pull
+            docker compose up -d
