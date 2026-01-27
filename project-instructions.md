@@ -325,8 +325,8 @@ Client env (dev):
 
 ### 8.1 DNS plan (worldify.xyz)
 
-- game.worldify.xyz  -> Netlify site
-- api.worldify.xyz   -> OVH VPS public IP
+- worldify-multiplayer.netlify.app  -> Netlify site
+- vps-95b38492.vps.ovh.net -> OVH VPS public IP
 - (later) assets.worldify.xyz -> Cloudflare R2
 
 ### 8.2 Netlify (client)
@@ -344,44 +344,54 @@ We run exactly two containers:
 
 No host-level Caddy install. Just Docker.
 
-OVH one-time setup:
-1) Create VPS (Ubuntu).
-2) SSH in.
-3) Run `ops/bootstrap_ovh.sh` once:
-   - installs Docker + docker compose plugin
-   - creates a non-root deploy user
-   - sets firewall: allow 22, 80, 443 only
-   - creates /opt/worldify and copies ops files
-   - starts docker compose (caddy + server)
+#### Server bootstrap (one-time)
+Run `ops/bootstrap_ovh.sh` on the VPS to:
+- create a non-root deploy user
+- install Docker + docker-compose plugin
+- configure firewall: open 22 (SSH), 80/443 (HTTP/HTTPS) only
+- set up the app directory at /opt/worldify
+- place docker-compose.yml and Caddyfile
+- enable auto-start on reboot (docker restart policies)
 
-Caddy handles:
-- TLS certificates automatically
-- WebSocket upgrade proxying
+Keep bootstrap idempotent so it can be re-run.
+
+#### Reverse proxy (Caddy)
+Caddy must:
+- terminate TLS for api.worldify.xyz
+- proxy WebSocket upgrades correctly to Node
+- set basic security headers
 - forwarding:
   - https://api.worldify.xyz/api/* -> server
   - wss://api.worldify.xyz/ws     -> server
 
-Server container:
-- listens on 0.0.0.0:8080 inside container
-- uses env for CORS + limits
+#### Server container
+- Expose port 8080 inside container.
+- Listen on 0.0.0.0:8080.
+- Read config via env:
+  - NODE_ENV
+  - CORS_ORIGIN (Netlify domain)
+  - MAX_PLAYERS=64
+  - TICK_RATE=20
+  - SNAP_RATE=15
 
 ### 8.4 Automated deploy to OVH from GitHub Actions
 
 Workflow deploy_server.yml:
-- triggers on push to main when server/ or shared/ changes
-- builds a server Docker image
-- pushes to GHCR
-- SSH into OVH and runs `ops/deploy_server.sh` which:
-  - docker login ghcr
-  - docker compose pull
-  - docker compose up -d
-  - curl /healthz and fail if not 200
+- On push to main affecting server/ or shared/:
+  1) build a Docker image for server
+  2) push image to GHCR (GitHub Container Registry)
+  3) SSH to OVH and run `ops/deploy_server.sh`:
+     - docker login ghcr
+     - docker pull latest
+     - docker compose up -d (or restart)
+     - health check curl https://api.worldify.xyz/healthz
 
 GitHub secrets needed:
-- OVH_HOST
-- OVH_DEPLOY_USER
-- OVH_SSH_KEY
-- GHCR_TOKEN (or use GitHub token with proper permissions)
+- OVH_HOST (IP or hostname)
+- OVH_SSH_KEY (private key for deploy user)
+- GHCR_TOKEN (or use GITHUB_TOKEN with GHCR permissions)
+
+Goal: merge to main triggers a server deploy with no manual steps.
 
 Outcome:
 - merge to main -> server deploys automatically

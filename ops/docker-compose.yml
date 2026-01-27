@@ -13,11 +13,16 @@ services:
       - server
 
   server:
-    image: ghcr.io/worldify/server:latest
+    image: ghcr.io/dan0net/worldify-multiplayer:latest
     restart: unless-stopped
     environment:
+      - NODE_ENV=production
       - PORT=8080
       - HOST=0.0.0.0
+      - CORS_ORIGIN=https://worldify-multiplayer.netlify.app
+      - MAX_PLAYERS=64
+      - TICK_RATE=20
+      - SNAP_RATE=15
     expose:
       - "8080"
 
