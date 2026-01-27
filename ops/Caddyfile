@@ -2,7 +2,8 @@
   email admin@worldify.xyz
 }
 
-api.worldify.xyz {
+# VPS hostname (for now, until DNS is set up)
+vps-95b38492.vps.ovh.net {
   # API routes
   handle /api/* {
     reverse_proxy server:8080
@@ -23,3 +24,8 @@ api.worldify.xyz {
     respond "Worldify API" 200
   }
 }
+
+# Future: when DNS is configured
+# api.worldify.xyz {
+#   ...same config...
+# }
