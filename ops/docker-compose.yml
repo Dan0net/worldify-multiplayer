@@ -19,7 +19,7 @@ services:
       - NODE_ENV=production
       - PORT=8080
       - HOST=0.0.0.0
-      - CORS_ORIGIN=https://worldify-multiplayer.netlify.app
+      - CORS_ORIGIN=https://worldify-multiplayer.netlify.app,https://wrldy.xyz
       - MAX_PLAYERS=64
       - TICK_RATE=20
       - SNAP_RATE=15
