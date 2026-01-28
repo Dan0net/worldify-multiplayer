@@ -2,10 +2,13 @@
  * Room tick logic
  * Server tick runs at SERVER_TICK_HZ (physics/game logic)
  * Snapshots broadcast at SNAPSHOT_HZ (network sync)
+ * 
+ * NOTE: Physics are handled client-side for voxel terrain collision.
+ * Server just relays positions and handles horizontal movement.
  */
 
 import { WebSocket } from 'ws';
-import { Room, PlayerState, PLAYER_EYE_HEIGHT, GROUND_LEVEL } from './room.js';
+import { Room, PlayerState } from './room.js';
 import { 
   SERVER_TICK_HZ, 
   SNAPSHOT_HZ,
@@ -13,10 +16,8 @@ import {
   INPUT_BACKWARD,
   INPUT_LEFT,
   INPUT_RIGHT,
-  INPUT_JUMP,
   INPUT_SPRINT,
   PlayerSnapshot,
-  FLAG_GROUNDED,
   FLAG_SPRINTING,
 } from '@worldify/shared';
 import { encodeSnapshot } from '../net/encode.js';
@@ -24,11 +25,9 @@ import { encodeSnapshot } from '../net/encode.js';
 const TICK_INTERVAL_MS = 1000 / SERVER_TICK_HZ;
 const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_HZ;
 
-// Movement constants
+// Movement constants (horizontal only - client handles vertical physics)
 const MOVE_SPEED = 5.0; // meters per second
 const SPRINT_MULTIPLIER = 1.6;
-const GRAVITY = 20.0; // meters per second squared
-const JUMP_VELOCITY = 8.0; // meters per second
 
 export function startRoomTick(room: Room): void {
   // Start game tick
@@ -71,29 +70,9 @@ function tick(room: Room): void {
 
 function processPlayerMovement(player: PlayerState, dt: number): void {
   const buttons = player.buttons;
-  const groundY = GROUND_LEVEL + PLAYER_EYE_HEIGHT;
   
-  // Check if grounded
-  const isGrounded = player.y <= groundY + 0.01;
-  
-  // Handle jump - only if grounded and jump pressed
-  if (isGrounded && (buttons & INPUT_JUMP)) {
-    player.velocityY = JUMP_VELOCITY;
-    player.flags &= ~FLAG_GROUNDED;
-  }
-  
-  // Apply gravity
-  player.velocityY -= GRAVITY * dt;
-  player.y += player.velocityY * dt;
-  
-  // Ground collision
-  if (player.y <= groundY) {
-    player.y = groundY;
-    player.velocityY = 0;
-    player.flags |= FLAG_GROUNDED;
-  } else {
-    player.flags &= ~FLAG_GROUNDED;
-  }
+  // Server only handles horizontal movement
+  // Client handles vertical physics (gravity, jump, voxel collision)
   
   // Calculate movement direction relative to player yaw
   // In Three.js: -Z is forward, +X is right
