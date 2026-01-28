@@ -124,6 +124,14 @@ export class ChunkMesh {
   }
 
   /**
+   * Get the Three.js mesh (for collision, etc).
+   * @returns The mesh or null if not created/disposed
+   */
+  getMesh(): THREE.Mesh | null {
+    return this.mesh;
+  }
+
+  /**
    * Get the vertex count of the current mesh.
    */
   getVertexCount(): number {

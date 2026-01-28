@@ -6,12 +6,14 @@ import { storeBridge } from '../state/bridge';
 import { PlayerLocal } from './player/playerLocal';
 import { PlayerRemote } from './player/playerRemote';
 import { controls } from './player/controls';
-import { BuildController } from './world/buildController';
+// Old build system - disabled for voxel terrain
+// import { BuildController } from './world/buildController';
 import { onSnapshot, onBuildCommit } from '../net/decode';
-import { sendBinary, setOnReconnected, requestBuildSync } from '../net/netClient';
+import { sendBinary, setOnReconnected } from '../net/netClient';
 import { encodeInput } from '../net/encode';
 import { CLIENT_INPUT_HZ, RoomSnapshot, BuildCommit } from '@worldify/shared';
 import { useGameStore } from '../state/store';
+import { VoxelIntegration } from './voxel/VoxelIntegration';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -26,8 +28,11 @@ export class GameCore {
   private remotePlayers = new Map<number, PlayerRemote>();
   private localPlayerId: number | null = null;
 
-  // Build system
-  private buildController!: BuildController;
+  // Voxel terrain system
+  private voxelIntegration!: VoxelIntegration;
+
+  // Old build system - disabled for voxel terrain
+  // private buildController!: BuildController;
 
   // Input sending
   private inputInterval: ReturnType<typeof setInterval> | null = null;
@@ -52,8 +57,22 @@ export class GameCore {
     // Create local player
     this.localPlayer = new PlayerLocal();
 
-    // Create build controller
-    this.buildController = new BuildController();
+    // Initialize voxel terrain system
+    const scene = getScene();
+    if (scene) {
+      this.voxelIntegration = new VoxelIntegration(scene, {
+        debugEnabled: false,
+        collisionEnabled: true,
+      });
+      this.voxelIntegration.init();
+      
+      // Set player spawn position above terrain
+      const spawnPos = this.voxelIntegration.getSpawnPosition(0, 0);
+      this.localPlayer.position.copy(spawnPos);
+    }
+
+    // Old build system - disabled for voxel terrain
+    // this.buildController = new BuildController();
 
     // Request pointer lock on canvas click (only if not spectating)
     canvas.addEventListener('click', () => {
@@ -138,15 +157,16 @@ export class GameCore {
     }
   };
 
-  private handleBuildCommit = (commit: BuildCommit): void => {
-    this.buildController.handleBuildCommit(commit);
+  // Old build system handlers - disabled for voxel terrain
+  private handleBuildCommit = (_commit: BuildCommit): void => {
+    // this.buildController.handleBuildCommit(commit);
   };
 
   private handleReconnected = (): void => {
-    // Request any builds we may have missed during disconnect
-    const lastSeq = this.buildController.getLastAppliedSeq();
-    console.log(`[game] Reconnected, requesting builds since seq ${lastSeq}`);
-    requestBuildSync(lastSeq);
+    // Old build system sync - disabled
+    // const lastSeq = this.buildController.getLastAppliedSeq();
+    // console.log(`[game] Reconnected, requesting builds since seq ${lastSeq}`);
+    // requestBuildSync(lastSeq);
   };
 
   private startLoop(): void {
@@ -181,8 +201,13 @@ export class GameCore {
       // FPS mode: update player and camera
       this.localPlayer.update(deltaMs, controls);
       
-      // Update build preview (only in FPS mode)
-      this.buildController.update();
+      // Update voxel terrain (streaming, collision)
+      if (this.voxelIntegration) {
+        this.voxelIntegration.update(this.localPlayer.position);
+      }
+      
+      // Old build system - disabled for voxel terrain
+      // this.buildController.update();
 
       if (camera) {
         updateCameraFromPlayer(camera, this.localPlayer);
@@ -220,8 +245,13 @@ export class GameCore {
       clearInterval(this.inputInterval);
     }
 
-    // Clean up build controller
-    this.buildController.dispose();
+    // Clean up voxel terrain
+    if (this.voxelIntegration) {
+      this.voxelIntegration.dispose();
+    }
+
+    // Old build system - disabled
+    // this.buildController.dispose();
 
     // Clean up remote players
     for (const remote of this.remotePlayers.values()) {
