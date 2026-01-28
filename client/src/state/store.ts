@@ -3,6 +3,21 @@ import { BuildPieceType } from '@worldify/shared';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
+/** Voxel debug visualization toggles */
+export interface VoxelDebugToggles {
+  showChunkBounds: boolean;
+  showEmptyChunks: boolean;
+  showCollisionMesh: boolean;
+  showChunkCoords: boolean;
+}
+
+/** Voxel world statistics */
+export interface VoxelStats {
+  chunksLoaded: number;
+  meshesVisible: number;
+  debugObjects: number;
+}
+
 interface GameState {
   // Connection
   connectionStatus: ConnectionStatus;
@@ -23,6 +38,10 @@ interface GameState {
   tickMs: number;
   serverTick: number;
 
+  // Voxel debug
+  voxelDebug: VoxelDebugToggles;
+  voxelStats: VoxelStats;
+
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
   setRoomInfo: (roomId: string, playerId: number) => void;
@@ -33,6 +52,11 @@ interface GameState {
   setLastBuildSeqSeen: (seq: number) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
   setServerTick: (tick: number) => void;
+  
+  // Voxel debug actions
+  toggleVoxelDebug: (key: keyof VoxelDebugToggles) => void;
+  setVoxelDebug: (updates: Partial<VoxelDebugToggles>) => void;
+  setVoxelStats: (stats: Partial<VoxelStats>) => void;
 }
 
 export const useGameStore = create<GameState>((set) => ({
@@ -48,6 +72,19 @@ export const useGameStore = create<GameState>((set) => ({
   fps: 0,
   tickMs: 0,
   serverTick: 0,
+  
+  // Voxel debug initial state
+  voxelDebug: {
+    showChunkBounds: false,
+    showEmptyChunks: false,
+    showCollisionMesh: false,
+    showChunkCoords: false,
+  },
+  voxelStats: {
+    chunksLoaded: 0,
+    meshesVisible: 0,
+    debugObjects: 0,
+  },
 
   // Actions
   setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -59,4 +96,24 @@ export const useGameStore = create<GameState>((set) => ({
   setLastBuildSeqSeen: (seq) => set({ lastBuildSeqSeen: seq }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),
   setServerTick: (tick) => set({ serverTick: tick }),
+  
+  // Voxel debug actions
+  toggleVoxelDebug: (key) => set((state) => ({
+    voxelDebug: {
+      ...state.voxelDebug,
+      [key]: !state.voxelDebug[key],
+    },
+  })),
+  setVoxelDebug: (updates) => set((state) => ({
+    voxelDebug: {
+      ...state.voxelDebug,
+      ...updates,
+    },
+  })),
+  setVoxelStats: (stats) => set((state) => ({
+    voxelStats: {
+      ...state.voxelStats,
+      ...stats,
+    },
+  })),
 }));
