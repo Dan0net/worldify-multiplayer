@@ -9,7 +9,12 @@ export * from './protocol/territory.js';
 export * from './util/bytes.js';
 export * from './util/quantize.js';
 
+// Voxel terrain
+export * from './voxel/constants.js';
+export * from './voxel/voxelData.js';
+
 // Re-export commonly used types for convenience
 export type { MovementInput, PlayerPosition } from './protocol/movement.js';
 export type { PlayerSnapshot, RoomSnapshot } from './protocol/snapshot.js';
 export type { BuildIntent, BuildCommit } from './protocol/build.js';
+export type { UnpackedVoxel, ChunkCoord, VoxelCoord, WorldCoord } from './voxel/voxelData.js';
