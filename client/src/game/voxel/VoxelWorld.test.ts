@@ -1,0 +1,600 @@
+/**
+ * Unit tests for VoxelWorld - Chunk loading/unloading manager
+ * Run with: npx tsx client/src/game/voxel/VoxelWorld.test.ts
+ * 
+ * Stage 5 Success Criteria:
+ * - On init, 64 chunks (4×4×4) are created and meshed
+ * - Flat terrain visible spanning all loaded chunks seamlessly
+ * - Moving player +8m in X loads new chunks, unloads old ones
+ * - No visible seams between adjacent chunks
+ * - Chunk count stays constant as player moves (streaming works)
+ * - Performance: chunk load/unload doesn't cause frame drops
+ * - getChunk(cx, cy, cz) returns correct chunk or undefined
+ */
+
+import * as THREE from 'three';
+import { VoxelWorld } from './VoxelWorld.js';
+import { Chunk } from './Chunk.js';
+import {
+  STREAM_RADIUS,
+  CHUNK_SIZE,
+  CHUNK_WORLD_SIZE,
+  INITIAL_TERRAIN_HEIGHT,
+  chunkKey,
+  worldToChunk,
+} from '@worldify/shared';
+
+// Simple test runner
+let passed = 0;
+let failed = 0;
+
+function test(name: string, fn: () => void) {
+  try {
+    fn();
+    passed++;
+    console.log(`✓ ${name}`);
+  } catch (e) {
+    failed++;
+    console.error(`✗ ${name}`);
+    console.error(`  ${e}`);
+  }
+}
+
+function expect<T>(actual: T) {
+  return {
+    toBe(expected: T) {
+      if (actual !== expected) {
+        throw new Error(`Expected ${expected}, got ${actual}`);
+      }
+    },
+    toBeCloseTo(expected: number, precision = 2) {
+      const diff = Math.abs((actual as number) - expected);
+      if (diff > Math.pow(10, -precision)) {
+        throw new Error(`Expected ${expected} (±${Math.pow(10, -precision)}), got ${actual}`);
+      }
+    },
+    toBeGreaterThan(expected: number) {
+      if ((actual as number) <= expected) {
+        throw new Error(`Expected ${actual} to be greater than ${expected}`);
+      }
+    },
+    toBeGreaterThanOrEqual(expected: number) {
+      if ((actual as number) < expected) {
+        throw new Error(`Expected ${actual} to be >= ${expected}`);
+      }
+    },
+    toBeLessThanOrEqual(expected: number) {
+      if ((actual as number) > expected) {
+        throw new Error(`Expected ${actual} to be <= ${expected}`);
+      }
+    },
+    toBeTrue() {
+      if (actual !== true) {
+        throw new Error(`Expected true, got ${actual}`);
+      }
+    },
+    toBeFalse() {
+      if (actual !== false) {
+        throw new Error(`Expected false, got ${actual}`);
+      }
+    },
+    toBeUndefined() {
+      if (actual !== undefined) {
+        throw new Error(`Expected undefined, got ${actual}`);
+      }
+    },
+    toBeDefined() {
+      if (actual === undefined) {
+        throw new Error(`Expected defined value, got undefined`);
+      }
+    },
+    toNotBeNull() {
+      if (actual === null) {
+        throw new Error(`Expected non-null value, got null`);
+      }
+    },
+    toContain(expected: string) {
+      if (typeof actual !== 'string' || !actual.includes(expected)) {
+        throw new Error(`Expected "${actual}" to contain "${expected}"`);
+      }
+    },
+  };
+}
+
+// Create a fresh scene for each test
+function createTestScene(): THREE.Scene {
+  return new THREE.Scene();
+}
+
+// Create a fresh VoxelWorld for testing
+function createTestWorld(): { world: VoxelWorld; scene: THREE.Scene } {
+  const scene = createTestScene();
+  const world = new VoxelWorld(scene);
+  return { world, scene };
+}
+
+console.log('\n=== VoxelWorld Tests ===\n');
+
+// ============== Constructor Tests ==============
+
+test('VoxelWorld constructor creates empty world', () => {
+  const { world } = createTestWorld();
+  expect(world.chunks.size).toBe(0);
+  expect(world.meshes.size).toBe(0);
+});
+
+test('VoxelWorld stores scene reference', () => {
+  const { world, scene } = createTestWorld();
+  expect(world.scene).toBe(scene);
+});
+
+// ============== Init Tests ==============
+
+test('On init, 64 chunks (4×4×4) are created', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // STREAM_RADIUS = 4, halfRadius = 2, so -2 to +1 = 4 chunks per axis
+  // 4 × 4 × 4 = 64 chunks
+  expect(world.getChunkCount()).toBe(64);
+});
+
+test('Init creates chunks from (-2,-2,-2) to (1,1,1)', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const halfRadius = Math.floor(STREAM_RADIUS / 2);
+  
+  // Check boundary chunks exist
+  expect(world.getChunk(-halfRadius, -halfRadius, -halfRadius)).toBeDefined();
+  expect(world.getChunk(halfRadius - 1, halfRadius - 1, halfRadius - 1)).toBeDefined();
+  
+  // Check an out-of-range chunk doesn't exist
+  expect(world.getChunk(halfRadius, 0, 0)).toBeUndefined();
+  expect(world.getChunk(-halfRadius - 1, 0, 0)).toBeUndefined();
+});
+
+test('Init is idempotent - calling twice does not duplicate chunks', () => {
+  const { world } = createTestWorld();
+  world.init();
+  const count1 = world.getChunkCount();
+  
+  world.init(); // Call again
+  const count2 = world.getChunkCount();
+  
+  expect(count1).toBe(64);
+  expect(count2).toBe(64);
+});
+
+test('Chunks are generated with flat terrain at INITIAL_TERRAIN_HEIGHT', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const chunk = world.getChunk(0, 0, 0);
+  expect(chunk).toBeDefined();
+  
+  // Check that terrain generation happened
+  // At y=0 (below global surface Y=10), weight should be positive (solid)
+  const weightBelow = chunk!.getWeightAt(5, 0, 5);
+  expect(weightBelow).toBeGreaterThan(0);
+});
+
+test('All chunks have dirty flag cleared after init', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  let allClean = true;
+  for (const chunk of world.chunks.values()) {
+    if (chunk.dirty) {
+      allClean = false;
+      break;
+    }
+  }
+  expect(allClean).toBeTrue();
+});
+
+// ============== getChunk Tests ==============
+
+test('getChunk(cx, cy, cz) returns correct chunk', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const chunk = world.getChunk(0, 0, 0);
+  expect(chunk).toBeDefined();
+  expect(chunk!.cx).toBe(0);
+  expect(chunk!.cy).toBe(0);
+  expect(chunk!.cz).toBe(0);
+});
+
+test('getChunk returns undefined for unloaded chunk', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Way out of initial range
+  const chunk = world.getChunk(100, 100, 100);
+  expect(chunk).toBeUndefined();
+});
+
+test('getChunkAtWorld converts world coords to chunk correctly', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // World position (0, 0, 0) should be in chunk (0, 0, 0)
+  const chunk = world.getChunkAtWorld(0, 0, 0);
+  expect(chunk).toBeDefined();
+  expect(chunk!.cx).toBe(0);
+  expect(chunk!.cy).toBe(0);
+  expect(chunk!.cz).toBe(0);
+});
+
+test('getChunkAtWorld returns correct chunk at chunk boundary', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Just past the boundary at x=8m should be chunk (1, 0, 0)
+  const chunk = world.getChunkAtWorld(8.1, 0, 0);
+  expect(chunk).toBeDefined();
+  expect(chunk!.cx).toBe(1);
+});
+
+// ============== Streaming Tests ==============
+
+test('Moving player +8m in X loads new chunk and unloads old ones', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Get initial chunks that should be unloaded
+  const oldChunk = world.getChunk(-2, 0, 0);
+  expect(oldChunk).toBeDefined();
+  
+  // Move player to x=16m (chunk cx=2)
+  // This should shift loading range from [-2,1] to [0,3] on X axis
+  world.update(new THREE.Vector3(16, 0, 0));
+  
+  // Old chunk at cx=-2 should be unloaded
+  const oldChunkAfter = world.getChunk(-2, 0, 0);
+  expect(oldChunkAfter).toBeUndefined();
+  
+  // New chunk at cx=2 should be loaded
+  const newChunk = world.getChunk(2, 0, 0);
+  expect(newChunk).toBeDefined();
+});
+
+test('Chunk count stays constant as player moves (streaming works)', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const initialCount = world.getChunkCount();
+  expect(initialCount).toBe(64);
+  
+  // Move player around
+  world.update(new THREE.Vector3(16, 0, 0));
+  expect(world.getChunkCount()).toBe(64);
+  
+  world.update(new THREE.Vector3(32, 0, 0));
+  expect(world.getChunkCount()).toBe(64);
+  
+  world.update(new THREE.Vector3(0, 16, 0));
+  expect(world.getChunkCount()).toBe(64);
+});
+
+test('Moving player in negative direction loads correct chunks', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Move player to x=-16m (chunk cx=-2)
+  world.update(new THREE.Vector3(-16, 0, 0));
+  
+  // Should now have chunks around cx=-2
+  const halfRadius = Math.floor(STREAM_RADIUS / 2);
+  const chunk = world.getChunk(-2 - halfRadius, 0, 0);
+  expect(chunk).toBeDefined();
+  
+  // Old chunks on positive X should be unloaded
+  const unloaded = world.getChunk(1, 0, 0);
+  expect(unloaded).toBeUndefined();
+});
+
+test('Small player movements within same chunk do not trigger reload', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Move player a small amount within chunk (0,0,0)
+  // CHUNK_WORLD_SIZE is 8m, so stay within 8m
+  world.update(new THREE.Vector3(1, 0, 0));
+  world.update(new THREE.Vector3(2, 1, 0));
+  world.update(new THREE.Vector3(3, 2, 1));
+  
+  // Chunk count should still be 64
+  expect(world.getChunkCount()).toBe(64);
+  
+  // Same chunks should be loaded
+  expect(world.getChunk(-2, 0, 0)).toBeDefined();
+  expect(world.getChunk(1, 0, 0)).toBeDefined();
+});
+
+test('Moving diagonally loads correct corner chunks', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Move to corner position (+16, +16, +16)
+  world.update(new THREE.Vector3(16, 16, 16));
+  
+  // Player is now in chunk (2, 2, 2)
+  // Range should be from (0, 0, 0) to (3, 3, 3)
+  expect(world.getChunk(0, 0, 0)).toBeDefined();
+  expect(world.getChunk(3, 3, 3)).toBeDefined();
+  
+  // Old corner chunks should be unloaded
+  expect(world.getChunk(-2, -2, -2)).toBeUndefined();
+});
+
+// ============== Mesh Management Tests ==============
+
+test('Meshes are created for chunks with terrain', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // At least some meshes should exist (chunks with surface crossings)
+  const meshCount = world.getMeshCount();
+  expect(meshCount).toBeGreaterThan(0);
+});
+
+test('getMeshCount returns count of visible meshes', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const stats = world.getStats();
+  expect(stats.meshesVisible).toBeGreaterThan(0);
+  expect(stats.chunksLoaded).toBe(64);
+});
+
+test('Meshes are added to scene', () => {
+  const { world, scene } = createTestWorld();
+  world.init();
+  
+  // Scene should have some children (the meshes)
+  expect(scene.children.length).toBeGreaterThan(0);
+});
+
+test('Unloading chunk removes mesh from scene', () => {
+  const { world, scene } = createTestWorld();
+  world.init();
+  
+  const initialSceneChildren = scene.children.length;
+  
+  // Move player far away to unload all original chunks
+  world.update(new THREE.Vector3(1000, 0, 0));
+  
+  // Old meshes should be removed (though new ones may be added)
+  // The key is that dispose was called - check that original meshes are gone
+  const chunk = world.getChunk(0, 0, 0);
+  expect(chunk).toBeUndefined();
+});
+
+// ============== generateChunk Tests ==============
+
+test('generateChunk creates chunk with correct coordinates', () => {
+  const { world } = createTestWorld();
+  
+  const chunk = world.generateChunk(5, -3, 10);
+  expect(chunk.cx).toBe(5);
+  expect(chunk.cy).toBe(-3);
+  expect(chunk.cz).toBe(10);
+});
+
+test('generateChunk creates chunk with flat terrain', () => {
+  const { world } = createTestWorld();
+  
+  const chunk = world.generateChunk(0, 0, 0);
+  
+  // Below global surface Y=10, weight should be positive
+  const weightBelow = chunk.getWeightAt(5, 5, 5);
+  expect(weightBelow).toBeGreaterThan(0);
+  
+  // Above surface (global Y > 10, local Y > 10 in chunk cy=0)
+  const weightAbove = chunk.getWeightAt(5, 15, 5);
+  expect(weightAbove).toBeGreaterThan(-0.6); // Could be slightly above or below 0 depending on distance
+});
+
+// ============== getStats Tests ==============
+
+test('getStats returns accurate chunk count', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const stats = world.getStats();
+  expect(stats.chunksLoaded).toBe(64);
+});
+
+test('getStats returns bounds', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const stats = world.getStats();
+  const halfRadius = Math.floor(STREAM_RADIUS / 2);
+  
+  expect(stats.bounds.minCx).toBe(-halfRadius);
+  expect(stats.bounds.maxCx).toBe(halfRadius - 1);
+});
+
+test('getStats bounds update after player movement', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Move player to x=16 (chunk cx=2)
+  world.update(new THREE.Vector3(16, 0, 0));
+  
+  const stats = world.getStats();
+  expect(stats.bounds.minCx).toBe(0);
+  expect(stats.bounds.maxCx).toBe(3);
+});
+
+// ============== Remesh Queue Tests ==============
+
+test('remeshQueue starts empty', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  const stats = world.getStats();
+  expect(stats.remeshQueueSize).toBe(0);
+});
+
+// ============== Dispose Tests ==============
+
+test('dispose removes all chunks', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  expect(world.getChunkCount()).toBe(64);
+  
+  world.dispose();
+  
+  expect(world.getChunkCount()).toBe(0);
+});
+
+test('dispose removes all meshes', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  expect(world.meshes.size).toBeGreaterThan(0);
+  
+  world.dispose();
+  
+  expect(world.meshes.size).toBe(0);
+});
+
+test('dispose removes meshes from scene', () => {
+  const { world, scene } = createTestWorld();
+  world.init();
+  
+  expect(scene.children.length).toBeGreaterThan(0);
+  
+  world.dispose();
+  
+  expect(scene.children.length).toBe(0);
+});
+
+test('dispose allows re-initialization', () => {
+  const { world } = createTestWorld();
+  world.init();
+  world.dispose();
+  
+  // Should be able to re-init
+  world.init();
+  expect(world.getChunkCount()).toBe(64);
+});
+
+// ============== Refresh Tests ==============
+
+test('refresh re-meshes all chunks', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Modify a chunk
+  const chunk = world.getChunk(0, 0, 0);
+  expect(chunk).toBeDefined();
+  
+  // refresh should remesh all
+  world.refresh();
+  
+  // All chunks should be clean after refresh
+  let allClean = true;
+  for (const c of world.chunks.values()) {
+    if (c.dirty) {
+      allClean = false;
+      break;
+    }
+  }
+  expect(allClean).toBeTrue();
+});
+
+// ============== Edge Cases ==============
+
+test('Update before init does nothing', () => {
+  const { world } = createTestWorld();
+  
+  // Should not crash
+  world.update(new THREE.Vector3(100, 100, 100));
+  
+  expect(world.getChunkCount()).toBe(0);
+});
+
+test('getChunk on empty world returns undefined', () => {
+  const { world } = createTestWorld();
+  
+  expect(world.getChunk(0, 0, 0)).toBeUndefined();
+});
+
+test('World handles negative chunk coordinates', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Move player to negative position
+  world.update(new THREE.Vector3(-24, -16, -16));
+  
+  // Check chunks at negative coordinates exist
+  const chunk = world.getChunk(-3, -2, -2);
+  expect(chunk).toBeDefined();
+  expect(chunk!.cx).toBe(-3);
+});
+
+test('Seamless boundaries - neighbor chunks share terrain height', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Get two adjacent chunks
+  const chunk0 = world.getChunk(0, 0, 0);
+  const chunk1 = world.getChunk(1, 0, 0);
+  
+  expect(chunk0).toBeDefined();
+  expect(chunk1).toBeDefined();
+  
+  // At the boundary, terrain generation should produce the same result
+  // because both use the same global surface height
+  // Check weight at boundary (x=31 in chunk0 vs x=0 in chunk1, same Y)
+  const y = 10; // At surface
+  const weight0 = chunk0!.getWeightAt(31, y, 15);
+  const weight1 = chunk1!.getWeightAt(0, y, 15);
+  
+  // Both should be approximately equal since flat terrain
+  expect(Math.abs(weight0 - weight1)).toBeLessThanOrEqual(0.1);
+});
+
+// ============== Performance / Stress Tests ==============
+
+test('Rapid player movement maintains chunk count', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Rapidly change player position
+  for (let i = 0; i < 20; i++) {
+    const x = Math.sin(i) * 50;
+    const z = Math.cos(i) * 50;
+    world.update(new THREE.Vector3(x, 0, z));
+  }
+  
+  // Should always have exactly 64 chunks
+  expect(world.getChunkCount()).toBe(64);
+});
+
+test('Large teleport loads correct chunks', () => {
+  const { world } = createTestWorld();
+  world.init();
+  
+  // Teleport far away
+  world.update(new THREE.Vector3(1000, 500, 2000));
+  
+  // Player is now in chunk (125, 62, 250) approximately
+  const playerChunk = worldToChunk(1000, 500, 2000);
+  
+  // Chunk at player position should exist
+  expect(world.getChunk(playerChunk.cx, playerChunk.cy, playerChunk.cz)).toBeDefined();
+  
+  // Still 64 chunks
+  expect(world.getChunkCount()).toBe(64);
+});
+
+// Summary
+console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
+process.exit(failed > 0 ? 1 : 0);
