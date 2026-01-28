@@ -3,7 +3,7 @@
  * Updates store at controlled rate (5-10 Hz) to avoid React re-render spam
  */
 
-import { useGameStore, ConnectionStatus } from './store';
+import { useGameStore, ConnectionStatus, VoxelStats } from './store';
 import { BuildPieceType } from '@worldify/shared';
 
 class StoreBridge {
@@ -51,6 +51,13 @@ class StoreBridge {
       useGameStore.getState().setDebugStats(fps, tickMs);
       this.lastUpdateTime = now;
     }
+  }
+
+  /**
+   * Update voxel world statistics
+   */
+  updateVoxelStats(stats: Partial<VoxelStats>): void {
+    useGameStore.getState().setVoxelStats(stats);
   }
 }
 

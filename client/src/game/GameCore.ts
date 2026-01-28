@@ -189,13 +189,32 @@ export class GameCore {
       this.fpsAccumulator = 0;
     }
 
-    const isSpectating = useGameStore.getState().isSpectating;
+    const gameState = useGameStore.getState();
+    const isSpectating = gameState.isSpectating;
     const camera = getCamera();
+
+    // Sync voxel debug state from store to VoxelDebugManager
+    if (this.voxelIntegration) {
+      this.voxelIntegration.debug.setState(gameState.voxelDebug);
+      
+      // Update voxel stats in store
+      const stats = this.voxelIntegration.getStats();
+      storeBridge.updateVoxelStats({
+        chunksLoaded: stats.chunksLoaded,
+        meshesVisible: stats.meshesVisible,
+        debugObjects: this.voxelIntegration.debug.getDebugObjectCount(),
+      });
+    }
 
     if (isSpectating) {
       // Spectator mode: orbit camera looking at game area
       if (camera) {
         updateSpectatorCamera(camera, deltaMs, this.elapsedTime);
+      }
+      
+      // Update voxel terrain in spectator mode too (for debug visualization)
+      if (this.voxelIntegration) {
+        this.voxelIntegration.update(new THREE.Vector3(0, 10, 0));
       }
     } else {
       // FPS mode: update player and camera

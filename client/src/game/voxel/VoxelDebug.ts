@@ -125,10 +125,12 @@ export function createCollisionWireframe(chunkMesh: ChunkMesh): THREE.LineSegmen
   const material = new THREE.LineBasicMaterial({
     color: COLOR_COLLISION,
     transparent: true,
-    opacity: 0.5,
+    opacity: 0.8,
+    depthTest: false, // Render on top to avoid Z-fighting with terrain
   });
   
   const wireframe = new THREE.LineSegments(edges, material);
+  wireframe.renderOrder = 1; // Render after terrain
   
   // Copy position from mesh
   wireframe.position.copy(chunkMesh.mesh.position);
