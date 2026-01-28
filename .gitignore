@@ -5,6 +5,7 @@ node_modules/
 # Build outputs
 client/dist/
 server/dist/
+**/dist/
 *.tsbuildinfo
 
 # Environment
