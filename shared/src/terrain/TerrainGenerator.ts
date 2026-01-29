@@ -154,15 +154,15 @@ export class TerrainGenerator {
           const voxelY = chunkWorldY + ly;
           
           // Calculate signed distance from surface
-          // Negative = inside terrain, Positive = outside (air)
-          const distanceFromSurface = voxelY - terrainHeight;
+          // Positive = inside terrain (solid), Negative = outside (air)
+          const distanceFromSurface = terrainHeight - voxelY;
           
-          // Convert to weight (-0.5 = solid, +0.5 = air, 0 = surface)
+          // Convert to weight (+0.5 = solid, -0.5 = air, 0 = surface)
           // Clamp to [-0.5, 0.5] range
           const weight = Math.max(-0.5, Math.min(0.5, distanceFromSurface * 0.5));
           
           // Determine material (0 for air, default material for solid)
-          const material = weight < 0 ? this.config.defaultMaterial : 0;
+          const material = weight > 0 ? this.config.defaultMaterial : 0;
           
           // Default light level
           const light = 0;

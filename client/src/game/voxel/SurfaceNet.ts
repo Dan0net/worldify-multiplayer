@@ -2,7 +2,10 @@
  * SurfaceNet meshing algorithm for voxel terrain
  * 
  * Based on Mikola Lysenko's implementation:
- * https://github.com/mikolalysenko/mikolern-density
+ * https://github.com/mikolalysenko/isosurface
+ * 
+ * The MIT License (MIT)
+ * Copyright (c) 2012-2013 Mikola Lysenko
  * 
  * SurfaceNets work by:
  * 1. For each cell (2×2×2 voxels), check if surface crosses (sign change in weights)
@@ -30,25 +33,90 @@ export interface SurfaceNetOutput {
   triangleCount: number;
 }
 
-// Edge table for cube corners
-// Each edge connects two corners - defines which corners form each of the 12 edges
-const EDGE_TABLE: [number, number][] = [
-  [0, 1], [1, 3], [3, 2], [2, 0], // Bottom face edges
-  [4, 5], [5, 7], [7, 6], [6, 4], // Top face edges
-  [0, 4], [1, 5], [2, 6], [3, 7], // Vertical edges
-];
+// ============== Pre-computed Tables ==============
 
-// Corner offsets for a 2x2x2 cell (x, y, z)
-const CORNER_OFFSETS: [number, number, number][] = [
-  [0, 0, 0], // 0
-  [1, 0, 0], // 1
-  [0, 0, 1], // 2
-  [1, 0, 1], // 3
-  [0, 1, 0], // 4
-  [1, 1, 0], // 5
-  [0, 1, 1], // 6
-  [1, 1, 1], // 7
-];
+// All 24 pairs of cells in 2x2x2 grid (12 edges, 2 indices each)
+const CUBE_EDGES = new Int32Array(24);
+
+// Edge table: 256 possible cube configurations -> 12-bit edge crossing mask
+const EDGE_TABLE = new Int32Array(256);
+
+// Initialize lookup tables
+(function initTables() {
+  // Build cube edges - pairs of adjacent corners
+  let k = 0;
+  for (let i = 0; i < 8; ++i) {
+    for (let j = 1; j <= 4; j <<= 1) {
+      const p = i ^ j;
+      if (i <= p) {
+        CUBE_EDGES[k++] = i;
+        CUBE_EDGES[k++] = p;
+      }
+    }
+  }
+
+  // Build edge table - which edges cross for each cube configuration
+  for (let i = 0; i < 256; ++i) {
+    let em = 0;
+    for (let j = 0; j < 24; j += 2) {
+      const a = !!(i & (1 << CUBE_EDGES[j]));
+      const b = !!(i & (1 << CUBE_EDGES[j + 1]));
+      em |= a !== b ? 1 << (j >> 1) : 0;
+    }
+    EDGE_TABLE[i] = em;
+  }
+})();
+
+// ============== Helper Functions ==============
+
+/**
+ * Fast inverse square root
+ */
+function invSqrt(x: number): number {
+  return 1.0 / Math.sqrt(x);
+}
+
+/**
+ * Generate face normal from three vertices
+ */
+function generateFaceNormal(
+  v0: [number, number, number],
+  v1: [number, number, number],
+  v2: [number, number, number]
+): [number, number, number] {
+  const e0x = v0[0] - v1[0];
+  const e0y = v0[1] - v1[1];
+  const e0z = v0[2] - v1[2];
+
+  const e1x = v2[0] - v0[0];
+  const e1y = v2[1] - v0[1];
+  const e1z = v2[2] - v0[2];
+
+  const nX = e0y * e1z - e0z * e1y;
+  const nY = e0z * e1x - e0x * e1z;
+  const nZ = e0x * e1y - e0y * e1x;
+
+  const lenSq = nX * nX + nY * nY + nZ * nZ;
+  if (lenSq < 0.000001) {
+    return [0, 1, 0];
+  }
+  const l = invSqrt(lenSq);
+
+  return [nX * l, nY * l, nZ * l];
+}
+
+/**
+ * Accumulate normal into vertex normal accumulator
+ */
+function accumulateNormal(
+  normalAccum: [number, number, number][],
+  vertexIndex: number,
+  normal: [number, number, number]
+): void {
+  normalAccum[vertexIndex][0] += normal[0];
+  normalAccum[vertexIndex][1] += normal[1];
+  normalAccum[vertexIndex][2] += normal[2];
+}
 
 
 
@@ -60,231 +128,272 @@ const CORNER_OFFSETS: [number, number, number][] = [
  * @returns SurfaceNet mesh output
  */
 export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceNetOutput {
-  // Pre-allocate buffers (will be trimmed at the end)
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const materials: number[] = [];
-  const indices: number[] = [];
-
-  // Grid to store vertex indices for each cell (for connecting faces)
-  // We use CHUNK_SIZE+1 to include boundary cells that connect to neighbors
-  const gridSize = CHUNK_SIZE + 1;
-  const vertexGrid = new Int32Array(gridSize * gridSize * gridSize).fill(-1);
-
-  const getGridIndex = (x: number, y: number, z: number): number => {
-    return x + y * gridSize + z * gridSize * gridSize;
+  // Dimensions including +1 margin for neighbor sampling
+  const dims = [CHUNK_SIZE + 1, CHUNK_SIZE + 1, CHUNK_SIZE + 1];
+  
+  // Helper to get weight at local coordinates (with margin support)
+  const getWeight = (lx: number, ly: number, lz: number): number => {
+    if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+      return chunk.getWeightAt(lx, ly, lz);
+    }
+    return chunk.getWeightWithMargin(lx, ly, lz, neighbors);
   };
 
-  // Helper to get weight - uses margin for coordinates outside chunk bounds
-  // Returns NaN for missing neighbors to skip surface generation at edges
-  const getW = (x: number, y: number, z: number): number => {
-    if (x >= 0 && x < CHUNK_SIZE && y >= 0 && y < CHUNK_SIZE && z >= 0 && z < CHUNK_SIZE) {
-      return chunk.getWeightAt(x, y, z);
+  // Helper to get voxel at local coordinates (with margin support)
+  const getVoxel = (lx: number, ly: number, lz: number): number => {
+    if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+      return chunk.getVoxel(lx, ly, lz);
     }
-    // Check if neighbor exists
-    const ncx = chunk.cx + (x < 0 ? -1 : x >= CHUNK_SIZE ? 1 : 0);
-    const ncy = chunk.cy + (y < 0 ? -1 : y >= CHUNK_SIZE ? 1 : 0);
-    const ncz = chunk.cz + (z < 0 ? -1 : z >= CHUNK_SIZE ? 1 : 0);
-    
-    if (ncx !== chunk.cx || ncy !== chunk.cy || ncz !== chunk.cz) {
-      const neighborKey = `${ncx},${ncy},${ncz}`;
-      if (!neighbors.has(neighborKey)) {
-        return NaN; // Signal missing neighbor
-      }
-    }
-    return chunk.getWeightWithMargin(x, y, z, neighbors);
+    return chunk.getVoxelWithMargin(lx, ly, lz, neighbors);
   };
 
-  // Helper to get voxel
-  const getV = (x: number, y: number, z: number): number => {
-    if (x >= 0 && x < CHUNK_SIZE && y >= 0 && y < CHUNK_SIZE && z >= 0 && z < CHUNK_SIZE) {
-      return chunk.getVoxel(x, y, z);
-    }
-    return chunk.getVoxelWithMargin(x, y, z, neighbors);
-  };
+  // Vertex buffer - stores which vertex is at each grid position
+  let buffer = new Int32Array(4096);
+  
+  // Output arrays
+  const vertices: [number, number, number][] = [];
+  const materialIndices: number[] = [];
+  const faces: [number, number, number][] = [];
+  const normalAccum: [number, number, number][] = [];
 
-  // Helper to check if a weight is valid (not from missing neighbor)
-  const isValidWeight = (w: number): boolean => !isNaN(w);
+  // Grid traversal state
+  let n = 0; // Flat 1D grid index
+  const x = new Int32Array(3); // Current x,y,z coordinates
+  const R = new Int32Array([1, dims[0] + 1, (dims[0] + 1) * (dims[1] + 1)]); // Axis strides
+  const grid = new Float32Array(8); // Local 2x2x2 grid values
+  let bufNo = 1; // Buffer alternation flag
 
-  // First pass: find surface crossings and create vertices
-  // Process all cells including boundary (using margin data for the +1 corners)
-  // We iterate to CHUNK_SIZE (inclusive) to create vertices at chunk boundaries
-  for (let z = 0; z <= CHUNK_SIZE; z++) {
-    for (let y = 0; y <= CHUNK_SIZE; y++) {
-      for (let x = 0; x <= CHUNK_SIZE; x++) {
-        // Get weights at all 8 corners of the cell
-        const cornerWeights: number[] = [];
-        const cornerVoxels: number[] = [];
+  // Ensure buffer is large enough
+  if (R[2] * 2 > buffer.length) {
+    buffer = new Int32Array(R[2] * 2);
+  }
+
+  // March over the voxel grid
+  for (x[2] = 0; x[2] < dims[2] - 1; ++x[2], n += dims[0], bufNo ^= 1, R[2] = -R[2]) {
+    // Buffer pointer for this z-slice
+    let m = 1 + (dims[0] + 1) * (1 + bufNo * (dims[1] + 1));
+
+    for (x[1] = 0; x[1] < dims[1] - 1; ++x[1], ++n, m += 2) {
+      for (x[0] = 0; x[0] < dims[0] - 1; ++x[0], ++n, ++m) {
+        // Read 8 field values around this vertex and calculate mask
         let mask = 0;
-        let hasInvalidCorner = false;
+        let g = 0;
+        let pMax = -Infinity;
+        let maxI = 0, maxJ = 0, maxK = 0;
 
-        for (let i = 0; i < 8; i++) {
-          const [dx, dy, dz] = CORNER_OFFSETS[i];
-          const w = getW(x + dx, y + dy, z + dz);
-          cornerWeights.push(w);
-          cornerVoxels.push(getV(x + dx, y + dy, z + dz));
-          
-          if (!isValidWeight(w)) {
-            hasInvalidCorner = true;
-          } else if (w > 0) {
-            mask |= (1 << i);
+        // Sample 2x2x2 grid
+        for (let k = 0; k < 2; ++k) {
+          for (let j = 0; j < 2; ++j) {
+            for (let i = 0; i < 2; ++i, ++g) {
+              // Get local coordinates
+              const lx = x[0] + i;
+              const ly = x[1] + j;
+              const lz = x[2] + k;
+
+              const p = getWeight(lx, ly, lz);
+              grid[g] = p;
+              
+              // Build mask: bit is set if weight < 0 (inside surface)
+              mask |= p < 0 ? 1 << g : 0;
+              
+              // Track max weight to find material
+              if (p > pMax) {
+                pMax = p;
+                maxI = i;
+                maxJ = j;
+                maxK = k;
+              }
+            }
           }
         }
 
-        // Skip cells with missing neighbor data
-        if (hasInvalidCorner) {
-          continue;
-        }
-
-        // If all corners same sign, no surface crossing
+        // Skip if no surface crossing (all inside or all outside)
         if (mask === 0 || mask === 0xff) {
           continue;
         }
 
-        // Calculate vertex position by averaging edge crossings
-        let vertX = 0, vertY = 0, vertZ = 0;
-        let crossingCount = 0;
+        // Sum up edge intersections to find vertex position
+        const edgeMask = EDGE_TABLE[mask];
+        const v: [number, number, number] = [0.0, 0.0, 0.0];
+        let eCount = 0;
 
-        for (let e = 0; e < 12; e++) {
-          const [c0, c1] = EDGE_TABLE[e];
-          const w0 = cornerWeights[c0];
-          const w1 = cornerWeights[c1];
-
-          // Check if edge crosses surface (different signs)
-          if ((w0 > 0) !== (w1 > 0)) {
-            // Interpolate crossing position
-            const t = w0 / (w0 - w1);
-            const [dx0, dy0, dz0] = CORNER_OFFSETS[c0];
-            const [dx1, dy1, dz1] = CORNER_OFFSETS[c1];
-
-            vertX += dx0 + t * (dx1 - dx0);
-            vertY += dy0 + t * (dy1 - dy0);
-            vertZ += dz0 + t * (dz1 - dz0);
-            crossingCount++;
+        // Check each of the 12 edges
+        for (let i = 0; i < 12; ++i) {
+          if (!(edgeMask & (1 << i))) {
+            continue;
           }
-        }
 
-        if (crossingCount > 0) {
-          // Average the crossing positions
-          vertX = x + vertX / crossingCount;
-          vertY = y + vertY / crossingCount;
-          vertZ = z + vertZ / crossingCount;
+          ++eCount;
 
-          // Store vertex index in grid
-          const gridIdx = getGridIndex(x, y, z);
-          vertexGrid[gridIdx] = positions.length / 3;
-
-          positions.push(vertX, vertY, vertZ);
-
-          // Calculate normal using central differences at the vertex position
-          // This produces smoother normals than using corner weights directly
-          const vxi = Math.floor(vertX);
-          const vyi = Math.floor(vertY);
-          const vzi = Math.floor(vertZ);
+          // Find intersection point on this edge
+          const e0 = CUBE_EDGES[i << 1];
+          const e1 = CUBE_EDGES[(i << 1) + 1];
+          const g0 = grid[e0];
+          const g1 = grid[e1];
+          let t = g0 - g1;
           
-          // Sample weight field around the vertex position using central differences
-          const wxp = getW(vxi + 1, vyi, vzi);
-          const wxn = getW(vxi - 1, vyi, vzi);
-          const wyp = getW(vxi, vyi + 1, vzi);
-          const wyn = getW(vxi, vyi - 1, vzi);
-          const wzp = getW(vxi, vyi, vzi + 1);
-          const wzn = getW(vxi, vyi, vzi - 1);
-          
-          // Gradient points from solid (positive weight) to air (negative weight)
-          // Normal should point outward (from solid to air)
-          let nx = (isValidWeight(wxp) && isValidWeight(wxn)) ? (wxn - wxp) : 0;
-          let ny = (isValidWeight(wyp) && isValidWeight(wyn)) ? (wyn - wyp) : 0;
-          let nz = (isValidWeight(wzp) && isValidWeight(wzn)) ? (wzn - wzp) : 0;
-
-          // Normalize
-          const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-          if (len > 0.0001) {
-            normals.push(nx / len, ny / len, nz / len);
+          if (Math.abs(t) > 1e-6) {
+            t = g0 / t;
           } else {
-            normals.push(0, 1, 0); // Default up normal
+            continue;
           }
 
-          // Get material from the solid corner (positive weight)
-          let solidMaterial = 0;
-          for (let i = 0; i < 8; i++) {
-            if (cornerWeights[i] > 0) {
-              solidMaterial = getMaterial(cornerVoxels[i]);
-              break;
+          // Interpolate position along edge
+          for (let j = 0, k = 1; j < 3; ++j, k <<= 1) {
+            const a = e0 & k;
+            const b = e1 & k;
+            if (a !== b) {
+              v[j] += a ? 1.0 - t : t;
+            } else {
+              v[j] += a ? 1.0 : 0;
             }
           }
-          materials.push(solidMaterial);
         }
-      }
-    }
-  }
 
-  // Second pass: connect vertices with quads
-  // Iterate over all cells that can have vertices (including boundary)
-  for (let z = 0; z <= CHUNK_SIZE; z++) {
-    for (let y = 0; y <= CHUNK_SIZE; y++) {
-      for (let x = 0; x <= CHUNK_SIZE; x++) {
-        const v0 = vertexGrid[getGridIndex(x, y, z)];
-        if (v0 < 0) continue;
+        // Average edge intersections and add to coordinate
+        if (eCount > 0) {
+          const s = 1.0 / eCount;
+          v[0] = x[0] + s * v[0];
+          v[1] = x[1] + s * v[1];
+          v[2] = x[2] + s * v[2];
+        }
 
-        // Check each axis for quad generation
-        for (let axis = 0; axis < 3; axis++) {
-          // Get the two other axes
-          const axis1 = (axis + 1) % 3;
-          const axis2 = (axis + 2) % 3;
+        // Store vertex index in buffer
+        buffer[m] = vertices.length;
+        vertices.push(v);
+        normalAccum.push([0, 0, 0]);
+        
+        // Get material from the solid voxel (highest weight)
+        const solidVoxel = getVoxel(x[0] + maxI, x[1] + maxJ, x[2] + maxK);
+        materialIndices.push(getMaterial(solidVoxel));
 
-          // Check if we have all 4 vertices for a quad
-          const coords1 = [x, y, z];
-          const coords2 = [x, y, z];
-          const coords3 = [x, y, z];
+        // Skip faces on boundary (will be rendered by adjacent chunk)
+        const ignoreFace = (x[0] === 0 || x[1] === 0 || x[2] === 0);
 
-          coords1[axis1]++;
-          coords2[axis2]++;
-          coords3[axis1]++;
-          coords3[axis2]++;
+        // Generate faces for edges along each axis
+        for (let i = 0; i < 3; ++i) {
+          if (!(edgeMask & (1 << i))) {
+            continue;
+          }
 
-          // Skip if any vertex is outside the valid grid range (now CHUNK_SIZE+1)
-          if (coords1[0] > CHUNK_SIZE || coords1[1] > CHUNK_SIZE || coords1[2] > CHUNK_SIZE) continue;
-          if (coords2[0] > CHUNK_SIZE || coords2[1] > CHUNK_SIZE || coords2[2] > CHUNK_SIZE) continue;
-          if (coords3[0] > CHUNK_SIZE || coords3[1] > CHUNK_SIZE || coords3[2] > CHUNK_SIZE) continue;
+          const iu = (i + 1) % 3;
+          const iv = (i + 2) % 3;
 
-          const v1 = vertexGrid[getGridIndex(coords1[0], coords1[1], coords1[2])];
-          const v2 = vertexGrid[getGridIndex(coords2[0], coords2[1], coords2[2])];
-          const v3 = vertexGrid[getGridIndex(coords3[0], coords3[1], coords3[2])];
+          // Skip if on boundary
+          if (x[iu] === 0 || x[iv] === 0) {
+            continue;
+          }
 
-          if (v1 < 0 || v2 < 0 || v3 < 0) continue;
+          // Look up adjacent vertices in buffer
+          const du = R[iu];
+          const dv = R[iv];
 
-          // Check if edge along this axis crosses surface
-          const w0 = getW(x, y, z);
-          const offset = [0, 0, 0];
-          offset[axis] = 1;
-          const w1 = getW(x + offset[0], y + offset[1], z + offset[2]);
+          // Generate triangles with correct winding based on corner sign
+          if (mask & 1) {
+            const norm = generateFaceNormal(
+              vertices[buffer[m - du]],
+              vertices[buffer[m]],
+              vertices[buffer[m - du - dv]]
+            );
+            const norm2 = generateFaceNormal(
+              vertices[buffer[m - dv]],
+              vertices[buffer[m - du - dv]],
+              vertices[buffer[m]]
+            );
 
-          if ((w0 > 0) === (w1 > 0)) continue;
+            if (!ignoreFace) {
+              faces.push([buffer[m - du], buffer[m], buffer[m - du - dv]]);
+              faces.push([buffer[m - dv], buffer[m - du - dv], buffer[m]]);
+            }
 
-          // Determine winding order based on which side is solid
-          if (w0 > 0) {
-            // Solid on negative side of axis (flip winding)
-            indices.push(v0, v3, v1);
-            indices.push(v0, v2, v3);
+            // Accumulate normals for smooth shading
+            accumulateNormal(normalAccum, buffer[m - du], norm);
+            accumulateNormal(normalAccum, buffer[m], norm);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm);
+
+            accumulateNormal(normalAccum, buffer[m - dv], norm2);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm2);
+            accumulateNormal(normalAccum, buffer[m], norm2);
           } else {
-            // Solid on positive side of axis (flip winding)
-            indices.push(v0, v1, v3);
-            indices.push(v0, v3, v2);
+            const norm = generateFaceNormal(
+              vertices[buffer[m - dv]],
+              vertices[buffer[m]],
+              vertices[buffer[m - du - dv]]
+            );
+            const norm2 = generateFaceNormal(
+              vertices[buffer[m - du]],
+              vertices[buffer[m - du - dv]],
+              vertices[buffer[m]]
+            );
+
+            if (!ignoreFace) {
+              faces.push([buffer[m - dv], buffer[m], buffer[m - du - dv]]);
+              faces.push([buffer[m - du], buffer[m - du - dv], buffer[m]]);
+            }
+
+            // Accumulate normals for smooth shading
+            accumulateNormal(normalAccum, buffer[m - dv], norm);
+            accumulateNormal(normalAccum, buffer[m], norm);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm);
+
+            accumulateNormal(normalAccum, buffer[m - du], norm2);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm2);
+            accumulateNormal(normalAccum, buffer[m], norm2);
           }
         }
       }
     }
   }
 
-  // Convert to typed arrays
-  const vertexCount = positions.length / 3;
-  const triangleCount = indices.length / 3;
+  // Convert to output format
+  const vertexCount = vertices.length;
+  const triangleCount = faces.length;
+
+  // Build position array
+  const positions = new Float32Array(vertexCount * 3);
+  for (let i = 0; i < vertexCount; i++) {
+    positions[i * 3] = vertices[i][0];
+    positions[i * 3 + 1] = vertices[i][1];
+    positions[i * 3 + 2] = vertices[i][2];
+  }
+
+  // Build normalized normal array from accumulated normals
+  const normals = new Float32Array(vertexCount * 3);
+  for (let i = 0; i < vertexCount; i++) {
+    const nx = normalAccum[i][0];
+    const ny = normalAccum[i][1];
+    const nz = normalAccum[i][2];
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (len > 0.0001) {
+      normals[i * 3] = nx / len;
+      normals[i * 3 + 1] = ny / len;
+      normals[i * 3 + 2] = nz / len;
+    } else {
+      normals[i * 3] = 0;
+      normals[i * 3 + 1] = 1;
+      normals[i * 3 + 2] = 0;
+    }
+  }
+
+  // Build index array
+  const indices = new Uint32Array(triangleCount * 3);
+  for (let i = 0; i < triangleCount; i++) {
+    indices[i * 3] = faces[i][0];
+    indices[i * 3 + 1] = faces[i][1];
+    indices[i * 3 + 2] = faces[i][2];
+  }
+
+  // Build materials array
+  const materials = new Uint8Array(vertexCount);
+  for (let i = 0; i < vertexCount; i++) {
+    materials[i] = materialIndices[i];
+  }
 
   return {
-    positions: new Float32Array(positions),
-    normals: new Float32Array(normals),
-    indices: new Uint32Array(indices),
-    materials: new Uint8Array(materials),
+    positions,
+    normals,
+    indices,
+    materials,
     vertexCount,
     triangleCount,
   };
