@@ -128,8 +128,9 @@ function accumulateNormal(
  * @returns SurfaceNet mesh output
  */
 export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceNetOutput {
-  // Dimensions including +1 margin for neighbor sampling
-  const dims = [CHUNK_SIZE + 1, CHUNK_SIZE + 1, CHUNK_SIZE + 1];
+  // Dimensions: CHUNK_SIZE + 2 to iterate up to and including CHUNK_SIZE
+  // This allows us to generate vertices at the chunk boundary that stitch with neighbors
+  const dims = [CHUNK_SIZE + 2, CHUNK_SIZE + 2, CHUNK_SIZE + 2];
   
   // Helper to get weight at local coordinates (with margin support)
   const getWeight = (lx: number, ly: number, lz: number): number => {
@@ -267,7 +268,9 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
         const solidVoxel = getVoxel(x[0] + maxI, x[1] + maxJ, x[2] + maxK);
         materialIndices.push(getMaterial(solidVoxel));
 
-        // Skip faces on boundary (will be rendered by adjacent chunk)
+        // Skip faces on low boundary only (x=0, y=0, z=0)
+        // Those faces will be rendered by the adjacent chunk at their high end
+        // HIGH boundary faces (x=CHUNK_SIZE) ARE needed - they stitch to the neighbor
         const ignoreFace = (x[0] === 0 || x[1] === 0 || x[2] === 0);
 
         // Generate faces for edges along each axis
@@ -279,7 +282,7 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
           const iu = (i + 1) % 3;
           const iv = (i + 2) % 3;
 
-          // Skip if on boundary
+          // Skip if on low boundary (adjacent vertices don't exist in our buffer)
           if (x[iu] === 0 || x[iv] === 0) {
             continue;
           }
@@ -358,6 +361,7 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
   }
 
   // Build normalized normal array from accumulated normals
+  // Negate normals because face normals point inward from winding
   const normals = new Float32Array(vertexCount * 3);
   for (let i = 0; i < vertexCount; i++) {
     const nx = normalAccum[i][0];
@@ -365,9 +369,9 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
     const nz = normalAccum[i][2];
     const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
     if (len > 0.0001) {
-      normals[i * 3] = nx / len;
-      normals[i * 3 + 1] = ny / len;
-      normals[i * 3 + 2] = nz / len;
+      normals[i * 3] = -nx / len;
+      normals[i * 3 + 1] = -ny / len;
+      normals[i * 3 + 2] = -nz / len;
     } else {
       normals[i * 3] = 0;
       normals[i * 3 + 1] = 1;

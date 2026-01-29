@@ -6,7 +6,7 @@ export function setupLighting(): void {
   if (!scene) return;
 
   // Ambient light
-  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.1);
   scene.add(ambient);
 
   // Directional light (sun)
