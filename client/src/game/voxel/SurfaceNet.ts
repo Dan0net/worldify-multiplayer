@@ -67,8 +67,8 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
   const indices: number[] = [];
 
   // Grid to store vertex indices for each cell (for connecting faces)
-  // We use CHUNK_SIZE because cells are defined by their minimum corner
-  const gridSize = CHUNK_SIZE;
+  // We use CHUNK_SIZE+1 to include boundary cells that connect to neighbors
+  const gridSize = CHUNK_SIZE + 1;
   const vertexGrid = new Int32Array(gridSize * gridSize * gridSize).fill(-1);
 
   const getGridIndex = (x: number, y: number, z: number): number => {
@@ -108,9 +108,10 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
 
   // First pass: find surface crossings and create vertices
   // Process all cells including boundary (using margin data for the +1 corners)
-  for (let z = 0; z < CHUNK_SIZE; z++) {
-    for (let y = 0; y < CHUNK_SIZE; y++) {
-      for (let x = 0; x < CHUNK_SIZE; x++) {
+  // We iterate to CHUNK_SIZE (inclusive) to create vertices at chunk boundaries
+  for (let z = 0; z <= CHUNK_SIZE; z++) {
+    for (let y = 0; y <= CHUNK_SIZE; y++) {
+      for (let x = 0; x <= CHUNK_SIZE; x++) {
         // Get weights at all 8 corners of the cell
         const cornerWeights: number[] = [];
         const cornerVoxels: number[] = [];
@@ -209,10 +210,10 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
   }
 
   // Second pass: connect vertices with quads
-  // Iterate over all cells that can have vertices
-  for (let z = 0; z < CHUNK_SIZE; z++) {
-    for (let y = 0; y < CHUNK_SIZE; y++) {
-      for (let x = 0; x < CHUNK_SIZE; x++) {
+  // Iterate over all cells that can have vertices (including boundary)
+  for (let z = 0; z <= CHUNK_SIZE; z++) {
+    for (let y = 0; y <= CHUNK_SIZE; y++) {
+      for (let x = 0; x <= CHUNK_SIZE; x++) {
         const v0 = vertexGrid[getGridIndex(x, y, z)];
         if (v0 < 0) continue;
 
@@ -232,10 +233,10 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
           coords3[axis1]++;
           coords3[axis2]++;
 
-          // Skip if any vertex is outside the valid grid range
-          if (coords1[0] >= CHUNK_SIZE || coords1[1] >= CHUNK_SIZE || coords1[2] >= CHUNK_SIZE) continue;
-          if (coords2[0] >= CHUNK_SIZE || coords2[1] >= CHUNK_SIZE || coords2[2] >= CHUNK_SIZE) continue;
-          if (coords3[0] >= CHUNK_SIZE || coords3[1] >= CHUNK_SIZE || coords3[2] >= CHUNK_SIZE) continue;
+          // Skip if any vertex is outside the valid grid range (now CHUNK_SIZE+1)
+          if (coords1[0] > CHUNK_SIZE || coords1[1] > CHUNK_SIZE || coords1[2] > CHUNK_SIZE) continue;
+          if (coords2[0] > CHUNK_SIZE || coords2[1] > CHUNK_SIZE || coords2[2] > CHUNK_SIZE) continue;
+          if (coords3[0] > CHUNK_SIZE || coords3[1] > CHUNK_SIZE || coords3[2] > CHUNK_SIZE) continue;
 
           const v1 = vertexGrid[getGridIndex(coords1[0], coords1[1], coords1[2])];
           const v2 = vertexGrid[getGridIndex(coords2[0], coords2[1], coords2[2])];
