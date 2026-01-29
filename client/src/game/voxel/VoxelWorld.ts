@@ -4,15 +4,13 @@
 
 import * as THREE from 'three';
 import {
-  CHUNK_SIZE,
-  CHUNK_WORLD_SIZE,
   STREAM_RADIUS,
   INITIAL_TERRAIN_HEIGHT,
   worldToChunk,
   chunkKey,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
-import { meshChunk, isEmptyMesh } from './SurfaceNet.js';
+import { meshChunk } from './SurfaceNet.js';
 import { ChunkMesh } from './ChunkMesh.js';
 
 /**
@@ -325,7 +323,7 @@ export class VoxelWorld {
     chunksLoaded: number;
     meshesVisible: number;
     remeshQueueSize: number;
-    bounds: typeof this.loadedBounds;
+    bounds: { minCx: number; maxCx: number; minCy: number; maxCy: number; minCz: number; maxCz: number };
   } {
     return {
       chunksLoaded: this.chunks.size,

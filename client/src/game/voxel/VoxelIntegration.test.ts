@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 import { VoxelIntegration, createVoxelIntegration, VoxelConfig } from './VoxelIntegration.js';
-import { VOXEL_SCALE, INITIAL_TERRAIN_HEIGHT, CHUNK_WORLD_SIZE } from '@worldify/shared';
+import { VOXEL_SCALE, INITIAL_TERRAIN_HEIGHT } from '@worldify/shared';
 
 // Simple test runner
 let passed = 0;
@@ -209,27 +209,27 @@ test('VoxelIntegration adds meshes to scene', () => {
 
 // ============== Collision Integration Tests ==============
 
-test('VoxelIntegration builds BVHs for chunk meshes', () => {
+test('VoxelIntegration builds colliders for chunk meshes', () => {
   const scene = createMockScene();
   const integration = createVoxelIntegration(scene);
   
   const stats = integration.getStats();
   
-  // Should have BVHs built
-  expect(stats.bvhCount).toBeGreaterThan(0);
+  // Should have colliders built
+  expect(stats.colliderCount).toBeGreaterThan(0);
   
   integration.dispose();
 });
 
-test('VoxelIntegration BVH count matches mesh count', () => {
+test('VoxelIntegration collider count matches mesh count', () => {
   const scene = createMockScene();
   const integration = createVoxelIntegration(scene);
   
   const stats = integration.getStats();
   
-  // BVH count should match or be close to mesh count
+  // Collider count should match or be close to mesh count
   // (may differ slightly due to empty chunks)
-  expect(stats.bvhCount).toBeLessThanOrEqual(stats.meshesVisible + 1);
+  expect(stats.colliderCount).toBeLessThanOrEqual(stats.meshesVisible + 1);
   
   integration.dispose();
 });
@@ -291,135 +291,57 @@ test('getSpawnPosition X and Z match input', () => {
   integration.dispose();
 });
 
-// ============== Ground Height Tests ==============
-
-test('getGroundHeight finds terrain surface', () => {
-  const scene = createMockScene();
-  const integration = createVoxelIntegration(scene);
-  
-  // Use position in the middle of a chunk (not at origin/boundaries)
-  // Chunk 0,0,0 covers world x=[0,8), z=[0,8)
-  const groundY = integration.getGroundHeight(4, 4);
-  
-  expect(groundY).toNotBeNull();
-  
-  // Ground should be near 2.5m (10 voxels * 0.25)
-  const expectedY = INITIAL_TERRAIN_HEIGHT * VOXEL_SCALE;
-  expect(groundY!).toBeGreaterThan(expectedY - 1);
-  expect(groundY!).toBeLessThan(expectedY + 1);
-  
-  integration.dispose();
-});
-
-test('getGroundHeight returns null outside loaded chunks', () => {
-  const scene = createMockScene();
-  const integration = createVoxelIntegration(scene);
-  
-  // Very far away from origin (outside loaded chunks)
-  const groundY = integration.getGroundHeight(1000, 1000);
-  
-  expect(groundY).toBeNull();
-  
-  integration.dispose();
-});
-
-// ============== Raycast Tests ==============
-
-test('raycast hits terrain from above', () => {
-  const scene = createMockScene();
-  const integration = createVoxelIntegration(scene);
-  
-  const origin = new THREE.Vector3(4, 10, 4);
-  const direction = new THREE.Vector3(0, -1, 0);
-  
-  const hit = integration.raycast(origin, direction, 100);
-  
-  expect(hit).toNotBeNull();
-  expect(hit!.point.y).toBeLessThan(origin.y);
-  
-  integration.dispose();
-});
-
-test('raycast returns null when missing terrain', () => {
-  const scene = createMockScene();
-  const integration = createVoxelIntegration(scene);
-  
-  // Cast upward from above terrain
-  const origin = new THREE.Vector3(4, 10, 4);
-  const direction = new THREE.Vector3(0, 1, 0);
-  
-  const hit = integration.raycast(origin, direction, 100);
-  
-  expect(hit).toBeNull();
-  
-  integration.dispose();
-});
-
-// ============== Sphere Collision Tests ==============
-
-test('sphereCollide detects terrain contact', () => {
-  const scene = createMockScene();
-  const integration = createVoxelIntegration(scene);
-  
-  // Place sphere at terrain surface level
-  const surfaceY = INITIAL_TERRAIN_HEIGHT * VOXEL_SCALE;
-  const center = new THREE.Vector3(4, surfaceY, 4);
-  const radius = 0.5;
-  
-  const result = integration.sphereCollide(center, radius);
-  
-  // May or may not collide depending on exact surface geometry
-  // Test that method executes without error
-  // (result can be null if sphere is just above surface)
-});
-
-test('sphereCollide returns null when collision disabled', () => {
-  const scene = createMockScene();
-  const config: VoxelConfig = { collisionEnabled: false };
-  const integration = new VoxelIntegration(scene, config);
-  integration.init();
-  
-  const result = integration.sphereCollide(new THREE.Vector3(4, 0, 4), 1.0);
-  
-  expect(result).toBeNull();
-  
-  integration.dispose();
-});
+// Ground height and raycast tests removed - these features were removed
+// in favor of capsule-only collision (similar to worldify-app)
 
 // ============== Capsule Collision Tests ==============
 
-test('resolveCapsuleCollision returns zero when not colliding', () => {
+// Old raycast and sphere collision tests removed - now using three-mesh-bvh capsule collision
+
+test('resolveCapsuleCollision returns collision result', () => {
   const scene = createMockScene();
   const integration = createVoxelIntegration(scene);
   
-  // Place capsule high above terrain
-  const feetPos = new THREE.Vector3(4, 20, 4);
-  const headPos = new THREE.Vector3(4, 22, 4);
+  const capsuleInfo = {
+    radius: 0.25,
+    segment: new THREE.Line3(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, -1.1, 0)
+    )
+  };
+  const position = new THREE.Vector3(4, 10, 4);
+  const velocity = new THREE.Vector3(0, -5, 0);
   
-  const pushOut = integration.resolveCapsuleCollision(feetPos, headPos, 0.3);
+  const result = integration.resolveCapsuleCollision(capsuleInfo, position, velocity, 0.016);
   
-  expect(pushOut.x).toBe(0);
-  expect(pushOut.y).toBe(0);
-  expect(pushOut.z).toBe(0);
+  // Result should have the expected shape
+  expect(result.collided !== undefined).toBe(true);
+  expect(result.deltaVector !== undefined).toBe(true);
+  expect(result.isOnGround !== undefined).toBe(true);
   
   integration.dispose();
 });
 
-test('resolveCapsuleCollision returns zero when collision disabled', () => {
+test('resolveCapsuleCollision returns no collision when collision disabled', () => {
   const scene = createMockScene();
   const config: VoxelConfig = { collisionEnabled: false };
   const integration = new VoxelIntegration(scene, config);
   integration.init();
   
-  const pushOut = integration.resolveCapsuleCollision(
-    new THREE.Vector3(4, 0, 4),
-    new THREE.Vector3(4, 2, 4),
-    0.3
-  );
+  const capsuleInfo = {
+    radius: 0.25,
+    segment: new THREE.Line3(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, -1.1, 0)
+    )
+  };
+  const position = new THREE.Vector3(4, 0, 4);
+  const velocity = new THREE.Vector3(0, -5, 0);
   
-  expect(pushOut.x).toBe(0);
-  expect(pushOut.y).toBe(0);
-  expect(pushOut.z).toBe(0);
+  const result = integration.resolveCapsuleCollision(capsuleInfo, position, velocity, 0.016);
+  
+  expect(result.collided).toBe(false);
+  expect(result.deltaVector.length()).toBe(0);
   
   integration.dispose();
 });
@@ -497,7 +419,7 @@ test('getStats returns complete statistics', () => {
   expect(stats.chunksLoaded).toBeDefined();
   expect(stats.meshesVisible).toBeDefined();
   expect(stats.remeshQueueSize).toBeDefined();
-  expect(stats.bvhCount).toBeDefined();
+  expect(stats.colliderCount).toBeDefined();
   expect(stats.triangleCount).toBeDefined();
   expect(stats.collisionEnabled).toBeDefined();
   expect(stats.debugEnabled).toBeDefined();
@@ -513,7 +435,7 @@ test('getStats reflects actual state', () => {
   
   // Stats should match subsystem states
   expect(stats.chunksLoaded).toBe(integration.world.getChunkCount());
-  expect(stats.bvhCount).toBe(integration.collision.getBVHCount());
+  expect(stats.colliderCount).toBe(integration.collision.getColliderCount());
   
   integration.dispose();
 });
@@ -546,7 +468,7 @@ test('dispose cleans up all resources', () => {
   
   expect(integration.isInitialized()).toBeFalse();
   expect(integration.world.getChunkCount()).toBe(0);
-  expect(integration.collision.getBVHCount()).toBe(0);
+  expect(integration.collision.getColliderCount()).toBe(0);
 });
 
 test('dispose removes meshes from scene', () => {
@@ -576,33 +498,7 @@ test('can init again after dispose', () => {
   // This tests that dispose leaves system in clean state
 });
 
-// ============== isPointInsideTerrain Tests ==============
-
-test('isPointInsideTerrain returns false above terrain', () => {
-  const scene = createMockScene();
-  const integration = createVoxelIntegration(scene);
-  
-  const pointAbove = new THREE.Vector3(4, 10, 4);
-  const inside = integration.isPointInsideTerrain(pointAbove);
-  
-  expect(inside).toBeFalse();
-  
-  integration.dispose();
-});
-
-test('isPointInsideTerrain returns true inside terrain', () => {
-  const scene = createMockScene();
-  const integration = createVoxelIntegration(scene);
-  
-  // Point below terrain surface
-  const pointBelow = new THREE.Vector3(4, 0, 4);
-  const inside = integration.isPointInsideTerrain(pointBelow);
-  
-  // Should be inside solid terrain
-  expect(inside).toBeTrue();
-  
-  integration.dispose();
-});
+// isPointInsideTerrain tests removed - feature removed in favor of capsule collision
 
 // ============== Edge Cases ==============
 

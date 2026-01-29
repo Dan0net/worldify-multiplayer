@@ -66,6 +66,9 @@ export class GameCore {
       });
       this.voxelIntegration.init();
       
+      // Connect player to voxel collision system
+      this.localPlayer.setVoxelIntegration(this.voxelIntegration);
+      
       // Set player spawn position above terrain
       const spawnPos = this.voxelIntegration.getSpawnPosition(0, 0);
       this.localPlayer.position.copy(spawnPos);

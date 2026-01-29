@@ -1,6 +1,9 @@
 /**
  * Local player controller
  * Handles input, movement, physics, and voxel terrain collision
+ * 
+ * Uses physics sub-stepping and capsule collision with three-mesh-bvh,
+ * similar to worldify-app's Player.ts implementation.
  */
 
 import * as THREE from 'three';
@@ -16,14 +19,17 @@ import {
 } from '@worldify/shared';
 import { Controls } from './controls';
 import type { VoxelIntegration } from '../voxel/VoxelIntegration';
+import type { CapsuleInfo } from '../voxel/VoxelCollision';
 
 // Physics constants
-const MOVE_SPEED = 5.0;
+const MOVE_SPEED = 6.0;
 const SPRINT_MULTIPLIER = 1.6;
-const GRAVITY = 20.0;
-const JUMP_VELOCITY = 8.0;
-const PLAYER_HEIGHT = 1.6; // Eye height
-const PLAYER_RADIUS = 0.3; // Collision capsule radius
+const GRAVITY = -40.0; // Negative because Y is up
+const JUMP_VELOCITY = 15.0;
+const PLAYER_HEIGHT = 1.6; // Total height from feet to eyes
+const PLAYER_RADIUS = 0.25; // Collision capsule radius
+const PLAYER_HEIGHT_INNER = PLAYER_HEIGHT - PLAYER_RADIUS * 2; // Height of capsule line segment
+const PHYSICS_STEPS = 5; // Number of physics sub-steps per frame
 
 export class PlayerLocal {
   // Position (client authoritative for vertical, server for horizontal)
@@ -40,6 +46,15 @@ export class PlayerLocal {
   // State
   private isGrounded = false;
   private inputSeq = 0;
+
+  // Capsule info (reused each frame)
+  private capsuleInfo: CapsuleInfo = {
+    radius: PLAYER_RADIUS,
+    segment: new THREE.Line3(
+      new THREE.Vector3(0, 0, 0), // Start (head)
+      new THREE.Vector3(0, -PLAYER_HEIGHT_INNER, 0) // End (feet)
+    ),
+  };
 
   /**
    * Set the voxel integration for collision detection
@@ -73,9 +88,10 @@ export class PlayerLocal {
 
   /**
    * Update local player physics and movement
+   * Uses sub-stepping for stable physics at any frame rate
    */
   update(deltaMs: number, controls: Controls): void {
-    const dt = deltaMs / 1000;
+    const dt = Math.min(deltaMs / 1000, 0.1); // Cap at 100ms to prevent spiral of death
     const buttons = controls.getButtonMask();
 
     // Use controls directly for responsive camera
@@ -88,8 +104,24 @@ export class PlayerLocal {
       this.isGrounded = false;
     }
 
+    // Run physics in sub-steps for stability
+    const deltaStep = dt / PHYSICS_STEPS;
+    for (let i = 0; i < PHYSICS_STEPS; i++) {
+      this.physicsStep(deltaStep, buttons);
+    }
+  }
+
+  /**
+   * Single physics sub-step
+   */
+  private physicsStep(dt: number, buttons: number): void {
     // Apply gravity
-    this.velocity.y -= GRAVITY * dt;
+    if (this.isGrounded) {
+      // Small downward force to keep grounded
+      this.velocity.y = GRAVITY * dt;
+    } else {
+      this.velocity.y += GRAVITY * dt;
+    }
 
     // Apply vertical velocity
     this.position.y += this.velocity.y * dt;
@@ -126,72 +158,39 @@ export class PlayerLocal {
     }
 
     // Apply voxel terrain collision
-    this.resolveTerrainCollision();
+    this.resolveTerrainCollision(dt);
   }
 
   /**
-   * Resolve collision with voxel terrain using BVH
+   * Resolve collision with voxel terrain using capsule collision.
+   * Uses three-mesh-bvh's shapecast for efficient collision detection,
+   * similar to worldify-app's Player.ts collisionUpdate method.
    */
-  private resolveTerrainCollision(): void {
+  private resolveTerrainCollision(dt: number): void {
     if (!this.voxelIntegration) return;
 
-    // PRIMARY: Use raycast for reliable ground detection
-    // Cast from player position downward to find ground
-    const rayOrigin = new THREE.Vector3(
-      this.position.x,
-      this.position.y + 1, // Start slightly above current position
-      this.position.z
-    );
-    const rayDirection = new THREE.Vector3(0, -1, 0);
-    
-    const hit = this.voxelIntegration.raycast(rayOrigin, rayDirection, 20);
-    
-    if (hit) {
-      const groundY = hit.point.y;
-      const feetY = this.position.y - PLAYER_HEIGHT;
-      
-      // If feet are below or at ground level, snap to ground
-      if (feetY <= groundY + 0.05) {
-        this.position.y = groundY + PLAYER_HEIGHT;
-        
-        // Only stop falling if we were moving down
-        if (this.velocity.y < 0) {
-          this.velocity.y = 0;
-          this.isGrounded = true;
-        }
-      } else {
-        // Check if we're close enough to ground to be "grounded"
-        if (feetY < groundY + 0.1) {
-          this.isGrounded = true;
-        } else {
-          this.isGrounded = false;
-        }
-      }
-    }
-
-    // SECONDARY: Use capsule collision for horizontal walls
-    const feetPos = new THREE.Vector3(
-      this.position.x,
-      this.position.y - PLAYER_HEIGHT + PLAYER_RADIUS,
-      this.position.z
-    );
-    const headPos = new THREE.Vector3(
-      this.position.x,
-      this.position.y - PLAYER_RADIUS,
-      this.position.z
+    // Get collision result using capsule-based collision
+    const result = this.voxelIntegration.resolveCapsuleCollision(
+      this.capsuleInfo,
+      this.position,
+      this.velocity,
+      dt
     );
 
-    const pushOut = this.voxelIntegration.resolveCapsuleCollision(
-      feetPos,
-      headPos,
-      PLAYER_RADIUS
-    );
+    // Update grounded state from collision result
+    this.isGrounded = result.isOnGround;
 
-    // Only apply horizontal push-out (walls)
-    // Vertical is handled by raycast above
-    if (Math.abs(pushOut.x) > 0.001 || Math.abs(pushOut.z) > 0.001) {
-      this.position.x += pushOut.x;
-      this.position.z += pushOut.z;
+    // Apply position correction
+    this.position.add(result.deltaVector);
+
+    // Adjust velocity based on collision
+    if (!this.isGrounded && result.collided) {
+      // Remove velocity component in collision direction
+      const deltaDir = result.deltaVector.clone().normalize();
+      this.velocity.addScaledVector(deltaDir, -deltaDir.dot(this.velocity));
+    } else if (this.isGrounded) {
+      // On ground - zero out velocity
+      this.velocity.set(0, 0, 0);
     }
   }
 
