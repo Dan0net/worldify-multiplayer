@@ -13,6 +13,9 @@ export * from './util/quantize.js';
 export * from './voxel/constants.js';
 export * from './voxel/voxelData.js';
 
+// Terrain generation
+export * from './terrain/index.js';
+
 // Re-export commonly used types for convenience
 export type { MovementInput, PlayerPosition } from './protocol/movement.js';
 export type { PlayerSnapshot, RoomSnapshot } from './protocol/snapshot.js';

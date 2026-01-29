@@ -5,9 +5,9 @@
 import * as THREE from 'three';
 import {
   STREAM_RADIUS,
-  INITIAL_TERRAIN_HEIGHT,
   worldToChunk,
   chunkKey,
+  TerrainGenerator,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk } from './SurfaceNet.js';
@@ -42,8 +42,12 @@ export class VoxelWorld {
   /** Whether the world has been initialized */
   private initialized = false;
 
-  constructor(scene: THREE.Scene) {
+  /** Terrain generator for procedural chunk generation */
+  private readonly terrainGenerator: TerrainGenerator;
+
+  constructor(scene: THREE.Scene, seed: number = 12345) {
     this.scene = scene;
+    this.terrainGenerator = new TerrainGenerator({ seed });
   }
 
   /**
@@ -189,15 +193,25 @@ export class VoxelWorld {
   }
 
   /**
-   * Generate a new chunk with terrain data.
-   * For now: flat terrain at INITIAL_TERRAIN_HEIGHT.
+   * Generate a new chunk with terrain data using procedural generation.
    */
   generateChunk(cx: number, cy: number, cz: number): Chunk {
     const chunk = new Chunk(cx, cy, cz);
-    
-    // Generate flat terrain at global Y = INITIAL_TERRAIN_HEIGHT (10 voxels = 2.5m)
-    chunk.generateFlatGlobal(INITIAL_TERRAIN_HEIGHT, 0, 16);
-    
+    // Generate terrain using the terrain generator
+    const generatedData = this.terrainGenerator.generateChunk(cx, cy, cz);
+    chunk.data.set(generatedData);
+    chunk.dirty = true;
+
+    // Debug: count solid voxels (material > 0)
+    let solidCount = 0;
+    for (let i = 0; i < generatedData.length; i++) {
+      // Material is bits 5-11 (see shared/src/voxel/constants.ts)
+      const material = (generatedData[i] >> 5) & 0x7F;
+      if (material > 0) solidCount++;
+    }
+    // eslint-disable-next-line no-console
+    console.log(`Chunk [${cx},${cy},${cz}] solid voxels: ${solidCount}`);
+
     return chunk;
   }
 

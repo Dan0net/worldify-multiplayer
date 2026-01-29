@@ -176,16 +176,25 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
 
           positions.push(vertX, vertY, vertZ);
 
-          // Calculate normal using gradient of the weight field
-          // Sample gradient using the corner weights
-          // Gradient points from high weight (solid) to low weight (empty)
-          // We want normal to point from solid toward empty (outward)
-          const nx = (cornerWeights[0] + cornerWeights[2] + cornerWeights[4] + cornerWeights[6]) -
-                     (cornerWeights[1] + cornerWeights[3] + cornerWeights[5] + cornerWeights[7]);
-          const ny = (cornerWeights[0] + cornerWeights[1] + cornerWeights[2] + cornerWeights[3]) -
-                     (cornerWeights[4] + cornerWeights[5] + cornerWeights[6] + cornerWeights[7]);
-          const nz = (cornerWeights[0] + cornerWeights[1] + cornerWeights[4] + cornerWeights[5]) -
-                     (cornerWeights[2] + cornerWeights[3] + cornerWeights[6] + cornerWeights[7]);
+          // Calculate normal using central differences at the vertex position
+          // This produces smoother normals than using corner weights directly
+          const vxi = Math.floor(vertX);
+          const vyi = Math.floor(vertY);
+          const vzi = Math.floor(vertZ);
+          
+          // Sample weight field around the vertex position using central differences
+          const wxp = getW(vxi + 1, vyi, vzi);
+          const wxn = getW(vxi - 1, vyi, vzi);
+          const wyp = getW(vxi, vyi + 1, vzi);
+          const wyn = getW(vxi, vyi - 1, vzi);
+          const wzp = getW(vxi, vyi, vzi + 1);
+          const wzn = getW(vxi, vyi, vzi - 1);
+          
+          // Gradient points from solid (positive weight) to air (negative weight)
+          // Normal should point outward (from solid to air)
+          let nx = (isValidWeight(wxp) && isValidWeight(wxn)) ? (wxn - wxp) : 0;
+          let ny = (isValidWeight(wyp) && isValidWeight(wyn)) ? (wyn - wyp) : 0;
+          let nz = (isValidWeight(wzp) && isValidWeight(wzn)) ? (wzn - wzp) : 0;
 
           // Normalize
           const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
@@ -254,13 +263,13 @@ export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceN
 
           // Determine winding order based on which side is solid
           if (w0 > 0) {
-            // Solid on negative side of axis
-            indices.push(v0, v1, v3);
-            indices.push(v0, v3, v2);
-          } else {
-            // Solid on positive side of axis
+            // Solid on negative side of axis (flip winding)
             indices.push(v0, v3, v1);
             indices.push(v0, v2, v3);
+          } else {
+            // Solid on positive side of axis (flip winding)
+            indices.push(v0, v1, v3);
+            indices.push(v0, v3, v2);
           }
         }
       }
