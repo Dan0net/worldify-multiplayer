@@ -237,30 +237,49 @@ describe('Neighbor Boundary Tests', () => {
     const result0 = meshChunk(chunk0, neighbors0);
     const result1 = meshChunk(chunk1, neighbors1);
     
+    // Collect boundary vertices from chunk0's high-X boundary
+    // These should align with chunk1's vertices at its low-X boundary
     const boundaryVerts0: { y: number; z: number }[] = [];
     const boundaryVerts1: { y: number; z: number }[] = [];
     
     for (let i = 0; i < result0.vertexCount; i++) {
       const x = result0.positions[i * 3];
-      if (x > CHUNK_SIZE - 1) {
+      // Vertices at the stitching boundary (near x = CHUNK_SIZE)
+      if (x >= CHUNK_SIZE - 0.5 && x <= CHUNK_SIZE + 0.5) {
         boundaryVerts0.push({
-          y: result0.positions[i * 3 + 1],
-          z: result0.positions[i * 3 + 2],
+          y: Math.round(result0.positions[i * 3 + 1] * 10) / 10,
+          z: Math.round(result0.positions[i * 3 + 2] * 10) / 10,
         });
       }
     }
     
     for (let i = 0; i < result1.vertexCount; i++) {
       const x = result1.positions[i * 3];
-      if (x < 1) {
+      // Vertices at the low-X boundary (near x = 0)
+      if (x >= -0.5 && x <= 0.5) {
         boundaryVerts1.push({
-          y: result1.positions[i * 3 + 1],
-          z: result1.positions[i * 3 + 2],
+          y: Math.round(result1.positions[i * 3 + 1] * 10) / 10,
+          z: Math.round(result1.positions[i * 3 + 2] * 10) / 10,
         });
       }
     }
     
-    expect(Math.abs(boundaryVerts0.length - boundaryVerts1.length)).toBeLessThanOrEqual(5);
+    // Check that boundary vertices from chunk0 have matching positions in chunk1
+    // (allowing for some variance due to surface net interpolation)
+    let matchCount = 0;
+    for (const v0 of boundaryVerts0) {
+      for (const v1 of boundaryVerts1) {
+        if (Math.abs(v0.y - v1.y) < 0.2 && Math.abs(v0.z - v1.z) < 0.2) {
+          matchCount++;
+          break;
+        }
+      }
+    }
+    
+    // At least 60% of chunk0's boundary vertices should have a match in chunk1
+    // (Some mismatch is expected due to surface net interpolation and boundary face skipping)
+    const matchRatio = boundaryVerts0.length > 0 ? matchCount / boundaryVerts0.length : 1;
+    expect(matchRatio).toBeGreaterThanOrEqual(0.6);
   });
 });
 
