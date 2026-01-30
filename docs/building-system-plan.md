@@ -110,51 +110,116 @@ Client requests full chunk data for a specific chunk coordinate.
 
 ### Phase 3: Client Build System (`client/src/game/build/`)
 
-#### 3.1 Create `BuildPreview.ts` - Real-time preview as player moves
-- Uses temp chunk data (doesn't modify real chunks)
-- Updates on every frame when building mode is active
-- Raycasts to find build position
-- Calls `drawToChunk()` with `isPreview=true`
+**Priority:** Visual feedback first (marker + UI), then voxel modification.
 
-#### 3.2 Create `Builder.ts` - Main build controller
-```typescript
-class Builder {
-  private config: BuildConfig;
-  private previewChunks: Set<string>;  // Chunks showing preview
-  
-  update(playerPos, cameraDir): void  // Update preview
-  place(): void                        // Send BUILD_INTENT to server
-  cancel(): void                       // Clear preview
-  setShape/setMode/setMaterial/etc.
-}
-```
+---
 
-#### 3.3 Modify `VoxelWorld.ts`
-- Add `applyBuild(intent: VoxelBuildIntent)` - applies build using shared drawing functions
-- Add `showPreview(center, rotation, config)` using temp buffers
-- Add `clearPreview()` to restore from temp buffers
-- Handle `VOXEL_BUILD_COMMIT`: apply the echoed intent locally
-- Handle `VOXEL_CHUNK_DATA`: replace/create chunk with server data
+#### Stage 3.1: Build Presets (`shared/src/voxel/buildPresets.ts`)
 
-#### 3.4 Create `BuildMarker.ts` - Visual indicator for build target
-- Wireframe representation of current shape
-- Snapping indicators (grid, surface normal)
+Define `BuildPreset` interface and `DEFAULT_BUILD_PRESETS` array.
+
+- `id` (0-9), `name`, `config` (BuildConfig), `align` (CENTER | BASE | SURFACE)
+- Preset 0 = "None" (disabled)
+- Export from shared so server can validate
+
+---
+
+#### Stage 3.2: Store & Bridge Updates
+
+**Extend existing `store.ts`** - add build state:
+- `buildPresetId: number`, `buildRotation: number` (0-7 = 0°-315°)
+
+**Extend existing `bridge.ts`** - add build accessors:
+- `get/set buildPresetId`, `get/set buildRotation`
+
+No new files - extend what exists.
+
+---
+
+#### Stage 3.3: Input Handling (Extend `Controls`)
+
+**Extend existing `client/src/game/player/controls.ts`** - don't create new file.
+
+Add to existing `onKeyDown`:
+- `Digit1`-`Digit9` → select preset 1-9
+- `Digit0` → select preset 0 (disable)
+- `KeyQ` → rotate -1
+- `KeyE` → rotate +1
+
+Add `onWheel` handler → rotate ±1
+
+Add `onClick` handler → call `Builder.place()` if preset active
+
+Expose via bridge, not direct coupling.
+
+---
+
+#### Stage 3.4: Build Marker (`client/src/game/build/BuildMarker.ts`)
+
+Single class for wireframe indicator.
+
+- Creates Box/Sphere/Cylinder wireframes (Three.js)
+- `update(camera, collisionMeshes)` - raycast and position
+- `setPreset(preset)` - switch wireframe shape/size
+- `setRotation(steps)` - apply Y rotation
+- Color: green = valid, red = too far
+
+No state management - pure rendering. Gets data from Builder.
+
+---
+
+#### Stage 3.5: Builder (`client/src/game/build/Builder.ts`)
+
+Single coordinator class. Minimal responsibilities:
+
+- Owns BuildMarker instance
+- `update(camera, collisionMeshes)` - called from GameCore loop
+- `selectPreset(id)` - updates store via bridge
+- `rotate(direction)` - updates store via bridge  
+- `place()` - sends network message (later: optimistic apply)
+- Reads state from bridge, doesn't duplicate it
+
+---
+
+#### Stage 3.6: Build UI (`client/src/ui/BuildToolbar.tsx`)
+
+React component reads from store (not bridge).
+
+- Shows preset name, mode icon, rotation
+- Hides when preset 0
+- Hotkey hints
+
+---
+
+#### Stage 3.7: Voxel Preview (LATER)
+
+Only after marker works. Extends ChunkMesh:
+
+- `tempData` buffer for non-destructive preview
+- Visual mesh from tempData, collision mesh unchanged
+- BuildPreview class coordinates preview rendering
+
+---
+
+#### Stage 3.8: Optimistic Apply (LATER)
+
+On place, apply to real data before server confirms.
+
+- Track pending builds for rollback
+- Request resync on rejection
 
 ---
 
 ### Phase 4: Server Build Handling (`server/src/rooms/`)
 
 #### 4.1 Create `BuildHandler.ts`
-```typescript
-class BuildHandler {
-  handleBuildIntent(player, intent): void {
-    // 1. Validate player can build (distance, permissions, rate limit)
-    // 2. Apply build to server chunk data using shared drawing functions
-    // 3. Track which chunks were modified (for streaming)
-    // 4. Broadcast VOXEL_BUILD_COMMIT with the original intent to all players
-    // 5. Update server-side collision for physics validation
-  }
-}
+
+Responsibilities:
+- Validate player can build (distance, permissions, rate limit)
+- Apply build to server chunk data using shared drawing functions
+- Track modified chunks for streaming
+- Broadcast VOXEL_BUILD_COMMIT to all players
+- Update server-side collision
 ```
 
 #### 4.2 Modify Room to maintain voxel state
@@ -168,10 +233,9 @@ class BuildHandler {
 ### Phase 5: Collision Updates
 
 #### 5.1 Client collision (`client/src/game/voxel/VoxelCollision.ts`)
-- Already exists for terrain
-- Add `rebuildCollision(chunkKey)` after confirmed builds
+- Already exists - add `rebuildCollision(chunkKey)` after confirmed builds
 
-#### 5.2 Server collision (new `server/src/voxel/`)
+#### 5.2 Server collision
 - Port VoxelCollision for server-side physics validation
 - Prevent building inside solid terrain / other players
 
@@ -181,59 +245,72 @@ class BuildHandler {
 
 ```
 shared/src/voxel/
-├── buildTypes.ts      # BuildMode, BuildShape, BuildConfig
-├── shapes.ts          # SDF functions (sphere, cube, cylinder, prism)
-├── drawing.ts         # drawToChunk, apply functions
-├── Chunk.ts           # Add draw(), tempData support
-└── index.ts           # Export all
+├── buildTypes.ts      # BuildMode, BuildShape, BuildConfig (exists)
+├── buildPresets.ts    # BuildPreset, DEFAULT_BUILD_PRESETS (new)
+├── shapes.ts          # SDF functions (exists)
+├── drawing.ts         # drawToChunk (exists)
+└── Chunk.ts           # tempData support (extend)
 
-shared/src/protocol/
-├── buildMessages.ts   # Binary encode/decode for build messages
-└── msgIds.ts          # Already has build message IDs
+client/src/game/player/
+└── controls.ts        # Extend with build keys (exists)
 
 client/src/game/build/
-├── Builder.ts         # Main controller
-├── BuildPreview.ts    # Real-time preview
-├── BuildMarker.ts     # Visual wireframe indicator
-└── index.ts
+├── Builder.ts         # Coordinator (new)
+└── BuildMarker.ts     # Wireframe indicator (new)
+
+client/src/state/
+├── store.ts           # Add buildPresetId, buildRotation (extend)
+└── bridge.ts          # Add build accessors (extend)
+
+client/src/ui/
+└── BuildToolbar.tsx   # Build UI (new)
 
 server/src/rooms/
-├── BuildHandler.ts    # Validate and apply builds
-└── room.ts            # Wire up build handling
+└── BuildHandler.ts    # Validate and apply (new)
 ```
 
 ---
 
 ## Implementation Order
 
-1. **Phase 1** (shared drawing) - Foundation, needed by both client and server
-2. **Phase 3.1-3.2** (client preview/builder) - Test drawing locally without network
-3. **Phase 2** (network protocol) - Define messages
-4. **Phase 4** (server handling) - Server-authoritative builds
-5. **Phase 3.3-3.4** (client integration) - Connect to VoxelWorld
-6. **Phase 5** (collision) - Physics updates after builds
+### Phase 1: Shared Foundation (Done)
+1. ✓ `buildTypes.ts`, `shapes.ts`, `drawing.ts`
+
+### Phase 3: Client Build System
+
+**Visual feedback first:**
+1. `buildPresets.ts` - Define presets in shared
+2. Extend `store.ts` + `bridge.ts` - Build state
+3. Extend `controls.ts` - Build input handling
+4. `BuildMarker.ts` - Wireframe at raycast hit
+5. `Builder.ts` - Coordinator
+6. `BuildToolbar.tsx` - UI
+
+**Voxel modification (later):**
+7. Extend `ChunkMesh.ts` - Visual/collision mesh separation
+8. Extend `Chunk.ts` - tempData buffer
+9. Optimistic apply in VoxelWorld
+
+### Phase 2 & 4: Network + Server (After client works locally)
 
 ---
 
 ## Key Design Decisions
 
-1. **Drawing functions in shared** - Same code on server and all clients ensures determinism
-2. **Temp buffer for preview** - Non-destructive preview that can be instantly reverted
-3. **Server-authoritative** - Client sends intent, server validates and broadcasts result
-4. **Echo intent, not patches** - Server broadcasts the original intent; clients apply it locally using shared drawing code. This is simpler and ensures all clients produce identical results.
-5. **Full chunk sync for streaming** - When clients need chunk data (new player, streaming into view, resync), send full chunk with `lastBuildSeq`. No need for complex delta tracking.
-6. **Sequence numbers** - `buildSeq` ensures ordering; clients can detect if they missed a build and request chunk resync
-7. **Error codes** - Server returns specific rejection reasons (too_far, no_permission, collision, rate_limited)
+1. **Extend existing files** - Don't create new files when extending works (DRY)
+2. **Single responsibility** - Controls handles input, Builder coordinates, Marker renders
+3. **State via bridge** - Game code reads/writes store through bridge only
+4. **Shared presets** - Both client and server reference same preset definitions
+5. **Visual first** - Wireframe marker works before voxel modification
+6. **Temp buffer isolation** - Preview never affects collision raycast
 
 ---
 
 ## Reference: worldify-app Key Files
 
-| Component | File | Key Functions |
-|-----------|------|---------------|
-| Builder controller | `src/builder/Builder.ts` | `draw()`, `place()`, `raycast()`, `project()` |
-| Build presets | `src/builder/BuildPresets.ts` | `BuildPreset`, `BuildPresetMode`, `BuildPresetShape` |
-| Chunk coordinator | `src/3d/ChunkCoordinator.ts` | `drawToChunks()`, `clearDrawToChunks()` |
-| Chunk drawing | `src/3d/Chunk.ts` | `draw()`, `drawSphere/Cube/Cylinder/Prism()` |
-| Grid modification | `src/3d/ChunkMesh.ts` | `drawGridAdd/Subtract/Paint/Fill()` |
-| Utility functions | `src/utils/functions.ts` | `packGridValue()`, `unpackGridValue()`, `clamp()` |
+| Component | File |
+|-----------|------|
+| Builder controller | `src/builder/Builder.ts` |
+| Build presets | `src/builder/BuildPresets.ts` |
+| Chunk drawing | `src/3d/Chunk.ts` |
+| Grid modification | `src/3d/ChunkMesh.ts` |
