@@ -1,5 +1,6 @@
 /**
  * Binary message decoding (server -> client)
+ * Uses MessageRegistry pattern for extensible message handling.
  */
 
 import {
@@ -18,6 +19,7 @@ import {
   BuildCommit,
 } from '@worldify/shared';
 import { storeBridge } from '../state/bridge';
+import { registerHandler, dispatch } from './MessageRegistry';
 
 // Callback for snapshot updates (set by game core)
 let onSnapshotCallback: ((snapshot: RoomSnapshot) => void) | null = null;
@@ -39,37 +41,12 @@ export function onBuildCommit(callback: (commit: BuildCommit) => void): void {
   onBuildCommitCallback = callback;
 }
 
+/**
+ * Decode and dispatch an incoming binary message.
+ * Delegates to registered handlers via MessageRegistry.
+ */
 export function decodeMessage(data: Uint8Array): void {
-  if (data.length === 0) return;
-
-  const reader = new ByteReader(data);
-  const msgId = reader.readUint8();
-
-  switch (msgId) {
-    case MSG_WELCOME:
-      handleWelcome(reader);
-      break;
-    case MSG_ROOM_INFO:
-      handleRoomInfo(reader);
-      break;
-    case MSG_SNAPSHOT:
-      handleSnapshot(reader);
-      break;
-    case MSG_BUILD_COMMIT:
-      handleBuildCommit(reader);
-      break;
-    case MSG_BUILD_SYNC:
-      handleBuildSync(reader);
-      break;
-    case MSG_ERROR:
-      handleError(reader);
-      break;
-    case MSG_PONG:
-      handlePong(reader);
-      break;
-    default:
-      console.warn('Unknown message ID:', msgId);
-  }
+  dispatch(data);
 }
 
 function handleWelcome(reader: ByteReader): void {
@@ -136,3 +113,12 @@ function handlePong(reader: ByteReader): void {
   const ping = Date.now() - timestamp;
   storeBridge.updatePing(ping);
 }
+
+// Register all message handlers
+registerHandler(MSG_WELCOME, handleWelcome);
+registerHandler(MSG_ROOM_INFO, handleRoomInfo);
+registerHandler(MSG_SNAPSHOT, handleSnapshot);
+registerHandler(MSG_BUILD_COMMIT, handleBuildCommit);
+registerHandler(MSG_BUILD_SYNC, handleBuildSync);
+registerHandler(MSG_ERROR, handleError);
+registerHandler(MSG_PONG, handlePong);

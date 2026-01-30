@@ -1,5 +1,6 @@
 /**
  * Binary message decoding (client -> server)
+ * Uses MessageRegistry pattern for extensible message handling.
  */
 
 import {
@@ -18,32 +19,14 @@ import { roomManager } from '../rooms/roomManager.js';
 import { encodePong } from '@worldify/shared';
 import { commitBuild, getBuildsSince } from '../rooms/buildLog.js';
 import { broadcast } from '../ws/wsServer.js';
+import { registerHandler, dispatch } from './MessageRegistry.js';
 
+/**
+ * Decode and dispatch an incoming binary message.
+ * Delegates to registered handlers via MessageRegistry.
+ */
 export function decodeMessage(roomId: string, playerId: number, data: Uint8Array): void {
-  if (data.length === 0) return;
-
-  const reader = new ByteReader(data);
-  const msgId = reader.readUint8();
-
-  switch (msgId) {
-    case MSG_JOIN:
-      handleJoin(roomId, playerId, reader);
-      break;
-    case MSG_INPUT:
-      handleInput(roomId, playerId, reader);
-      break;
-    case MSG_BUILD_INTENT:
-      handleBuildIntent(roomId, playerId, reader);
-      break;
-    case MSG_ACK_BUILD:
-      handleAckBuild(roomId, playerId, reader);
-      break;
-    case MSG_PING:
-      handlePing(roomId, playerId, reader);
-      break;
-    default:
-      console.warn(`[decode] Unknown message ID: ${msgId}`);
-  }
+  dispatch(roomId, playerId, data);
 }
 
 function handleJoin(_roomId: string, playerId: number, reader: ByteReader): void {
@@ -141,3 +124,10 @@ function handlePing(roomId: string, playerId: number, reader: ByteReader): void 
     ws.send(encodePong(timestamp));
   }
 }
+
+// Register all message handlers
+registerHandler(MSG_JOIN, handleJoin);
+registerHandler(MSG_INPUT, handleInput);
+registerHandler(MSG_BUILD_INTENT, handleBuildIntent);
+registerHandler(MSG_ACK_BUILD, handleAckBuild);
+registerHandler(MSG_PING, handlePing);
