@@ -1,9 +1,8 @@
 import type { WebSocket } from 'ws';
-import { TERRITORY_GRID_SIZE } from '@worldify/shared';
+import { TERRITORY_GRID_SIZE, PLAYER_HEIGHT, GROUND_LEVEL } from '@worldify/shared';
 
-// Physics constants
-export const PLAYER_EYE_HEIGHT = 1.6;
-export const GROUND_LEVEL = 0;
+// Re-export for backward compatibility (prefer importing directly from shared)
+export const PLAYER_EYE_HEIGHT = PLAYER_HEIGHT;
 
 /**
  * Server-side player state (authoritative)

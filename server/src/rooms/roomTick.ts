@@ -19,15 +19,14 @@ import {
   INPUT_SPRINT,
   PlayerSnapshot,
   FLAG_SPRINTING,
+  // Physics constants from shared (ensures client/server consistency)
+  MOVE_SPEED,
+  SPRINT_MULTIPLIER,
 } from '@worldify/shared';
 import { encodeSnapshot } from '../net/encode.js';
 
 const TICK_INTERVAL_MS = 1000 / SERVER_TICK_HZ;
 const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_HZ;
-
-// Movement constants (horizontal only - client handles vertical physics)
-const MOVE_SPEED = 5.0; // meters per second
-const SPRINT_MULTIPLIER = 1.6;
 
 export function startRoomTick(room: Room): void {
   // Start game tick

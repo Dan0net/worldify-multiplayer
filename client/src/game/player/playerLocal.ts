@@ -16,20 +16,18 @@ import {
   INPUT_RIGHT,
   INPUT_JUMP,
   INPUT_SPRINT,
+  // Physics constants from shared
+  MOVE_SPEED,
+  SPRINT_MULTIPLIER,
+  GRAVITY,
+  JUMP_VELOCITY,
+  PLAYER_HEIGHT_INNER,
+  PLAYER_RADIUS,
+  PHYSICS_STEPS,
 } from '@worldify/shared';
 import { Controls } from './controls';
 import type { VoxelIntegration } from '../voxel/VoxelIntegration';
 import type { CapsuleInfo } from '../voxel/VoxelCollision';
-
-// Physics constants
-const MOVE_SPEED = 6.0;
-const SPRINT_MULTIPLIER = 1.6;
-const GRAVITY = -40.0; // Negative because Y is up
-const JUMP_VELOCITY = 15.0;
-const PLAYER_HEIGHT = 1.6; // Total height from feet to eyes
-const PLAYER_RADIUS = 0.25; // Collision capsule radius
-const PLAYER_HEIGHT_INNER = PLAYER_HEIGHT - PLAYER_RADIUS * 2; // Height of capsule line segment
-const PHYSICS_STEPS = 5; // Number of physics sub-steps per frame
 
 export class PlayerLocal {
   // Position (client authoritative for vertical, server for horizontal)
