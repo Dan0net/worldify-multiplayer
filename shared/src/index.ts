@@ -11,6 +11,8 @@ export * from './protocol/messages.js';
 export * from './util/bytes.js';
 export * from './util/quantize.js';
 export * from './util/movement.js';
+export * from './util/spatialHash.js';
+export * from './util/logger.js';
 
 // Voxel terrain
 export * from './voxel/constants.js';

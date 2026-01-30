@@ -91,7 +91,6 @@ export class PlayerManager {
     } else {
       // Terrain not ready yet - just reset position high and wait
       // The fall detection will trigger again later when terrain loads
-      console.log('[PlayerManager] Terrain not ready, resetting to high position');
       this.localPlayer.respawn(new THREE.Vector3(0, SPAWN_FALLBACK_HEIGHT, 0));
     }
   };

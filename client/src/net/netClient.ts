@@ -99,7 +99,6 @@ function scheduleReconnect(): void {
   }
   
   reconnectAttempts++;
-  console.log(`[net] Scheduling reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
   
   reconnectTimeout = setTimeout(async () => {
     try {

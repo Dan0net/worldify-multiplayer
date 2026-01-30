@@ -83,7 +83,6 @@ export class SpawnManager {
         const spawnY = this.calculateSpawnY(terrainHeight);
         this.cachedSpawnPosition = new THREE.Vector3(0, spawnY, 0);
         this.spawnFound = true;
-        console.log(`[SpawnManager] Spawn point found at Y=${spawnY.toFixed(2)}`);
       } else {
         this.spawnFound = false;
       }
@@ -148,26 +147,22 @@ export class SpawnManager {
   ): THREE.Vector3 | null {
     // Option 1: Use last grounded position
     if (lastGroundedPos) {
-      console.log('[SpawnManager] Respawning at last grounded position');
       return lastGroundedPos.clone();
     }
     
     // Option 2: Raycast at current XZ
     const terrainAtCurrent = this.raycastTerrainHeight(currentPos.x, currentPos.z);
     if (terrainAtCurrent !== null) {
-      console.log('[SpawnManager] Respawning via raycast at current XZ');
       return new THREE.Vector3(currentPos.x, this.calculateSpawnY(terrainAtCurrent), currentPos.z);
     }
     
     // Option 3: Raycast at origin
     const terrainAtOrigin = this.raycastTerrainHeight(0, 0);
     if (terrainAtOrigin !== null) {
-      console.log('[SpawnManager] Respawning via raycast at origin');
       return new THREE.Vector3(0, this.calculateSpawnY(terrainAtOrigin), 0);
     }
     
     // All methods failed - terrain not loaded
-    console.warn('[SpawnManager] All respawn methods failed - terrain not ready');
     return null;
   }
 

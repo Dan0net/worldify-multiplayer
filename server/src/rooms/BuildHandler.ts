@@ -163,12 +163,6 @@ export function handleBuildIntent(
     room.chunkBuildSeq.set(key, buildSeq);
   }
 
-  console.log(
-    `[room ${room.id}] Player ${playerId} built at ` +
-    `(${intent.center.x.toFixed(1)}, ${intent.center.y.toFixed(1)}, ${intent.center.z.toFixed(1)}), ` +
-    `modified ${modifiedKeys.length} chunks, seq=${buildSeq}`
-  );
-
   return {
     buildSeq,
     playerId,
@@ -184,7 +178,7 @@ export function handleBuildIntent(
  */
 export function handleChunkRequest(
   room: Room,
-  playerId: number,
+  _playerId: number,
   request: VoxelChunkRequest,
   ws: WebSocket
 ): void {
@@ -205,10 +199,6 @@ export function handleChunkRequest(
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(encoded);
   }
-
-  console.log(
-    `[room ${room.id}] Sent chunk (${request.chunkX}, ${request.chunkY}, ${request.chunkZ}) to player ${playerId}`
-  );
 }
 
 // ============== Broadcast ==============

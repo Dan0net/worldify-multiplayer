@@ -31,10 +31,12 @@ export function decodeMessage(roomId: string, playerId: number, data: Uint8Array
   dispatch(roomId, playerId, data);
 }
 
-function handleJoin(_roomId: string, playerId: number, reader: ByteReader): void {
+function handleJoin(_roomId: string, _playerId: number, reader: ByteReader): void {
   const protocolVersion = reader.readUint8();
   const clientPlayerId = reader.readUint16();
-  console.log(`[join] Player ${playerId} joined with version ${protocolVersion}, claimed ID ${clientPlayerId}`);
+  // Join acknowledged - protocol version and client ID captured for validation
+  void protocolVersion;
+  void clientPlayerId;
 }
 
 function handleInput(roomId: string, playerId: number, reader: ByteReader): void {

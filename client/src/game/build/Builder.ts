@@ -200,16 +200,6 @@ export class Builder {
     const encoded = encodeVoxelBuildIntent(intent);
     sendBinary(encoded);
 
-    console.log('[Builder] Sent build intent:', {
-      presetId: preset.id,
-      presetName: preset.name,
-      position: intent.center,
-      rotationDegrees: storeBridge.buildRotationDegrees,
-      mode: preset.config.mode,
-      shape: preset.config.shape,
-      size: preset.config.size,
-    });
-
     // Note: We no longer apply locally - server will broadcast commit and we apply from that
     // This ensures all clients stay in sync. Clear preview since we're waiting for server.
     this.preview.clearPreview();

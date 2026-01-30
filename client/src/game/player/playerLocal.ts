@@ -203,7 +203,6 @@ export class PlayerLocal {
       
       // Check if fallen for too long
       if (this.fallTime > MAX_FALL_TIME) {
-        console.warn(`[PlayerLocal] Falling for ${this.fallTime.toFixed(1)}s - triggering respawn`);
         this.triggerRespawn();
       }
     } else if (wasGrounded && !this.isGrounded) {
@@ -241,7 +240,6 @@ export class PlayerLocal {
     this.velocity.set(0, 0, 0);
     this.isGrounded = false;
     this.fallTime = 0;
-    console.log(`[PlayerLocal] Respawned at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
   }
 
   /**

@@ -74,8 +74,6 @@ function handleWelcome(reader: ByteReader): void {
     if (byte !== 0) roomBytes.push(byte);
   }
   const roomId = String.fromCharCode(...roomBytes);
-  
-  console.log(`[net] Welcome! Player ID: ${playerId}, Room: ${roomId}`);
   storeBridge.updateRoomInfo(roomId, playerId);
 }
 
@@ -109,7 +107,6 @@ function handleBuildCommit(reader: ByteReader): void {
   const commit = decodeVoxelBuildCommit(reader);
   
   if (commit.result === BuildResult.SUCCESS) {
-    console.log(`[net] Build commit seq=${commit.buildSeq} from player ${commit.playerId}`);
     emit('buildCommit', commit);
   } else {
     console.warn(`[net] Build rejected: ${buildResultToString(commit.result)}`);
@@ -118,9 +115,6 @@ function handleBuildCommit(reader: ByteReader): void {
 
 function handleChunkData(reader: ByteReader): void {
   const chunkData = decodeVoxelChunkData(reader);
-  
-  console.log(`[net] Received chunk (${chunkData.chunkX}, ${chunkData.chunkY}, ${chunkData.chunkZ}) seq=${chunkData.lastBuildSeq}`);
-  
   emit('chunkData', chunkData);
 }
 

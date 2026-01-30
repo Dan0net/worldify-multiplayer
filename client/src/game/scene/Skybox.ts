@@ -23,7 +23,8 @@ export function setupSkybox(scene: Scene, onLoaded?: () => void): void {
 
       scene.background = texture;
       scene.environment = texture;
-      scene.environmentIntensity = 0.5;
+      // environmentIntensity is available in Three.js r155+ but types may lag
+      (scene as unknown as { environmentIntensity: number }).environmentIntensity = 0.5;
 
       skyboxTexture = texture;
       onLoaded?.();

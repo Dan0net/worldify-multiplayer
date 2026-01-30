@@ -213,15 +213,12 @@ export class GameCore {
   private handleGameModeTransition(currentMode: GameMode): void {
     if (currentMode === this.lastGameMode) return;
     
-    const previousMode = this.lastGameMode;
     this.lastGameMode = currentMode;
     
     // Entering Playing mode - calculate proper spawn position
     if (currentMode === GameMode.Playing && !this.hasSpawnedPlayer) {
       this.spawnPlayer();
     }
-    
-    console.log(`[GameCore] Mode transition: ${previousMode} → ${currentMode}`);
   }
 
   /**
@@ -238,8 +235,6 @@ export class GameCore {
     
     // Clear spawn debug visualization now that game is starting
     this.spawnManager.clearDebugVisualization();
-    
-    console.log(`[GameCore] Player spawned at (${spawnPos.x.toFixed(1)}, ${spawnPos.y.toFixed(1)}, ${spawnPos.z.toFixed(1)})`);
   }
 
   /**
