@@ -19,9 +19,8 @@ import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera 
 import { setupLighting } from './scene/lighting';
 import { storeBridge } from '../state/bridge';
 import { controls } from './player/controls';
-import { onSnapshot, onBuildCommit } from '../net/decode';
-import { setOnReconnected } from '../net/netClient';
-import { RoomSnapshot, BuildCommit } from '@worldify/shared';
+import { onSnapshot } from '../net/decode';
+import { RoomSnapshot } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { GameLoop } from './GameLoop';
 import { PlayerManager } from './PlayerManager';
@@ -99,8 +98,6 @@ export class GameCore {
 
     // Register for network events
     onSnapshot(this.handleSnapshot);
-    onBuildCommit(this.handleBuildCommit);
-    setOnReconnected(this.handleReconnected);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
@@ -118,18 +115,6 @@ export class GameCore {
     const scene = getScene();
     if (!scene) return;
     this.playerManager.handleSnapshot(snapshot, scene);
-  };
-
-  // Old build system handlers - disabled for voxel terrain
-  private handleBuildCommit = (_commit: BuildCommit): void => {
-    // this.buildController.handleBuildCommit(commit);
-  };
-
-  private handleReconnected = (): void => {
-    // Old build system sync - disabled
-    // const lastSeq = this.buildController.getLastAppliedSeq();
-    // console.log(`[game] Reconnected, requesting builds since seq ${lastSeq}`);
-    // requestBuildSync(lastSeq);
   };
 
   /**

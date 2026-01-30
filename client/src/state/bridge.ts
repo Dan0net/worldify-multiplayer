@@ -11,7 +11,7 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState } from './store';
-import { BuildPieceType, getPreset, BuildPreset, BUILD_ROTATION_STEP } from '@worldify/shared';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP } from '@worldify/shared';
 
 class StoreBridge {
   private lastUpdateTime = 0;
@@ -21,10 +21,6 @@ class StoreBridge {
 
   get isSpectating(): boolean {
     return useGameStore.getState().isSpectating;
-  }
-
-  get selectedTool(): BuildPieceType {
-    return useGameStore.getState().selectedTool;
   }
 
   get voxelDebug(): VoxelDebugToggles {
@@ -82,16 +78,8 @@ class StoreBridge {
     useGameStore.getState().setPing(ping);
   }
 
-  updateSelectedTool(tool: BuildPieceType): void {
-    useGameStore.getState().setSelectedTool(tool);
-  }
-
   updateIsSpectating(spectating: boolean): void {
     useGameStore.getState().setIsSpectating(spectating);
-  }
-
-  updateLastBuildSeq(seq: number): void {
-    useGameStore.getState().setLastBuildSeqSeen(seq);
   }
 
   updateServerTick(tick: number): void {

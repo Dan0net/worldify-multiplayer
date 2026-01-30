@@ -3,7 +3,7 @@
  */
 
 import { storeBridge } from '../state/bridge';
-import { PROTOCOL_VERSION, encodeAckBuild, encodeJoin } from '@worldify/shared';
+import { PROTOCOL_VERSION, encodeJoin } from '@worldify/shared';
 import { decodeMessage } from './decode';
 
 let ws: WebSocket | null = null;
@@ -15,7 +15,7 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 let reconnectAttempts = 0;
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-// Callback for reconnect to request build sync
+// Callback for reconnect events
 let onReconnectedCallback: (() => void) | null = null;
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
@@ -60,7 +60,7 @@ async function connectWebSocket(
       ws?.send(encodeJoin(PROTOCOL_VERSION, playerId));
       reconnectAttempts = 0;
       
-      // Always request build sync (for both initial join and reconnect)
+      // Notify on reconnect if callback registered
       if (onReconnectedCallback) {
         onReconnectedCallback();
       }
@@ -123,15 +123,6 @@ function scheduleReconnect(): void {
       scheduleReconnect();
     }
   }, RECONNECT_DELAY_MS);
-}
-
-/**
- * Request build sync from server (called after reconnect)
- */
-export function requestBuildSync(lastSeenSeq: number): void {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(encodeAckBuild(lastSeenSeq));
-  }
 }
 
 export function getPlayerId(): number | null {

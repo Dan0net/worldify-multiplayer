@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { TERRITORY_GRID_SIZE, PLAYER_HEIGHT, GROUND_LEVEL, BuildCommit } from '@worldify/shared';
+import { TERRITORY_GRID_SIZE, PLAYER_HEIGHT, GROUND_LEVEL } from '@worldify/shared';
 
 // Re-export for backward compatibility (prefer importing directly from shared)
 export const PLAYER_EYE_HEIGHT = PLAYER_HEIGHT;
@@ -27,8 +27,6 @@ export interface Room {
   connections: Map<number, WebSocket>;
   players: Map<number, PlayerState>;
   createdAt: number;
-  buildSeq: number;
-  buildLog: BuildCommit[];
   territory: Uint16Array;
   tick: number;
   tickInterval: NodeJS.Timeout | null;
@@ -42,8 +40,6 @@ export function createRoom(id: string): Room {
     connections: new Map(),
     players: new Map(),
     createdAt: Date.now(),
-    buildSeq: 0,
-    buildLog: [],
     territory: new Uint16Array(TERRITORY_GRID_SIZE * TERRITORY_GRID_SIZE),
     tick: 0,
     tickInterval: null,

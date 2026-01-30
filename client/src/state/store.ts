@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { BuildPieceType } from '@worldify/shared';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -39,10 +38,6 @@ interface GameState {
   // Game mode
   isSpectating: boolean;
 
-  // Build system (legacy)
-  selectedTool: BuildPieceType;
-  lastBuildSeqSeen: number;
-
   // Voxel build system
   build: BuildState;
 
@@ -61,8 +56,6 @@ interface GameState {
   setPlayerCount: (count: number) => void;
   setPing: (ping: number) => void;
   setIsSpectating: (spectating: boolean) => void;
-  setSelectedTool: (tool: BuildPieceType) => void;
-  setLastBuildSeqSeen: (seq: number) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
   setServerTick: (tick: number) => void;
   
@@ -85,8 +78,6 @@ export const useGameStore = create<GameState>((set) => ({
   playerCount: 0,
   ping: 0,
   isSpectating: true, // Start in spectator mode
-  selectedTool: BuildPieceType.FLOOR,
-  lastBuildSeqSeen: 0,
   fps: 0,
   tickMs: 0,
   serverTick: 0,
@@ -117,8 +108,6 @@ export const useGameStore = create<GameState>((set) => ({
   setPlayerCount: (count) => set({ playerCount: count }),
   setPing: (ping) => set({ ping }),
   setIsSpectating: (spectating) => set({ isSpectating: spectating }),
-  setSelectedTool: (tool) => set({ selectedTool: tool }),
-  setLastBuildSeqSeen: (seq) => set({ lastBuildSeqSeen: seq }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),
   setServerTick: (tick) => set({ serverTick: tick }),
   

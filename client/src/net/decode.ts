@@ -7,16 +7,11 @@ import {
   MSG_WELCOME,
   MSG_ROOM_INFO,
   MSG_SNAPSHOT,
-  MSG_BUILD_COMMIT,
-  MSG_BUILD_SYNC,
   MSG_ERROR,
   MSG_PONG,
   ByteReader,
   decodeSnapshot,
-  decodeBuildCommit,
-  decodeBuildSync,
   RoomSnapshot,
-  BuildCommit,
 } from '@worldify/shared';
 import { storeBridge } from '../state/bridge';
 import { registerHandler, dispatch } from './MessageRegistry';
@@ -24,21 +19,11 @@ import { registerHandler, dispatch } from './MessageRegistry';
 // Callback for snapshot updates (set by game core)
 let onSnapshotCallback: ((snapshot: RoomSnapshot) => void) | null = null;
 
-// Callback for build commits (set by game core)
-let onBuildCommitCallback: ((commit: BuildCommit) => void) | null = null;
-
 /**
  * Register callback for snapshot updates
  */
 export function onSnapshot(callback: (snapshot: RoomSnapshot) => void): void {
   onSnapshotCallback = callback;
-}
-
-/**
- * Register callback for build commit updates
- */
-export function onBuildCommit(callback: (commit: BuildCommit) => void): void {
-  onBuildCommitCallback = callback;
 }
 
 /**
@@ -80,29 +65,6 @@ function handleSnapshot(reader: ByteReader): void {
   }
 }
 
-function handleBuildCommit(reader: ByteReader): void {
-  const commit = decodeBuildCommit(reader);
-  
-  storeBridge.updateLastBuildSeq(commit.buildSeq);
-  
-  if (onBuildCommitCallback) {
-    onBuildCommitCallback(commit);
-  }
-}
-
-function handleBuildSync(reader: ByteReader): void {
-  const commits = decodeBuildSync(reader);
-  
-  // Apply all commits in order
-  for (const commit of commits) {
-    storeBridge.updateLastBuildSeq(commit.buildSeq);
-    
-    if (onBuildCommitCallback) {
-      onBuildCommitCallback(commit);
-    }
-  }
-}
-
 function handleError(reader: ByteReader): void {
   const errorCode = reader.readUint8();
   console.error('Server error:', errorCode);
@@ -118,7 +80,5 @@ function handlePong(reader: ByteReader): void {
 registerHandler(MSG_WELCOME, handleWelcome);
 registerHandler(MSG_ROOM_INFO, handleRoomInfo);
 registerHandler(MSG_SNAPSHOT, handleSnapshot);
-registerHandler(MSG_BUILD_COMMIT, handleBuildCommit);
-registerHandler(MSG_BUILD_SYNC, handleBuildSync);
 registerHandler(MSG_ERROR, handleError);
 registerHandler(MSG_PONG, handlePong);

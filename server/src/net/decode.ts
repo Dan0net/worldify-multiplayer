@@ -6,19 +6,12 @@
 import {
   MSG_JOIN,
   MSG_INPUT,
-  MSG_BUILD_INTENT,
-  MSG_ACK_BUILD,
   MSG_PING,
   ByteReader,
   decodeInput,
-  decodeBuildIntent,
-  encodeBuildCommit,
-  encodeBuildSync,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
 import { encodePong } from '@worldify/shared';
-import { commitBuild, getBuildsSince } from '../rooms/buildLog.js';
-import { broadcast } from '../ws/wsServer.js';
 import { registerHandler, dispatch } from './MessageRegistry.js';
 
 /**
@@ -63,58 +56,6 @@ function handleInput(roomId: string, playerId: number, reader: ByteReader): void
   player.lastInputTime = Date.now();
 }
 
-function handleBuildIntent(roomId: string, playerId: number, reader: ByteReader): void {
-  const intent = decodeBuildIntent(reader);
-  
-  const room = roomManager.getRoom(roomId);
-  if (!room) return;
-  
-  // Validate placement (basic bounds check)
-  if (intent.gridX < 0 || intent.gridX >= 128 || intent.gridZ < 0 || intent.gridZ >= 128) {
-    console.warn(`[build] Invalid placement from player ${playerId}: (${intent.gridX}, ${intent.gridZ})`);
-    return;
-  }
-  
-  // Validate rotation
-  if (intent.rotation < 0 || intent.rotation > 3) {
-    console.warn(`[build] Invalid rotation from player ${playerId}: ${intent.rotation}`);
-    return;
-  }
-  
-  // Commit the build
-  const commit = commitBuild(room, playerId, intent);
-  
-  // Broadcast BUILD_COMMIT to all clients in room
-  const commitData = encodeBuildCommit(commit);
-  broadcast(roomId, commitData);
-  
-  console.log(`[build] Player ${playerId} placed ${intent.pieceType} at (${intent.gridX}, ${intent.gridZ}), seq=${commit.buildSeq}`);
-}
-
-function handleAckBuild(roomId: string, playerId: number, reader: ByteReader): void {
-  // Client reports its last seen build sequence
-  const lastSeenSeq = reader.readUint32();
-  
-  const room = roomManager.getRoom(roomId);
-  if (!room) return;
-  
-  // Get builds the client hasn't seen yet
-  const missedBuilds = getBuildsSince(room, lastSeenSeq);
-  
-  if (missedBuilds.length === 0) {
-    return; // Client is up to date
-  }
-  
-  // Send BUILD_SYNC with all missed builds
-  const ws = room.connections.get(playerId);
-  if (ws) {
-    const startSeq = missedBuilds[0].buildSeq;
-    const syncData = encodeBuildSync(startSeq, missedBuilds);
-    ws.send(syncData);
-    console.log(`[build] Sent BUILD_SYNC to player ${playerId}: ${missedBuilds.length} builds from seq ${startSeq}`);
-  }
-}
-
 function handlePing(roomId: string, playerId: number, reader: ByteReader): void {
   const timestamp = reader.readUint32();
   
@@ -131,6 +72,4 @@ function handlePing(roomId: string, playerId: number, reader: ByteReader): void 
 // Register all message handlers
 registerHandler(MSG_JOIN, handleJoin);
 registerHandler(MSG_INPUT, handleInput);
-registerHandler(MSG_BUILD_INTENT, handleBuildIntent);
-registerHandler(MSG_ACK_BUILD, handleAckBuild);
 registerHandler(MSG_PING, handlePing);
