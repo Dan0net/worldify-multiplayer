@@ -27,7 +27,7 @@ describe('Room', () => {
     const room = createRoom('tick-room');
     
     expect(room.tick).toBe(0);
-    expect(room.lastTickTime).toBeDefined();
+    expect(room.createdAt).toBeDefined();
   });
 });
 
@@ -47,12 +47,10 @@ describe('PlayerState', () => {
     expect(typeof player.z).toBe('number');
   });
 
-  it('initializes with zero velocity', () => {
+  it('initializes with zero vertical velocity', () => {
     const player = createPlayerState(1);
     
-    expect(player.vx).toBe(0);
-    expect(player.vy).toBe(0);
-    expect(player.vz).toBe(0);
+    expect(player.velocityY).toBe(0);
   });
 
   it('different players get different spawn positions', () => {

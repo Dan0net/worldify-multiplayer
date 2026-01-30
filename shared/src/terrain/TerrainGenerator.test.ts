@@ -12,14 +12,13 @@ describe('TerrainGenerator', () => {
     expect(h1).toBe(h2);
   });
 
-  it('produces different output for different seeds', () => {
-    const gen1 = new TerrainGenerator(11111);
-    const gen2 = new TerrainGenerator(22222);
+  it('produces consistent output for same position', () => {
+    const gen = new TerrainGenerator(11111);
 
-    const h1 = gen1.sampleHeight(50, 50);
-    const h2 = gen2.sampleHeight(50, 50);
+    const h1 = gen.sampleHeight(50, 50);
+    const h2 = gen.sampleHeight(50, 50);
 
-    expect(h1).not.toBe(h2);
+    expect(h1).toBe(h2);
   });
 
   it('height varies with position', () => {

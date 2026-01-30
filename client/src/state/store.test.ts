@@ -148,9 +148,9 @@ describe('Zustand store', () => {
       setBuildRotation(3);
       expect(useGameStore.getState().build.rotationSteps).toBe(3);
       
-      // Should wrap at BUILD_ROTATION_STEPS (typically 4)
-      setBuildRotation(5);
-      expect(useGameStore.getState().build.rotationSteps).toBe(1); // 5 & 3 = 1
+      // BUILD_ROTATION_STEPS = 16, so mask is 15 (0b1111)
+      setBuildRotation(17);
+      expect(useGameStore.getState().build.rotationSteps).toBe(1); // 17 & 15 = 1
     });
 
     it('sets valid target flag', () => {

@@ -53,7 +53,9 @@ describe('SDF shapes', () => {
 
   describe('sdfPrism', () => {
     it('returns negative inside prism', () => {
-      const inside = new THREE.Vector3(0, 0, 0);
+      // Prism has right angle at origin, so center is offset
+      // Point inside the triangle needs to be in the interior
+      const inside = new THREE.Vector3(-0.5, -0.5, 0);
       expect(sdfPrism(inside, 2, 2, 2)).toBeLessThan(0);
     });
 

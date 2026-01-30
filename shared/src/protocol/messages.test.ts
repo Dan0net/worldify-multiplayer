@@ -14,19 +14,21 @@ import {
 
 describe('Protocol messages', () => {
   it('round-trips JOIN message', () => {
-    const token = 'abc123tokenXYZ';
-    const encoded = encodeJoin(token);
+    const protocolVersion = 1;
+    const playerId = 42;
+    const encoded = encodeJoin(protocolVersion, playerId);
     
     expect(encoded[0]).toBe(MSG_JOIN);
     
     const reader = new ByteReader(encoded.buffer);
     reader.readUint8(); // skip msgId
     const decoded = decodeJoin(reader);
-    expect(decoded.token).toBe(token);
+    expect(decoded.protocolVersion).toBe(protocolVersion);
+    expect(decoded.playerId).toBe(playerId);
   });
 
   it('round-trips PING message', () => {
-    const timestamp = 1234567890;
+    const timestamp = 1234567; // Fits in uint32
     const encoded = encodePing(timestamp);
     
     expect(encoded[0]).toBe(MSG_PING);
@@ -39,7 +41,8 @@ describe('Protocol messages', () => {
 
   it('round-trips WELCOME message', () => {
     const playerId = 42;
-    const encoded = encodeWelcome(playerId);
+    const roomId = 'room123';
+    const encoded = encodeWelcome(playerId, roomId);
     
     expect(encoded[0]).toBe(MSG_WELCOME);
     
@@ -47,6 +50,7 @@ describe('Protocol messages', () => {
     reader.readUint8();
     const decoded = decodeWelcome(reader);
     expect(decoded.playerId).toBe(playerId);
+    expect(decoded.roomId).toBe(roomId);
   });
 
   it('round-trips ROOM_INFO message', () => {
@@ -62,7 +66,7 @@ describe('Protocol messages', () => {
   });
 
   it('round-trips PONG message', () => {
-    const timestamp = 9876543210;
+    const timestamp = 987654; // Fits in uint32
     const encoded = encodePong(timestamp);
     
     expect(encoded[0]).toBe(MSG_PONG);
@@ -86,10 +90,10 @@ describe('Protocol messages', () => {
   });
 
   it('uses ByteWriter/ByteReader consistently across messages', () => {
-    // Chain multiple messages into one buffer to test offset handling
-    const join = encodeJoin('test');
+    // Test multiple message types are self-contained
+    const join = encodeJoin(1, 100);
     const ping = encodePing(12345);
-    const welcome = encodeWelcome(99);
+    const welcome = encodeWelcome(99, 'testroom');
 
     // Each message is self-contained with msgId prefix
     expect(join[0]).toBe(MSG_JOIN);
