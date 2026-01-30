@@ -45,8 +45,14 @@ export class Chunk {
   /** Packed voxel data (32×32×32 = 32,768 voxels) */
   readonly data: Uint16Array;
 
+  /** Temporary data buffer for preview (not persisted) */
+  tempData: Uint16Array | null = null;
+
   /** Whether the chunk needs to be remeshed */
   dirty: boolean = true;
+
+  /** Whether the temp data is currently showing */
+  tempActive: boolean = false;
 
   /** Unique key for this chunk's coordinates */
   readonly key: string;
@@ -275,5 +281,68 @@ export class Chunk {
    */
   clearDirty(): void {
     this.dirty = false;
+  }
+
+  // ============== Temp Data Management ==============
+
+  /**
+   * Initialize temp data buffer (for preview rendering).
+   * Copies current data to temp buffer.
+   */
+  initTempData(): void {
+    if (!this.tempData) {
+      this.tempData = new Uint16Array(VOXELS_PER_CHUNK);
+    }
+    this.tempData.set(this.data);
+    this.tempActive = false;
+  }
+
+  /**
+   * Copy current data to temp buffer (reset preview to current state).
+   */
+  copyToTemp(): void {
+    if (!this.tempData) {
+      this.tempData = new Uint16Array(VOXELS_PER_CHUNK);
+    }
+    this.tempData.set(this.data);
+  }
+
+  /**
+   * Copy temp buffer back to data (commit preview changes).
+   */
+  copyFromTemp(): void {
+    if (this.tempData) {
+      this.data.set(this.tempData);
+      this.dirty = true;
+    }
+  }
+
+  /**
+   * Discard temp data (cancel preview).
+   */
+  discardTemp(): void {
+    this.tempData = null;
+    this.tempActive = false;
+  }
+
+  /**
+   * Check if temp data exists.
+   */
+  hasTempData(): boolean {
+    return this.tempData !== null;
+  }
+
+  /**
+   * Get data array to use for rendering (temp if active, otherwise main).
+   */
+  getRenderData(): Uint16Array {
+    return (this.tempActive && this.tempData) ? this.tempData : this.data;
+  }
+
+  /**
+   * Set whether temp data should be used for rendering.
+   */
+  setTempActive(active: boolean): void {
+    this.tempActive = active && this.tempData !== null;
   }
 }
