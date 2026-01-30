@@ -3,6 +3,7 @@ export * from './protocol/version.js';
 export * from './protocol/msgIds.js';
 export * from './protocol/constants.js';
 export * from './protocol/physics.js';
+export * from './protocol/gameMode.js';
 export * from './protocol/movement.js';
 export * from './protocol/snapshot.js';
 export * from './protocol/buildMessages.js';

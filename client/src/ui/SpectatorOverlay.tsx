@@ -5,19 +5,22 @@
 
 import { useGameStore } from '../state/store';
 import { controls } from '../game/player/controls';
+import { GameMode } from '@worldify/shared';
 
 export function SpectatorOverlay() {
-  const isSpectating = useGameStore((s) => s.isSpectating);
+  const gameMode = useGameStore((s) => s.gameMode);
   const playerCount = useGameStore((s) => s.playerCount);
   const roomId = useGameStore((s) => s.roomId);
+  const setGameMode = useGameStore((s) => s.setGameMode);
 
-  if (!isSpectating) {
+  // Only show in MainMenu mode
+  if (gameMode !== GameMode.MainMenu) {
     return null;
   }
 
   const handleStart = () => {
-    // Switch to FPS mode
-    useGameStore.getState().setIsSpectating(false);
+    // Switch to Playing mode
+    setGameMode(GameMode.Playing);
     // Lock pointer for FPS controls
     controls.requestPointerLock();
   };

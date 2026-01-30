@@ -11,7 +11,7 @@
  */
 
 import { useGameStore } from '../state/store';
-import { getPreset, BUILD_ROTATION_STEP, BuildMode } from '@worldify/shared';
+import { getPreset, BUILD_ROTATION_STEP, BuildMode, GameMode } from '@worldify/shared';
 
 /** Mode colors for visual distinction */
 const MODE_COLORS: Record<BuildMode, string> = {
@@ -31,10 +31,10 @@ const MODE_LABELS: Record<BuildMode, string> = {
 
 export function BuildToolbar() {
   const build = useGameStore((s) => s.build);
-  const isSpectating = useGameStore((s) => s.isSpectating);
+  const gameMode = useGameStore((s) => s.gameMode);
 
-  // Hide when spectating or build mode disabled (preset 0)
-  if (isSpectating || build.presetId === 0) {
+  // Hide when not playing or build mode disabled (preset 0)
+  if (gameMode !== GameMode.Playing || build.presetId === 0) {
     return null;
   }
 

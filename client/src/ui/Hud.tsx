@@ -1,11 +1,12 @@
 
 import { useGameStore } from '../state/store';
+import { GameMode } from '@worldify/shared';
 
 export function Hud() {
-  const { playerCount, roomId, isSpectating } = useGameStore();
+  const { playerCount, roomId, gameMode } = useGameStore();
 
-  // Hide HUD when spectating
-  if (isSpectating) {
+  // Hide HUD when not playing
+  if (gameMode !== GameMode.Playing) {
     return null;
   }
 

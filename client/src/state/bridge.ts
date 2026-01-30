@@ -11,7 +11,10 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState } from './store';
-import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS } from '@worldify/shared';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
+
+// Cache getState for cleaner access - always returns fresh state
+const getState = useGameStore.getState;
 
 class StoreBridge {
   private lastUpdateTime = 0;
@@ -19,25 +22,25 @@ class StoreBridge {
 
   // ============== READS (game code reads state here) ==============
 
-  get isSpectating(): boolean {
-    return useGameStore.getState().isSpectating;
+  get gameMode(): GameMode {
+    return getState().gameMode;
   }
 
   get voxelDebug(): VoxelDebugToggles {
-    return useGameStore.getState().voxelDebug;
+    return getState().voxelDebug;
   }
 
   get playerId(): number | null {
-    return useGameStore.getState().playerId;
+    return getState().playerId;
   }
 
   // Build system reads
   get buildState(): BuildState {
-    return useGameStore.getState().build;
+    return getState().build;
   }
 
   get buildPresetId(): number {
-    return useGameStore.getState().build.presetId;
+    return getState().build.presetId;
   }
 
   get buildPreset(): BuildPreset {
@@ -45,7 +48,7 @@ class StoreBridge {
   }
 
   get buildRotationSteps(): number {
-    return useGameStore.getState().build.rotationSteps;
+    return getState().build.rotationSteps;
   }
 
   get buildRotationDegrees(): number {
@@ -63,27 +66,27 @@ class StoreBridge {
   // ============== WRITES ==============
 
   updateConnectionStatus(status: ConnectionStatus): void {
-    useGameStore.getState().setConnectionStatus(status);
+    getState().setConnectionStatus(status);
   }
 
   updateRoomInfo(roomId: string, playerId: number): void {
-    useGameStore.getState().setRoomInfo(roomId, playerId);
+    getState().setRoomInfo(roomId, playerId);
   }
 
   updatePlayerCount(count: number): void {
-    useGameStore.getState().setPlayerCount(count);
+    getState().setPlayerCount(count);
   }
 
   updatePing(ping: number): void {
-    useGameStore.getState().setPing(ping);
+    getState().setPing(ping);
   }
 
-  updateIsSpectating(spectating: boolean): void {
-    useGameStore.getState().setIsSpectating(spectating);
+  setGameMode(mode: GameMode): void {
+    getState().setGameMode(mode);
   }
 
   updateServerTick(tick: number): void {
-    useGameStore.getState().setServerTick(tick);
+    getState().setServerTick(tick);
   }
 
   /**
@@ -92,7 +95,7 @@ class StoreBridge {
   updateDebugStats(fps: number, tickMs: number): void {
     const now = performance.now();
     if (now - this.lastUpdateTime >= this.updateIntervalMs) {
-      useGameStore.getState().setDebugStats(fps, tickMs);
+      getState().setDebugStats(fps, tickMs);
       this.lastUpdateTime = now;
     }
   }
@@ -101,7 +104,7 @@ class StoreBridge {
    * Update voxel world statistics
    */
   updateVoxelStats(stats: Partial<VoxelStats>): void {
-    useGameStore.getState().setVoxelStats(stats);
+    getState().setVoxelStats(stats);
   }
 
   // Build system writes
@@ -111,14 +114,14 @@ class StoreBridge {
    * 0 = disabled, 1-9 = presets
    */
   selectBuildPreset(presetId: number): void {
-    useGameStore.getState().setBuildPreset(presetId);
+    getState().setBuildPreset(presetId);
   }
 
   /**
    * Set build rotation in steps (0 to BUILD_ROTATION_STEPS-1).
    */
   setBuildRotation(steps: number): void {
-    useGameStore.getState().setBuildRotation(steps);
+    getState().setBuildRotation(steps);
   }
 
   /**
@@ -134,7 +137,7 @@ class StoreBridge {
    * Update whether build has a valid target.
    */
   setBuildHasValidTarget(valid: boolean): void {
-    useGameStore.getState().setBuildHasValidTarget(valid);
+    getState().setBuildHasValidTarget(valid);
   }
 }
 

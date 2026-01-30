@@ -10,6 +10,7 @@ import {
   INPUT_RIGHT,
   INPUT_JUMP,
   INPUT_SPRINT,
+  GameMode,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
 
@@ -89,8 +90,8 @@ export class Controls {
   private onPointerLockChange = (): void => {
     this.isPointerLocked = document.pointerLockElement !== null;
     if (!this.isPointerLocked) {
-      // Exit to spectator mode (show start screen)
-      storeBridge.updateIsSpectating(true);
+      // Exit to main menu (show start screen)
+      storeBridge.setGameMode(GameMode.MainMenu);
     }
   };
 

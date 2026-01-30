@@ -20,7 +20,7 @@ import { setupLighting } from './scene/lighting';
 import { storeBridge } from '../state/bridge';
 import { controls } from './player/controls';
 import { onSnapshot } from '../net/decode';
-import { RoomSnapshot } from '@worldify/shared';
+import { RoomSnapshot, GameMode } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -90,9 +90,9 @@ export class GameCore {
       };
     }
 
-    // Request pointer lock on canvas click (only if not spectating)
+    // Request pointer lock on canvas click (only when playing)
     canvas.addEventListener('click', () => {
-      if (!storeBridge.isSpectating) {
+      if (storeBridge.gameMode === GameMode.Playing) {
         controls.requestPointerLock();
       }
     });
@@ -122,55 +122,26 @@ export class GameCore {
    * Main update loop callback - called by GameLoop
    */
   private update = (deltaMs: number, elapsedTime: number): void => {
-    const isSpectating = storeBridge.isSpectating;
+    const gameMode = storeBridge.gameMode;
     const camera = getCamera();
     const localPlayer = this.playerManager.getLocalPlayer();
 
     // Sync voxel debug state from store to VoxelDebugManager
-    if (this.voxelIntegration) {
-      const debugState = storeBridge.voxelDebug;
-      this.voxelIntegration.debug.setState(debugState);
-      
-      // Sync wireframe mode to shared material
-      setVoxelWireframe(debugState.showWireframe);
-      
-      // Update voxel stats in store
-      const stats = this.voxelIntegration.getStats();
-      storeBridge.updateVoxelStats({
-        chunksLoaded: stats.chunksLoaded,
-        meshesVisible: stats.meshesVisible,
-        debugObjects: this.voxelIntegration.debug.getDebugObjectCount(),
-      });
+    this.updateVoxelDebug();
+
+    // Update based on current game mode
+    switch (gameMode) {
+      case GameMode.MainMenu:
+      case GameMode.Spectating:
+        this.updateSpectatorMode(camera, deltaMs, elapsedTime);
+        break;
+
+      case GameMode.Playing:
+        this.updatePlayingMode(camera, localPlayer, deltaMs);
+        break;
     }
 
-    if (isSpectating) {
-      // Spectator mode: orbit camera looking at game area
-      if (camera) {
-        updateSpectatorCamera(camera, deltaMs, elapsedTime);
-      }
-      
-      // Update voxel terrain in spectator mode too (for debug visualization)
-      if (this.voxelIntegration) {
-        this.voxelIntegration.update(new THREE.Vector3(0, 10, 0));
-      }
-    } else {
-      // FPS mode: update player and camera
-      this.playerManager.updateLocalPlayer(deltaMs);
-      
-      // Update voxel terrain (streaming, collision)
-      if (this.voxelIntegration) {
-        this.voxelIntegration.update(localPlayer.position);
-      }
-
-      if (camera) {
-        updateCameraFromPlayer(camera, localPlayer);
-        
-        // Update build marker (raycast from camera)
-        this.builder.update(camera);
-      }
-    }
-
-    // Always update remote players (visible in both modes)
+    // Always update remote players (visible in all modes)
     this.playerManager.updateRemotePlayers(deltaMs);
 
     // Render
@@ -179,6 +150,68 @@ export class GameCore {
       this.renderer.render(scene, camera);
     }
   };
+
+  /**
+   * Sync voxel debug state from store to VoxelDebugManager
+   */
+  private updateVoxelDebug(): void {
+    if (!this.voxelIntegration) return;
+
+    const debugState = storeBridge.voxelDebug;
+    this.voxelIntegration.debug.setState(debugState);
+
+    // Sync wireframe mode to shared material
+    setVoxelWireframe(debugState.showWireframe);
+
+    // Update voxel stats in store
+    const stats = this.voxelIntegration.getStats();
+    storeBridge.updateVoxelStats({
+      chunksLoaded: stats.chunksLoaded,
+      meshesVisible: stats.meshesVisible,
+      debugObjects: this.voxelIntegration.debug.getDebugObjectCount(),
+    });
+  }
+
+  /**
+   * Update for MainMenu/Spectating modes - orbiting camera
+   */
+  private updateSpectatorMode(
+    camera: THREE.PerspectiveCamera | null,
+    deltaMs: number,
+    elapsedTime: number
+  ): void {
+    if (camera) {
+      updateSpectatorCamera(camera, deltaMs, elapsedTime);
+    }
+
+    // Update voxel terrain centered on origin
+    if (this.voxelIntegration) {
+      this.voxelIntegration.update(new THREE.Vector3(0, 10, 0));
+    }
+  }
+
+  /**
+   * Update for Playing mode - FPS controls
+   */
+  private updatePlayingMode(
+    camera: THREE.PerspectiveCamera | null,
+    localPlayer: ReturnType<PlayerManager['getLocalPlayer']>,
+    deltaMs: number
+  ): void {
+    // Update player physics and movement
+    this.playerManager.updateLocalPlayer(deltaMs);
+
+    // Update voxel terrain around player
+    if (this.voxelIntegration) {
+      this.voxelIntegration.update(localPlayer.position);
+    }
+
+    // Update camera and build system
+    if (camera) {
+      updateCameraFromPlayer(camera, localPlayer);
+      this.builder.update(camera);
+    }
+  }
 
   private onResize = (): void => {
     const camera = getCamera();

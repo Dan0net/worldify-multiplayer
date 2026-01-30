@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { BUILD_ROTATION_STEPS } from '@worldify/shared';
+import { BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -38,7 +38,7 @@ interface GameState {
   ping: number;
 
   // Game mode
-  isSpectating: boolean;
+  gameMode: GameMode;
 
   // Voxel build system
   build: BuildState;
@@ -57,7 +57,7 @@ interface GameState {
   setRoomInfo: (roomId: string, playerId: number) => void;
   setPlayerCount: (count: number) => void;
   setPing: (ping: number) => void;
-  setIsSpectating: (spectating: boolean) => void;
+  setGameMode: (mode: GameMode) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
   setServerTick: (tick: number) => void;
   
@@ -79,7 +79,7 @@ export const useGameStore = create<GameState>((set) => ({
   playerId: null,
   playerCount: 0,
   ping: 0,
-  isSpectating: true, // Start in spectator mode
+  gameMode: GameMode.MainMenu, // Start in main menu
   fps: 0,
   tickMs: 0,
   serverTick: 0,
@@ -110,7 +110,7 @@ export const useGameStore = create<GameState>((set) => ({
   setRoomInfo: (roomId, playerId) => set({ roomId, playerId }),
   setPlayerCount: (count) => set({ playerCount: count }),
   setPing: (ping) => set({ ping }),
-  setIsSpectating: (spectating) => set({ isSpectating: spectating }),
+  setGameMode: (mode) => set({ gameMode: mode }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),
   setServerTick: (tick) => set({ serverTick: tick }),
   
