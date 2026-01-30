@@ -121,8 +121,11 @@ export class Builder {
     // Get collision meshes for raycasting
     const meshes = this.meshProvider.getCollisionMeshes();
 
-    // Update the marker
-    this.marker.update(camera, meshes);
+    // Update the marker and get valid target state
+    const { hasValidTarget } = this.marker.update(camera, meshes);
+    
+    // Update store with valid target state
+    storeBridge.setBuildHasValidTarget(hasValidTarget);
 
     // Update voxel preview
     this.updateVoxelPreview();

@@ -14,6 +14,7 @@ import {
   BuildConfig,
   drawToChunks,
   getAffectedChunks,
+  yRotationQuat,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { meshChunk } from '../voxel/ChunkMesher.js';
@@ -33,9 +34,6 @@ export class BuildPreview {
 
   /** Last operation that was previewed (for change detection) */
   private lastOperationHash: string = '';
-
-  /** Whether preview is currently active */
-  private isActive: boolean = false;
 
   /**
    * Set the voxel world and scene to use for preview.
@@ -65,7 +63,7 @@ export class BuildPreview {
 
     // Check if operation changed (avoid redundant work)
     const hash = this.hashOperation(operation);
-    if (hash === this.lastOperationHash && this.isActive) {
+    if (hash === this.lastOperationHash && this.activePreviewChunks.size > 0) {
       return; // No change
     }
     this.lastOperationHash = hash;
@@ -117,7 +115,6 @@ export class BuildPreview {
     }
 
     this.activePreviewChunks = newActiveChunks;
-    this.isActive = true;
   }
 
   /**
@@ -132,7 +129,6 @@ export class BuildPreview {
 
     this.activePreviewChunks.clear();
     this.lastOperationHash = '';
-    this.isActive = false;
   }
 
   /**
@@ -159,7 +155,7 @@ export class BuildPreview {
    * @returns Array of chunk keys that were modified
    */
   commitPreview(): string[] {
-    if (!this.world || !this.scene || !this.isActive) return [];
+    if (!this.world || !this.scene || this.activePreviewChunks.size === 0) return [];
 
     const modifiedKeys: string[] = [];
 
@@ -186,7 +182,6 @@ export class BuildPreview {
     // Clear remaining preview state
     this.activePreviewChunks.clear();
     this.lastOperationHash = '';
-    this.isActive = false;
 
     return modifiedKeys;
   }
@@ -195,7 +190,7 @@ export class BuildPreview {
    * Check if preview is currently active.
    */
   hasActivePreview(): boolean {
-    return this.isActive && this.activePreviewChunks.size > 0;
+    return this.activePreviewChunks.size > 0;
   }
 
   /**
@@ -206,19 +201,9 @@ export class BuildPreview {
     rotationRadians: number,
     config: BuildConfig
   ): BuildOperation {
-    // Convert Y-axis rotation to quaternion
-    const halfAngle = rotationRadians / 2;
-    const sinHalf = Math.sin(halfAngle);
-    const cosHalf = Math.cos(halfAngle);
-
     return {
       center: { x: center.x, y: center.y, z: center.z },
-      rotation: {
-        x: 0,
-        y: sinHalf,
-        z: 0,
-        w: cosHalf,
-      },
+      rotation: yRotationQuat(rotationRadians),
       config,
     };
   }

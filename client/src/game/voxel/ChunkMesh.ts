@@ -157,8 +157,10 @@ export class ChunkMesh {
 
   /**
    * Set preview mode active. When active, main mesh is hidden.
+   * @param active Whether to activate preview mode
+   * @param scene Scene to remove preview mesh from when deactivating (required)
    */
-  setPreviewActive(active: boolean, scene?: THREE.Scene): void {
+  setPreviewActive(active: boolean, scene: THREE.Scene): void {
     if (this.previewActive === active) return;
     this.previewActive = active;
 

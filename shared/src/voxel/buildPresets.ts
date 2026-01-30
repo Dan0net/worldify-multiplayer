@@ -53,14 +53,14 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 1,
     name: 'Small Cube',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(2, 2, 2), material: 1 },
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(3, 3, 3), material: 1 },
     align: BuildPresetAlign.BASE,
   },
   // 2 = Cube subtract (centered for carving)
   {
     id: 2,
     name: 'Cube Carve',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 },
+    config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(3, 3, 3), material: 1 },
     align: BuildPresetAlign.CENTER,
   },
   // 3 = Sphere add (centered)
@@ -128,6 +128,11 @@ export function getPreset(id: number): BuildPreset {
 export const MAX_BUILD_DISTANCE = 20;
 
 /**
- * Rotation step in degrees (45° increments).
+ * Number of rotation steps in a full rotation.
  */
-export const BUILD_ROTATION_STEP = 45;
+export const BUILD_ROTATION_STEPS = 16;
+
+/**
+ * Rotation step in degrees (360 / BUILD_ROTATION_STEPS).
+ */
+export const BUILD_ROTATION_STEP = 360 / BUILD_ROTATION_STEPS;

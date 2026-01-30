@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { BUILD_ROTATION_STEPS } from '@worldify/shared';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -21,7 +22,7 @@ export interface VoxelStats {
 export interface BuildState {
   /** Currently selected preset ID (0-9, 0 = disabled) */
   presetId: number;
-  /** Current rotation in steps (0-7, each step = 45°) */
+  /** Current rotation in steps (0 to BUILD_ROTATION_STEPS-1) */
   rotationSteps: number;
   /** Whether a valid build target is found */
   hasValidTarget: boolean;
@@ -136,7 +137,7 @@ export const useGameStore = create<GameState>((set) => ({
     build: { ...state.build, presetId },
   })),
   setBuildRotation: (rotationSteps) => set((state) => ({
-    build: { ...state.build, rotationSteps: rotationSteps & 7 }, // Clamp 0-7
+    build: { ...state.build, rotationSteps: rotationSteps & (BUILD_ROTATION_STEPS - 1) },
   })),
   setBuildHasValidTarget: (hasValidTarget) => set((state) => ({
     build: { ...state.build, hasValidTarget },

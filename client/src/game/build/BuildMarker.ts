@@ -13,6 +13,7 @@ import {
   BuildPresetAlign,
   MAX_BUILD_DISTANCE,
   VOXEL_SCALE,
+  BUILD_ROTATION_STEP,
   getPreset,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
@@ -85,16 +86,16 @@ export class BuildMarker {
    * 
    * @param camera The camera to raycast from
    * @param collisionMeshes Array of meshes to raycast against
+   * @returns Whether a valid build target was found
    */
-  update(camera: THREE.Camera, collisionMeshes: THREE.Object3D[]): void {
+  update(camera: THREE.Camera, collisionMeshes: THREE.Object3D[]): { hasValidTarget: boolean } {
     const presetId = storeBridge.buildPresetId;
     const rotationSteps = storeBridge.buildRotationSteps;
 
     // Hide if build mode disabled (preset 0)
     if (presetId === 0) {
       this.hide();
-      storeBridge.setBuildHasValidTarget(false);
-      return;
+      return { hasValidTarget: false };
     }
 
     const preset = getPreset(presetId);
@@ -114,8 +115,7 @@ export class BuildMarker {
 
     if (intersects.length === 0) {
       this.hide();
-      storeBridge.setBuildHasValidTarget(false);
-      return;
+      return { hasValidTarget: false };
     }
 
     const hit = intersects[0];
@@ -143,7 +143,7 @@ export class BuildMarker {
 
     // Show the marker
     this.show();
-    storeBridge.setBuildHasValidTarget(isValid);
+    return { hasValidTarget: isValid };
   }
 
   /**
@@ -242,8 +242,8 @@ export class BuildMarker {
 
     this.wireframe = new THREE.LineSegments(edges, material);
 
-    // Apply rotation (Y-axis only, 45° steps)
-    const rotationRadians = (rotationSteps * 45 * Math.PI) / 180;
+    // Apply rotation (Y-axis only)
+    const rotationRadians = (rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180;
     this.wireframe.rotation.y = rotationRadians;
 
     // For BASE alignment, offset the wireframe up so its bottom is at the group origin

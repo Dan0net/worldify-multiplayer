@@ -11,7 +11,7 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState } from './store';
-import { getPreset, BuildPreset, BUILD_ROTATION_STEP } from '@worldify/shared';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS } from '@worldify/shared';
 
 class StoreBridge {
   private lastUpdateTime = 0;
@@ -115,7 +115,7 @@ class StoreBridge {
   }
 
   /**
-   * Set build rotation in steps (0-7, each step = 45°).
+   * Set build rotation in steps (0 to BUILD_ROTATION_STEPS-1).
    */
   setBuildRotation(steps: number): void {
     useGameStore.getState().setBuildRotation(steps);
@@ -126,7 +126,7 @@ class StoreBridge {
    */
   rotateBuild(direction: number): void {
     const current = this.buildRotationSteps;
-    const next = (current + direction + 8) % 8;
+    const next = (current + direction + BUILD_ROTATION_STEPS) % BUILD_ROTATION_STEPS;
     this.setBuildRotation(next);
   }
 

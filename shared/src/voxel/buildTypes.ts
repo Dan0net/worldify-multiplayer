@@ -155,6 +155,20 @@ export function invertQuat(q: Quat): Quat {
 }
 
 /**
+ * Create a quaternion for rotation around the Y axis.
+ * @param radians - The rotation angle in radians
+ */
+export function yRotationQuat(radians: number): Quat {
+  const halfAngle = radians * 0.5;
+  return {
+    x: 0,
+    y: Math.sin(halfAngle),
+    z: 0,
+    w: Math.cos(halfAngle),
+  };
+}
+
+/**
  * Clamp a number to a range.
  */
 export function clamp(value: number, min: number, max: number): number {
