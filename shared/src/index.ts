@@ -18,6 +18,7 @@ export * from './voxel/constants.js';
 export * from './voxel/voxelData.js';
 export * from './voxel/Chunk.js';
 export * from './voxel/buildTypes.js';
+export * from './voxel/buildPresets.js';
 export * from './voxel/shapes.js';
 export * from './voxel/drawing.js';
 

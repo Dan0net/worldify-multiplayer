@@ -10,8 +10,8 @@
  * - Clean separation between React and imperative game code
  */
 
-import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles } from './store';
-import { BuildPieceType } from '@worldify/shared';
+import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState } from './store';
+import { BuildPieceType, getPreset, BuildPreset, BUILD_ROTATION_STEP } from '@worldify/shared';
 
 class StoreBridge {
   private lastUpdateTime = 0;
@@ -33,6 +33,35 @@ class StoreBridge {
 
   get playerId(): number | null {
     return useGameStore.getState().playerId;
+  }
+
+  // Build system reads
+  get buildState(): BuildState {
+    return useGameStore.getState().build;
+  }
+
+  get buildPresetId(): number {
+    return useGameStore.getState().build.presetId;
+  }
+
+  get buildPreset(): BuildPreset {
+    return getPreset(this.buildPresetId);
+  }
+
+  get buildRotationSteps(): number {
+    return useGameStore.getState().build.rotationSteps;
+  }
+
+  get buildRotationDegrees(): number {
+    return this.buildRotationSteps * BUILD_ROTATION_STEP;
+  }
+
+  get buildRotationRadians(): number {
+    return (this.buildRotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180;
+  }
+
+  get buildIsEnabled(): boolean {
+    return this.buildPresetId !== 0;
   }
 
   // ============== WRITES ==============
@@ -85,6 +114,39 @@ class StoreBridge {
    */
   updateVoxelStats(stats: Partial<VoxelStats>): void {
     useGameStore.getState().setVoxelStats(stats);
+  }
+
+  // Build system writes
+  
+  /**
+   * Select a build preset (0-9).
+   * 0 = disabled, 1-9 = presets
+   */
+  selectBuildPreset(presetId: number): void {
+    useGameStore.getState().setBuildPreset(presetId);
+  }
+
+  /**
+   * Set build rotation in steps (0-7, each step = 45°).
+   */
+  setBuildRotation(steps: number): void {
+    useGameStore.getState().setBuildRotation(steps);
+  }
+
+  /**
+   * Rotate build by direction (-1 or +1).
+   */
+  rotateBuild(direction: number): void {
+    const current = this.buildRotationSteps;
+    const next = (current + direction + 8) % 8;
+    this.setBuildRotation(next);
+  }
+
+  /**
+   * Update whether build has a valid target.
+   */
+  setBuildHasValidTarget(valid: boolean): void {
+    useGameStore.getState().setBuildHasValidTarget(valid);
   }
 }
 

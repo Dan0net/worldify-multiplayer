@@ -18,6 +18,16 @@ export interface VoxelStats {
   debugObjects: number;
 }
 
+/** Build tool state */
+export interface BuildState {
+  /** Currently selected preset ID (0-9, 0 = disabled) */
+  presetId: number;
+  /** Current rotation in steps (0-7, each step = 45°) */
+  rotationSteps: number;
+  /** Whether a valid build target is found */
+  hasValidTarget: boolean;
+}
+
 interface GameState {
   // Connection
   connectionStatus: ConnectionStatus;
@@ -29,9 +39,12 @@ interface GameState {
   // Game mode
   isSpectating: boolean;
 
-  // Build system
+  // Build system (legacy)
   selectedTool: BuildPieceType;
   lastBuildSeqSeen: number;
+
+  // Voxel build system
+  build: BuildState;
 
   // Debug
   fps: number;
@@ -57,6 +70,11 @@ interface GameState {
   toggleVoxelDebug: (key: keyof VoxelDebugToggles) => void;
   setVoxelDebug: (updates: Partial<VoxelDebugToggles>) => void;
   setVoxelStats: (stats: Partial<VoxelStats>) => void;
+  
+  // Build actions
+  setBuildPreset: (presetId: number) => void;
+  setBuildRotation: (rotationSteps: number) => void;
+  setBuildHasValidTarget: (valid: boolean) => void;
 }
 
 export const useGameStore = create<GameState>((set) => ({
@@ -72,6 +90,13 @@ export const useGameStore = create<GameState>((set) => ({
   fps: 0,
   tickMs: 0,
   serverTick: 0,
+  
+  // Build initial state
+  build: {
+    presetId: 0,        // Disabled by default
+    rotationSteps: 0,   // No rotation
+    hasValidTarget: false,
+  },
   
   // Voxel debug initial state
   voxelDebug: {
@@ -115,5 +140,16 @@ export const useGameStore = create<GameState>((set) => ({
       ...state.voxelStats,
       ...stats,
     },
+  })),
+  
+  // Build actions
+  setBuildPreset: (presetId) => set((state) => ({
+    build: { ...state.build, presetId },
+  })),
+  setBuildRotation: (rotationSteps) => set((state) => ({
+    build: { ...state.build, rotationSteps: rotationSteps & 7 }, // Clamp 0-7
+  })),
+  setBuildHasValidTarget: (hasValidTarget) => set((state) => ({
+    build: { ...state.build, hasValidTarget },
   })),
 }));

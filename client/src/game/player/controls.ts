@@ -1,6 +1,6 @@
 /**
  * Input controls handler
- * Captures keyboard/mouse input for player movement
+ * Captures keyboard/mouse input for player movement and building
  */
 
 import {
@@ -13,6 +13,9 @@ import {
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
 
+/** Callback for build place action */
+export type BuildPlaceCallback = () => void;
+
 export class Controls {
   private keys = new Set<string>();
   private isPointerLocked = false;
@@ -20,15 +23,37 @@ export class Controls {
   public yaw = 0;
   public pitch = 0;
 
+  /** Callback when user clicks to place a build */
+  public onBuildPlace: BuildPlaceCallback | null = null;
+
   constructor() {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('mousemove', this.onMouseMove);
+    window.addEventListener('wheel', this.onWheel, { passive: false });
+    window.addEventListener('mousedown', this.onMouseDown);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
     this.keys.add(e.code);
+
+    // Build preset selection (0-9)
+    if (e.code >= 'Digit0' && e.code <= 'Digit9') {
+      const digit = parseInt(e.code.charAt(5));
+      storeBridge.selectBuildPreset(digit);
+      return;
+    }
+
+    // Build rotation
+    if (e.code === 'KeyQ') {
+      storeBridge.rotateBuild(-1);
+      return;
+    }
+    if (e.code === 'KeyE') {
+      storeBridge.rotateBuild(1);
+      return;
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
@@ -40,6 +65,25 @@ export class Controls {
     this.yaw -= e.movementX * 0.002;
     this.pitch -= e.movementY * 0.002;
     this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitch));
+  };
+
+  private onWheel = (e: WheelEvent): void => {
+    if (!this.isPointerLocked) return;
+    
+    // Only handle wheel when build mode is active
+    if (storeBridge.buildIsEnabled) {
+      e.preventDefault();
+      storeBridge.rotateBuild(e.deltaY > 0 ? 1 : -1);
+    }
+  };
+
+  private onMouseDown = (e: MouseEvent): void => {
+    if (!this.isPointerLocked) return;
+    
+    // Left click to place build
+    if (e.button === 0 && storeBridge.buildIsEnabled && this.onBuildPlace) {
+      this.onBuildPlace();
+    }
   };
 
   private onPointerLockChange = (): void => {
@@ -69,6 +113,8 @@ export class Controls {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('mousemove', this.onMouseMove);
+    window.removeEventListener('wheel', this.onWheel);
+    window.removeEventListener('mousedown', this.onMouseDown);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
   }
 }
