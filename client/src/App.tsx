@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { Landing } from './ui/Landing';
+import { useEffect, useRef } from 'react';
 import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
@@ -9,25 +8,21 @@ import { createGame } from './game/createGame';
 
 function App() {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
-  const [gameInitialized, setGameInitialized] = useState(false);
+  const joinAttempted = useRef(false);
 
+  // Auto-join on mount - skip menu, go straight to spectator mode
   useEffect(() => {
-    // Game will be initialized when player joins
-  }, []);
-
-  const handleJoin = async () => {
-    if (!gameInitialized) {
-      await createGame();
-      setGameInitialized(true);
+    if (!joinAttempted.current) {
+      joinAttempted.current = true;
+      createGame();
     }
-  };
+  }, []);
 
   return (
     <>
-      {connectionStatus === 'disconnected' && <Landing onJoin={handleJoin} />}
-      {connectionStatus !== 'disconnected' && (
+      <SpectatorOverlay />
+      {connectionStatus === 'connected' && (
         <>
-          <SpectatorOverlay />
           <Hud />
           <BuildToolbar />
           <DebugPanel />
