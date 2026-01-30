@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server, IncomingMessage } from 'node:http';
 import { roomManager } from '../rooms/roomManager.js';
 import { decodeMessage } from '../net/decode.js';
-import { encodeWelcome } from '../net/encode.js';
+import { encodeWelcome } from '@worldify/shared';
 
 interface AuthenticatedSocket extends WebSocket {
   playerId?: number;

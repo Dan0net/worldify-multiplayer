@@ -33,7 +33,5 @@ export function commitBuild(
 }
 
 export function getBuildsSince(room: Room, fromSeq: number): BuildCommit[] {
-  return room.buildLog.filter(
-    (commit) => (commit as BuildCommit).buildSeq > fromSeq
-  ) as BuildCommit[];
+  return room.buildLog.filter((commit) => commit.buildSeq > fromSeq);
 }

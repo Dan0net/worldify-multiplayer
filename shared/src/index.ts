@@ -7,6 +7,7 @@ export * from './protocol/movement.js';
 export * from './protocol/snapshot.js';
 export * from './protocol/build.js';
 export * from './protocol/territory.js';
+export * from './protocol/messages.js';
 export * from './util/bytes.js';
 export * from './util/quantize.js';
 export * from './util/movement.js';

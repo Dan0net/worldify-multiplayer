@@ -7,12 +7,11 @@
  */
 
 import * as THREE from 'three';
-import { BuildPieceType, BuildCommit, TERRITORY_CELL_SIZE } from '@worldify/shared';
+import { BuildPieceType, BuildCommit, TERRITORY_CELL_SIZE, encodeBuildIntent } from '@worldify/shared';
 import { getCamera } from '../scene/camera';
 import { BuildPreview } from './buildPreview';
 import { BuildPieces } from './buildPieces';
 import { sendBinary } from '../../net/netClient';
-import { encodeBuildIntent } from '../../net/encode';
 import { storeBridge } from '../../state/bridge';
 
 export class BuildController {

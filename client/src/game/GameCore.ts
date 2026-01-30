@@ -10,8 +10,7 @@ import { controls } from './player/controls';
 // import { BuildController } from './world/buildController';
 import { onSnapshot, onBuildCommit } from '../net/decode';
 import { sendBinary, setOnReconnected } from '../net/netClient';
-import { encodeInput } from '../net/encode';
-import { CLIENT_INPUT_HZ, RoomSnapshot, BuildCommit } from '@worldify/shared';
+import { CLIENT_INPUT_HZ, RoomSnapshot, BuildCommit, encodeInput } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 
 export class GameCore {

@@ -20,8 +20,9 @@ import {
   SPRINT_MULTIPLIER,
   // Movement utilities from shared
   getWorldDirectionFromInput,
+  // Encode functions from shared
+  encodeSnapshot,
 } from '@worldify/shared';
-import { encodeSnapshot } from '../net/encode.js';
 
 const TICK_INTERVAL_MS = 1000 / SERVER_TICK_HZ;
 const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_HZ;

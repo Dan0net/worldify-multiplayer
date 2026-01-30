@@ -3,9 +3,8 @@
  */
 
 import { storeBridge } from '../state/bridge';
-import { PROTOCOL_VERSION } from '@worldify/shared';
+import { PROTOCOL_VERSION, encodeAckBuild, encodeJoin } from '@worldify/shared';
 import { decodeMessage } from './decode';
-import { encodeJoin, encodeAckBuild } from './encode';
 
 let ws: WebSocket | null = null;
 let localPlayerId: number | null = null;

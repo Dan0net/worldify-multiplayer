@@ -11,9 +11,11 @@ import {
   ByteReader,
   decodeInput,
   decodeBuildIntent,
+  encodeBuildCommit,
+  encodeBuildSync,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
-import { encodePong, encodeBuildSync, encodeBuildCommit } from './encode.js';
+import { encodePong } from '@worldify/shared';
 import { commitBuild, getBuildsSince } from '../rooms/buildLog.js';
 import { broadcast } from '../ws/wsServer.js';
 
