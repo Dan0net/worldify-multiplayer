@@ -10,10 +10,6 @@ import * as THREE from 'three';
 import { 
   MovementInput, 
   PlayerSnapshot,
-  INPUT_FORWARD,
-  INPUT_BACKWARD,
-  INPUT_LEFT,
-  INPUT_RIGHT,
   INPUT_JUMP,
   INPUT_SPRINT,
   // Physics constants from shared
@@ -24,6 +20,8 @@ import {
   PLAYER_HEIGHT_INNER,
   PLAYER_RADIUS,
   PHYSICS_STEPS,
+  // Movement utilities from shared
+  getWorldDirectionFromInput,
 } from '@worldify/shared';
 import { Controls } from './controls';
 import type { VoxelIntegration } from '../voxel/VoxelIntegration';
@@ -124,35 +122,17 @@ export class PlayerLocal {
     // Apply vertical velocity
     this.position.y += this.velocity.y * dt;
 
-    // Calculate horizontal movement direction
-    let moveX = 0;
-    let moveZ = 0;
-
-    if (buttons & INPUT_FORWARD) moveZ -= 1;
-    if (buttons & INPUT_BACKWARD) moveZ += 1;
-    if (buttons & INPUT_LEFT) moveX -= 1;
-    if (buttons & INPUT_RIGHT) moveX += 1;
-
-    // Normalize diagonal movement
-    const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
-    if (length > 0) {
-      moveX /= length;
-      moveZ /= length;
-
-      // Rotate by player yaw to get world direction
-      const cos = Math.cos(this.yaw);
-      const sin = Math.sin(this.yaw);
-      const worldX = moveX * cos + moveZ * sin;
-      const worldZ = -moveX * sin + moveZ * cos;
-
+    // Calculate horizontal movement using shared utility
+    const worldDir = getWorldDirectionFromInput(buttons, this.yaw);
+    if (worldDir) {
       // Apply speed
       let speed = MOVE_SPEED;
       if (buttons & INPUT_SPRINT) {
         speed *= SPRINT_MULTIPLIER;
       }
 
-      this.position.x += worldX * speed * dt;
-      this.position.z += worldZ * speed * dt;
+      this.position.x += worldDir.worldX * speed * dt;
+      this.position.z += worldDir.worldZ * speed * dt;
     }
 
     // Apply voxel terrain collision

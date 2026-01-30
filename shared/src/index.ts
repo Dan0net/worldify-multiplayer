@@ -9,6 +9,7 @@ export * from './protocol/build.js';
 export * from './protocol/territory.js';
 export * from './util/bytes.js';
 export * from './util/quantize.js';
+export * from './util/movement.js';
 
 // Voxel terrain
 export * from './voxel/constants.js';

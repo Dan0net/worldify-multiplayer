@@ -12,16 +12,14 @@ import { Room, PlayerState } from './room.js';
 import { 
   SERVER_TICK_HZ, 
   SNAPSHOT_HZ,
-  INPUT_FORWARD,
-  INPUT_BACKWARD,
-  INPUT_LEFT,
-  INPUT_RIGHT,
   INPUT_SPRINT,
   PlayerSnapshot,
   FLAG_SPRINTING,
   // Physics constants from shared (ensures client/server consistency)
   MOVE_SPEED,
   SPRINT_MULTIPLIER,
+  // Movement utilities from shared
+  getWorldDirectionFromInput,
 } from '@worldify/shared';
 import { encodeSnapshot } from '../net/encode.js';
 
@@ -73,29 +71,9 @@ function processPlayerMovement(player: PlayerState, dt: number): void {
   // Server only handles horizontal movement
   // Client handles vertical physics (gravity, jump, voxel collision)
   
-  // Calculate movement direction relative to player yaw
-  // In Three.js: -Z is forward, +X is right
-  let moveX = 0;
-  let moveZ = 0;
-  
-  if (buttons & INPUT_FORWARD) moveZ -= 1;
-  if (buttons & INPUT_BACKWARD) moveZ += 1;
-  if (buttons & INPUT_LEFT) moveX -= 1;
-  if (buttons & INPUT_RIGHT) moveX += 1;
-  
-  // Normalize diagonal movement
-  const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
-  if (length > 0) {
-    moveX /= length;
-    moveZ /= length;
-    
-    // Rotate by player yaw to get world direction
-    // Rotation matrix: [cos, -sin; sin, cos]
-    const cos = Math.cos(player.yaw);
-    const sin = Math.sin(player.yaw);
-    const worldX = moveX * cos + moveZ * sin;
-    const worldZ = -moveX * sin + moveZ * cos;
-    
+  // Calculate horizontal movement using shared utility
+  const worldDir = getWorldDirectionFromInput(buttons, player.yaw);
+  if (worldDir) {
     // Apply speed
     let speed = MOVE_SPEED;
     if (buttons & INPUT_SPRINT) {
@@ -105,8 +83,8 @@ function processPlayerMovement(player: PlayerState, dt: number): void {
       player.flags &= ~FLAG_SPRINTING;
     }
     
-    player.x += worldX * speed * dt;
-    player.z += worldZ * speed * dt;
+    player.x += worldDir.worldX * speed * dt;
+    player.z += worldDir.worldZ * speed * dt;
   }
 }
 
