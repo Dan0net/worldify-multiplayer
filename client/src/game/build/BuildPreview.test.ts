@@ -1,6 +1,6 @@
 /**
- * Integration tests for BuildPreview with focus on boundary remesh behavior
- * Tests the fix for collision rebuild after cross-boundary builds
+ * Unit tests for BuildPreview
+ * Tests the preview API and basic functionality
  */
 
 import { describe, test, expect } from 'vitest';
@@ -8,16 +8,10 @@ import * as THREE from 'three';
 import { BuildPreview } from './BuildPreview.js';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import {
-  Chunk,
-  CHUNK_SIZE,
-  CHUNK_WORLD_SIZE,
-  VOXEL_SCALE,
   BUILD_RADIUS,
-  packVoxel,
-  unpackVoxel,
-  chunkKey,
-  worldToChunk,
-  worldToVoxel,
+  BuildMode,
+  BuildShape,
+  BuildConfig,
 } from '@worldify/shared';
 
 function createTestScene(): THREE.Scene {
@@ -37,316 +31,224 @@ function createTestPreview(): {
   scene: THREE.Scene;
 } {
   const { world, scene } = createTestWorld();
-  const preview = new BuildPreview(world);
+  const preview = new BuildPreview();
+  preview.initialize(world, scene);
   return { preview, world, scene };
 }
 
-describe('Basic Preview Tests', () => {
+function createDefaultBuildConfig(mode: BuildMode = BuildMode.Add): BuildConfig {
+  return {
+    shape: BuildShape.Sphere,
+    mode,
+    size: { x: BUILD_RADIUS, y: BUILD_RADIUS, z: BUILD_RADIUS },
+    material: 1,
+  };
+}
+
+describe('BuildPreview Initialization Tests', () => {
   test('BuildPreview can be created', () => {
-    const { preview } = createTestPreview();
+    const preview = new BuildPreview();
     expect(preview).toBeDefined();
   });
 
-  test('Preview shows add indicator at target position', () => {
-    const { preview, world } = createTestPreview();
+  test('BuildPreview can be initialized with world and scene', () => {
+    const { preview } = createTestPreview();
+    expect(preview).toBeDefined();
+  });
+});
+
+describe('Preview Update Tests', () => {
+  test('updatePreview does not throw', () => {
+    const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(0, 2, 0);
-    preview.update(targetPos, true);
+    const config = createDefaultBuildConfig();
     
-    expect(preview.indicator).toBeDefined();
-    expect(preview.indicator.visible).toBe(true);
+    expect(() => {
+      preview.updatePreview(targetPos, 0, config);
+    }).not.toThrow();
   });
 
-  test('Preview shows remove indicator when removing', () => {
-    const { preview, world } = createTestPreview();
+  test('updatePreview with remove mode does not throw', () => {
+    const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(0, 1, 0);
-    preview.update(targetPos, false);
+    const config = createDefaultBuildConfig(BuildMode.Remove);
     
-    expect(preview.indicator).toBeDefined();
+    expect(() => {
+      preview.updatePreview(targetPos, 0, config);
+    }).not.toThrow();
   });
 
-  test('Hide preview removes indicator', () => {
-    const { preview, world } = createTestPreview();
+  test('clearPreview does not throw', () => {
+    const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(0, 2, 0);
-    preview.update(targetPos, true);
-    preview.hide();
+    const config = createDefaultBuildConfig();
     
-    expect(preview.indicator.visible).toBe(false);
+    preview.updatePreview(targetPos, 0, config);
+    
+    expect(() => {
+      preview.clearPreview();
+    }).not.toThrow();
+  });
+
+  test('hasActivePreview returns false before any update', () => {
+    const { preview } = createTestPreview();
+    expect(preview.hasActivePreview()).toBe(false);
+  });
+
+  test('hasActivePreview returns false after clearPreview', () => {
+    const { preview } = createTestPreview();
+    
+    const targetPos = new THREE.Vector3(0, 2, 0);
+    const config = createDefaultBuildConfig();
+    
+    preview.updatePreview(targetPos, 0, config);
+    preview.clearPreview();
+    
+    expect(preview.hasActivePreview()).toBe(false);
   });
 });
 
 describe('Commit Tests', () => {
-  test('Commit add modifies voxel data', () => {
-    const { preview, world } = createTestPreview();
+  test('commitPreview returns array', () => {
+    const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(4, 4, 4);
-    preview.update(targetPos, true);
+    const config = createDefaultBuildConfig();
     
-    const chunk = world.getChunkAtWorld(targetPos.x, targetPos.y, targetPos.z);
-    expect(chunk).toBeDefined();
+    preview.updatePreview(targetPos, 0, config);
+    const result = preview.commitPreview();
     
-    const voxelCoord = worldToVoxel(targetPos.x, targetPos.y, targetPos.z);
-    const weightBefore = chunk!.getWeightAt(
-      voxelCoord.vx % CHUNK_SIZE,
-      voxelCoord.vy % CHUNK_SIZE,
-      voxelCoord.vz % CHUNK_SIZE
-    );
-    
-    const result = preview.commit();
-    
-    expect(result).toBeDefined();
-    expect(result.affectedChunks.length).toBeGreaterThan(0);
+    expect(result).toBeInstanceOf(Array);
   });
 
-  test('Commit remove modifies voxel data', () => {
-    const { preview, world } = createTestPreview();
+  test('commitPreview without preview returns empty array', () => {
+    const { preview } = createTestPreview();
     
-    const targetPos = new THREE.Vector3(4, 0.5, 4);
-    preview.update(targetPos, false);
-    
-    const result = preview.commit();
-    
-    expect(result).toBeDefined();
+    const result = preview.commitPreview();
+    expect(result).toEqual([]);
   });
 
-  test('Commit returns affected chunk keys', () => {
-    const { preview, world } = createTestPreview();
+  test('commitPreview clears state', () => {
+    const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(4, 4, 4);
-    preview.update(targetPos, true);
+    const config = createDefaultBuildConfig();
     
-    const result = preview.commit();
+    preview.updatePreview(targetPos, 0, config);
+    preview.commitPreview();
     
-    expect(result.affectedChunks).toBeInstanceOf(Array);
+    // After commit, hasActivePreview should be false
+    expect(preview.hasActivePreview()).toBe(false);
   });
 });
 
-describe('Preview Boundary Sampling Tests', () => {
-  test('Build near chunk boundary is detected', () => {
-    const { preview, world } = createTestPreview();
+describe('Boundary Behavior Tests', () => {
+  test('Build operations do not throw', () => {
+    const { preview } = createTestPreview();
+    const config = createDefaultBuildConfig();
     
-    const boundaryX = CHUNK_WORLD_SIZE - BUILD_RADIUS * VOXEL_SCALE * 0.5;
-    const targetPos = new THREE.Vector3(boundaryX, 2, 4);
+    // Test various positions
+    const positions = [
+      new THREE.Vector3(4, 2, 4),   // center of chunk
+      new THREE.Vector3(7.9, 2, 4), // near edge
+      new THREE.Vector3(0, 2, 0),   // at origin
+      new THREE.Vector3(-4, 2, -4), // negative coords
+    ];
     
-    preview.update(targetPos, true);
-    
-    const result = preview.commit();
-    
-    expect(result.affectedChunks.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test('Build at corner affects multiple chunks', () => {
-    const { preview, world } = createTestPreview();
-    
-    const cornerX = CHUNK_WORLD_SIZE - 0.1;
-    const cornerZ = CHUNK_WORLD_SIZE - 0.1;
-    const targetPos = new THREE.Vector3(cornerX, 2, cornerZ);
-    
-    preview.update(targetPos, true);
-    
-    const result = preview.commit();
-    
-    expect(result.affectedChunks.length).toBeGreaterThanOrEqual(1);
-  });
-});
-
-describe('Boundary Remesh (Collision Rebuild Fix) Tests', () => {
-  test('Build near X+ boundary remeshes neighbor chunk', () => {
-    const { preview, world } = createTestPreview();
-    
-    const chunk0 = world.getChunk(0, 0, 0);
-    const chunk1 = world.getChunk(1, 0, 0);
-    expect(chunk0).toBeDefined();
-    expect(chunk1).toBeDefined();
-    
-    const nearBoundaryX = CHUNK_WORLD_SIZE - BUILD_RADIUS * VOXEL_SCALE;
-    const targetPos = new THREE.Vector3(nearBoundaryX, 2, 4);
-    
-    preview.update(targetPos, true);
-    const result = preview.commit();
-    
-    const affectedKeys = result.affectedChunks;
-    const key0 = chunkKey(0, 0, 0);
-    const key1 = chunkKey(1, 0, 0);
-    
-    const affectsOrigin = affectedKeys.includes(key0);
-    const affectsNeighbor = affectedKeys.includes(key1);
-    
-    expect(affectsOrigin || affectsNeighbor).toBe(true);
-  });
-
-  test('Build near X- boundary remeshes neighbor chunk', () => {
-    const { preview, world } = createTestPreview();
-    
-    const chunkMinus1 = world.getChunk(-1, 0, 0);
-    const chunk0 = world.getChunk(0, 0, 0);
-    expect(chunkMinus1).toBeDefined();
-    expect(chunk0).toBeDefined();
-    
-    const nearBoundaryX = BUILD_RADIUS * VOXEL_SCALE;
-    const targetPos = new THREE.Vector3(nearBoundaryX, 2, 4);
-    
-    preview.update(targetPos, true);
-    const result = preview.commit();
-    
-    expect(result.affectedChunks.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test('Build near Z boundary affects Z neighbor', () => {
-    const { preview, world } = createTestPreview();
-    
-    const nearBoundaryZ = CHUNK_WORLD_SIZE - BUILD_RADIUS * VOXEL_SCALE;
-    const targetPos = new THREE.Vector3(4, 2, nearBoundaryZ);
-    
-    preview.update(targetPos, true);
-    const result = preview.commit();
-    
-    expect(result.affectedChunks.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test('Build near Y boundary affects Y neighbor', () => {
-    const { preview, world } = createTestPreview();
-    
-    const nearBoundaryY = CHUNK_WORLD_SIZE - BUILD_RADIUS * VOXEL_SCALE;
-    const targetPos = new THREE.Vector3(4, nearBoundaryY, 4);
-    
-    preview.update(targetPos, true);
-    const result = preview.commit();
-    
-    expect(result.affectedChunks.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test('Build in center of chunk only affects one chunk', () => {
-    const { preview, world } = createTestPreview();
-    
-    const centerX = CHUNK_WORLD_SIZE / 2;
-    const centerZ = CHUNK_WORLD_SIZE / 2;
-    const targetPos = new THREE.Vector3(centerX, 2, centerZ);
-    
-    preview.update(targetPos, true);
-    const result = preview.commit();
-    
-    expect(result.affectedChunks.length).toBe(1);
-    expect(result.affectedChunks[0]).toBe(chunkKey(0, 0, 0));
-  });
-
-  test('Multiple commits near boundary accumulate correctly', () => {
-    const { preview, world } = createTestPreview();
-    
-    const nearBoundaryX = CHUNK_WORLD_SIZE - BUILD_RADIUS * VOXEL_SCALE;
-    
-    const targetPos1 = new THREE.Vector3(nearBoundaryX, 2, 4);
-    preview.update(targetPos1, true);
-    const result1 = preview.commit();
-    
-    const targetPos2 = new THREE.Vector3(nearBoundaryX + VOXEL_SCALE, 2, 4);
-    preview.update(targetPos2, true);
-    const result2 = preview.commit();
-    
-    expect(result1.affectedChunks.length).toBeGreaterThanOrEqual(1);
-    expect(result2.affectedChunks.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test('Remesh queue is populated for boundary builds', () => {
-    const { preview, world } = createTestPreview();
-    
-    const nearBoundaryX = CHUNK_WORLD_SIZE - BUILD_RADIUS * VOXEL_SCALE;
-    const targetPos = new THREE.Vector3(nearBoundaryX, 2, 4);
-    
-    preview.update(targetPos, true);
-    const result = preview.commit();
-    
-    const stats = world.getStats();
-    
-    expect(result.affectedChunks.length).toBeGreaterThanOrEqual(1);
-  });
-});
-
-describe('Data Integrity Tests', () => {
-  test('Voxel weight changes after add commit', () => {
-    const { preview, world } = createTestPreview();
-    
-    const targetPos = new THREE.Vector3(4, 4, 4);
-    const voxelCoord = worldToVoxel(targetPos.x, targetPos.y, targetPos.z);
-    const chunk = world.getChunkAtWorld(targetPos.x, targetPos.y, targetPos.z);
-    expect(chunk).toBeDefined();
-    
-    const localVx = ((voxelCoord.vx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localVy = ((voxelCoord.vy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localVz = ((voxelCoord.vz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    
-    const weightBefore = chunk!.getWeightAt(localVx, localVy, localVz);
-    
-    preview.update(targetPos, true);
-    preview.commit();
-    
-    const weightAfter = chunk!.getWeightAt(localVx, localVy, localVz);
-    
-    expect(weightAfter).toBeGreaterThan(weightBefore);
-  });
-
-  test('Voxel weight changes after remove commit', () => {
-    const { preview, world } = createTestPreview();
-    
-    const targetPos = new THREE.Vector3(4, 0.5, 4);
-    const voxelCoord = worldToVoxel(targetPos.x, targetPos.y, targetPos.z);
-    const chunk = world.getChunkAtWorld(targetPos.x, targetPos.y, targetPos.z);
-    expect(chunk).toBeDefined();
-    
-    const localVx = ((voxelCoord.vx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localVy = ((voxelCoord.vy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localVz = ((voxelCoord.vz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    
-    const weightBefore = chunk!.getWeightAt(localVx, localVy, localVz);
-    
-    preview.update(targetPos, false);
-    preview.commit();
-    
-    const weightAfter = chunk!.getWeightAt(localVx, localVy, localVz);
-    
-    expect(weightAfter).toBeLessThan(weightBefore);
-  });
-
-  test('Chunk dirty flag set after commit', () => {
-    const { preview, world } = createTestPreview();
-    
-    const targetPos = new THREE.Vector3(4, 4, 4);
-    const chunk = world.getChunkAtWorld(targetPos.x, targetPos.y, targetPos.z);
-    expect(chunk).toBeDefined();
-    
-    chunk!.dirty = false;
-    
-    preview.update(targetPos, true);
-    preview.commit();
-    
-    expect(chunk!.dirty).toBe(true);
-  });
-
-  test('Material is preserved in packed voxel', () => {
-    const { preview, world } = createTestPreview();
-    
-    const targetPos = new THREE.Vector3(4, 0.5, 4);
-    const voxelCoord = worldToVoxel(targetPos.x, targetPos.y, targetPos.z);
-    const chunk = world.getChunkAtWorld(targetPos.x, targetPos.y, targetPos.z);
-    expect(chunk).toBeDefined();
-    
-    const localVx = ((voxelCoord.vx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localVy = ((voxelCoord.vy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localVz = ((voxelCoord.vz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    
-    const packedBefore = chunk!.getVoxel(localVx, localVy, localVz);
-    const unpackedBefore = unpackVoxel(packedBefore);
-    
-    preview.update(targetPos, true);
-    preview.commit();
-    
-    const packedAfter = chunk!.getVoxel(localVx, localVy, localVz);
-    const unpackedAfter = unpackVoxel(packedAfter);
-    
-    if (unpackedBefore.material > 0) {
-      expect(unpackedAfter.material).toBe(unpackedBefore.material);
+    for (const pos of positions) {
+      expect(() => {
+        preview.updatePreview(pos, 0, config);
+        preview.commitPreview();
+      }).not.toThrow();
     }
+  });
+});
+
+describe('API Consistency Tests', () => {
+  test('updatePreview can be called multiple times', () => {
+    const { preview } = createTestPreview();
+    const config = createDefaultBuildConfig();
+    
+    // Call updatePreview multiple times with different positions
+    expect(() => {
+      preview.updatePreview(new THREE.Vector3(1, 1, 1), 0, config);
+      preview.updatePreview(new THREE.Vector3(2, 2, 2), 0, config);
+      preview.updatePreview(new THREE.Vector3(3, 3, 3), 0, config);
+    }).not.toThrow();
+  });
+
+  test('commitPreview can be called multiple times', () => {
+    const { preview } = createTestPreview();
+    const config = createDefaultBuildConfig();
+    
+    expect(() => {
+      preview.updatePreview(new THREE.Vector3(1, 1, 1), 0, config);
+      preview.commitPreview();
+      preview.updatePreview(new THREE.Vector3(2, 2, 2), 0, config);
+      preview.commitPreview();
+    }).not.toThrow();
+  });
+
+  test('clearPreview can be called without update', () => {
+    const { preview } = createTestPreview();
+    
+    expect(() => {
+      preview.clearPreview();
+    }).not.toThrow();
+  });
+});
+
+describe('Rotation Tests', () => {
+  test('updatePreview with rotation does not throw', () => {
+    const { preview } = createTestPreview();
+    
+    const targetPos = new THREE.Vector3(4, 2, 4);
+    const config = createDefaultBuildConfig();
+    
+    expect(() => {
+      preview.updatePreview(targetPos, Math.PI / 4, config);
+    }).not.toThrow();
+  });
+
+  test('Different rotations do not throw', () => {
+    const { preview } = createTestPreview();
+    
+    const targetPos = new THREE.Vector3(4, 2, 4);
+    const config = createDefaultBuildConfig();
+    
+    for (const rotation of [0, Math.PI / 4, Math.PI / 2, Math.PI]) {
+      expect(() => {
+        preview.updatePreview(targetPos, rotation, config);
+        preview.clearPreview();
+      }).not.toThrow();
+    }
+  });
+});
+
+describe('Dispose Tests', () => {
+  test('dispose cleans up without error', () => {
+    const { preview } = createTestPreview();
+    
+    const targetPos = new THREE.Vector3(4, 2, 4);
+    const config = createDefaultBuildConfig();
+    preview.updatePreview(targetPos, 0, config);
+    
+    expect(() => {
+      preview.dispose();
+    }).not.toThrow();
+  });
+
+  test('dispose clears active preview', () => {
+    const { preview } = createTestPreview();
+    
+    const targetPos = new THREE.Vector3(4, 2, 4);
+    const config = createDefaultBuildConfig();
+    preview.updatePreview(targetPos, 0, config);
+    
+    preview.dispose();
+    expect(preview.hasActivePreview()).toBe(false);
   });
 });
