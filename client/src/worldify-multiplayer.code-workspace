@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../../worldify-app"
+		},
+		{
+			"path": "../../../worldify-firebase"
 		}
 	],
 	"settings": {}

@@ -66,20 +66,45 @@ export interface BuildConfig {
 
 ### Phase 2: Network Protocol (`shared/src/protocol/`)
 
-#### 2.1 Add message types to `msgIds.ts`
+#### 2.1 Message IDs (in `buildMessages.ts`)
 ```typescript
-// Already exists:
-export const MSG_BUILD_INTENT = 0x03;   // Client → Server: "I want to build here"
-export const MSG_ACK_BUILD = 0x04;      // Client → Server: ACK received build
-export const MSG_BUILD_COMMIT = 0x83;   // Server → Client: Build confirmed
-export const MSG_BUILD_SYNC = 0x84;     // Server → Client: Sync chunk changes
+// Client → Server
+export const MSG_VOXEL_BUILD_INTENT = 0x06;   // Player clicks to build
+export const MSG_VOXEL_CHUNK_REQUEST = 0x07;  // Request full chunk data
+
+// Server → Client
+export const MSG_VOXEL_BUILD_COMMIT = 0x87;   // Echoes intent to all clients
+export const MSG_VOXEL_CHUNK_DATA = 0x88;     // Full chunk for streaming/resync
 ```
 
-#### 2.2 Create `shared/src/protocol/buildMessages.ts` - Binary encode/decode for build messages
-```typescript
-// BuildIntent: { seq, center, rotation, config }
-// BuildCommit: { seq, affectedChunks: [cx,cy,cz,patchData][] }
-```
+#### 2.2 VOXEL_BUILD_INTENT (Client → Server)
+Sent when player clicks to commit a build. Contains:
+- Center position (Vec3)
+- Rotation (Quaternion)
+- BuildConfig (shape, mode, size, material, optional thickness/arcSweep)
+
+#### 2.3 VOXEL_BUILD_COMMIT (Server → Client)
+Server validates the build, applies it, then echoes the intent to ALL clients:
+- Build sequence number (for ordering)
+- Player ID
+- Result code (success, too_far, no_permission, collision, invalid_config, rate_limited)
+- Original intent data (if success)
+
+Clients apply the build locally using shared drawing functions. This ensures determinism.
+
+#### 2.4 VOXEL_CHUNK_DATA (Server → Client)
+Full chunk voxel data. Used for:
+- New players joining (chunks they can see)
+- Existing players streaming new chunks into view
+- Resync if client gets out of order
+
+Contains:
+- Chunk coordinates
+- Last build sequence applied to this chunk
+- Raw voxel data (32×32×32×2 = 65536 bytes)
+
+#### 2.5 VOXEL_CHUNK_REQUEST (Client → Server)
+Client requests full chunk data for a specific chunk coordinate.
 
 ---
 
@@ -105,9 +130,11 @@ class Builder {
 ```
 
 #### 3.3 Modify `VoxelWorld.ts`
-- Add `applyBuild(center, rotation, config)` for local application
+- Add `applyBuild(intent: VoxelBuildIntent)` - applies build using shared drawing functions
 - Add `showPreview(center, rotation, config)` using temp buffers
 - Add `clearPreview()` to restore from temp buffers
+- Handle `VOXEL_BUILD_COMMIT`: apply the echoed intent locally
+- Handle `VOXEL_CHUNK_DATA`: replace/create chunk with server data
 
 #### 3.4 Create `BuildMarker.ts` - Visual indicator for build target
 - Wireframe representation of current shape
@@ -121,19 +148,20 @@ class Builder {
 ```typescript
 class BuildHandler {
   handleBuildIntent(player, intent): void {
-    // 1. Validate player can build (distance, permissions)
+    // 1. Validate player can build (distance, permissions, rate limit)
     // 2. Apply build to server chunk data using shared drawing functions
-    // 3. Generate patch/delta for affected voxels
-    // 4. Broadcast BUILD_COMMIT with changes to all players
-    // 5. Update collision mesh for physics
+    // 3. Track which chunks were modified (for streaming)
+    // 4. Broadcast VOXEL_BUILD_COMMIT with the original intent to all players
+    // 5. Update server-side collision for physics validation
   }
 }
 ```
 
 #### 4.2 Modify Room to maintain voxel state
-- Store modified chunks
+- Store modified chunks with `lastBuildSeq` per chunk
+- Handle `VOXEL_BUILD_INTENT` messages
+- Handle `VOXEL_CHUNK_REQUEST` - send full chunk data to requesting client
 - Serialize/deserialize for persistence
-- Handle BUILD_INTENT messages
 
 ---
 
@@ -189,11 +217,13 @@ server/src/rooms/
 
 ## Key Design Decisions
 
-1. **Drawing functions in shared** - Same code validates on server and previews on client
+1. **Drawing functions in shared** - Same code on server and all clients ensures determinism
 2. **Temp buffer for preview** - Non-destructive preview that can be instantly reverted
 3. **Server-authoritative** - Client sends intent, server validates and broadcasts result
-4. **Delta/patch sync** - Only send changed voxels, not full chunks
-5. **Sequence numbers** - Handle out-of-order messages and duplicate detection
+4. **Echo intent, not patches** - Server broadcasts the original intent; clients apply it locally using shared drawing code. This is simpler and ensures all clients produce identical results.
+5. **Full chunk sync for streaming** - When clients need chunk data (new player, streaming into view, resync), send full chunk with `lastBuildSeq`. No need for complex delta tracking.
+6. **Sequence numbers** - `buildSeq` ensures ordering; clients can detect if they missed a build and request chunk resync
+7. **Error codes** - Server returns specific rejection reasons (too_far, no_permission, collision, rate_limited)
 
 ---
 
