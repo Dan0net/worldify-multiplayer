@@ -65,12 +65,19 @@ WWWW MMMMMMM LLLLL  →  Weight(4) | Material(7) | Light(5)
 **Chunk structure**:
 - 32³ voxels per chunk, 0.25m per voxel → 8m chunks
 - All constants in `shared/src/voxel/constants.ts`
+- `Chunk` class + `ChunkData` interface in `shared/src/voxel/Chunk.ts`
 
-**Client components** (`client/src/game/voxel/`):
+**Shared voxel code** (`shared/src/voxel/`):
 | File | Responsibility |
 |------|----------------|
-| `VoxelWorld.ts` | Chunk loading/unloading, coordinate systems |
-| `Chunk.ts` | Single chunk data container |
+| `Chunk.ts` | Chunk data container + serialization |
+| `voxelData.ts` | Pack/unpack, coordinate helpers |
+| `constants.ts` | Chunk size, voxel scale, bit layouts |
+
+**Client voxel code** (`client/src/game/voxel/`):
+| File | Responsibility |
+|------|----------------|
+| `VoxelWorld.ts` | Chunk loading/unloading, streaming |
 | `ChunkMesh.ts` | Three.js mesh from chunk data |
 | `SurfaceNet.ts` | Isosurface extraction algorithm |
 | `VoxelCollision.ts` | Player collision with terrain |

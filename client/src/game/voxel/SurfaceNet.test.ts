@@ -3,9 +3,8 @@
  * Run with: npx tsx client/src/game/voxel/SurfaceNet.test.ts
  */
 
-import { Chunk } from './Chunk.js';
 import { meshChunk, isEmptyMesh, SurfaceNetOutput } from './SurfaceNet.js';
-import { CHUNK_SIZE, packVoxel } from '@worldify/shared';
+import { CHUNK_SIZE, packVoxel, Chunk } from '@worldify/shared';
 
 // Simple test runner
 let passed = 0;

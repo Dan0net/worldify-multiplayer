@@ -3,8 +3,8 @@
  * Run with: npx tsx client/src/game/voxel/Chunk.test.ts
  */
 
-import { Chunk } from './Chunk.js';
 import {
+  Chunk,
   CHUNK_SIZE,
   VOXELS_PER_CHUNK,
   packVoxel,

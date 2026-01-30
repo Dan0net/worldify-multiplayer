@@ -13,8 +13,7 @@
  * 3. Connect vertices with quads where edges cross the surface
  */
 
-import { CHUNK_SIZE, getMaterial } from '@worldify/shared';
-import { Chunk } from './Chunk.js';
+import { CHUNK_SIZE, getMaterial, Chunk } from '@worldify/shared';
 
 // ============== Types ==============
 

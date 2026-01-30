@@ -1,16 +1,36 @@
 /**
  * Chunk - Holds voxel data for a 32×32×32 section of the world
+ * 
+ * This is the core data container for voxel terrain, used by both
+ * client (rendering) and server (collision, validation, network).
  */
 
 import {
   CHUNK_SIZE,
   VOXELS_PER_CHUNK,
   CHUNK_WORLD_SIZE,
+} from './constants.js';
+import {
   packVoxel,
   getWeight,
   voxelIndex,
   chunkKey,
-} from '@worldify/shared';
+} from './voxelData.js';
+
+// ============== Types ==============
+
+/**
+ * Serializable chunk data for network transmission.
+ */
+export interface ChunkData {
+  cx: number;
+  cy: number;
+  cz: number;
+  /** Base64-encoded Uint16Array data */
+  data: string;
+}
+
+// ============== Chunk Class ==============
 
 /**
  * A chunk of voxel terrain data.
@@ -37,6 +57,37 @@ export class Chunk {
     this.cz = cz;
     this.data = new Uint16Array(VOXELS_PER_CHUNK);
     this.key = chunkKey(cx, cy, cz);
+  }
+
+  /**
+   * Create a Chunk from serialized ChunkData.
+   */
+  static fromChunkData(chunkData: ChunkData): Chunk {
+    const chunk = new Chunk(chunkData.cx, chunkData.cy, chunkData.cz);
+    const binary = atob(chunkData.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    chunk.data.set(new Uint16Array(bytes.buffer));
+    return chunk;
+  }
+
+  /**
+   * Serialize chunk to ChunkData for network transmission.
+   */
+  toChunkData(): ChunkData {
+    const bytes = new Uint8Array(this.data.buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return {
+      cx: this.cx,
+      cy: this.cy,
+      cz: this.cz,
+      data: btoa(binary),
+    };
   }
 
   /**

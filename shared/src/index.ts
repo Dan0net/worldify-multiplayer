@@ -12,6 +12,7 @@ export * from './util/quantize.js';
 // Voxel terrain
 export * from './voxel/constants.js';
 export * from './voxel/voxelData.js';
+export * from './voxel/Chunk.js';
 
 // Terrain generation
 export * from './terrain/index.js';
@@ -21,3 +22,4 @@ export type { MovementInput, PlayerPosition } from './protocol/movement.js';
 export type { PlayerSnapshot, RoomSnapshot } from './protocol/snapshot.js';
 export type { BuildIntent, BuildCommit } from './protocol/build.js';
 export type { UnpackedVoxel, ChunkCoord, VoxelCoord, WorldCoord } from './voxel/voxelData.js';
+export type { ChunkData } from './voxel/Chunk.js';

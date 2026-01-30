@@ -8,8 +8,8 @@ import {
   worldToChunk,
   chunkKey,
   TerrainGenerator,
+  Chunk,
 } from '@worldify/shared';
-import { Chunk } from './Chunk.js';
 import { meshChunk } from './SurfaceNet.js';
 import { ChunkMesh } from './ChunkMesh.js';
 

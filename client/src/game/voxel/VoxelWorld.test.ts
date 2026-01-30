@@ -14,8 +14,8 @@
 
 import * as THREE from 'three';
 import { VoxelWorld } from './VoxelWorld.js';
-import { Chunk } from './Chunk.js';
 import {
+  Chunk,
   STREAM_RADIUS,
   CHUNK_SIZE,
   CHUNK_WORLD_SIZE,

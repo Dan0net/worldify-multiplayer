@@ -9,8 +9,7 @@
  */
 
 import * as THREE from 'three';
-import { CHUNK_WORLD_SIZE } from '@worldify/shared';
-import { Chunk } from './Chunk.js';
+import { CHUNK_WORLD_SIZE, Chunk } from '@worldify/shared';
 import { ChunkMesh } from './ChunkMesh.js';
 
 // ============== Debug Colors ==============
