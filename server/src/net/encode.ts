@@ -1,7 +1,7 @@
 /**
  * Binary message encoding (server -> client)
  * 
- * NOTE: For shared encode functions (encodeSnapshot, encodeBuildCommit, encodeBuildSync),
+ * NOTE: For shared encode functions (encodeSnapshot),
  * import directly from '@worldify/shared' instead of this module.
  * This module only contains server-specific encoding functions.
  */

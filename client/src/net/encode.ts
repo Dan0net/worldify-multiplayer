@@ -1,7 +1,7 @@
 /**
  * Binary message encoding (client -> server)
  * 
- * NOTE: For shared encode functions (encodeInput, encodeBuildIntent, encodeAckBuild),
+ * NOTE: For shared encode functions (encodeInput),
  * import directly from '@worldify/shared' instead of this module.
  * This module only contains client-specific encoding functions.
  */
