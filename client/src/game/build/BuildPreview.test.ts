@@ -245,10 +245,10 @@ test('Preview at chunk boundary initializes tempData in both affected chunks', (
   preview.clearPreview();
 });
 
-// ============== Boundary Remesh Tests (The Bug Fix) ==============
+// ============== Boundary Remesh Tests (Collision Rebuild Fix) ==============
 
-test('Building at X chunk boundary queues neighbor for remesh', () => {
-  const { world, preview } = createTestSetup();
+test('Building at X chunk boundary returns neighbor in commit result', () => {
+  const { preview } = createTestSetup();
   
   // Build right at X boundary between chunks (0,0,0) and (1,0,0)
   // Chunk 0 ends at X = CHUNK_WORLD_SIZE (8m), so build at X = 7.9m
@@ -257,55 +257,46 @@ test('Building at X chunk boundary queues neighbor for remesh', () => {
   
   preview.updatePreview(center, 0, createBuildConfig(BuildShape.SPHERE, 2));
   
-  // Record the remesh queue state before commit
-  const initialQueueSize = (world as any).remeshQueue.size;
+  // Commit the build - should return both modified chunk and neighbors
+  const result = preview.commitPreview();
   
-  // Commit the build
-  preview.commitPreview();
-  
-  // After commit, neighbor chunk (1,0,0) should be queued for remesh
+  // Result should include the neighbor chunk (1,0,0) for collision rebuild
   const neighborKey = chunkKey(1, 0, 0);
-  const queueHasNeighbor = (world as any).remeshQueue.has(neighborKey);
-  
-  expect(queueHasNeighbor).toBeTrue();
+  expect(result.includes(neighborKey)).toBeTrue();
 });
 
-test('Building at Y chunk boundary queues vertical neighbor for remesh', () => {
-  const { world, preview } = createTestSetup();
+test('Building at Y chunk boundary returns vertical neighbor in commit result', () => {
+  const { preview } = createTestSetup();
   
   // Build at Y boundary
   const boundaryY = CHUNK_WORLD_SIZE - 0.1;
   const center = new THREE.Vector3(4, boundaryY, 4);
   
   preview.updatePreview(center, 0, createBuildConfig(BuildShape.SPHERE, 2));
-  preview.commitPreview();
+  const result = preview.commitPreview();
   
-  // Neighbor chunk (0,1,0) should be queued
+  // Neighbor chunk (0,1,0) should be in result
   const neighborKey = chunkKey(0, 1, 0);
-  const queueHasNeighbor = (world as any).remeshQueue.has(neighborKey);
-  
-  expect(queueHasNeighbor).toBeTrue();
+  expect(result.includes(neighborKey)).toBeTrue();
 });
 
-test('Building at Z chunk boundary queues neighbor for remesh', () => {
-  const { world, preview } = createTestSetup();
+test('Building at Z chunk boundary returns neighbor in commit result', () => {
+  const { preview } = createTestSetup();
   
   // Build at Z boundary
   const boundaryZ = CHUNK_WORLD_SIZE - 0.1;
   const center = new THREE.Vector3(4, 4, boundaryZ);
   
   preview.updatePreview(center, 0, createBuildConfig(BuildShape.SPHERE, 2));
-  preview.commitPreview();
+  const result = preview.commitPreview();
   
-  // Neighbor chunk (0,0,1) should be queued
+  // Neighbor chunk (0,0,1) should be in result
   const neighborKey = chunkKey(0, 0, 1);
-  const queueHasNeighbor = (world as any).remeshQueue.has(neighborKey);
-  
-  expect(queueHasNeighbor).toBeTrue();
+  expect(result.includes(neighborKey)).toBeTrue();
 });
 
-test('Building at corner queues all adjacent neighbors for remesh', () => {
-  const { world, preview } = createTestSetup();
+test('Building at corner returns all adjacent neighbors in commit result', () => {
+  const { preview } = createTestSetup();
   
   // Build at corner of chunk (near X=8, Y=8, Z=8 boundary)
   const corner = new THREE.Vector3(
@@ -315,9 +306,9 @@ test('Building at corner queues all adjacent neighbors for remesh', () => {
   );
   
   preview.updatePreview(corner, 0, createBuildConfig(BuildShape.SPHERE, 2));
-  preview.commitPreview();
+  const result = preview.commitPreview();
   
-  // All face neighbors should be queued
+  // All face neighbors should be in result for collision rebuild
   const expectedNeighbors = [
     chunkKey(1, 0, 0), // +X neighbor
     chunkKey(0, 1, 0), // +Y neighbor
@@ -325,32 +316,28 @@ test('Building at corner queues all adjacent neighbors for remesh', () => {
   ];
   
   for (const key of expectedNeighbors) {
-    const hasNeighbor = (world as any).remeshQueue.has(key);
-    if (!hasNeighbor) {
-      throw new Error(`Expected remesh queue to contain neighbor ${key}`);
+    if (!result.includes(key)) {
+      throw new Error(`Expected commit result to contain neighbor ${key}, got [${result.join(', ')}]`);
     }
   }
 });
 
-test('Building away from boundary still queues immediate neighbors', () => {
-  const { world, preview } = createTestSetup();
+test('Building away from boundary returns neighbors in commit result', () => {
+  const { preview } = createTestSetup();
   
   // Build in the center of chunk (0,0,0) - far from boundaries
   const center = new THREE.Vector3(4, 4, 4);
   
-  // Clear any existing queue entries
-  (world as any).remeshQueue.clear();
-  
   preview.updatePreview(center, 0, createBuildConfig(BuildShape.SPHERE, 1));
-  preview.commitPreview();
+  const result = preview.commitPreview();
   
-  // After commit, the modified chunk's neighbors should be queued for remesh
-  // This is important for boundary consistency even when building "away" from edge
-  const queueSize = (world as any).remeshQueue.size;
+  // Commit result should include neighbors for collision rebuild
+  // Even a center build needs neighbor collision rebuild for boundary consistency
+  // At minimum, the modified chunk should be in the result
+  expect(result.length).toBeGreaterThan(0);
   
-  // Should have queued up to 6 neighbors (one per face direction, if loaded)
-  // Even a center build needs neighbor remesh for the surface net algorithm
-  expect(queueSize).toBeGreaterThanOrEqual(0);
+  // The directly modified chunk (0,0,0) should be in the result
+  expect(result.includes(chunkKey(0, 0, 0))).toBeTrue();
 });
 
 // ============== Data Integrity Tests ==============

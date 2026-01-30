@@ -78,6 +78,9 @@ export class ChunkMesh {
   
   /** Whether the mesh has been disposed */
   disposed: boolean = false;
+  
+  /** Generation counter - increments each time mesh geometry is updated */
+  meshGeneration: number = 0;
 
   constructor(chunk: Chunk) {
     this.chunk = chunk;
@@ -109,6 +112,7 @@ export class ChunkMesh {
     this.mesh.userData.chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
 
     this.disposed = false;
+    this.meshGeneration++;
 
     // Add to scene if provided
     if (scene) {

@@ -344,11 +344,12 @@ export class VoxelDebugManager {
   private ensureCollisionWireframe(chunkMesh: ChunkMesh): void {
     const objKey = `collisionWireframe:${chunkMesh.chunk.key}`;
     
-    // Remove old wireframe if mesh changed
+    // Remove old wireframe if mesh geometry changed (check generation counter)
     const existing = this.debugObjects.get(objKey);
     if (existing) {
-      // Check if mesh position changed (mesh was updated)
-      if (chunkMesh.mesh && existing.position.equals(chunkMesh.mesh.position)) {
+      // Check if mesh generation changed (geometry was regenerated)
+      const storedGeneration = existing.userData.meshGeneration ?? -1;
+      if (storedGeneration === chunkMesh.meshGeneration) {
         return; // No change
       }
       // Remove old and recreate
@@ -358,6 +359,8 @@ export class VoxelDebugManager {
     
     const wireframe = createCollisionWireframe(chunkMesh);
     if (wireframe) {
+      // Store the generation so we know when to update
+      wireframe.userData.meshGeneration = chunkMesh.meshGeneration;
       this.debugObjects.set(objKey, wireframe);
       this.scene.add(wireframe);
     }
