@@ -225,9 +225,9 @@ export function drawToChunk(
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         // Convert local voxel coords to world position (center of voxel)
-        const worldX = chunkWorldPos.x + (lx + 0.5) * VOXEL_SCALE;
-        const worldY = chunkWorldPos.y + (ly + 0.5) * VOXEL_SCALE;
-        const worldZ = chunkWorldPos.z + (lz + 0.5) * VOXEL_SCALE;
+        const worldX = chunkWorldPos.x + (lx) * VOXEL_SCALE;
+        const worldY = chunkWorldPos.y + (ly) * VOXEL_SCALE;
+        const worldZ = chunkWorldPos.z + (lz) * VOXEL_SCALE;
         
         // Position relative to build center
         const relPos: Vec3 = {
