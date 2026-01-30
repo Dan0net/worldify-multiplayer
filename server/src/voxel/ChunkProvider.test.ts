@@ -3,65 +3,38 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { 
-  ChunkProvider, 
-  MapChunkStore, 
-  FlatTerrainGenerator,
-  TerrainGenerator,
-  ChunkStore,
-} from './ChunkProvider.js';
+import { ChunkProvider, ChunkStore } from './ChunkProvider.js';
 import { ChunkData, getWeight } from '@worldify/shared';
 
-describe('MapChunkStore', () => {
-  let store: MapChunkStore;
+/**
+ * Simple Map-based chunk store for testing.
+ */
+class TestChunkStore implements ChunkStore {
+  private readonly chunks = new Map<string, ChunkData>();
 
-  beforeEach(() => {
-    store = new MapChunkStore();
-  });
+  get(key: string): ChunkData | undefined {
+    return this.chunks.get(key);
+  }
 
-  it('should return undefined for non-existent chunk', () => {
-    expect(store.get('0,0,0')).toBeUndefined();
-  });
+  set(key: string, chunk: ChunkData): void {
+    this.chunks.set(key, chunk);
+  }
 
-  it('should store and retrieve chunks', () => {
-    const chunk = new ChunkData(0, 0, 0);
-    store.set('0,0,0', chunk);
-    expect(store.get('0,0,0')).toBe(chunk);
-  });
+  has(key: string): boolean {
+    return this.chunks.has(key);
+  }
 
-  it('should clear all chunks', () => {
-    store.set('0,0,0', new ChunkData(0, 0, 0));
-    store.set('1,0,0', new ChunkData(1, 0, 0));
-    store.clear();
-    expect(store.get('0,0,0')).toBeUndefined();
-    expect(store.get('1,0,0')).toBeUndefined();
-  });
-});
-
-describe('FlatTerrainGenerator', () => {
-  it('should generate flat terrain at specified height', () => {
-    const generator = new FlatTerrainGenerator(2); // 2m ground level
-    const chunk = new ChunkData(0, 0, 0);
-    
-    generator.generate(chunk);
-    
-    // At 2m ground level with 0.25m voxel scale = voxel Y=8 is surface
-    // Voxels below surface should be solid (positive weight)
-    // Voxels above surface should be empty (negative weight)
-    const belowSurface = chunk.getVoxel(16, 0, 16);
-    const aboveSurface = chunk.getVoxel(16, 31, 16);
-    
-    expect(getWeight(belowSurface)).toBeGreaterThan(0);
-    expect(getWeight(aboveSurface)).toBeLessThan(0);
-  });
-});
+  clear(): void {
+    this.chunks.clear();
+  }
+}
 
 describe('ChunkProvider', () => {
-  let store: MapChunkStore;
+  let store: TestChunkStore;
   let provider: ChunkProvider;
 
   beforeEach(() => {
-    store = new MapChunkStore();
+    store = new TestChunkStore();
     provider = new ChunkProvider(store);
   });
 
@@ -85,13 +58,13 @@ describe('ChunkProvider', () => {
     it('should store created chunk in the store', () => {
       provider.getOrCreate(1, 2, 3);
       
-      expect(store.get('1,2,3')).toBeDefined();
+      expect(store.has('1,2,3')).toBe(true);
     });
 
     it('should apply terrain generation to new chunks', () => {
-      const chunk = provider.getOrCreate(0, 0, 0);
+      const chunk = provider.getOrCreate(0, -1, 0);
       
-      // With default FlatTerrainGenerator, should have terrain
+      // With TerrainGenerator, chunks at y=-1 should have terrain
       // Check that not all voxels are 0
       let hasNonZero = false;
       for (let i = 0; i < chunk.data.length; i++) {
@@ -101,6 +74,25 @@ describe('ChunkProvider', () => {
         }
       }
       expect(hasNonZero).toBe(true);
+    });
+
+    it('should generate terrain with proper height variation', () => {
+      // Chunk below ground level should have solid voxels at top
+      const chunk = provider.getOrCreate(0, -1, 0);
+      
+      // Check some voxels have positive weight (solid)
+      let hasSolid = false;
+      for (let z = 0; z < 32; z++) {
+        for (let x = 0; x < 32; x++) {
+          const voxel = chunk.getVoxel(x, 31, z); // Top of chunk
+          if (getWeight(voxel) > 0) {
+            hasSolid = true;
+            break;
+          }
+        }
+        if (hasSolid) break;
+      }
+      expect(hasSolid).toBe(true);
     });
   });
 
@@ -117,24 +109,6 @@ describe('ChunkProvider', () => {
     });
   });
 
-  describe('custom terrain generator', () => {
-    it('should use custom terrain generator', () => {
-      // Custom generator that fills with a specific value
-      const customGenerator: TerrainGenerator = {
-        generate: (chunk: ChunkData) => {
-          chunk.fill(0.5, 42, 16); // Fill with material 42
-        },
-      };
-      
-      const customProvider = new ChunkProvider(store, customGenerator);
-      const chunk = customProvider.getOrCreate(5, 5, 5);
-      
-      // Check that custom generator was used
-      const voxel = chunk.getVoxel(16, 16, 16);
-      expect(voxel).not.toBe(0);
-    });
-  });
-
   describe('custom chunk store', () => {
     it('should use custom chunk store', () => {
       const customChunks = new Map<string, ChunkData>();
@@ -147,6 +121,41 @@ describe('ChunkProvider', () => {
       customProvider.getOrCreate(0, 0, 0);
       
       expect(customChunks.has('0,0,0')).toBe(true);
+    });
+  });
+
+  describe('seed consistency', () => {
+    it('should generate same terrain with same seed', () => {
+      const store1 = new TestChunkStore();
+      const store2 = new TestChunkStore();
+      const provider1 = new ChunkProvider(store1, 12345);
+      const provider2 = new ChunkProvider(store2, 12345);
+      
+      const chunk1 = provider1.getOrCreate(5, -1, 5);
+      const chunk2 = provider2.getOrCreate(5, -1, 5);
+      
+      // Same seed should produce identical terrain
+      expect(chunk1.data).toEqual(chunk2.data);
+    });
+
+    it('should generate different terrain with different seeds', () => {
+      const store1 = new TestChunkStore();
+      const store2 = new TestChunkStore();
+      const provider1 = new ChunkProvider(store1, 11111);
+      const provider2 = new ChunkProvider(store2, 22222);
+      
+      const chunk1 = provider1.getOrCreate(5, -1, 5);
+      const chunk2 = provider2.getOrCreate(5, -1, 5);
+      
+      // Different seeds should produce different terrain
+      let isDifferent = false;
+      for (let i = 0; i < chunk1.data.length; i++) {
+        if (chunk1.data[i] !== chunk2.data[i]) {
+          isDifferent = true;
+          break;
+        }
+      }
+      expect(isDifferent).toBe(true);
     });
   });
 });

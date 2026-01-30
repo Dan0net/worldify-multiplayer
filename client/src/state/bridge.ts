@@ -63,6 +63,10 @@ class StoreBridge {
     return this.buildPresetId !== 0;
   }
 
+  get useServerChunks(): boolean {
+    return getState().useServerChunks;
+  }
+
   // ============== WRITES ==============
 
   updateConnectionStatus(status: ConnectionStatus): void {

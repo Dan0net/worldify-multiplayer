@@ -19,6 +19,7 @@ import { Chunk } from './Chunk.js';
 import { meshChunk } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
 import { sendBinary } from '../../net/netClient.js';
+import { storeBridge } from '../../state/bridge.js';
 
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
@@ -47,7 +48,7 @@ export class VoxelWorld {
   };
 
   /** Last player chunk position (for detecting chunk changes) */
-  private lastPlayerChunk = { cx: 0, cy: 0, cz: 0 };
+  private lastPlayerChunk: { cx: number; cy: number; cz: number } | null = null;
 
   /** Queue of chunks that need remeshing */
   private remeshQueue: Set<string> = new Set();
@@ -55,11 +56,8 @@ export class VoxelWorld {
   /** Whether the world has been initialized */
   private initialized = false;
 
-  /** Terrain generator for procedural chunk generation (fallback) */
+  /** Terrain generator for procedural chunk generation (fallback for offline mode) */
   private readonly terrainGenerator: TerrainGenerator;
-
-  /** Whether to use server for chunk data (true) or generate locally (false) */
-  private useServerChunks: boolean = false;
 
   constructor(scene: THREE.Scene, seed: number = 12345) {
     this.scene = scene;
@@ -67,21 +65,21 @@ export class VoxelWorld {
   }
 
   /**
-   * Enable server-based chunk loading.
-   * When enabled, chunks will be requested from the server instead of generated locally.
-   */
-  enableServerChunks(): void {
-    this.useServerChunks = true;
-    console.log('[VoxelWorld] Server chunk loading enabled');
-  }
-
-  /**
-   * Initialize the world - generate initial chunks around origin.
+   * Initialize the world.
+   * If server chunks are enabled (via store), just marks as initialized (chunks come from server).
+   * Otherwise, generates initial chunks locally around origin.
    */
   init(): void {
     if (this.initialized) return;
 
-    // Generate initial 4×4×4 chunks centered at origin
+    // If using server chunks, don't generate locally - wait for server data
+    if (storeBridge.useServerChunks) {
+      console.log('[VoxelWorld] Waiting for server chunks...');
+      this.initialized = true;
+      return;
+    }
+
+    // Local mode: Generate initial 4×4×4 chunks centered at origin
     // Stream radius of 2 means chunks from -2 to +1 (4 chunks per axis)
     const halfRadius = Math.floor(STREAM_RADIUS / 2);
 
@@ -117,8 +115,9 @@ export class VoxelWorld {
     // Get player's current chunk
     const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
 
-    // Check if player moved to a new chunk
+    // Check if player moved to a new chunk (or first update)
     if (
+      this.lastPlayerChunk === null ||
       playerChunk.cx !== this.lastPlayerChunk.cx ||
       playerChunk.cy !== this.lastPlayerChunk.cy ||
       playerChunk.cz !== this.lastPlayerChunk.cz
@@ -198,7 +197,7 @@ export class VoxelWorld {
 
   /**
    * Load a chunk at the given coordinates.
-   * If server chunks are enabled, sends a request instead of generating locally.
+   * If server chunks are enabled (via store), sends a request instead of generating locally.
    */
   private loadChunk(cx: number, cy: number, cz: number): Chunk | null {
     const key = chunkKey(cx, cy, cz);
@@ -212,12 +211,12 @@ export class VoxelWorld {
       return null;
     }
 
-    if (this.useServerChunks) {
+    if (storeBridge.useServerChunks) {
       // Request from server
       this.requestChunkFromServer(cx, cy, cz);
       return null;
     } else {
-      // Generate locally (fallback)
+      // Generate locally (offline/fallback mode)
       const chunk = this.generateChunk(cx, cy, cz);
       this.chunks.set(key, chunk);
       return chunk;

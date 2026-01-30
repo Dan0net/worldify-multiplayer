@@ -11,12 +11,12 @@ export async function createGame(): Promise<GameCore> {
 
   storeBridge.updateConnectionStatus('connecting');
 
-  // Create game core
+  // Connect to server FIRST so WebSocket is ready for chunk requests
+  await connectToServer();
+
+  // Create and initialize game core (will request chunks from server)
   gameCore = new GameCore();
   await gameCore.init();
-
-  // Connect to server
-  await connectToServer();
 
   // Set local player ID so GameCore knows which player to skip in snapshots
   const playerId = getPlayerId();

@@ -13,6 +13,7 @@ import {
   VoxelBuildCommit,
   VoxelChunkRequest,
   BuildResult,
+  ChunkData,
   encodeVoxelBuildCommit,
   encodeVoxelChunkData,
   MAX_BUILD_DISTANCE,
@@ -41,13 +42,14 @@ function getChunkProvider(room: Room): ChunkProvider {
   let provider = roomChunkProviders.get(room.id);
   if (!provider) {
     // Create a provider backed by the room's chunk storage
-    provider = new ChunkProvider({
-      get: (key) => room.voxelChunks.get(key),
-      set: (key, chunk) => {
+    const store = {
+      get: (key: string) => room.voxelChunks.get(key),
+      set: (key: string, chunk: ChunkData) => {
         room.voxelChunks.set(key, chunk);
         room.chunkBuildSeq.set(key, 0);
       },
-    });
+    };
+    provider = new ChunkProvider(store);
     roomChunkProviders.set(room.id, provider);
   }
   return provider;

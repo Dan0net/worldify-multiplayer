@@ -9,8 +9,7 @@
 import {
   ChunkData,
   chunkKey,
-  GROUND_LEVEL,
-  VOXEL_SCALE,
+  TerrainGenerator,
 } from '@worldify/shared';
 
 /**
@@ -22,37 +21,15 @@ export interface ChunkStore {
 }
 
 /**
- * Interface for terrain generation - allows different terrain strategies.
- */
-export interface TerrainGenerator {
-  generate(chunk: ChunkData): void;
-}
-
-/**
- * Default terrain generator - flat terrain at ground level.
- */
-export class FlatTerrainGenerator implements TerrainGenerator {
-  private readonly groundVoxelY: number;
-
-  constructor(groundLevel: number = GROUND_LEVEL) {
-    this.groundVoxelY = Math.floor(groundLevel / VOXEL_SCALE);
-  }
-
-  generate(chunk: ChunkData): void {
-    chunk.generateFlatGlobal(this.groundVoxelY);
-  }
-}
-
-/**
  * Provides chunks for a room, creating them on demand with terrain generation.
  */
 export class ChunkProvider {
   private readonly store: ChunkStore;
   private readonly terrainGenerator: TerrainGenerator;
 
-  constructor(store: ChunkStore, terrainGenerator?: TerrainGenerator) {
+  constructor(store: ChunkStore, seed: number = 12345) {
     this.store = store;
-    this.terrainGenerator = terrainGenerator ?? new FlatTerrainGenerator();
+    this.terrainGenerator = new TerrainGenerator({ seed });
   }
 
   /**
@@ -64,7 +41,8 @@ export class ChunkProvider {
 
     if (!chunk) {
       chunk = new ChunkData(cx, cy, cz);
-      this.terrainGenerator.generate(chunk);
+      const generatedData = this.terrainGenerator.generateChunk(cx, cy, cz);
+      chunk.data.set(generatedData);
       this.store.set(key, chunk);
     }
 

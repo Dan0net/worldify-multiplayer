@@ -70,6 +70,8 @@ export class GameCore {
         debugEnabled: false,
         collisionEnabled: true,
       });
+      
+      // Note: useServerChunks is read from store by VoxelWorld
       this.voxelIntegration.init();
       
       // Connect player manager to voxel collision system
@@ -88,9 +90,6 @@ export class GameCore {
       this.builder.onBuildCommit = (modifiedChunks: string[]) => {
         this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
       };
-
-      // Enable server-based chunk loading
-      this.voxelIntegration.world.enableServerChunks();
     }
 
     // Request pointer lock on canvas click (only when playing)
