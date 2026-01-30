@@ -112,7 +112,13 @@ describe('Normal Direction Tests', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
+    // Provide neighbors so boundary stitching works correctly
     const neighbors = new Map<string, Chunk>();
+    for (const [dx, dy, dz] of [[1,0,0], [-1,0,0], [0,1,0], [0,-1,0], [0,0,1], [0,0,-1]]) {
+      const neighbor = new Chunk(dx, dy, dz);
+      neighbor.generateFlatGlobal(16, 0, 16);  // Same surface level
+      neighbors.set(neighbor.key, neighbor);
+    }
     const result = meshChunk(chunk, neighbors);
     
     let upwardCount = 0;
@@ -175,7 +181,13 @@ describe('Vertex Position Tests', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(surfaceY, 0, 16);
     
+    // Provide neighbors so boundary stitching works correctly
     const neighbors = new Map<string, Chunk>();
+    for (const [dx, dy, dz] of [[1,0,0], [-1,0,0], [0,1,0], [0,-1,0], [0,0,1], [0,0,-1]]) {
+      const neighbor = new Chunk(dx, dy, dz);
+      neighbor.generateFlatGlobal(surfaceY, 0, 16);  // Same surface level
+      neighbors.set(neighbor.key, neighbor);
+    }
     const result = meshChunk(chunk, neighbors);
     
     let nearSurfaceCount = 0;
@@ -199,11 +211,28 @@ describe('Neighbor Boundary Tests', () => {
     chunk0.generateFlatGlobal(10, 0, 16);
     chunk1.generateFlatGlobal(10, 0, 16);
     
+    // Provide all neighbors for proper boundary stitching
     const neighbors0 = new Map<string, Chunk>();
-    neighbors0.set(chunk1.key, chunk1);
-    
     const neighbors1 = new Map<string, Chunk>();
+    
+    // chunk0 and chunk1 are neighbors of each other
+    neighbors0.set(chunk1.key, chunk1);
     neighbors1.set(chunk0.key, chunk0);
+    
+    // Add remaining neighbors for chunk0 and chunk1
+    for (const [dx, dy, dz] of [[-1,0,0], [0,1,0], [0,-1,0], [0,0,1], [0,0,-1]]) {
+      const n0 = new Chunk(dx, dy, dz);
+      n0.generateFlatGlobal(10, 0, 16);
+      neighbors0.set(n0.key, n0);
+      
+      const n1 = new Chunk(1 + dx, dy, dz);
+      n1.generateFlatGlobal(10, 0, 16);
+      neighbors1.set(n1.key, n1);
+    }
+    // chunk1 also needs +X neighbor
+    const chunk2 = new Chunk(2, 0, 0);
+    chunk2.generateFlatGlobal(10, 0, 16);
+    neighbors1.set(chunk2.key, chunk2);
     
     const result0 = meshChunk(chunk0, neighbors0);
     const result1 = meshChunk(chunk1, neighbors1);

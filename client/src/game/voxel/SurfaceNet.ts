@@ -46,6 +46,11 @@ export interface SurfaceNetInput {
   getWeight: (x: number, y: number, z: number) => number;
   /** Get packed voxel data at coordinates (for material lookup) */
   getVoxel: (x: number, y: number, z: number) => number;
+  /** 
+   * Skip faces at high boundary for each axis [+X, +Y, +Z].
+   * When true, faces at dims[axis]-2 are skipped (no neighbor to stitch with).
+   */
+  skipHighBoundary?: [boolean, boolean, boolean];
 }
 
 // ============== Pre-computed Tables ==============
@@ -143,7 +148,11 @@ function accumulateNormal(
  * @returns SurfaceNet mesh output
  */
 export function meshVoxels(input: SurfaceNetInput): SurfaceNetOutput {
-  const { dims, getWeight, getVoxel } = input;
+  const { dims, getWeight, getVoxel, skipHighBoundary = [false, false, false] } = input;
+  
+  // High boundary positions where we skip faces if no neighbor exists
+  // dims is CHUNK_SIZE+2, so dims[i]-2 = CHUNK_SIZE is the high boundary
+  const highBoundary = [dims[0] - 2, dims[1] - 2, dims[2] - 2];
 
   // Vertex buffer - stores which vertex is at each grid position
   let buffer = new Int32Array(4096);
@@ -265,10 +274,15 @@ export function meshVoxels(input: SurfaceNetInput): SurfaceNetOutput {
         const solidVoxel = getVoxel(x[0] + maxI, x[1] + maxJ, x[2] + maxK);
         materialIndices.push(getMaterial(solidVoxel));
 
-        // Skip faces on low boundary only (x=0, y=0, z=0)
-        // Those faces will be rendered by the adjacent chunk at their high end
-        // HIGH boundary faces (x=CHUNK_SIZE) ARE needed - they stitch to the neighbor
-        const ignoreFace = (x[0] === 0 || x[1] === 0 || x[2] === 0);
+        // Skip faces on low boundary (x=0, y=0, z=0) - those faces are rendered by adjacent chunk
+        // Also skip faces on high boundary if no neighbor exists (nothing to stitch with)
+        // Note: at x[i] = CHUNK_SIZE-1, the 2x2x2 grid samples x[i]+1 = CHUNK_SIZE which is in the margin
+        const onLowBoundary = (x[0] === 0 || x[1] === 0 || x[2] === 0);
+        const onHighBoundaryNoNeighbor = 
+          (skipHighBoundary[0] && x[0] >= highBoundary[0] - 1) ||
+          (skipHighBoundary[1] && x[1] >= highBoundary[1] - 1) ||
+          (skipHighBoundary[2] && x[2] >= highBoundary[2] - 1);
+        const ignoreFace = onLowBoundary || onHighBoundaryNoNeighbor;
 
         // Generate faces for edges along each axis
         for (let i = 0; i < 3; ++i) {

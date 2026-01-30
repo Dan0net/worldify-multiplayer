@@ -5,7 +5,7 @@
  * from Chunks and their neighbors, then passing it to the pure SurfaceNet algorithm.
  */
 
-import { CHUNK_SIZE, voxelIndex, getWeight as getWeightFromPacked } from '@worldify/shared';
+import { CHUNK_SIZE, voxelIndex, getWeight as getWeightFromPacked, chunkKey } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshVoxels, SurfaceNetInput, SurfaceNetOutput } from './SurfaceNet.js';
 
@@ -29,6 +29,13 @@ function createChunkInput(
   // This allows us to generate vertices at the chunk boundary that stitch with neighbors
   const dims: [number, number, number] = [CHUNK_SIZE + 2, CHUNK_SIZE + 2, CHUNK_SIZE + 2];
 
+  // Check which +X, +Y, +Z neighbors are missing - skip faces at those high boundaries
+  const skipHighBoundary: [boolean, boolean, boolean] = [
+    !neighbors.has(chunkKey(chunk.cx + 1, chunk.cy, chunk.cz)),     // +X
+    !neighbors.has(chunkKey(chunk.cx, chunk.cy + 1, chunk.cz)),     // +Y  
+    !neighbors.has(chunkKey(chunk.cx, chunk.cy, chunk.cz + 1)),     // +Z
+  ];
+
   // Helper to get weight at local coordinates (with margin support)
   const getWeight = (lx: number, ly: number, lz: number): number => {
     if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
@@ -48,7 +55,7 @@ function createChunkInput(
     return chunk.getVoxelWithMargin(lx, ly, lz, neighbors, useTemp);
   };
 
-  return { dims, getWeight, getVoxel };
+  return { dims, getWeight, getVoxel, skipHighBoundary };
 }
 
 /**
