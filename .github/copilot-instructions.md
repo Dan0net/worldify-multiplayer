@@ -25,6 +25,8 @@ All network messages use binary encoding. Follow the pattern in `shared/src/prot
 **Never duplicate** types between client/server. If it's used by both:
 - Types/interfaces → `shared/src/protocol/`
 - Constants → `shared/src/protocol/constants.ts`
+- Physics constants → `shared/src/protocol/physics.ts`
+- Movement utilities → `shared/src/util/movement.ts`
 - Voxel logic → `shared/src/voxel/`
 - Utilities → `shared/src/util/`
 
@@ -95,15 +97,18 @@ npm run build        # Build all packages (shared first)
 ## Key Files to Reference
 | When working on... | Reference these files |
 |--------------------|-----------------------|
-| Network messages | `shared/src/protocol/msgIds.ts`, `snapshot.ts`, `movement.ts` |
+| Network messages | `shared/src/protocol/msgIds.ts`, `*/net/MessageRegistry.ts` |
+| Physics/movement | `shared/src/protocol/physics.ts`, `shared/src/util/movement.ts` |
 | Voxel terrain | `shared/src/voxel/`, `client/src/game/voxel/` |
-| Player physics | `client/src/game/player/playerLocal.ts`, `server/src/rooms/room.ts` |
+| Player management | `client/src/game/PlayerManager.ts`, `GameLoop.ts` |
 | State management | `client/src/state/store.ts`, `bridge.ts` |
 | Scene setup | `client/src/game/scene/` (lighting, camera) |
 
 ## Anti-Patterns
 - ❌ Magic numbers → Use `shared/src/protocol/constants.ts`
+- ❌ Duplicated physics values → Import from `shared/src/protocol/physics.ts`
 - ❌ String-based protocols → Binary only via ByteWriter/ByteReader
+- ❌ Switch statements for messages → Use `MessageRegistry.registerHandler()`
 - ❌ Game state in React → Keep in GameCore, expose summaries via Zustand
 - ❌ Direct DOM in game code → Use React for UI, Three.js for 3D
 
