@@ -5,7 +5,7 @@
  * - Owns BuildMarker instance
  * - Owns BuildPreview instance for voxel preview rendering
  * - Updates marker each frame with raycast
- * - Handles place action (future: sends to server)
+ * - Handles place action (sends to server)
  * - Reads state from bridge, doesn't duplicate it
  */
 
@@ -15,6 +15,8 @@ import { BuildPreview } from './BuildPreview';
 import { storeBridge } from '../../state/bridge';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
+import { sendBinary } from '../../net/netClient';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, yRotationQuat } from '@worldify/shared';
 
 /**
  * Interface for objects that provide collision meshes for raycasting.
@@ -187,31 +189,30 @@ export class Builder {
     const preset = storeBridge.buildPreset;
     const rotationRadians = storeBridge.buildRotationRadians;
 
-    // Commit the preview to actual voxel data (optimistic apply)
-    let modifiedChunks: string[] = [];
-    if (this.preview.hasActivePreview()) {
-      modifiedChunks = this.preview.commitPreview();
-      console.log('[Builder] Committed preview to', modifiedChunks.length, 'chunks');
-      
-      // Notify caller to rebuild collision
-      if (this.onBuildCommit && modifiedChunks.length > 0) {
-        this.onBuildCommit(modifiedChunks);
-      }
-    }
+    // Create build intent using shared rotation helper
+    const intent: VoxelBuildIntent = {
+      center: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
+      rotation: yRotationQuat(rotationRadians),
+      config: preset.config,
+    };
 
-    // TODO: Send build intent to server
-    console.log('[Builder] Place:', {
+    // Send build intent to server
+    const encoded = encodeVoxelBuildIntent(intent);
+    sendBinary(encoded);
+
+    console.log('[Builder] Sent build intent:', {
       presetId: preset.id,
       presetName: preset.name,
-      position: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
+      position: intent.center,
       rotationDegrees: storeBridge.buildRotationDegrees,
-      rotationRadians,
       mode: preset.config.mode,
       shape: preset.config.shape,
       size: preset.config.size,
     });
 
-    // TODO: Network message to server
+    // Note: We no longer apply locally - server will broadcast commit and we apply from that
+    // This ensures all clients stay in sync. Clear preview since we're waiting for server.
+    this.preview.clearPreview();
   };
 
   /**

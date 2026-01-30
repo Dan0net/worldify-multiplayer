@@ -19,8 +19,8 @@ import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera 
 import { setupLighting } from './scene/lighting';
 import { storeBridge } from '../state/bridge';
 import { controls } from './player/controls';
-import { onSnapshot } from '../net/decode';
-import { RoomSnapshot, GameMode } from '@worldify/shared';
+import { onSnapshot, onBuildCommit } from '../net/decode';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, BuildResult } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -99,6 +99,7 @@ export class GameCore {
 
     // Register for network events
     onSnapshot(this.handleSnapshot);
+    onBuildCommit(this.handleBuildCommit);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
@@ -116,6 +117,29 @@ export class GameCore {
     const scene = getScene();
     if (!scene) return;
     this.playerManager.handleSnapshot(snapshot, scene);
+  };
+
+  /**
+   * Handle build commit from server - apply to voxel world
+   */
+  private handleBuildCommit = (commit: VoxelBuildCommit): void => {
+    if (commit.result !== BuildResult.SUCCESS || !commit.intent) {
+      return;
+    }
+
+    // Apply the build operation to voxel world
+    const operation = {
+      center: commit.intent.center,
+      rotation: commit.intent.rotation,
+      config: commit.intent.config,
+    };
+
+    const modifiedChunks = this.voxelIntegration.world.applyBuildOperation(operation);
+
+    // Rebuild collision for modified chunks
+    if (modifiedChunks.length > 0) {
+      this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
+    }
   };
 
   /**

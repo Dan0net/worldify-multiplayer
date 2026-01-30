@@ -9,6 +9,9 @@ import {
   worldToChunk,
   chunkKey,
   TerrainGenerator,
+  BuildOperation,
+  getAffectedChunks,
+  drawToChunk,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk } from './ChunkMesher.js';
@@ -369,6 +372,38 @@ export class VoxelWorld {
       this.remeshQueue.add(key);
     }
     this.remeshAllDirty();
+  }
+
+  /**
+   * Apply a build operation to the world.
+   * Used when receiving build commits from the server.
+   * @param operation The build operation to apply
+   * @returns Array of modified chunk keys
+   */
+  applyBuildOperation(operation: BuildOperation): string[] {
+    const affectedKeys = getAffectedChunks(operation);
+    const modifiedKeys: string[] = [];
+
+    for (const key of affectedKeys) {
+      const chunk = this.chunks.get(key);
+      if (!chunk) {
+        // Chunk not loaded, skip (server has authoritative state)
+        continue;
+      }
+
+      const changed = drawToChunk(chunk, operation);
+      if (changed) {
+        modifiedKeys.push(key);
+        chunk.dirty = true;
+        this.remeshQueue.add(key);
+        
+        // Also queue neighbors for seamless boundary updates
+        this.queueNeighborRemesh(chunk.cx, chunk.cy, chunk.cz);
+      }
+    }
+
+    console.log(`[VoxelWorld] Applied build to ${modifiedKeys.length}/${affectedKeys.length} loaded chunks`);
+    return modifiedKeys;
   }
 
   /**

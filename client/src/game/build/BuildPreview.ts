@@ -15,8 +15,6 @@ import {
   drawToChunk,
   getAffectedChunks,
   yRotationQuat,
-  parseChunkKey,
-  chunkKey,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { meshChunk } from '../voxel/ChunkMesher.js';
@@ -34,8 +32,11 @@ export class BuildPreview {
   /** Set of chunk keys currently showing preview */
   private activePreviewChunks: Set<string> = new Set();
 
-  /** Last operation that was previewed (for change detection) */
+  /** Last operation that was previewed (for change detection and commit) */
   private lastOperationHash: string = '';
+
+  /** The current preview operation (stored for commitPreview) */
+  private currentOperation: BuildOperation | null = null;
 
   /**
    * Set the voxel world and scene to use for preview.
@@ -79,6 +80,9 @@ export class BuildPreview {
         this.clearChunkPreview(key);
       }
     }
+
+    // Store current operation for potential commit
+    this.currentOperation = operation;
 
     // Update active set
     const newActiveChunks = new Set<string>();
@@ -137,6 +141,7 @@ export class BuildPreview {
 
     this.activePreviewChunks.clear();
     this.lastOperationHash = '';
+    this.currentOperation = null;
   }
 
   /**
@@ -159,81 +164,35 @@ export class BuildPreview {
   /**
    * Commit the current preview to actual voxel data.
    * Call this when the player clicks to place.
+   * Delegates to VoxelWorld.applyBuildOperation for DRY.
    * 
    * @returns Array of chunk keys that need collision rebuild (modified + neighbors)
    */
   commitPreview(): string[] {
-    if (!this.world || !this.scene || this.activePreviewChunks.size === 0) return [];
+    if (!this.world || !this.scene || !this.currentOperation) return [];
 
-    const modifiedKeys: string[] = [];
-    const neighborsToRemesh = new Set<string>();
-
-    // PHASE 1: Copy all temp data to main data FIRST
-    // This ensures all chunks have updated data before any remeshing
+    // Clear preview meshes first
     for (const key of this.activePreviewChunks) {
       const chunk = this.world.chunks.get(key);
-      if (!chunk || !chunk.hasTempData()) continue;
+      if (chunk) {
+        chunk.discardTemp();
+      }
 
       const chunkMesh = this.world.meshes.get(key);
-
-      // Restore main mesh visibility and clear preview mesh
       if (chunkMesh) {
         chunkMesh.setPreviewActive(false, this.scene);
       }
-
-      // Copy temp to main data (but don't remesh yet!)
-      chunk.copyFromTemp();
-      chunk.discardTemp();
-      modifiedKeys.push(key);
-
-      // Collect neighbor chunks that need remesh (for boundary seams)
-      const coords = parseChunkKey(key);
-      this.collectNeighborKeys(coords.cx, coords.cy, coords.cz, neighborsToRemesh);
     }
 
-    // PHASE 2: Now remesh all modified chunks (all have updated data now)
-    for (const key of modifiedKeys) {
-      const chunk = this.world.chunks.get(key);
-      if (chunk) {
-        this.world.remeshChunk(chunk);
-      }
-    }
+    // Apply the operation using the shared VoxelWorld method (DRY)
+    const modifiedKeys = this.world.applyBuildOperation(this.currentOperation);
 
-    // PHASE 3: Remesh all neighbor chunks
-    const remeshedNeighbors: string[] = [];
-    for (const neighborKey of neighborsToRemesh) {
-      // Skip if this neighbor was already directly modified
-      if (modifiedKeys.includes(neighborKey)) continue;
-      
-      const chunk = this.world.chunks.get(neighborKey);
-      if (chunk) {
-        this.world.remeshChunk(chunk);
-        remeshedNeighbors.push(neighborKey);
-      }
-    }
-
-    // Clear remaining preview state
+    // Clear preview state
     this.activePreviewChunks.clear();
     this.lastOperationHash = '';
+    this.currentOperation = null;
 
-    // Return all chunks that need collision rebuild
-    return [...modifiedKeys, ...remeshedNeighbors];
-  }
-
-  /**
-   * Collect neighbor chunk keys for a given chunk coordinate.
-   */
-  private collectNeighborKeys(cx: number, cy: number, cz: number, result: Set<string>): void {
-    const offsets = [-1, 1];
-    for (const dx of offsets) {
-      result.add(chunkKey(cx + dx, cy, cz));
-    }
-    for (const dy of offsets) {
-      result.add(chunkKey(cx, cy + dy, cz));
-    }
-    for (const dz of offsets) {
-      result.add(chunkKey(cx, cy, cz + dz));
-    }
+    return modifiedKeys;
   }
 
   /**

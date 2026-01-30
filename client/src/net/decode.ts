@@ -9,9 +9,14 @@ import {
   MSG_SNAPSHOT,
   MSG_ERROR,
   MSG_PONG,
+  MSG_VOXEL_BUILD_COMMIT,
   ByteReader,
   decodeSnapshot,
+  decodeVoxelBuildCommit,
   RoomSnapshot,
+  VoxelBuildCommit,
+  BuildResult,
+  buildResultToString,
 } from '@worldify/shared';
 import { storeBridge } from '../state/bridge';
 import { registerHandler, dispatch } from './MessageRegistry';
@@ -19,11 +24,21 @@ import { registerHandler, dispatch } from './MessageRegistry';
 // Callback for snapshot updates (set by game core)
 let onSnapshotCallback: ((snapshot: RoomSnapshot) => void) | null = null;
 
+// Callback for build commit updates (set by game core)
+let onBuildCommitCallback: ((commit: VoxelBuildCommit) => void) | null = null;
+
 /**
  * Register callback for snapshot updates
  */
 export function onSnapshot(callback: (snapshot: RoomSnapshot) => void): void {
   onSnapshotCallback = callback;
+}
+
+/**
+ * Register callback for build commit updates
+ */
+export function onBuildCommit(callback: (commit: VoxelBuildCommit) => void): void {
+  onBuildCommitCallback = callback;
 }
 
 /**
@@ -76,9 +91,25 @@ function handlePong(reader: ByteReader): void {
   storeBridge.updatePing(ping);
 }
 
+function handleBuildCommit(reader: ByteReader): void {
+  const commit = decodeVoxelBuildCommit(reader);
+  
+  if (commit.result === BuildResult.SUCCESS) {
+    console.log(`[net] Build commit seq=${commit.buildSeq} from player ${commit.playerId}`);
+    
+    // Notify game core to apply the build
+    if (onBuildCommitCallback) {
+      onBuildCommitCallback(commit);
+    }
+  } else {
+    console.warn(`[net] Build rejected: ${buildResultToString(commit.result)}`);
+  }
+}
+
 // Register all message handlers
 registerHandler(MSG_WELCOME, handleWelcome);
 registerHandler(MSG_ROOM_INFO, handleRoomInfo);
 registerHandler(MSG_SNAPSHOT, handleSnapshot);
 registerHandler(MSG_ERROR, handleError);
 registerHandler(MSG_PONG, handlePong);
+registerHandler(MSG_VOXEL_BUILD_COMMIT, handleBuildCommit);
