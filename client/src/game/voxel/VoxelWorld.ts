@@ -229,8 +229,9 @@ export class VoxelWorld {
 
   /**
    * Queue neighbor chunks for remeshing (for seamless boundaries).
+   * Public so build system can trigger neighbor remesh after commits.
    */
-  private queueNeighborRemesh(cx: number, cy: number, cz: number): void {
+  queueNeighborRemesh(cx: number, cy: number, cz: number): void {
     const offsets = [-1, 1];
     for (const dx of offsets) {
       const key = chunkKey(cx + dx, cy, cz);

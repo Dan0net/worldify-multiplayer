@@ -15,6 +15,7 @@ import {
   drawToChunks,
   getAffectedChunks,
   yRotationQuat,
+  parseChunkKey,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { meshChunk } from '../voxel/ChunkMesher.js';
@@ -177,6 +178,10 @@ export class BuildPreview {
 
       // Remesh with new data (this updates both visual and collision mesh)
       this.world.remeshChunk(chunk);
+
+      // Queue neighbor chunks for remesh (fixes boundary seams)
+      const coords = parseChunkKey(key);
+      this.world.queueNeighborRemesh(coords.cx, coords.cy, coords.cz);
     }
 
     // Clear remaining preview state

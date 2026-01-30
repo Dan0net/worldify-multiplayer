@@ -5,8 +5,68 @@
  * from Chunks and their neighbors, then passing it to the pure SurfaceNet algorithm.
  */
 
-import { CHUNK_SIZE, Chunk, voxelIndex, getWeight as getWeightFromPacked } from '@worldify/shared';
+import { CHUNK_SIZE, Chunk, voxelIndex, getWeight as getWeightFromPacked, chunkKey, packVoxel } from '@worldify/shared';
 import { meshVoxels, SurfaceNetInput, SurfaceNetOutput } from './SurfaceNet.js';
+
+/**
+ * Get voxel from neighbor chunk, using tempData if available and useTemp is true.
+ * This allows preview meshes to correctly sample neighbor chunks that are also being previewed.
+ */
+function getNeighborVoxel(
+  chunk: Chunk,
+  lx: number,
+  ly: number,
+  lz: number,
+  neighbors: Map<string, Chunk>,
+  useTemp: boolean
+): number {
+  // Calculate which neighbor chunk to sample from
+  let ncx = chunk.cx;
+  let ncy = chunk.cy;
+  let ncz = chunk.cz;
+  let nx = lx;
+  let ny = ly;
+  let nz = lz;
+
+  if (lx < 0) {
+    ncx -= 1;
+    nx = CHUNK_SIZE + lx; // e.g., -1 becomes 31
+  } else if (lx >= CHUNK_SIZE) {
+    ncx += 1;
+    nx = lx - CHUNK_SIZE; // e.g., 32 becomes 0
+  }
+
+  if (ly < 0) {
+    ncy -= 1;
+    ny = CHUNK_SIZE + ly;
+  } else if (ly >= CHUNK_SIZE) {
+    ncy += 1;
+    ny = ly - CHUNK_SIZE;
+  }
+
+  if (lz < 0) {
+    ncz -= 1;
+    nz = CHUNK_SIZE + lz;
+  } else if (lz >= CHUNK_SIZE) {
+    ncz += 1;
+    nz = lz - CHUNK_SIZE;
+  }
+
+  const neighborKey = chunkKey(ncx, ncy, ncz);
+  const neighbor = neighbors.get(neighborKey);
+
+  if (!neighbor) {
+    // No neighbor chunk loaded - return empty (negative weight)
+    return packVoxel(-0.5, 0, 0);
+  }
+
+  // Use tempData if previewing and neighbor has temp data (also being previewed)
+  if (useTemp && neighbor.tempData) {
+    return neighbor.tempData[voxelIndex(nx, ny, nz)];
+  }
+
+  return neighbor.getVoxel(nx, ny, nz);
+}
 
 /**
  * Create a SurfaceNetInput from a chunk and its neighbors.
@@ -34,8 +94,9 @@ function createChunkInput(
       const packed = dataArray[voxelIndex(lx, ly, lz)];
       return getWeightFromPacked(packed);
     }
-    // For margin voxels, use neighbor's main data (not temp - neighbors aren't affected by preview)
-    return chunk.getWeightWithMargin(lx, ly, lz, neighbors);
+    // For margin voxels, use neighbor data (tempData if previewing and available)
+    const packed = getNeighborVoxel(chunk, lx, ly, lz, neighbors, useTemp);
+    return getWeightFromPacked(packed);
   };
 
   // Helper to get voxel at local coordinates (with margin support)
@@ -43,7 +104,8 @@ function createChunkInput(
     if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
       return dataArray[voxelIndex(lx, ly, lz)];
     }
-    return chunk.getVoxelWithMargin(lx, ly, lz, neighbors);
+    // For margin voxels, use neighbor data (tempData if previewing and available)
+    return getNeighborVoxel(chunk, lx, ly, lz, neighbors, useTemp);
   };
 
   return { dims, getWeight, getVoxel };
