@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import { BuildMarker } from './BuildMarker';
 import { BuildPreview } from './BuildPreview';
 import { storeBridge } from '../../state/bridge';
-import { controls } from '../player/controls';
+import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 
 /**
@@ -52,12 +52,16 @@ export class Builder {
   /** Callback when a build is committed (for collision rebuild) */
   onBuildCommit: ((modifiedChunks: string[]) => void) | null = null;
 
-  constructor() {
+  /** Injected controls instance */
+  private readonly controls: Controls;
+
+  constructor(controls: Controls) {
+    this.controls = controls;
     this.marker = new BuildMarker();
     this.preview = new BuildPreview();
 
     // Register for build place events from controls
-    controls.onBuildPlace = this.handlePlace;
+    this.controls.onBuildPlace = this.handlePlace;
   }
 
   /**
@@ -228,7 +232,10 @@ export class Builder {
    * Dispose of resources.
    */
   dispose(): void {
-    controls.onBuildPlace = null;
+    // Only clear callback if it's still ours
+    if (this.controls.onBuildPlace === this.handlePlace) {
+      this.controls.onBuildPlace = null;
+    }
     this.marker.dispose();
     this.preview.dispose();
   }

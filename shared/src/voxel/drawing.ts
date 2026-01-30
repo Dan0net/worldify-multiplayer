@@ -111,17 +111,26 @@ export function applyFill(
   return { packed: existingPacked, changed: false };
 }
 
+/** Type for apply functions */
+type ApplyFunction = (
+  existingPacked: number,
+  newWeight: number,
+  newMaterial: number
+) => { packed: number; changed: boolean };
+
+/** Registry mapping build modes to their apply functions */
+const APPLY_FUNCTIONS: Record<BuildMode, ApplyFunction> = {
+  [BuildMode.ADD]: applyAdd,
+  [BuildMode.SUBTRACT]: applySubtract,
+  [BuildMode.PAINT]: applyPaint,
+  [BuildMode.FILL]: applyFill,
+};
+
 /**
  * Get the apply function for a build mode.
  */
-export function getApplyFunction(mode: BuildMode): typeof applyAdd {
-  switch (mode) {
-    case BuildMode.ADD: return applyAdd;
-    case BuildMode.SUBTRACT: return applySubtract;
-    case BuildMode.PAINT: return applyPaint;
-    case BuildMode.FILL: return applyFill;
-    default: return applyAdd;
-  }
+export function getApplyFunction(mode: BuildMode): ApplyFunction {
+  return APPLY_FUNCTIONS[mode] ?? applyAdd;
 }
 
 // ============== Bounding Box Calculation ==============

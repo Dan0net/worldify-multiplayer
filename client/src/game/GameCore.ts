@@ -42,7 +42,7 @@ export class GameCore {
   constructor() {
     this.gameLoop = new GameLoop();
     this.playerManager = new PlayerManager();
-    this.builder = new Builder();
+    this.builder = new Builder(controls);
   }
 
   async init(): Promise<void> {
