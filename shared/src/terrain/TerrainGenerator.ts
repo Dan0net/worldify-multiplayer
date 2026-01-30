@@ -37,7 +37,7 @@ export interface TerrainConfig {
 
 export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   seed: 12345,
-  baseHeight: -16, // Base height in voxels (so surface appears in cy=-1)
+  baseHeight: 0, // Base height in voxels (so surface appears in cy=-1)
   heightLayers: [
     {
       frequency: 0.02,   // Low frequency for broad hills

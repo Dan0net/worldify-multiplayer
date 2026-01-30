@@ -4,8 +4,9 @@ import type { PlayerLocal } from '../player/playerLocal';
 let camera: THREE.PerspectiveCamera | null = null;
 
 // Spectator camera settings
-const SPECTATOR_HEIGHT = 80;
-const SPECTATOR_DISTANCE = 40;
+const SPECTATOR_HEIGHT = 15;
+const SPECTATOR_DISTANCE = 20;
+const SPECTATOR_LOOK_UP_OFFSET = 0; // How much above origin the camera looks (tilts up)
 const SPECTATOR_ROTATION_SPEED = 0.1; // radians per second
 
 export function createCamera(): THREE.PerspectiveCamera {
@@ -56,6 +57,6 @@ export function updateSpectatorCamera(
   camera.position.z = Math.cos(angle) * SPECTATOR_DISTANCE;
   camera.position.y = SPECTATOR_HEIGHT;
   
-  // Always look at center
-  camera.lookAt(0, 0, 0);
+  // Look at a point above center to tilt camera up
+  camera.lookAt(0, SPECTATOR_LOOK_UP_OFFSET, 0);
 }
