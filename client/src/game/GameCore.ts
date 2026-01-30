@@ -1,39 +1,45 @@
+/**
+ * GameCore - Main game orchestration
+ * 
+ * Responsibilities:
+ * - Renderer management
+ * - Scene/camera setup
+ * - Coordinating PlayerManager and GameLoop
+ * - Voxel terrain integration
+ * - Network event registration
+ * 
+ * Extracted responsibilities:
+ * - Player lifecycle → PlayerManager
+ * - RAF/timing/FPS → GameLoop
+ */
+
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
 import { setupLighting } from './scene/lighting';
 import { storeBridge } from '../state/bridge';
-import { PlayerLocal } from './player/playerLocal';
-import { PlayerRemote } from './player/playerRemote';
 import { controls } from './player/controls';
-// Old build system - disabled for voxel terrain
-// import { BuildController } from './world/buildController';
 import { onSnapshot, onBuildCommit } from '../net/decode';
-import { sendBinary, setOnReconnected } from '../net/netClient';
-import { CLIENT_INPUT_HZ, RoomSnapshot, BuildCommit, encodeInput } from '@worldify/shared';
+import { setOnReconnected } from '../net/netClient';
+import { RoomSnapshot, BuildCommit } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
+import { GameLoop } from './GameLoop';
+import { PlayerManager } from './PlayerManager';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
-  private animationId: number | null = null;
-  private lastTime = 0;
-  private frameCount = 0;
-  private fpsAccumulator = 0;
-  private elapsedTime = 0; // Total time for spectator camera animation
 
-  // Player management
-  private localPlayer!: PlayerLocal;
-  private remotePlayers = new Map<number, PlayerRemote>();
-  private localPlayerId: number | null = null;
+  // Extracted modules
+  private gameLoop: GameLoop;
+  private playerManager: PlayerManager;
 
   // Voxel terrain system
   private voxelIntegration!: VoxelIntegration;
 
-  // Old build system - disabled for voxel terrain
-  // private buildController!: BuildController;
-
-  // Input sending
-  private inputInterval: ReturnType<typeof setInterval> | null = null;
+  constructor() {
+    this.gameLoop = new GameLoop();
+    this.playerManager = new PlayerManager();
+  }
 
   async init(): Promise<void> {
     // Create renderer
@@ -52,9 +58,6 @@ export class GameCore {
     createCamera();
     setupLighting();
 
-    // Create local player
-    this.localPlayer = new PlayerLocal();
-
     // Initialize voxel terrain system
     const scene = getScene();
     if (scene) {
@@ -64,16 +67,13 @@ export class GameCore {
       });
       this.voxelIntegration.init();
       
-      // Connect player to voxel collision system
-      this.localPlayer.setVoxelIntegration(this.voxelIntegration);
+      // Connect player manager to voxel collision system
+      this.playerManager.setVoxelIntegration(this.voxelIntegration);
       
       // Set player spawn position above terrain
       const spawnPos = this.voxelIntegration.getSpawnPosition(0, 0);
-      this.localPlayer.position.copy(spawnPos);
+      this.playerManager.setSpawnPosition(spawnPos);
     }
-
-    // Old build system - disabled for voxel terrain
-    // this.buildController = new BuildController();
 
     // Request pointer lock on canvas click (only if not spectating)
     canvas.addEventListener('click', () => {
@@ -82,80 +82,27 @@ export class GameCore {
       }
     });
 
-    // Register for snapshot updates
+    // Register for network events
     onSnapshot(this.handleSnapshot);
-
-    // Register for build commits
     onBuildCommit(this.handleBuildCommit);
-
-    // Register for reconnect events
     setOnReconnected(this.handleReconnected);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
 
-    // Start render loop
-    this.startLoop();
-
-    // Start input sending loop
-    this.startInputLoop();
+    // Start game loop and input loop
+    this.gameLoop.start(this.update);
+    this.playerManager.startInputLoop();
   }
 
   setLocalPlayerId(playerId: number): void {
-    this.localPlayerId = playerId;
-  }
-
-  private startInputLoop(): void {
-    const intervalMs = 1000 / CLIENT_INPUT_HZ;
-    this.inputInterval = setInterval(() => {
-      this.sendInput();
-    }, intervalMs);
-  }
-
-  private sendInput(): void {
-    const input = this.localPlayer.getInput(controls);
-    sendBinary(encodeInput(input));
+    this.playerManager.setLocalPlayerId(playerId);
   }
 
   private handleSnapshot = (snapshot: RoomSnapshot): void => {
     const scene = getScene();
     if (!scene) return;
-
-    // Update player count in store
-    storeBridge.updatePlayerCount(snapshot.players.length);
-
-    // Track which players we've seen
-    const seenPlayerIds = new Set<number>();
-
-    for (const playerData of snapshot.players) {
-      seenPlayerIds.add(playerData.playerId);
-
-      // Skip local player (we control them locally)
-      if (playerData.playerId === this.localPlayerId) {
-        // Update local player position from server (for now, no prediction)
-        this.localPlayer.applyServerState(playerData);
-        continue;
-      }
-
-      // Get or create remote player
-      let remote = this.remotePlayers.get(playerData.playerId);
-      if (!remote) {
-        remote = new PlayerRemote(playerData.playerId);
-        this.remotePlayers.set(playerData.playerId, remote);
-        scene.add(remote.mesh);
-      }
-
-      remote.applySnapshot(playerData);
-    }
-
-    // Remove disconnected players
-    for (const [playerId, remote] of this.remotePlayers) {
-      if (!seenPlayerIds.has(playerId)) {
-        scene.remove(remote.mesh);
-        remote.dispose();
-        this.remotePlayers.delete(playerId);
-      }
-    }
+    this.playerManager.handleSnapshot(snapshot, scene);
   };
 
   // Old build system handlers - disabled for voxel terrain
@@ -170,28 +117,13 @@ export class GameCore {
     // requestBuildSync(lastSeq);
   };
 
-  private startLoop(): void {
-    this.lastTime = performance.now();
-    this.animationId = requestAnimationFrame(this.loop);
-  }
-
-  private loop = (time: number): void => {
-    const deltaMs = time - this.lastTime;
-    this.lastTime = time;
-    this.elapsedTime += deltaMs / 1000; // Track total time in seconds
-
-    // FPS calculation
-    this.frameCount++;
-    this.fpsAccumulator += deltaMs;
-    if (this.fpsAccumulator >= 1000) {
-      const fps = Math.round((this.frameCount * 1000) / this.fpsAccumulator);
-      storeBridge.updateDebugStats(fps, deltaMs);
-      this.frameCount = 0;
-      this.fpsAccumulator = 0;
-    }
-
+  /**
+   * Main update loop callback - called by GameLoop
+   */
+  private update = (deltaMs: number, elapsedTime: number): void => {
     const isSpectating = storeBridge.isSpectating;
     const camera = getCamera();
+    const localPlayer = this.playerManager.getLocalPlayer();
 
     // Sync voxel debug state from store to VoxelDebugManager
     if (this.voxelIntegration) {
@@ -209,7 +141,7 @@ export class GameCore {
     if (isSpectating) {
       // Spectator mode: orbit camera looking at game area
       if (camera) {
-        updateSpectatorCamera(camera, deltaMs, this.elapsedTime);
+        updateSpectatorCamera(camera, deltaMs, elapsedTime);
       }
       
       // Update voxel terrain in spectator mode too (for debug visualization)
@@ -218,33 +150,26 @@ export class GameCore {
       }
     } else {
       // FPS mode: update player and camera
-      this.localPlayer.update(deltaMs, controls);
+      this.playerManager.updateLocalPlayer(deltaMs);
       
       // Update voxel terrain (streaming, collision)
       if (this.voxelIntegration) {
-        this.voxelIntegration.update(this.localPlayer.position);
+        this.voxelIntegration.update(localPlayer.position);
       }
-      
-      // Old build system - disabled for voxel terrain
-      // this.buildController.update();
 
       if (camera) {
-        updateCameraFromPlayer(camera, this.localPlayer);
+        updateCameraFromPlayer(camera, localPlayer);
       }
     }
 
     // Always update remote players (visible in both modes)
-    for (const remote of this.remotePlayers.values()) {
-      remote.update(deltaMs);
-    }
+    this.playerManager.updateRemotePlayers(deltaMs);
 
     // Render
     const scene = getScene();
     if (scene && camera) {
       this.renderer.render(scene, camera);
     }
-
-    this.animationId = requestAnimationFrame(this.loop);
   };
 
   private onResize = (): void => {
@@ -257,26 +182,14 @@ export class GameCore {
   };
 
   dispose(): void {
-    if (this.animationId !== null) {
-      cancelAnimationFrame(this.animationId);
-    }
-    if (this.inputInterval !== null) {
-      clearInterval(this.inputInterval);
-    }
+    // Stop loops
+    this.gameLoop.stop();
+    this.playerManager.dispose();
 
     // Clean up voxel terrain
     if (this.voxelIntegration) {
       this.voxelIntegration.dispose();
     }
-
-    // Old build system - disabled
-    // this.buildController.dispose();
-
-    // Clean up remote players
-    for (const remote of this.remotePlayers.values()) {
-      remote.dispose();
-    }
-    this.remotePlayers.clear();
 
     window.removeEventListener('resize', this.onResize);
     this.renderer.dispose();
