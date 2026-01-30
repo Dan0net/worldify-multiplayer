@@ -49,7 +49,7 @@ export function Landing({ onJoin }: LandingProps) {
 
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-[#1a1a2e] to-[#16213e] text-white z-[100]">
-      <h1 className="text-5xl mb-2">Worldify</h1>
+      <h1 className="text-5xl mb-2">wrldy</h1>
       <p className="text-xl opacity-80 mb-4">
         Rapid Survival
       </p>
