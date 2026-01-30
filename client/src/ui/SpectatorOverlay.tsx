@@ -12,6 +12,7 @@ export function SpectatorOverlay() {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   const playerCount = useGameStore((s) => s.playerCount);
   const roomId = useGameStore((s) => s.roomId);
+  const spawnReady = useGameStore((s) => s.spawnReady);
   const setGameMode = useGameStore((s) => s.setGameMode);
 
   // Only show in MainMenu mode
@@ -20,8 +21,10 @@ export function SpectatorOverlay() {
   }
 
   const isConnected = connectionStatus === 'connected';
+  const canStart = isConnected && spawnReady;
 
   const handleStart = () => {
+    if (!canStart) return;
     // Switch to Playing mode
     setGameMode(GameMode.Playing);
     // Lock pointer for FPS controls
@@ -44,19 +47,29 @@ export function SpectatorOverlay() {
             <div className="text-lg">
               {playerCount} player{playerCount !== 1 ? 's' : ''} in game
             </div>
+            {!spawnReady && (
+              <div className="text-sm text-yellow-400 mt-2">
+                Loading terrain...
+              </div>
+            )}
           </>
         ) : (
           <div className="text-lg opacity-80">Connecting...</div>
         )}
       </div>
 
-      {/* Start button - only show when connected */}
+      {/* Start button - only show when connected, enable when spawn ready */}
       {isConnected && (
         <button
           onClick={handleStart}
-          className="py-6 px-16 text-2xl bg-indigo-600 text-white border-none rounded-xl cursor-pointer pointer-events-auto shadow-[0_4px_20px_rgba(79,70,229,0.5)] transition-all duration-100 hover:bg-indigo-500 hover:scale-105"
+          disabled={!spawnReady}
+          className={`py-6 px-16 text-2xl text-white border-none rounded-xl pointer-events-auto shadow-[0_4px_20px_rgba(79,70,229,0.5)] transition-all duration-100 ${
+            spawnReady
+              ? 'bg-indigo-600 cursor-pointer hover:bg-indigo-500 hover:scale-105'
+              : 'bg-gray-600 cursor-not-allowed opacity-50'
+          }`}
         >
-          ▶ Start
+          {spawnReady ? '▶ Start' : '⏳ Loading...'}
         </button>
       )}
 

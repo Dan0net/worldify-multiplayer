@@ -26,6 +26,7 @@ import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
 import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
+import { SpawnManager } from './spawn/SpawnManager';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -37,8 +38,15 @@ export class GameCore {
   // Voxel terrain system
   private voxelIntegration!: VoxelIntegration;
 
+  // Spawn system
+  private spawnManager!: SpawnManager;
+
   // Build system
   private builder: Builder;
+
+  // Track if player has been properly spawned
+  private hasSpawnedPlayer = false;
+  private lastGameMode: GameMode = GameMode.MainMenu;
 
   constructor() {
     this.gameLoop = new GameLoop();
@@ -74,12 +82,20 @@ export class GameCore {
       // Note: useServerChunks is read from store by VoxelWorld
       this.voxelIntegration.init();
       
+      // Initialize spawn manager
+      this.spawnManager = new SpawnManager(scene);
+      this.spawnManager.setTerrainProvider(this.voxelIntegration);
+      
       // Connect player manager to voxel collision system
       this.playerManager.setVoxelIntegration(this.voxelIntegration);
       
-      // Set player spawn position above terrain
-      const spawnPos = this.voxelIntegration.getSpawnPosition(0, 0);
-      this.playerManager.setSpawnPosition(spawnPos);
+      // Set up respawn callback using SpawnManager
+      this.playerManager.setRespawnFinder((currentPos, lastGrounded) => 
+        this.spawnManager.findRespawnPosition(currentPos, lastGrounded)
+      );
+      
+      // Spawn position will be calculated when entering Playing mode
+      // (chunks may not be loaded yet at init time)
 
       // Initialize build system
       this.builder.setMeshProvider(this.voxelIntegration);
@@ -163,6 +179,9 @@ export class GameCore {
     const camera = getCamera();
     const localPlayer = this.playerManager.getLocalPlayer();
 
+    // Check for game mode transitions
+    this.handleGameModeTransition(gameMode);
+
     // Sync voxel debug state from store to VoxelDebugManager
     this.updateVoxelDebug();
 
@@ -187,6 +206,41 @@ export class GameCore {
       this.renderer.render(scene, camera);
     }
   };
+
+  /**
+   * Handle game mode transitions (e.g. MainMenu → Playing)
+   */
+  private handleGameModeTransition(currentMode: GameMode): void {
+    if (currentMode === this.lastGameMode) return;
+    
+    const previousMode = this.lastGameMode;
+    this.lastGameMode = currentMode;
+    
+    // Entering Playing mode - calculate proper spawn position
+    if (currentMode === GameMode.Playing && !this.hasSpawnedPlayer) {
+      this.spawnPlayer();
+    }
+    
+    console.log(`[GameCore] Mode transition: ${previousMode} → ${currentMode}`);
+  }
+
+  /**
+   * Calculate spawn position and place player.
+   * Called when entering Playing mode for the first time.
+   */
+  private spawnPlayer(): void {
+    if (!this.spawnManager) return;
+    
+    // Use cached spawn position from spectator mode detection
+    const spawnPos = this.spawnManager.getCachedSpawnPosition();
+    this.playerManager.setSpawnPosition(spawnPos);
+    this.hasSpawnedPlayer = true;
+    
+    // Clear spawn debug visualization now that game is starting
+    this.spawnManager.clearDebugVisualization();
+    
+    console.log(`[GameCore] Player spawned at (${spawnPos.x.toFixed(1)}, ${spawnPos.y.toFixed(1)}, ${spawnPos.z.toFixed(1)})`);
+  }
 
   /**
    * Sync voxel debug state from store to VoxelDebugManager
@@ -224,6 +278,17 @@ export class GameCore {
     // Update voxel terrain centered on origin
     if (this.voxelIntegration) {
       this.voxelIntegration.update(new THREE.Vector3(0, 10, 0));
+    }
+    
+    // Update spawn detection
+    if (this.spawnManager) {
+      this.spawnManager.update();
+      
+      // Update spawn ready state in store
+      const spawnReady = this.spawnManager.isSpawnReady();
+      if (spawnReady !== storeBridge.spawnReady) {
+        storeBridge.setSpawnReady(spawnReady);
+      }
     }
   }
 
@@ -266,6 +331,11 @@ export class GameCore {
 
     // Clean up build system
     this.builder.dispose();
+
+    // Clean up spawn manager
+    if (this.spawnManager) {
+      this.spawnManager.dispose();
+    }
 
     // Clean up voxel terrain
     if (this.voxelIntegration) {

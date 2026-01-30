@@ -37,3 +37,19 @@ export const PLAYER_HEIGHT_INNER = PLAYER_HEIGHT - PLAYER_RADIUS * 2;
 
 /** Ground level Y coordinate */
 export const GROUND_LEVEL = 0;
+
+// ============== Fall Detection ==============
+
+/** Maximum continuous fall time before triggering respawn (seconds) */
+export const MAX_FALL_TIME = 5.0;
+
+// ============== Spawn Constants ==============
+
+/** Height offset above terrain surface when spawning */
+export const SPAWN_HEIGHT_OFFSET = 2.0;
+
+/** Height to raycast from when finding terrain surface */
+export const SPAWN_RAYCAST_HEIGHT = 200.0;
+
+/** Fallback spawn height when terrain not found (high to let gravity work) */
+export const SPAWN_FALLBACK_HEIGHT = 50.0;

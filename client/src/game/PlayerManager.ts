@@ -9,18 +9,24 @@
  */
 
 import * as THREE from 'three';
-import { PlayerLocal } from './player/playerLocal';
+import { PlayerLocal, RespawnCallback } from './player/playerLocal';
 import { PlayerRemote } from './player/playerRemote';
 import { Controls, controls } from './player/controls';
 import { sendBinary } from '../net/netClient';
-import { CLIENT_INPUT_HZ, RoomSnapshot, encodeInput } from '@worldify/shared';
+import { CLIENT_INPUT_HZ, RoomSnapshot, encodeInput, SPAWN_FALLBACK_HEIGHT } from '@worldify/shared';
 import { storeBridge } from '../state/bridge';
 import type { VoxelIntegration } from './voxel/VoxelIntegration';
+
+/** Callback type for finding respawn positions (decouples from VoxelIntegration) */
+export type RespawnFinder = (currentPos: THREE.Vector3, lastGroundedPos: THREE.Vector3 | null) => THREE.Vector3 | null;
 
 export class PlayerManager {
   private localPlayer: PlayerLocal;
   private remotePlayers = new Map<number, PlayerRemote>();
   private localPlayerId: number | null = null;
+  
+  // Respawn position finder (injected by GameCore)
+  private respawnFinder: RespawnFinder | null = null;
 
   // Input sending interval
   private inputInterval: ReturnType<typeof setInterval> | null = null;
@@ -51,11 +57,44 @@ export class PlayerManager {
   }
 
   /**
-   * Connect the local player to voxel collision system
+   * Connect the local player to voxel collision system.
+   * Only used for collision - respawn uses the callback pattern.
    */
   setVoxelIntegration(voxel: VoxelIntegration): void {
     this.localPlayer.setVoxelIntegration(voxel);
+    
+    // Set up respawn callback (uses respawnFinder if set)
+    this.localPlayer.setRespawnCallback(this.handleRespawnNeeded);
   }
+
+  /**
+   * Set the respawn finder callback (injected by GameCore).
+   * Decouples PlayerManager from VoxelIntegration for respawn logic.
+   */
+  setRespawnFinder(finder: RespawnFinder): void {
+    this.respawnFinder = finder;
+  }
+
+  /**
+   * Handle respawn request from local player (fell too long)
+   */
+  private handleRespawnNeeded: RespawnCallback = (currentPos, lastGroundedPos) => {
+    if (!this.respawnFinder) {
+      console.warn('[PlayerManager] No respawn finder set, using fallback position');
+      this.localPlayer.respawn(new THREE.Vector3(0, SPAWN_FALLBACK_HEIGHT, 0));
+      return;
+    }
+    
+    const respawnPos = this.respawnFinder(currentPos, lastGroundedPos);
+    if (respawnPos) {
+      this.localPlayer.respawn(respawnPos);
+    } else {
+      // Terrain not ready yet - just reset position high and wait
+      // The fall detection will trigger again later when terrain loads
+      console.log('[PlayerManager] Terrain not ready, resetting to high position');
+      this.localPlayer.respawn(new THREE.Vector3(0, SPAWN_FALLBACK_HEIGHT, 0));
+    }
+  };
 
   /**
    * Set spawn position for local player

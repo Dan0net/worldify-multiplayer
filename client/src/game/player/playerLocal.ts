@@ -20,12 +20,16 @@ import {
   PLAYER_HEIGHT_INNER,
   PLAYER_RADIUS,
   PHYSICS_STEPS,
+  MAX_FALL_TIME,
   // Movement utilities from shared
   getWorldDirectionFromInput,
 } from '@worldify/shared';
 import { Controls } from './controls';
 import type { VoxelIntegration } from '../voxel/VoxelIntegration';
 import type { CapsuleInfo } from '../voxel/VoxelCollision';
+
+/** Callback type for respawn requests */
+export type RespawnCallback = (currentPos: THREE.Vector3, lastGroundedPos: THREE.Vector3 | null) => void;
 
 export class PlayerLocal {
   // Position (client authoritative for vertical, server for horizontal)
@@ -43,6 +47,13 @@ export class PlayerLocal {
   private isGrounded = false;
   private inputSeq = 0;
 
+  // Fall detection
+  private fallTime = 0; // Continuous time spent falling (seconds)
+  private lastGroundedPosition: THREE.Vector3 | null = null;
+  
+  // Respawn callback (set by GameCore)
+  private onRespawnNeeded: RespawnCallback | null = null;
+
   // Capsule info (reused each frame)
   private capsuleInfo: CapsuleInfo = {
     radius: PLAYER_RADIUS,
@@ -57,6 +68,20 @@ export class PlayerLocal {
    */
   setVoxelIntegration(voxel: VoxelIntegration): void {
     this.voxelIntegration = voxel;
+  }
+
+  /**
+   * Set callback for when player needs to respawn (fell too long)
+   */
+  setRespawnCallback(callback: RespawnCallback): void {
+    this.onRespawnNeeded = callback;
+  }
+
+  /**
+   * Get the last position where the player was grounded
+   */
+  getLastGroundedPosition(): THREE.Vector3 | null {
+    return this.lastGroundedPosition;
   }
 
   /**
@@ -157,10 +182,34 @@ export class PlayerLocal {
     );
 
     // Update grounded state from collision result
+    const wasGrounded = this.isGrounded;
     this.isGrounded = result.isOnGround;
 
     // Apply position correction
     this.position.add(result.deltaVector);
+
+    // Track last grounded position for respawn
+    if (this.isGrounded) {
+      if (!this.lastGroundedPosition) {
+        this.lastGroundedPosition = new THREE.Vector3();
+      }
+      this.lastGroundedPosition.copy(this.position);
+      this.fallTime = 0; // Reset fall timer
+    }
+
+    // Track fall time (only when falling with negative velocity and not grounded)
+    if (!this.isGrounded && this.velocity.y < 0) {
+      this.fallTime += dt;
+      
+      // Check if fallen for too long
+      if (this.fallTime > MAX_FALL_TIME) {
+        console.warn(`[PlayerLocal] Falling for ${this.fallTime.toFixed(1)}s - triggering respawn`);
+        this.triggerRespawn();
+      }
+    } else if (wasGrounded && !this.isGrounded) {
+      // Just left ground (e.g. jumped) - don't reset fall time until actually falling down
+      // Fall time is already 0 from being grounded
+    }
 
     // Adjust velocity based on collision
     if (!this.isGrounded && result.collided) {
@@ -174,9 +223,38 @@ export class PlayerLocal {
   }
 
   /**
+   * Trigger a respawn request
+   */
+  private triggerRespawn(): void {
+    if (this.onRespawnNeeded) {
+      this.onRespawnNeeded(this.position.clone(), this.lastGroundedPosition);
+    }
+    // Reset fall time to prevent repeated triggers
+    this.fallTime = 0;
+  }
+
+  /**
+   * Respawn the player at a given position
+   */
+  respawn(position: THREE.Vector3): void {
+    this.position.copy(position);
+    this.velocity.set(0, 0, 0);
+    this.isGrounded = false;
+    this.fallTime = 0;
+    console.log(`[PlayerLocal] Respawned at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
+  }
+
+  /**
    * Check if player is grounded
    */
   getIsGrounded(): boolean {
     return this.isGrounded;
+  }
+
+  /**
+   * Get current fall time in seconds
+   */
+  getFallTime(): number {
+    return this.fallTime;
   }
 }

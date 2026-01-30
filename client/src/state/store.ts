@@ -40,6 +40,9 @@ interface GameState {
   // Game mode
   gameMode: GameMode;
 
+  // Spawn readiness (terrain found at spawn point)
+  spawnReady: boolean;
+
   // Network chunk streaming
   useServerChunks: boolean;
 
@@ -61,6 +64,7 @@ interface GameState {
   setPlayerCount: (count: number) => void;
   setPing: (ping: number) => void;
   setGameMode: (mode: GameMode) => void;
+  setSpawnReady: (ready: boolean) => void;
   setUseServerChunks: (enabled: boolean) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
   setServerTick: (tick: number) => void;
@@ -84,7 +88,8 @@ export const useGameStore = create<GameState>((set) => ({
   playerCount: 0,
   ping: 0,
   gameMode: GameMode.MainMenu, // Start in main menu
-  useServerChunks: true, // Default to server chunks in multiplayer
+  spawnReady: false, // Terrain not found yet
+  useServerChunks: false, // Default to server chunks in multiplayer
   fps: 0,
   tickMs: 0,
   serverTick: 0,
@@ -116,6 +121,7 @@ export const useGameStore = create<GameState>((set) => ({
   setPlayerCount: (count) => set({ playerCount: count }),
   setPing: (ping) => set({ ping }),
   setGameMode: (mode) => set({ gameMode: mode }),
+  setSpawnReady: (ready) => set({ spawnReady: ready }),
   setUseServerChunks: (enabled) => set({ useServerChunks: enabled }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),
   setServerTick: (tick) => set({ serverTick: tick }),

@@ -3,13 +3,15 @@
  * 
  * This module provides a single entry point for the voxel terrain system,
  * managing initialization, updates, and cleanup.
+ * 
+ * Implements TerrainRaycaster interface for SpawnManager to use.
  */
 
 import * as THREE from 'three';
-import { VOXEL_SCALE, INITIAL_TERRAIN_HEIGHT } from '@worldify/shared';
 import { VoxelWorld } from './VoxelWorld.js';
 import { VoxelCollision, CapsuleInfo, CapsuleCollisionResult } from './VoxelCollision.js';
 import { VoxelDebugManager } from './VoxelDebug.js';
+import type { TerrainRaycaster } from '../spawn/TerrainRaycaster.js';
 
 /**
  * Configuration for the voxel integration.
@@ -19,8 +21,6 @@ export interface VoxelConfig {
   debugEnabled?: boolean;
   /** Whether to enable collision */
   collisionEnabled?: boolean;
-  /** Initial player spawn height offset above terrain */
-  spawnHeightOffset?: number;
 }
 
 /**
@@ -29,7 +29,6 @@ export interface VoxelConfig {
 const DEFAULT_CONFIG: Required<VoxelConfig> = {
   debugEnabled: false,
   collisionEnabled: true,
-  spawnHeightOffset: 5.0, // 5 meters above terrain
 };
 
 /**
@@ -39,9 +38,10 @@ const DEFAULT_CONFIG: Required<VoxelConfig> = {
  * - Initializes VoxelCollision for physics (using three-mesh-bvh)
  * - Initializes VoxelDebug for visualization
  * - Syncs colliders when chunks are meshed
+ * - Implements TerrainRaycaster for spawn system
  * - Provides capsule collision for player physics
  */
-export class VoxelIntegration {
+export class VoxelIntegration implements TerrainRaycaster {
   /** The voxel world manager */
   readonly world: VoxelWorld;
   
@@ -167,23 +167,6 @@ export class VoxelIntegration {
   }
 
   /**
-   * Get the spawn position for a player.
-   * Returns a position above the terrain at the origin.
-   * 
-   * @param x World X coordinate (default 0)
-   * @param z World Z coordinate (default 0)
-   * @returns Spawn position with Y set above terrain
-   */
-  getSpawnPosition(x: number = 0, z: number = 0): THREE.Vector3 {
-    const spawnPos = new THREE.Vector3(x, 0, z);
-    
-    // Use terrain height constant as fallback
-    spawnPos.y = INITIAL_TERRAIN_HEIGHT * VOXEL_SCALE + this.config.spawnHeightOffset;
-    
-    return spawnPos;
-  }
-
-  /**
    * Resolve capsule collision against terrain.
    * This is the main collision method - uses three-mesh-bvh capsule collision.
    * 
@@ -231,9 +214,11 @@ export class VoxelIntegration {
   getCollisionMeshes(): THREE.Object3D[] {
     const meshes: THREE.Object3D[] = [];
     for (const chunkMesh of this.world.meshes.values()) {
-      const mesh = chunkMesh.getMesh();
-      if (mesh) {
-        meshes.push(mesh);
+      if (chunkMesh.hasGeometry()) {
+        const mesh = chunkMesh.getMesh();
+        if (mesh) {
+          meshes.push(mesh);
+        }
       }
     }
     return meshes;

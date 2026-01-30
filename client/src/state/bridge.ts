@@ -67,6 +67,10 @@ class StoreBridge {
     return getState().useServerChunks;
   }
 
+  get spawnReady(): boolean {
+    return getState().spawnReady;
+  }
+
   // ============== WRITES ==============
 
   updateConnectionStatus(status: ConnectionStatus): void {
@@ -87,6 +91,10 @@ class StoreBridge {
 
   setGameMode(mode: GameMode): void {
     getState().setGameMode(mode);
+  }
+
+  setSpawnReady(ready: boolean): void {
+    getState().setSpawnReady(ready);
   }
 
   updateServerTick(tick: number): void {
