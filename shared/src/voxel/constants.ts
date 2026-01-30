@@ -66,5 +66,8 @@ export const WEIGHT_RANGE = WEIGHT_MAX - WEIGHT_MIN; // 1.0
 /** Number of chunks to load in each direction from player */
 export const STREAM_RADIUS = 4;
 
+/** Extra margin (in chunks) before unloading - prevents pop-in/out at boundaries */
+export const STREAM_UNLOAD_MARGIN = 1;
+
 /** Initial terrain height in voxel units (-16 voxels = -4m surface) */
 export const INITIAL_TERRAIN_HEIGHT = -16;

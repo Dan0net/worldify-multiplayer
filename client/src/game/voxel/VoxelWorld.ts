@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import {
   STREAM_RADIUS,
+  STREAM_UNLOAD_MARGIN,
   worldToChunk,
   chunkKey,
   TerrainGenerator,
@@ -111,7 +112,10 @@ export class VoxelWorld {
    */
   private updateLoadedChunks(pcx: number, pcy: number, pcz: number): void {
     const halfRadius = Math.floor(STREAM_RADIUS / 2);
+    // Use larger unload radius to prevent pop-in/out at chunk boundaries (hysteresis)
+    const halfUnloadRadius = halfRadius + STREAM_UNLOAD_MARGIN;
     
+    // Loading bounds (tighter)
     const newMinCx = pcx - halfRadius;
     const newMaxCx = pcx + halfRadius - 1;
     const newMinCy = pcy - halfRadius;
@@ -119,13 +123,21 @@ export class VoxelWorld {
     const newMinCz = pcz - halfRadius;
     const newMaxCz = pcz + halfRadius - 1;
 
-    // Unload chunks that are now out of range
+    // Unloading bounds (larger with margin)
+    const unloadMinCx = pcx - halfUnloadRadius;
+    const unloadMaxCx = pcx + halfUnloadRadius - 1;
+    const unloadMinCy = pcy - halfUnloadRadius;
+    const unloadMaxCy = pcy + halfUnloadRadius - 1;
+    const unloadMinCz = pcz - halfUnloadRadius;
+    const unloadMaxCz = pcz + halfUnloadRadius - 1;
+
+    // Unload chunks that are now out of unload range (larger threshold)
     const chunksToUnload: string[] = [];
     for (const [key, chunk] of this.chunks) {
       if (
-        chunk.cx < newMinCx || chunk.cx > newMaxCx ||
-        chunk.cy < newMinCy || chunk.cy > newMaxCy ||
-        chunk.cz < newMinCz || chunk.cz > newMaxCz
+        chunk.cx < unloadMinCx || chunk.cx > unloadMaxCx ||
+        chunk.cy < unloadMinCy || chunk.cy > unloadMaxCy ||
+        chunk.cz < unloadMinCz || chunk.cz > unloadMaxCz
       ) {
         chunksToUnload.push(key);
       }

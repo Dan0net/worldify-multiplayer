@@ -52,7 +52,10 @@ function handleInput(roomId: string, playerId: number, reader: ByteReader): void
     return;
   }
   
-  // Update player look direction and buttons
+  // Client-authoritative: copy position directly from client
+  player.x = input.x;
+  player.y = input.y;
+  player.z = input.z;
   player.yaw = input.yaw;
   player.pitch = input.pitch;
   player.buttons = input.buttons;

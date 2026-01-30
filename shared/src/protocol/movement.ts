@@ -10,8 +10,11 @@
  * │ 2-3         │ int16  │ Yaw (quantized radians)                  │
  * │ 4-5         │ int16  │ Pitch (quantized radians)                │
  * │ 6-7         │ uint16 │ Client sequence number                   │
+ * │ 8-11        │ float32│ X position                               │
+ * │ 12-15       │ float32│ Y position                               │
+ * │ 16-19       │ float32│ Z position                               │
  * └─────────────┴────────┴──────────────────────────────────────────┘
- * Total: 8 bytes
+ * Total: 20 bytes
  */
 
 import { ByteReader, ByteWriter } from '../util/bytes.js';
@@ -31,6 +34,9 @@ export interface MovementInput {
   yaw: number; // radians
   pitch: number; // radians
   seq: number; // client sequence number
+  x: number; // client-authoritative position
+  y: number;
+  z: number;
 }
 
 export interface PlayerPosition {
@@ -45,12 +51,15 @@ export interface PlayerPosition {
  * Encode movement input for network transmission
  */
 export function encodeInput(input: MovementInput): Uint8Array {
-  const writer = new ByteWriter(8);
+  const writer = new ByteWriter(20);
   writer.writeUint8(MSG_INPUT);
   writer.writeUint8(input.buttons);
   writer.writeInt16(quantizeAngle(input.yaw));
   writer.writeInt16(quantizeAngle(input.pitch));
   writer.writeUint16(input.seq);
+  writer.writeFloat32(input.x);
+  writer.writeFloat32(input.y);
+  writer.writeFloat32(input.z);
   return writer.toUint8Array();
 }
 
@@ -63,5 +72,8 @@ export function decodeInput(reader: ByteReader): MovementInput {
     yaw: dequantizeAngle(reader.readInt16()),
     pitch: dequantizeAngle(reader.readInt16()),
     seq: reader.readUint16(),
+    x: reader.readFloat32(),
+    y: reader.readFloat32(),
+    z: reader.readFloat32(),
   };
 }

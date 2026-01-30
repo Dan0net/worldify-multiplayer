@@ -3,23 +3,16 @@
  * Server tick runs at SERVER_TICK_HZ (physics/game logic)
  * Snapshots broadcast at SNAPSHOT_HZ (network sync)
  * 
- * NOTE: Physics are handled client-side for voxel terrain collision.
- * Server just relays positions and handles horizontal movement.
+ * NOTE: Movement is client-authoritative. Server just relays positions
+ * received from clients to other clients via snapshots.
  */
 
 import { WebSocket } from 'ws';
-import { Room, PlayerState } from './room.js';
+import { Room } from './room.js';
 import { 
   SERVER_TICK_HZ, 
   SNAPSHOT_HZ,
-  INPUT_SPRINT,
   PlayerSnapshot,
-  FLAG_SPRINTING,
-  // Physics constants from shared (ensures client/server consistency)
-  MOVE_SPEED,
-  SPRINT_MULTIPLIER,
-  // Movement utilities from shared
-  getWorldDirectionFromInput,
   // Encode functions from shared
   encodeSnapshot,
 } from '@worldify/shared';
@@ -55,38 +48,12 @@ export function stopRoomTick(room: Room): void {
 
 function tick(room: Room): void {
   room.tick++;
-  const dt = 1 / SERVER_TICK_HZ;
   
-  // Process each player's movement based on their last input
-  for (const player of room.players.values()) {
-    processPlayerMovement(player, dt);
-  }
+  // Movement is client-authoritative, so no physics processing here.
+  // Server just relays positions via snapshots.
   
   // TODO: apply consume wave logic
   // TODO: check territory conditions
-}
-
-function processPlayerMovement(player: PlayerState, dt: number): void {
-  const buttons = player.buttons;
-  
-  // Server only handles horizontal movement
-  // Client handles vertical physics (gravity, jump, voxel collision)
-  
-  // Calculate horizontal movement using shared utility
-  const worldDir = getWorldDirectionFromInput(buttons, player.yaw);
-  if (worldDir) {
-    // Apply speed
-    let speed = MOVE_SPEED;
-    if (buttons & INPUT_SPRINT) {
-      speed *= SPRINT_MULTIPLIER;
-      player.flags |= FLAG_SPRINTING;
-    } else {
-      player.flags &= ~FLAG_SPRINTING;
-    }
-    
-    player.x += worldDir.worldX * speed * dt;
-    player.z += worldDir.worldZ * speed * dt;
-  }
 }
 
 function broadcastSnapshot(room: Room): void {

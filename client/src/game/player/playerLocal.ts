@@ -68,18 +68,19 @@ export class PlayerLocal {
       yaw: controls.yaw,
       pitch: controls.pitch,
       seq: this.inputSeq++,
+      x: this.position.x,
+      y: this.position.y,
+      z: this.position.z,
     };
   }
 
   /**
    * Apply authoritative state from server snapshot
-   * Server handles horizontal position, client handles vertical
+   * Movement is client-authoritative, so we ignore server position
    */
-  applyServerState(snapshot: PlayerSnapshot): void {
-    // Only apply horizontal position from server
-    this.position.x = snapshot.x;
-    this.position.z = snapshot.z;
-    // Y is handled locally with physics
+  applyServerState(_snapshot: PlayerSnapshot): void {
+    // Client-authoritative movement: don't apply server position
+    // Server just relays our position to other clients
   }
 
   /**
