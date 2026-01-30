@@ -3,6 +3,7 @@ import { Landing } from './ui/Landing';
 import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
+import { BuildToolbar } from './ui/BuildToolbar';
 import { useGameStore } from './state/store';
 import { createGame } from './game/createGame';
 
@@ -28,6 +29,7 @@ function App() {
         <>
           <SpectatorOverlay />
           <Hud />
+          <BuildToolbar />
           <DebugPanel />
         </>
       )}
