@@ -119,6 +119,9 @@ export class ChunkMesh {
     if (scene) {
       scene.add(this.mesh);
     }
+    
+    // Update world matrix so raycasting works immediately
+    this.mesh.updateMatrixWorld(true);
   }
 
   /**

@@ -159,8 +159,10 @@ export class VoxelCollision {
     velocity: THREE.Vector3,
     delta: number
   ): CapsuleCollisionResult {
-    const deltaV = new THREE.Vector3();
-    let maxDeltaLength = 0;
+    // Accumulate total delta across all colliders
+    const totalDelta = new THREE.Vector3();
+    // Working position that gets updated after each collider
+    const workingPosition = position.clone();
 
     for (const collider of this.colliderMeshes.values()) {
       if (!collider?.matrixWorld || !collider.geometry?.boundsTree) continue;
@@ -171,8 +173,9 @@ export class VoxelCollision {
       this.tempMat.copy(collider.matrixWorld).invert();
 
       // Transform capsule segment to collider's local space
-      this.tempSegment.start.add(position).applyMatrix4(this.tempMat);
-      this.tempSegment.end.add(position).applyMatrix4(this.tempMat);
+      // Use workingPosition which includes adjustments from previous colliders
+      this.tempSegment.start.add(workingPosition).applyMatrix4(this.tempMat);
+      this.tempSegment.end.add(workingPosition).applyMatrix4(this.tempMat);
 
       // Get AABB of the capsule
       this.tempBox.expandByPoint(this.tempSegment.start);
@@ -216,9 +219,9 @@ export class VoxelCollision {
       const newPosition = this.tempVector;
       newPosition.copy(this.tempSegment.start).applyMatrix4(collider.matrixWorld);
 
-      // Calculate delta from original position
+      // Calculate delta from working position (not original position)
       const deltaVector = this.tempVector2;
-      deltaVector.subVectors(newPosition, position);
+      deltaVector.subVectors(newPosition, workingPosition);
 
       // Add offset to capsule segment start
       deltaVector.sub(capsuleInfo.segment.start);
@@ -226,19 +229,20 @@ export class VoxelCollision {
       const offset = Math.max(0.0, deltaVector.length() - 1e-5);
       deltaVector.normalize().multiplyScalar(offset);
 
-      // Keep track of the largest push-out
-      if (deltaVector.lengthSq() > maxDeltaLength) {
-        maxDeltaLength = deltaVector.lengthSq();
-        deltaV.copy(deltaVector);
+      // Accumulate this collider's delta
+      if (deltaVector.lengthSq() > 0) {
+        totalDelta.add(deltaVector);
+        // Update working position for next collider
+        workingPosition.add(deltaVector);
       }
     }
 
     // Check if on ground based on vertical push-out vs velocity
-    const isOnGround = deltaV.y > Math.abs(delta * velocity.y * 0.25);
+    const isOnGround = totalDelta.y > Math.abs(delta * velocity.y * 0.25);
 
     return {
-      collided: deltaV.lengthSq() > 0,
-      deltaVector: deltaV,
+      collided: totalDelta.lengthSq() > 0,
+      deltaVector: totalDelta,
       isOnGround,
     };
   }
