@@ -7,12 +7,21 @@ import {
   MSG_JOIN,
   MSG_INPUT,
   MSG_PING,
+  MSG_VOXEL_BUILD_INTENT,
+  MSG_VOXEL_CHUNK_REQUEST,
   ByteReader,
   decodeInput,
+  decodeVoxelBuildIntent,
+  decodeVoxelChunkRequest,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
 import { encodePong } from '@worldify/shared';
 import { registerHandler, dispatch } from './MessageRegistry.js';
+import { 
+  handleBuildIntent, 
+  handleChunkRequest, 
+  broadcastBuildCommit 
+} from '../rooms/BuildHandler.js';
 
 /**
  * Decode and dispatch an incoming binary message.
@@ -69,7 +78,37 @@ function handlePing(roomId: string, playerId: number, reader: ByteReader): void 
   }
 }
 
+function handleVoxelBuildIntent(roomId: string, playerId: number, reader: ByteReader): void {
+  const room = roomManager.getRoom(roomId);
+  if (!room) return;
+  
+  // Decode the build intent
+  const intent = decodeVoxelBuildIntent(reader);
+  
+  // Process the build (validate, apply, get result)
+  const commit = handleBuildIntent(room, playerId, intent);
+  
+  // Broadcast the result to all players in the room
+  broadcastBuildCommit(room, commit);
+}
+
+function handleVoxelChunkRequest(roomId: string, playerId: number, reader: ByteReader): void {
+  const room = roomManager.getRoom(roomId);
+  if (!room) return;
+  
+  const ws = room.connections.get(playerId);
+  if (!ws) return;
+  
+  // Decode the chunk request
+  const request = decodeVoxelChunkRequest(reader);
+  
+  // Handle the request (sends chunk data to the player)
+  handleChunkRequest(room, playerId, request, ws);
+}
+
 // Register all message handlers
 registerHandler(MSG_JOIN, handleJoin);
 registerHandler(MSG_INPUT, handleInput);
 registerHandler(MSG_PING, handlePing);
+registerHandler(MSG_VOXEL_BUILD_INTENT, handleVoxelBuildIntent);
+registerHandler(MSG_VOXEL_CHUNK_REQUEST, handleVoxelChunkRequest);

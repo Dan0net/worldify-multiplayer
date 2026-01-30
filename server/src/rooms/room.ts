@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { PLAYER_HEIGHT, GROUND_LEVEL } from '@worldify/shared';
+import { PLAYER_HEIGHT, GROUND_LEVEL, ChunkData } from '@worldify/shared';
 
 // Re-export for backward compatibility (prefer importing directly from shared)
 export const PLAYER_EYE_HEIGHT = PLAYER_HEIGHT;
@@ -30,6 +30,14 @@ export interface Room {
   tick: number;
   tickInterval: NodeJS.Timeout | null;
   snapshotInterval: NodeJS.Timeout | null;
+  
+  // Voxel terrain state
+  /** Modified chunks stored by chunkKey */
+  voxelChunks: Map<string, ChunkData>;
+  /** Last build sequence number applied to each chunk */
+  chunkBuildSeq: Map<string, number>;
+  /** Next build sequence number */
+  nextBuildSeq: number;
 }
 
 export function createRoom(id: string): Room {
@@ -42,6 +50,10 @@ export function createRoom(id: string): Room {
     tick: 0,
     tickInterval: null,
     snapshotInterval: null,
+    // Voxel terrain state
+    voxelChunks: new Map(),
+    chunkBuildSeq: new Map(),
+    nextBuildSeq: 0,
   };
 }
 

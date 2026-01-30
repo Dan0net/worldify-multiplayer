@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Room, createRoom, createPlayerState } from './room.js';
 import { startRoomTick, stopRoomTick } from './roomTick.js';
+import { cleanupPlayer, cleanupRoom } from './BuildHandler.js';
 import { MAX_PLAYERS_PER_ROOM, EMPTY_ROOM_TIMEOUT_MS } from '@worldify/shared';
 import type { WebSocket } from 'ws';
 
@@ -86,6 +87,10 @@ class RoomManager {
     room.connections.delete(playerId);
     room.players.delete(playerId);
     room.playerCount = Math.max(0, room.playerCount - 1);
+    
+    // Clean up build handler state for this player
+    cleanupPlayer(roomId, playerId);
+    
     console.log(`[room ${roomId}] Player ${playerId} disconnected (${room.connections.size} remaining)`);
   }
 
@@ -151,6 +156,8 @@ class RoomManager {
       if (room.playerCount === 0 && now - room.createdAt > EMPTY_ROOM_TIMEOUT_MS) {
         // Stop room ticks before removing
         stopRoomTick(room);
+        // Clean up build handler state for this room
+        cleanupRoom(roomId);
         this.rooms.delete(roomId);
         console.log(`[room] Removed empty room: ${roomId}`);
         if (this.currentRoomId === roomId) {
