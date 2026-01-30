@@ -13,7 +13,7 @@ import { BuildPreview } from './buildPreview';
 import { BuildPieces } from './buildPieces';
 import { sendBinary } from '../../net/netClient';
 import { encodeBuildIntent } from '../../net/encode';
-import { useGameStore } from '../../state/store';
+import { storeBridge } from '../../state/bridge';
 
 export class BuildController {
   private preview: BuildPreview;
@@ -57,7 +57,7 @@ export class BuildController {
     }
     
     // Get currently selected tool
-    const selectedTool = useGameStore.getState().selectedTool;
+    const selectedTool = storeBridge.selectedTool;
     
     // Raycast from camera center to ground plane
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
@@ -146,7 +146,7 @@ export class BuildController {
     // Prevent double-sends
     if (this.isBuilding) return;
     
-    const selectedTool = useGameStore.getState().selectedTool;
+    const selectedTool = storeBridge.selectedTool;
     
     // Send BUILD_INTENT to server
     const intent = {
@@ -175,11 +175,11 @@ export class BuildController {
     
     // Tool selection via number keys (handled here and in store)
     if (e.code === 'Digit1') {
-      useGameStore.getState().setSelectedTool(BuildPieceType.FLOOR);
+      storeBridge.updateSelectedTool(BuildPieceType.FLOOR);
     } else if (e.code === 'Digit2') {
-      useGameStore.getState().setSelectedTool(BuildPieceType.WALL);
+      storeBridge.updateSelectedTool(BuildPieceType.WALL);
     } else if (e.code === 'Digit3') {
-      useGameStore.getState().setSelectedTool(BuildPieceType.SLOPE);
+      storeBridge.updateSelectedTool(BuildPieceType.SLOPE);
     }
   };
 

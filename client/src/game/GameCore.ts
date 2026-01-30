@@ -12,7 +12,6 @@ import { onSnapshot, onBuildCommit } from '../net/decode';
 import { sendBinary, setOnReconnected } from '../net/netClient';
 import { encodeInput } from '../net/encode';
 import { CLIENT_INPUT_HZ, RoomSnapshot, BuildCommit } from '@worldify/shared';
-import { useGameStore } from '../state/store';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 
 export class GameCore {
@@ -79,7 +78,7 @@ export class GameCore {
 
     // Request pointer lock on canvas click (only if not spectating)
     canvas.addEventListener('click', () => {
-      if (!useGameStore.getState().isSpectating) {
+      if (!storeBridge.isSpectating) {
         controls.requestPointerLock();
       }
     });
@@ -192,13 +191,12 @@ export class GameCore {
       this.fpsAccumulator = 0;
     }
 
-    const gameState = useGameStore.getState();
-    const isSpectating = gameState.isSpectating;
+    const isSpectating = storeBridge.isSpectating;
     const camera = getCamera();
 
     // Sync voxel debug state from store to VoxelDebugManager
     if (this.voxelIntegration) {
-      this.voxelIntegration.debug.setState(gameState.voxelDebug);
+      this.voxelIntegration.debug.setState(storeBridge.voxelDebug);
       
       // Update voxel stats in store
       const stats = this.voxelIntegration.getStats();

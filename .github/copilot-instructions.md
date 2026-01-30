@@ -31,7 +31,21 @@ All network messages use binary encoding. Follow the pattern in `shared/src/prot
 ### React + Three.js Separation
 - **React** (`client/src/ui/`) → Only UI components, reads from Zustand
 - **GameCore** (`client/src/game/`) → Owns all Three.js/game state, imperatively updated
-- **Bridge** (`client/src/state/bridge.ts`) → GameCore writes to Zustand store
+- **Bridge** (`client/src/state/bridge.ts`) → ALL non-React store access goes through here
+
+### Zustand Store Access Pattern
+```typescript
+// ✅ React components: use the hook for reactive updates
+const isSpectating = useGameStore((s) => s.isSpectating);
+
+// ✅ Game code (non-React): use storeBridge for ALL reads and writes
+import { storeBridge } from '../state/bridge';
+const isSpectating = storeBridge.isSpectating;      // read
+storeBridge.updateIsSpectating(false);               // write
+
+// ❌ NEVER do this in game code:
+useGameStore.getState().isSpectating;  // bypasses bridge
+```
 
 ### Server Room Model
 - Rooms are independent game instances (`server/src/rooms/room.ts`)

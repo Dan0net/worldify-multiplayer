@@ -11,7 +11,7 @@ import {
   INPUT_JUMP,
   INPUT_SPRINT,
 } from '@worldify/shared';
-import { useGameStore } from '../../state/store';
+import { storeBridge } from '../../state/bridge';
 
 export class Controls {
   private keys = new Set<string>();
@@ -46,10 +46,7 @@ export class Controls {
     this.isPointerLocked = document.pointerLockElement !== null;
     if (!this.isPointerLocked) {
       // Exit to spectator mode (show start screen)
-      // Use the store directly to avoid React hook issues
-      import('../../state/store').then(mod => {
-        mod.useGameStore.getState().setIsSpectating(true);
-      });
+      storeBridge.updateIsSpectating(true);
     }
   };
 

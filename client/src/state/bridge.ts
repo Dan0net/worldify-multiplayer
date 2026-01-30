@@ -1,14 +1,41 @@
 /**
  * Bridge between game core and Zustand store
- * Updates store at controlled rate (5-10 Hz) to avoid React re-render spam
+ * 
+ * ALL non-React code must use this bridge for store access.
+ * React components should use the useGameStore hook directly.
+ * 
+ * This centralizes store access, enabling:
+ * - Rate limiting for high-frequency updates
+ * - Single point of control for state access patterns
+ * - Clean separation between React and imperative game code
  */
 
-import { useGameStore, ConnectionStatus, VoxelStats } from './store';
+import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles } from './store';
 import { BuildPieceType } from '@worldify/shared';
 
 class StoreBridge {
   private lastUpdateTime = 0;
   private readonly updateIntervalMs = 100; // 10 Hz
+
+  // ============== READS (game code reads state here) ==============
+
+  get isSpectating(): boolean {
+    return useGameStore.getState().isSpectating;
+  }
+
+  get selectedTool(): BuildPieceType {
+    return useGameStore.getState().selectedTool;
+  }
+
+  get voxelDebug(): VoxelDebugToggles {
+    return useGameStore.getState().voxelDebug;
+  }
+
+  get playerId(): number | null {
+    return useGameStore.getState().playerId;
+  }
+
+  // ============== WRITES ==============
 
   updateConnectionStatus(status: ConnectionStatus): void {
     useGameStore.getState().setConnectionStatus(status);
