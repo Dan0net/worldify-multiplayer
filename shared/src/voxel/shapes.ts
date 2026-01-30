@@ -13,6 +13,7 @@
  */
 
 import { BuildConfig, BuildShape, Size3, Vec3 } from './buildTypes.js';
+import { VOXEL_SCALE } from './constants.js';
 
 // ============== Primitive SDF Functions ==============
 
@@ -172,52 +173,60 @@ export function arcSweepSdf(p: Vec3, sdfValue: number, arcSweep: number): number
 
 /**
  * Calculate SDF for a build configuration.
- * @param p Position relative to build center, in LOCAL shape space (inverse-rotated)
- * @param config Build configuration
+ * @param p Position relative to build center, in LOCAL shape space (inverse-rotated), in WORLD units
+ * @param config Build configuration (size is in VOXEL units, will be scaled)
  * @returns Signed distance (negative = inside shape)
  */
 export function sdfFromConfig(p: Vec3, config: BuildConfig): number {
   let d: number;
 
+  // Scale size from voxel units to world units
+  const worldSize: Size3 = {
+    x: config.size.x * VOXEL_SCALE,
+    y: config.size.y * VOXEL_SCALE,
+    z: config.size.z * VOXEL_SCALE,
+  };
+
   // Calculate base shape SDF
   switch (config.shape) {
     case BuildShape.SPHERE:
       // Sphere uses X as radius
-      d = sdfSphere(p, config.size.x);
+      d = sdfSphere(p, worldSize.x);
       break;
 
     case BuildShape.CUBE:
-      d = sdfBox(p, config.size);
+      d = sdfBox(p, worldSize);
       break;
 
     case BuildShape.CYLINDER:
       // Cylinder: X = radius, Y = half-height
-      d = sdfCylinder(p, config.size.x, config.size.y);
+      d = sdfCylinder(p, worldSize.x, worldSize.y);
       break;
 
     case BuildShape.PRISM:
-      // Prism: X = width, Y = height, Z = depth
-      d = sdfPrism(p, config.size.x * 2, config.size.y * 2, config.size.z * 2);
+      // Prism: X = width, Y = height, Z = depth (sdfPrism takes full dimensions)
+      d = sdfPrism(p, worldSize.x * 2, worldSize.y * 2, worldSize.z * 2);
       break;
 
     default:
-      d = sdfBox(p, config.size);  // Fallback to box
+      d = sdfBox(p, worldSize);  // Fallback to box
   }
 
   // Apply hollow modifier if thickness is specified
   if (config.thickness !== undefined && config.thickness > 0) {
+    const worldThickness = config.thickness * VOXEL_SCALE;
     // For hollow shapes with open top/bottom, extend the hollow region
     if (config.shape === BuildShape.CYLINDER || config.shape === BuildShape.CUBE) {
-      const hollowD = hollowSdf(d, config.thickness);
+      const hollowD = hollowSdf(d, worldThickness);
       if (!config.closed) {
         // Open top/bottom: also cut out the vertical caps
-        const capCut = -(Math.abs(p.y) - config.size.y);
+        const capCut = -(Math.abs(p.y) - worldSize.y);
         d = Math.min(hollowD, capCut);
       } else {
         d = hollowD;
       }
     } else {
-      d = hollowSdf(d, config.thickness);
+      d = hollowSdf(d, worldThickness);
     }
   }
 

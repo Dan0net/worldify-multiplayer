@@ -81,7 +81,13 @@ export class GameCore {
 
       // Initialize build system
       this.builder.setMeshProvider(this.voxelIntegration);
+      this.builder.setVoxelWorld(this.voxelIntegration.world, scene);
       this.builder.addToScene(scene);
+      
+      // Handle collision rebuild after builds
+      this.builder.onBuildCommit = (modifiedChunks: string[]) => {
+        this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
+      };
     }
 
     // Request pointer lock on canvas click (only if not spectating)

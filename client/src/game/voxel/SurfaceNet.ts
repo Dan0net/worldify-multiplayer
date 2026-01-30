@@ -13,7 +13,7 @@
  * 3. Connect vertices with quads where edges cross the surface
  */
 
-import { CHUNK_SIZE, getMaterial, Chunk } from '@worldify/shared';
+import { CHUNK_SIZE, getMaterial, Chunk, voxelIndex, getWeight as getWeightFromPacked } from '@worldify/shared';
 
 // ============== Types ==============
 
@@ -124,25 +124,33 @@ function accumulateNormal(
  * 
  * @param chunk The chunk to mesh
  * @param neighbors Map of neighbor chunks for margin sampling
+ * @param useTemp If true, use tempData for preview rendering (defaults to false)
  * @returns SurfaceNet mesh output
  */
-export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>): SurfaceNetOutput {
+export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>, useTemp: boolean = false): SurfaceNetOutput {
   // Dimensions: CHUNK_SIZE + 2 to iterate up to and including CHUNK_SIZE
   // This allows us to generate vertices at the chunk boundary that stitch with neighbors
   const dims = [CHUNK_SIZE + 2, CHUNK_SIZE + 2, CHUNK_SIZE + 2];
   
+  // Get the data array to use (temp for preview if available, otherwise main)
+  const dataArray = (useTemp && chunk.tempData) ? chunk.tempData : chunk.data;
+  
   // Helper to get weight at local coordinates (with margin support)
   const getWeight = (lx: number, ly: number, lz: number): number => {
     if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
-      return chunk.getWeightAt(lx, ly, lz);
+      // Use local data array (could be temp or main)
+      const packed = dataArray[voxelIndex(lx, ly, lz)];
+      return getWeightFromPacked(packed);
     }
+    // For margin voxels, use neighbor's main data (not temp - neighbors aren't affected by preview)
     return chunk.getWeightWithMargin(lx, ly, lz, neighbors);
   };
 
   // Helper to get voxel at local coordinates (with margin support)
   const getVoxel = (lx: number, ly: number, lz: number): number => {
     if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
-      return chunk.getVoxel(lx, ly, lz);
+      // Use local data array (could be temp or main)
+      return dataArray[voxelIndex(lx, ly, lz)];
     }
     return chunk.getVoxelWithMargin(lx, ly, lz, neighbors);
   };

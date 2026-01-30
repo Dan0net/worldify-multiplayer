@@ -12,6 +12,7 @@ import {
   BuildPreset,
   BuildPresetAlign,
   MAX_BUILD_DISTANCE,
+  VOXEL_SCALE,
   getPreset,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
@@ -147,6 +148,8 @@ export class BuildMarker {
 
   /**
    * Calculate the build position based on alignment mode.
+   * Note: For BASE alignment, the wireframe is offset up within the group,
+   * so the group position stays at the hit point (which is the base).
    */
   private calculatePosition(
     preset: BuildPreset,
@@ -162,14 +165,14 @@ export class BuildMarker {
         break;
 
       case BuildPresetAlign.BASE:
-        // Offset up by half height
-        pos.y += (size.y / 2) * 0.25; // Scale by voxel size (0.25m)
+        // Base at hit point - wireframe is offset up within the group
+        // Group stays at hit point so the base (bottom) of marker aligns with surface
         break;
 
       case BuildPresetAlign.SURFACE:
-        // Offset along normal by half size
+        // Offset along normal by half size (average half-extent)
         const avgSize = (size.x + size.y + size.z) / 3;
-        pos.addScaledVector(hitNormal, (avgSize / 2) * 0.25);
+        pos.addScaledVector(hitNormal, avgSize * VOXEL_SCALE);
         break;
     }
 
@@ -194,31 +197,35 @@ export class BuildMarker {
     const size = preset.config.size;
     const shape = preset.config.shape;
 
-    // Scale from voxel units to world units (0.25m per voxel)
-    const scaleX = size.x * 0.25;
-    const scaleY = size.y * 0.25;
-    const scaleZ = size.z * 0.25;
+    // Size values are half-extents in voxel units
+    // Convert to world units: size * VOXEL_SCALE for radius/half-extent
+    // For full dimensions (box width/height), use size * 2 * VOXEL_SCALE
+    const halfX = size.x * VOXEL_SCALE;
+    const halfY = size.y * VOXEL_SCALE;
+    const halfZ = size.z * VOXEL_SCALE;
 
     let geometry: THREE.BufferGeometry;
 
     switch (shape) {
       case BuildShape.SPHERE:
-        // Use icosahedron for sphere wireframe
-        geometry = new THREE.IcosahedronGeometry(scaleX, 1);
+        // Sphere radius is size.x
+        geometry = new THREE.IcosahedronGeometry(halfX, 1);
         break;
 
       case BuildShape.CYLINDER:
-        geometry = new THREE.CylinderGeometry(scaleX, scaleX, scaleY, 16);
+        // Cylinder: radius = size.x, half-height = size.y
+        geometry = new THREE.CylinderGeometry(halfX, halfX, halfY * 2, 16);
         break;
 
       case BuildShape.PRISM:
-        // Triangular prism using custom geometry
-        geometry = this.createPrismGeometry(scaleX, scaleY, scaleZ);
+        // Triangular prism - full dimensions
+        geometry = this.createPrismGeometry(halfX * 2, halfY * 2, halfZ * 2);
         break;
 
       case BuildShape.CUBE:
       default:
-        geometry = new THREE.BoxGeometry(scaleX, scaleY, scaleZ);
+        // Box uses full dimensions
+        geometry = new THREE.BoxGeometry(halfX * 2, halfY * 2, halfZ * 2);
         break;
     }
 
@@ -238,6 +245,12 @@ export class BuildMarker {
     // Apply rotation (Y-axis only, 45° steps)
     const rotationRadians = (rotationSteps * 45 * Math.PI) / 180;
     this.wireframe.rotation.y = rotationRadians;
+
+    // For BASE alignment, offset the wireframe up so its bottom is at the group origin
+    // This way the marker's base aligns with the hit point
+    if (preset.align === BuildPresetAlign.BASE) {
+      this.wireframe.position.y = halfY;
+    }
 
     this.group.add(this.wireframe);
   }
@@ -313,12 +326,23 @@ export class BuildMarker {
   }
 
   /**
-   * Get the current hit position (world coordinates).
+   * Get the build operation center position (world coordinates).
+   * For BASE alignment, this is offset up from the hit point by half the shape height.
    * Returns null if no valid target.
    */
   getTargetPosition(): THREE.Vector3 | null {
     if (!this.isVisible) return null;
-    return this.group.position.clone();
+
+    const preset = getPreset(this.currentPresetId);
+    const pos = this.group.position.clone();
+
+    // For BASE alignment, the group is at the hit point (base of the shape)
+    // but the build operation needs the center, so offset up by half-height
+    if (preset.align === BuildPresetAlign.BASE) {
+      pos.y += preset.config.size.y * VOXEL_SCALE;
+    }
+
+    return pos;
   }
 
   /**

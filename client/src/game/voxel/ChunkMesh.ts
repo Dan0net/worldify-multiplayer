@@ -11,8 +11,14 @@ import { getMaterialColor, voxelMaterial } from './VoxelMaterials.js';
  * Container for a chunk's mesh and related data.
  */
 export class ChunkMesh {
-  /** The Three.js mesh */
+  /** The Three.js mesh (used for collision) */
   mesh: THREE.Mesh | null = null;
+  
+  /** Preview mesh for build preview (visual only, not for collision) */
+  previewMesh: THREE.Mesh | null = null;
+  
+  /** Whether preview mode is active (hides main mesh, shows preview) */
+  private previewActive: boolean = false;
   
   /** The chunk this mesh represents */
   readonly chunk: Chunk;
@@ -95,10 +101,105 @@ export class ChunkMesh {
   }
 
   /**
+   * Update the preview mesh from SurfaceNet output (temp data).
+   * The preview mesh is visual only - collision uses the main mesh.
+   * @param output SurfaceNet mesh data from temp voxel data
+   * @param scene Scene to add preview mesh to
+   */
+  updatePreviewMesh(output: SurfaceNetOutput, scene: THREE.Scene): void {
+    // Dispose old preview mesh
+    this.disposePreviewMesh(scene);
+
+    // Don't create mesh for empty geometry
+    if (output.vertexCount === 0 || output.triangleCount === 0) {
+      return;
+    }
+
+    // Create geometry (same as updateMesh but for preview)
+    const geometry = new THREE.BufferGeometry();
+
+    const scaledPositions = new Float32Array(output.positions.length);
+    for (let i = 0; i < output.positions.length; i++) {
+      scaledPositions[i] = output.positions[i] * VOXEL_SCALE;
+    }
+    geometry.setAttribute('position', new THREE.BufferAttribute(scaledPositions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(output.normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(output.indices, 1));
+
+    // Vertex colors with slight tint to indicate preview
+    const colors = new Float32Array(output.vertexCount * 3);
+    for (let i = 0; i < output.vertexCount; i++) {
+      const materialId = output.materials[i];
+      const color = getMaterialColor(materialId);
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+
+    // Create preview mesh with same material as main mesh
+    this.previewMesh = new THREE.Mesh(geometry, voxelMaterial);
+    
+    const worldPos = this.chunk.getWorldPosition();
+    this.previewMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+
+    this.previewMesh.userData.chunkKey = this.chunk.key;
+    this.previewMesh.userData.isPreview = true;
+    this.previewMesh.castShadow = true;
+    this.previewMesh.receiveShadow = true;
+
+    scene.add(this.previewMesh);
+  }
+
+  /**
+   * Dispose of the preview mesh only.
+   */
+  disposePreviewMesh(scene?: THREE.Scene): void {
+    if (this.previewMesh) {
+      if (scene) {
+        scene.remove(this.previewMesh);
+      }
+      this.previewMesh.geometry.dispose();
+      this.previewMesh = null;
+    }
+  }
+
+  /**
+   * Set preview mode active. When active, main mesh is hidden.
+   */
+  setPreviewActive(active: boolean, scene?: THREE.Scene): void {
+    if (this.previewActive === active) return;
+    this.previewActive = active;
+
+    if (this.mesh) {
+      this.mesh.visible = !active;
+    }
+    
+    // If deactivating, clean up preview mesh
+    if (!active && this.previewMesh) {
+      this.disposePreviewMesh(scene);
+    }
+  }
+
+  /**
+   * Check if preview mode is active.
+   */
+  isPreviewActive(): boolean {
+    return this.previewActive;
+  }
+
+  /**
    * Dispose of the mesh and clean up resources.
    * @param scene Optional scene to remove mesh from
    */
   disposeMesh(scene?: THREE.Scene): void {
+    // Also dispose preview mesh
+    this.disposePreviewMesh(scene);
+    this.previewActive = false;
+    
     if (this.mesh) {
       // Remove from scene
       if (scene) {

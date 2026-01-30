@@ -141,6 +141,32 @@ export class VoxelIntegration {
   }
 
   /**
+   * Rebuild collision for specific chunks after voxel modification.
+   * Call this after committing a build operation.
+   * 
+   * @param chunkKeys Array of chunk keys to rebuild collision for
+   */
+  rebuildCollisionForChunks(chunkKeys: string[]): void {
+    for (const key of chunkKeys) {
+      const chunkMesh = this.world.meshes.get(key);
+      if (!chunkMesh || !chunkMesh.hasGeometry()) continue;
+
+      const mesh = chunkMesh.getMesh();
+      if (!mesh) continue;
+
+      // Remove old collider if exists
+      if (this.colliderBuiltChunks.has(key)) {
+        this.collision.removeCollider(key);
+        this.colliderBuiltChunks.delete(key);
+      }
+
+      // Add new collider with updated geometry
+      this.collision.addCollider(key, mesh);
+      this.colliderBuiltChunks.add(key);
+    }
+  }
+
+  /**
    * Get the spawn position for a player.
    * Returns a position above the terrain at the origin.
    * 
