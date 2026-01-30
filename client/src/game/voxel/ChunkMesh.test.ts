@@ -4,7 +4,7 @@
  */
 
 import * as THREE from 'three';
-import { meshChunk } from './SurfaceNet.js';
+import { meshChunk } from './ChunkMesher.js';
 import { Chunk } from '@worldify/shared';
 import { ChunkMesh, createMeshFromSurfaceNet, disposeMesh } from './ChunkMesh.js';
 import { getMaterialColor, MATERIAL_COLORS, voxelMaterial } from './VoxelMaterials.js';

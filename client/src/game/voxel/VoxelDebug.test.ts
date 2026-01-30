@@ -27,7 +27,7 @@ import {
 } from './VoxelDebug.js';
 import { Chunk } from '@worldify/shared';
 import { ChunkMesh } from './ChunkMesh.js';
-import { meshChunk } from './SurfaceNet.js';
+import { meshChunk } from './ChunkMesher.js';
 import { CHUNK_WORLD_SIZE } from '@worldify/shared';
 
 // Simple test runner

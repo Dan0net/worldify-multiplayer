@@ -16,7 +16,7 @@ import {
   getAffectedChunks,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
-import { meshChunk } from '../voxel/SurfaceNet.js';
+import { meshChunk } from '../voxel/ChunkMesher.js';
 
 /**
  * BuildPreview manages non-destructive voxel preview rendering.

@@ -11,9 +11,12 @@
  * 1. For each cell (2×2×2 voxels), check if surface crosses (sign change in weights)
  * 2. If crossing, place a vertex at the weighted average of edge crossings
  * 3. Connect vertices with quads where edges cross the surface
+ * 
+ * This is a PURE function - it takes voxel data and produces mesh data.
+ * It has no knowledge of Chunks or any game-specific concepts.
  */
 
-import { CHUNK_SIZE, getMaterial, Chunk, voxelIndex, getWeight as getWeightFromPacked } from '@worldify/shared';
+import { getMaterial } from '@worldify/shared';
 
 // ============== Types ==============
 
@@ -30,6 +33,19 @@ export interface SurfaceNetOutput {
   vertexCount: number;
   /** Number of triangles */
   triangleCount: number;
+}
+
+/**
+ * Input data for surface net meshing.
+ * Provides access to voxel weights and packed voxel data.
+ */
+export interface SurfaceNetInput {
+  /** Dimensions of the voxel grid [x, y, z] */
+  dims: [number, number, number];
+  /** Get weight at coordinates (negative = inside, positive = outside) */
+  getWeight: (x: number, y: number, z: number) => number;
+  /** Get packed voxel data at coordinates (for material lookup) */
+  getVoxel: (x: number, y: number, z: number) => number;
 }
 
 // ============== Pre-computed Tables ==============
@@ -117,43 +133,17 @@ function accumulateNormal(
   normalAccum[vertexIndex][2] += normal[2];
 }
 
-
-
 /**
- * Generate a mesh from chunk voxel data using SurfaceNets algorithm.
+ * Generate a mesh from voxel data using SurfaceNets algorithm.
  * 
- * @param chunk The chunk to mesh
- * @param neighbors Map of neighbor chunks for margin sampling
- * @param useTemp If true, use tempData for preview rendering (defaults to false)
+ * This is a pure function - give it voxel accessors and dimensions,
+ * get back mesh geometry. No game-specific concepts.
+ * 
+ * @param input Voxel data accessors and dimensions
  * @returns SurfaceNet mesh output
  */
-export function meshChunk(chunk: Chunk, neighbors: Map<string, Chunk>, useTemp: boolean = false): SurfaceNetOutput {
-  // Dimensions: CHUNK_SIZE + 2 to iterate up to and including CHUNK_SIZE
-  // This allows us to generate vertices at the chunk boundary that stitch with neighbors
-  const dims = [CHUNK_SIZE + 2, CHUNK_SIZE + 2, CHUNK_SIZE + 2];
-  
-  // Get the data array to use (temp for preview if available, otherwise main)
-  const dataArray = (useTemp && chunk.tempData) ? chunk.tempData : chunk.data;
-  
-  // Helper to get weight at local coordinates (with margin support)
-  const getWeight = (lx: number, ly: number, lz: number): number => {
-    if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
-      // Use local data array (could be temp or main)
-      const packed = dataArray[voxelIndex(lx, ly, lz)];
-      return getWeightFromPacked(packed);
-    }
-    // For margin voxels, use neighbor's main data (not temp - neighbors aren't affected by preview)
-    return chunk.getWeightWithMargin(lx, ly, lz, neighbors);
-  };
-
-  // Helper to get voxel at local coordinates (with margin support)
-  const getVoxel = (lx: number, ly: number, lz: number): number => {
-    if (lx >= 0 && lx < CHUNK_SIZE && ly >= 0 && ly < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
-      // Use local data array (could be temp or main)
-      return dataArray[voxelIndex(lx, ly, lz)];
-    }
-    return chunk.getVoxelWithMargin(lx, ly, lz, neighbors);
-  };
+export function meshVoxels(input: SurfaceNetInput): SurfaceNetOutput {
+  const { dims, getWeight, getVoxel } = input;
 
   // Vertex buffer - stores which vertex is at each grid position
   let buffer = new Int32Array(4096);

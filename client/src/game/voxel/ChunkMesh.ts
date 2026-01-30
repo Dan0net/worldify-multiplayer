@@ -7,6 +7,59 @@ import { VOXEL_SCALE, Chunk } from '@worldify/shared';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import { getMaterialColor, voxelMaterial } from './VoxelMaterials.js';
 
+// ============== Helper Functions ==============
+
+/**
+ * Create a BufferGeometry from SurfaceNet output.
+ * This is the single source of truth for geometry creation.
+ */
+function createGeometryFromOutput(output: SurfaceNetOutput): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+
+  // Scale positions from voxel units to world units
+  const scaledPositions = new Float32Array(output.positions.length);
+  for (let i = 0; i < output.positions.length; i++) {
+    scaledPositions[i] = output.positions[i] * VOXEL_SCALE;
+  }
+  geometry.setAttribute('position', new THREE.BufferAttribute(scaledPositions, 3));
+
+  // Normals
+  geometry.setAttribute('normal', new THREE.BufferAttribute(output.normals, 3));
+
+  // Indices
+  geometry.setIndex(new THREE.BufferAttribute(output.indices, 1));
+
+  // Vertex colors from materials
+  const colors = new Float32Array(output.vertexCount * 3);
+  for (let i = 0; i < output.vertexCount; i++) {
+    const materialId = output.materials[i];
+    const color = getMaterialColor(materialId);
+    colors[i * 3] = color.r;
+    colors[i * 3 + 1] = color.g;
+    colors[i * 3 + 2] = color.b;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  // Compute bounds for frustum culling
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+
+  return geometry;
+}
+
+/**
+ * Create a mesh from geometry with standard settings.
+ */
+function createMesh(geometry: THREE.BufferGeometry, chunkKey: string): THREE.Mesh {
+  const mesh = new THREE.Mesh(geometry, voxelMaterial);
+  mesh.userData.chunkKey = chunkKey;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// ============== ChunkMesh Class ==============
+
 /**
  * Container for a chunk's mesh and related data.
  */
@@ -46,51 +99,14 @@ export class ChunkMesh {
       return;
     }
 
-    // Create geometry
-    const geometry = new THREE.BufferGeometry();
-
-    // Set position attribute (scale from voxel units to world units)
-    const scaledPositions = new Float32Array(output.positions.length);
-    for (let i = 0; i < output.positions.length; i++) {
-      scaledPositions[i] = output.positions[i] * VOXEL_SCALE;
-    }
-    geometry.setAttribute('position', new THREE.BufferAttribute(scaledPositions, 3));
-
-    // Set normal attribute
-    geometry.setAttribute('normal', new THREE.BufferAttribute(output.normals, 3));
-
-    // Set index attribute
-    geometry.setIndex(new THREE.BufferAttribute(output.indices, 1));
-
-    // Create vertex colors from materials
-    const colors = new Float32Array(output.vertexCount * 3);
-    for (let i = 0; i < output.vertexCount; i++) {
-      const materialId = output.materials[i];
-      const color = getMaterialColor(materialId);
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
-    }
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-    // Compute bounding box/sphere for frustum culling
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
-
-    // Create mesh
-    this.mesh = new THREE.Mesh(geometry, voxelMaterial);
+    // Create geometry and mesh using helpers
+    const geometry = createGeometryFromOutput(output);
+    this.mesh = createMesh(geometry, this.chunk.key);
     
     // Position mesh at chunk world position
     const worldPos = this.chunk.getWorldPosition();
     this.mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-
-    // Set user data for identification
-    this.mesh.userData.chunkKey = this.chunk.key;
     this.mesh.userData.chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
-
-    // Enable shadow casting/receiving
-    this.mesh.castShadow = true;
-    this.mesh.receiveShadow = true;
 
     this.disposed = false;
 
@@ -115,41 +131,13 @@ export class ChunkMesh {
       return;
     }
 
-    // Create geometry (same as updateMesh but for preview)
-    const geometry = new THREE.BufferGeometry();
-
-    const scaledPositions = new Float32Array(output.positions.length);
-    for (let i = 0; i < output.positions.length; i++) {
-      scaledPositions[i] = output.positions[i] * VOXEL_SCALE;
-    }
-    geometry.setAttribute('position', new THREE.BufferAttribute(scaledPositions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(output.normals, 3));
-    geometry.setIndex(new THREE.BufferAttribute(output.indices, 1));
-
-    // Vertex colors with slight tint to indicate preview
-    const colors = new Float32Array(output.vertexCount * 3);
-    for (let i = 0; i < output.vertexCount; i++) {
-      const materialId = output.materials[i];
-      const color = getMaterialColor(materialId);
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
-    }
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
-
-    // Create preview mesh with same material as main mesh
-    this.previewMesh = new THREE.Mesh(geometry, voxelMaterial);
+    // Create geometry and mesh using helpers
+    const geometry = createGeometryFromOutput(output);
+    this.previewMesh = createMesh(geometry, this.chunk.key);
+    this.previewMesh.userData.isPreview = true;
     
     const worldPos = this.chunk.getWorldPosition();
     this.previewMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-
-    this.previewMesh.userData.chunkKey = this.chunk.key;
-    this.previewMesh.userData.isPreview = true;
-    this.previewMesh.castShadow = true;
-    this.previewMesh.receiveShadow = true;
 
     scene.add(this.previewMesh);
   }
@@ -261,39 +249,11 @@ export function createMeshFromSurfaceNet(output: SurfaceNetOutput, chunk: Chunk)
     return null;
   }
 
-  const geometry = new THREE.BufferGeometry();
-
-  // Scale positions from voxel units to world units
-  const scaledPositions = new Float32Array(output.positions.length);
-  for (let i = 0; i < output.positions.length; i++) {
-    scaledPositions[i] = output.positions[i] * VOXEL_SCALE;
-  }
-  geometry.setAttribute('position', new THREE.BufferAttribute(scaledPositions, 3));
-  geometry.setAttribute('normal', new THREE.BufferAttribute(output.normals, 3));
-  geometry.setIndex(new THREE.BufferAttribute(output.indices, 1));
-
-  // Create vertex colors
-  const colors = new Float32Array(output.vertexCount * 3);
-  for (let i = 0; i < output.vertexCount; i++) {
-    const materialId = output.materials[i];
-    const color = getMaterialColor(materialId);
-    colors[i * 3] = color.r;
-    colors[i * 3 + 1] = color.g;
-    colors[i * 3 + 2] = color.b;
-  }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-
-  const mesh = new THREE.Mesh(geometry, voxelMaterial);
+  const geometry = createGeometryFromOutput(output);
+  const mesh = createMesh(geometry, chunk.key);
   
   const worldPos = chunk.getWorldPosition();
   mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-
-  mesh.userData.chunkKey = chunk.key;
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
 
   return mesh;
 }

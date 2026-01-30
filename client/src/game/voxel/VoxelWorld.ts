@@ -11,7 +11,7 @@ import {
   TerrainGenerator,
   Chunk,
 } from '@worldify/shared';
-import { meshChunk } from './SurfaceNet.js';
+import { meshChunk } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
 
 /**
