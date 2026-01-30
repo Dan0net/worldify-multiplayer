@@ -25,6 +25,7 @@ import { RoomSnapshot, BuildCommit } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { GameLoop } from './GameLoop';
 import { PlayerManager } from './PlayerManager';
+import { Builder } from './build/Builder';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -36,9 +37,13 @@ export class GameCore {
   // Voxel terrain system
   private voxelIntegration!: VoxelIntegration;
 
+  // Build system
+  private builder: Builder;
+
   constructor() {
     this.gameLoop = new GameLoop();
     this.playerManager = new PlayerManager();
+    this.builder = new Builder();
   }
 
   async init(): Promise<void> {
@@ -73,6 +78,10 @@ export class GameCore {
       // Set player spawn position above terrain
       const spawnPos = this.voxelIntegration.getSpawnPosition(0, 0);
       this.playerManager.setSpawnPosition(spawnPos);
+
+      // Initialize build system
+      this.builder.setMeshProvider(this.voxelIntegration);
+      this.builder.addToScene(scene);
     }
 
     // Request pointer lock on canvas click (only if not spectating)
@@ -159,6 +168,9 @@ export class GameCore {
 
       if (camera) {
         updateCameraFromPlayer(camera, localPlayer);
+        
+        // Update build marker (raycast from camera)
+        this.builder.update(camera);
       }
     }
 
@@ -185,6 +197,9 @@ export class GameCore {
     // Stop loops
     this.gameLoop.stop();
     this.playerManager.dispose();
+
+    // Clean up build system
+    this.builder.dispose();
 
     // Clean up voxel terrain
     if (this.voxelIntegration) {

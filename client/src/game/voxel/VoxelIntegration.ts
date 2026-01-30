@@ -199,6 +199,21 @@ export class VoxelIntegration {
   }
 
   /**
+   * Get all collision meshes for raycasting.
+   * Returns an array of Three.js meshes that can be used with Raycaster.
+   */
+  getCollisionMeshes(): THREE.Object3D[] {
+    const meshes: THREE.Object3D[] = [];
+    for (const chunkMesh of this.world.meshes.values()) {
+      const mesh = chunkMesh.getMesh();
+      if (mesh) {
+        meshes.push(mesh);
+      }
+    }
+    return meshes;
+  }
+
+  /**
    * Get statistics about the voxel system.
    */
   getStats() {
