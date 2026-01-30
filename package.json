@@ -11,6 +11,8 @@
     "dev": "concurrently -n shared,server,client -c yellow,blue,green \"npm run dev -w shared\" \"npm run dev -w server\" \"npm run dev -w client\"",
     "dev:kill": "lsof -ti :8080 | xargs -r kill -9; lsof -ti :5173 | xargs -r kill -9; pkill -f 'npm run dev' || true",
     "build": "npm run build -w shared && npm run build -w server && npm run build -w client",
+    "test": "vitest",
+    "test:run": "vitest run",
     "lint": "eslint . --ext .ts,.tsx",
     "clean": "rimraf client/dist server/dist shared/dist"
   },
@@ -19,6 +21,7 @@
     "concurrently": "^8.2.2",
     "eslint": "^8.55.0",
     "rimraf": "^5.0.5",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.18"
   }
 }
