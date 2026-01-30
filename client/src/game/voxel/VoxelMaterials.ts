@@ -79,3 +79,12 @@ export const wireframeMaterial = new THREE.MeshBasicMaterial({
   transparent: true,
   opacity: 0.3,
 });
+
+/**
+ * Set wireframe mode on the shared voxel material.
+ * This affects all chunk meshes that use voxelMaterial.
+ * @param enabled Whether to enable wireframe rendering
+ */
+export function setVoxelWireframe(enabled: boolean): void {
+  voxelMaterial.wireframe = enabled;
+}

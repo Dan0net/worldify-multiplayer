@@ -39,6 +39,10 @@ export function DebugPanel() {
           e.preventDefault();
           toggleVoxelDebug('showChunkCoords');
           break;
+        case 'F5':
+          e.preventDefault();
+          toggleVoxelDebug('showWireframe');
+          break;
       }
     };
     
@@ -65,7 +69,7 @@ export function DebugPanel() {
       
       {/* Voxel Debug Toggles */}
       <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
-        <div className="mb-1 text-green-500">Debug (F1-F4):</div>
+        <div className="mb-1 text-green-500">Debug (F1-F5):</div>
         <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
           <input
             type="checkbox"
@@ -101,6 +105,15 @@ export function DebugPanel() {
             className="accent-yellow-400"
           />
           <span>F4 Coords</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+          <input
+            type="checkbox"
+            checked={voxelDebug.showWireframe}
+            onChange={() => toggleVoxelDebug('showWireframe')}
+            className="accent-yellow-400"
+          />
+          <span>F5 Wireframe</span>
         </label>
       </div>
     </div>

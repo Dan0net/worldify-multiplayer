@@ -9,6 +9,7 @@ export interface VoxelDebugToggles {
   showEmptyChunks: boolean;
   showCollisionMesh: boolean;
   showChunkCoords: boolean;
+  showWireframe: boolean;
 }
 
 /** Voxel world statistics */
@@ -96,6 +97,7 @@ export const useGameStore = create<GameState>((set) => ({
     showEmptyChunks: false,
     showCollisionMesh: false,
     showChunkCoords: false,
+    showWireframe: false,
   },
   voxelStats: {
     chunksLoaded: 0,

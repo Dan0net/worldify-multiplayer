@@ -35,6 +35,7 @@ export interface VoxelDebugState {
   showEmptyChunks: boolean;
   showCollisionMesh: boolean;
   showChunkCoords: boolean;
+  showWireframe: boolean;
 }
 
 /**
@@ -45,6 +46,7 @@ export const DEFAULT_DEBUG_STATE: VoxelDebugState = {
   showEmptyChunks: false,
   showCollisionMesh: false,
   showChunkCoords: false,
+  showWireframe: false,
 };
 
 // ============== Helper Creation Functions ==============

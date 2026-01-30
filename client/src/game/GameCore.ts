@@ -22,6 +22,7 @@ import { controls } from './player/controls';
 import { onSnapshot } from '../net/decode';
 import { RoomSnapshot } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
+import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
 import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
@@ -127,7 +128,11 @@ export class GameCore {
 
     // Sync voxel debug state from store to VoxelDebugManager
     if (this.voxelIntegration) {
-      this.voxelIntegration.debug.setState(storeBridge.voxelDebug);
+      const debugState = storeBridge.voxelDebug;
+      this.voxelIntegration.debug.setState(debugState);
+      
+      // Sync wireframe mode to shared material
+      setVoxelWireframe(debugState.showWireframe);
       
       // Update voxel stats in store
       const stats = this.voxelIntegration.getStats();
