@@ -22,7 +22,7 @@ import {
   voxelIndex, 
   chunkKey,
 } from './voxelData.js';
-import { Chunk } from './Chunk.js';
+import { ChunkData } from './ChunkData.js';
 
 // ============== Apply Functions ==============
 // These modify a single voxel based on the build mode
@@ -191,17 +191,17 @@ export function getAffectedChunks(operation: BuildOperation): string[] {
 // ============== Core Drawing Function ==============
 
 /**
- * Draw a build operation to a single chunk.
+ * Draw a build operation to a single chunk's data array.
  * 
  * @param chunk The chunk to modify
  * @param operation The build operation
- * @param useTemp If true, write to tempData instead of data (for preview)
+ * @param targetData Optional data array to write to (defaults to chunk.data)
  * @returns True if any voxels were changed
  */
 export function drawToChunk(
-  chunk: Chunk,
+  chunk: ChunkData,
   operation: BuildOperation,
-  useTemp: boolean = false
+  targetData: Uint16Array = chunk.data
 ): boolean {
   const { center, rotation, config } = operation;
   
@@ -216,9 +216,6 @@ export function drawToChunk(
   
   // Weight multiplier for subtract mode
   const weightMult = config.mode === BuildMode.SUBTRACT ? -1 : 1;
-  
-  // Target data array
-  const targetData = useTemp && chunk.tempData ? chunk.tempData : chunk.data;
   
   let anyChanged = false;
   
@@ -264,25 +261,19 @@ export function drawToChunk(
     }
   }
   
-  if (anyChanged && !useTemp) {
-    chunk.dirty = true;
-  }
-  
   return anyChanged;
 }
 
 /**
  * Draw a build operation to multiple chunks.
  * 
- * @param chunks Map of chunk key to Chunk
+ * @param chunks Map of chunk key to ChunkData
  * @param operation The build operation
- * @param useTemp If true, write to tempData for preview
  * @returns Array of chunk keys that were modified
  */
 export function drawToChunks(
-  chunks: Map<string, Chunk>,
-  operation: BuildOperation,
-  useTemp: boolean = false
+  chunks: Map<string, ChunkData>,
+  operation: BuildOperation
 ): string[] {
   const affectedKeys = getAffectedChunks(operation);
   const modifiedKeys: string[] = [];
@@ -290,12 +281,7 @@ export function drawToChunks(
   for (const key of affectedKeys) {
     const chunk = chunks.get(key);
     if (chunk) {
-      // Initialize temp data if needed for preview
-      if (useTemp && !chunk.tempData) {
-        chunk.initTempData();
-      }
-      
-      const changed = drawToChunk(chunk, operation, useTemp);
+      const changed = drawToChunk(chunk, operation);
       if (changed) {
         modifiedKeys.push(key);
       }

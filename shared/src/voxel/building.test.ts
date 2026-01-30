@@ -3,9 +3,9 @@
  * Run with: npx tsx shared/src/voxel/building.test.ts
  */
 
-import { CHUNK_SIZE, CHUNK_WORLD_SIZE } from './constants.js';
+import { CHUNK_SIZE, CHUNK_WORLD_SIZE, VOXELS_PER_CHUNK } from './constants.js';
 import { packVoxel, unpackVoxel, voxelIndex } from './voxelData.js';
-import { Chunk } from './Chunk.js';
+import { ChunkData } from './ChunkData.js';
 
 // buildTypes tests
 import {
@@ -298,7 +298,7 @@ test('getAffectedChunks returns at least one chunk', () => {
 
 test('drawToChunk modifies chunk data with ADD', () => {
   // Create empty chunk at origin
-  const chunk = new Chunk(0, 0, 0);
+  const chunk = new ChunkData(0, 0, 0);
   chunk.fill(-0.5, 0, 16);  // All empty
   
   // Build a small sphere at the center of the chunk
@@ -318,19 +318,22 @@ test('drawToChunk modifies chunk data with ADD', () => {
     }
   );
   
-  const changed = drawToChunk(chunk, operation, false);
+  const changed = drawToChunk(chunk, operation);
   assertTrue(changed, 'chunk should be modified');
-  assertTrue(chunk.dirty, 'chunk should be marked dirty');
   
   // Check that the center voxel is now solid
   const centerVoxel = CHUNK_SIZE / 2;
-  const weight = chunk.getWeightAt(centerVoxel, centerVoxel, centerVoxel);
-  assertTrue(weight > 0, `center voxel should be solid, got ${weight}`);
+  const centerWeight = chunk.getWeightAt(centerVoxel, centerVoxel, centerVoxel);
+  assertTrue(centerWeight > 0, `center voxel should be solid, got ${centerWeight}`);
 });
 
-test('drawToChunk with useTemp writes to tempData', () => {
-  const chunk = new Chunk(0, 0, 0);
-  chunk.fill(-0.5, 0, 16);
+test('drawToChunk can write to custom target array', () => {
+  const chunk = new ChunkData(0, 0, 0);
+  chunk.fill(-0.5, 0, 16);  // All empty
+  
+  // Create a separate target array (simulating client-side preview)
+  const targetData = new Uint16Array(VOXELS_PER_CHUNK);
+  targetData.set(chunk.data);
   
   const centerWorld = {
     x: CHUNK_WORLD_SIZE / 2,
@@ -348,46 +351,19 @@ test('drawToChunk with useTemp writes to tempData', () => {
     }
   );
   
-  // Draw with useTemp = true
-  chunk.initTempData();
-  const changed = drawToChunk(chunk, operation, true);
-  assertTrue(changed, 'should modify temp data');
+  // Draw to custom target array
+  const changed = drawToChunk(chunk, operation, targetData);
+  assertTrue(changed, 'should modify target data');
   
   // Main data should still be empty
   const centerVoxel = CHUNK_SIZE / 2;
   const mainWeight = chunk.getWeightAt(centerVoxel, centerVoxel, centerVoxel);
   assertApproxEqual(mainWeight, -0.5, 0.1, 'main data unchanged');
   
-  // Temp data should have the build
-  assertTrue(chunk.tempData !== null, 'tempData exists');
-  const tempIdx = voxelIndex(centerVoxel, centerVoxel, centerVoxel);
-  const tempVoxel = unpackVoxel(chunk.tempData![tempIdx]);
-  assertTrue(tempVoxel.weight > 0, 'temp voxel should be solid');
-});
-
-test('Chunk temp data management', () => {
-  const chunk = new Chunk(0, 0, 0);
-  chunk.fill(0.5, 5, 16);  // Solid
-  
-  // Init temp
-  chunk.initTempData();
-  assertTrue(chunk.hasTempData(), 'should have temp data');
-  
-  // Copy to temp
-  chunk.copyToTemp();
-  assertEqual(chunk.tempData![0], chunk.data[0], 'temp should match data');
-  
-  // Modify temp
-  chunk.tempData![0] = packVoxel(-0.5, 0, 16);
-  
-  // Copy from temp (commit)
-  chunk.copyFromTemp();
-  const v = unpackVoxel(chunk.data[0]);
-  assertApproxEqual(v.weight, -0.5, 0.1);
-  
-  // Discard
-  chunk.discardTemp();
-  assertFalse(chunk.hasTempData(), 'temp should be discarded');
+  // Target data should have the build
+  const targetIdx = voxelIndex(centerVoxel, centerVoxel, centerVoxel);
+  const targetVoxel = unpackVoxel(targetData[targetIdx]);
+  assertTrue(targetVoxel.weight > 0, 'target voxel should be solid');
 });
 
 // ============== Summary ==============

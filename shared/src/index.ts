@@ -14,7 +14,7 @@ export * from './util/movement.js';
 // Voxel terrain
 export * from './voxel/constants.js';
 export * from './voxel/voxelData.js';
-export * from './voxel/Chunk.js';
+export * from './voxel/ChunkData.js';
 export * from './voxel/buildTypes.js';
 export * from './voxel/buildPresets.js';
 export * from './voxel/shapes.js';
@@ -27,5 +27,5 @@ export * from './terrain/index.js';
 export type { MovementInput, PlayerPosition } from './protocol/movement.js';
 export type { PlayerSnapshot, RoomSnapshot } from './protocol/snapshot.js';
 export type { UnpackedVoxel, ChunkCoord, VoxelCoord, WorldCoord } from './voxel/voxelData.js';
-export type { ChunkData } from './voxel/Chunk.js';
+export type { SerializedChunkData } from './voxel/ChunkData.js';
 export type { BuildConfig, BuildOperation, Vec3, Quat, Size3, VoxelBBox } from './voxel/buildTypes.js';

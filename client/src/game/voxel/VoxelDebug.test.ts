@@ -25,7 +25,7 @@ import {
   COLOR_EMPTY,
   COLOR_COLLISION,
 } from './VoxelDebug.js';
-import { Chunk } from '@worldify/shared';
+import { Chunk } from './Chunk.js';
 import { ChunkMesh } from './ChunkMesh.js';
 import { meshChunk } from './ChunkMesher.js';
 import { CHUNK_WORLD_SIZE } from '@worldify/shared';

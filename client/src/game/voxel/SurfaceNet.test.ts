@@ -5,7 +5,8 @@
 
 import { meshChunk } from './ChunkMesher.js';
 import { isEmptyMesh, SurfaceNetOutput } from './SurfaceNet.js';
-import { CHUNK_SIZE, packVoxel, Chunk } from '@worldify/shared';
+import { Chunk } from './Chunk.js';
+import { CHUNK_SIZE, packVoxel } from '@worldify/shared';
 
 // Simple test runner
 let passed = 0;

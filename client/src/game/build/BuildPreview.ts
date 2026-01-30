@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import {
   BuildOperation,
   BuildConfig,
-  drawToChunks,
+  drawToChunk,
   getAffectedChunks,
   yRotationQuat,
   parseChunkKey,
@@ -82,20 +82,26 @@ export class BuildPreview {
 
     // Update active set
     const newActiveChunks = new Set<string>();
+    const modifiedKeys: string[] = [];
 
-    // For each affected chunk, update tempData and remesh preview
+    // For each affected chunk, update tempData and draw operation
     for (const key of affectedKeys) {
       const chunk = this.world.chunks.get(key);
       if (!chunk) continue;
 
       // Initialize temp data from current data
       chunk.copyToTemp();
+      
+      // Draw operation to this chunk's tempData
+      if (chunk.tempData) {
+        const changed = drawToChunk(chunk, operation, chunk.tempData);
+        if (changed) {
+          modifiedKeys.push(key);
+        }
+      }
 
       newActiveChunks.add(key);
     }
-
-    // Draw operation to all affected chunks' tempData
-    const modifiedKeys = drawToChunks(this.world.chunks, operation, true);
 
     // Generate preview meshes for affected chunks
     for (const key of newActiveChunks) {

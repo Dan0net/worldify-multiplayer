@@ -1,8 +1,9 @@
 /**
- * Chunk - Holds voxel data for a 32×32×32 section of the world
+ * ChunkData - Shared chunk data container for voxel terrain.
  * 
- * This is the core data container for voxel terrain, used by both
- * client (rendering) and server (collision, validation, network).
+ * This class handles single-chunk voxel data operations, used by both
+ * client and server. For client-specific features (temp data, multi-chunk
+ * operations), see client/Chunk.ts which extends this class.
  */
 
 import {
@@ -17,12 +18,12 @@ import {
   chunkKey,
 } from './voxelData.js';
 
-// ============== Types ==============
+// ============== Serializable Interface ==============
 
 /**
  * Serializable chunk data for network transmission.
  */
-export interface ChunkData {
+export interface SerializedChunkData {
   cx: number;
   cy: number;
   cz: number;
@@ -30,13 +31,42 @@ export interface ChunkData {
   data: string;
 }
 
-// ============== Chunk Class ==============
+// ============== Encoding Utilities ==============
+
+/**
+ * Encode a Uint16Array to base64 string.
+ */
+export function encodeChunkData(data: Uint16Array): string {
+  const bytes = new Uint8Array(data.buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Decode a base64 string to Uint16Array.
+ */
+export function decodeChunkData(base64: string): Uint16Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Uint16Array(bytes.buffer);
+}
+
+// ============== ChunkData Class ==============
 
 /**
  * A chunk of voxel terrain data.
  * Stores 32×32×32 voxels as packed 16-bit values.
+ * 
+ * This is the shared base class with single-chunk operations.
+ * Client extends this with temp data and multi-chunk features.
  */
-export class Chunk {
+export class ChunkData {
   /** Chunk coordinates */
   readonly cx: number;
   readonly cy: number;
@@ -44,15 +74,6 @@ export class Chunk {
 
   /** Packed voxel data (32×32×32 = 32,768 voxels) */
   readonly data: Uint16Array;
-
-  /** Temporary data buffer for preview (not persisted) */
-  tempData: Uint16Array | null = null;
-
-  /** Whether the chunk needs to be remeshed */
-  dirty: boolean = true;
-
-  /** Whether the temp data is currently showing */
-  tempActive: boolean = false;
 
   /** Unique key for this chunk's coordinates */
   readonly key: string;
@@ -66,33 +87,23 @@ export class Chunk {
   }
 
   /**
-   * Create a Chunk from serialized ChunkData.
+   * Create a ChunkData from serialized data.
    */
-  static fromChunkData(chunkData: ChunkData): Chunk {
-    const chunk = new Chunk(chunkData.cx, chunkData.cy, chunkData.cz);
-    const binary = atob(chunkData.data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    chunk.data.set(new Uint16Array(bytes.buffer));
+  static fromSerialized(serialized: SerializedChunkData): ChunkData {
+    const chunk = new ChunkData(serialized.cx, serialized.cy, serialized.cz);
+    chunk.data.set(decodeChunkData(serialized.data));
     return chunk;
   }
 
   /**
-   * Serialize chunk to ChunkData for network transmission.
+   * Serialize chunk for network transmission.
    */
-  toChunkData(): ChunkData {
-    const bytes = new Uint8Array(this.data.buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
+  toSerialized(): SerializedChunkData {
     return {
       cx: this.cx,
       cy: this.cy,
       cz: this.cz,
-      data: btoa(binary),
+      data: encodeChunkData(this.data),
     };
   }
 
@@ -132,7 +143,6 @@ export class Chunk {
       return;
     }
     this.data[voxelIndex(x, y, z)] = value;
-    this.dirty = true;
   }
 
   /**
@@ -151,7 +161,6 @@ export class Chunk {
   fill(weight: number, material: number, light: number): void {
     const packed = packVoxel(weight, material, light);
     this.data.fill(packed);
-    this.dirty = true;
   }
 
   /**
@@ -179,7 +188,6 @@ export class Chunk {
         }
       }
     }
-    this.dirty = true;
   }
 
   /**
@@ -207,142 +215,5 @@ export class Chunk {
         }
       }
     }
-    this.dirty = true;
-  }
-
-  /**
-   * Get voxel with margin support - samples from neighbors when coordinates
-   * are outside the chunk bounds (-1 or 32).
-   * 
-   * @param x Local X coordinate (-1 to 32)
-   * @param y Local Y coordinate (-1 to 32)
-   * @param z Local Z coordinate (-1 to 32)
-   * @param neighbors Map of chunk keys to Chunk objects
-   * @returns Packed voxel value, or 0 if neighbor doesn't exist
-   */
-  getVoxelWithMargin(x: number, y: number, z: number, neighbors: Map<string, Chunk>): number {
-    // Check if within this chunk's bounds
-    if (x >= 0 && x < CHUNK_SIZE && y >= 0 && y < CHUNK_SIZE && z >= 0 && z < CHUNK_SIZE) {
-      return this.data[voxelIndex(x, y, z)];
-    }
-
-    // Calculate which neighbor chunk to sample from
-    let ncx = this.cx;
-    let ncy = this.cy;
-    let ncz = this.cz;
-    let nx = x;
-    let ny = y;
-    let nz = z;
-
-    if (x < 0) {
-      ncx -= 1;
-      nx = CHUNK_SIZE + x; // e.g., -1 becomes 31
-    } else if (x >= CHUNK_SIZE) {
-      ncx += 1;
-      nx = x - CHUNK_SIZE; // e.g., 32 becomes 0
-    }
-
-    if (y < 0) {
-      ncy -= 1;
-      ny = CHUNK_SIZE + y;
-    } else if (y >= CHUNK_SIZE) {
-      ncy += 1;
-      ny = y - CHUNK_SIZE;
-    }
-
-    if (z < 0) {
-      ncz -= 1;
-      nz = CHUNK_SIZE + z;
-    } else if (z >= CHUNK_SIZE) {
-      ncz += 1;
-      nz = z - CHUNK_SIZE;
-    }
-
-    const neighborKey = chunkKey(ncx, ncy, ncz);
-    const neighbor = neighbors.get(neighborKey);
-
-    if (!neighbor) {
-      // No neighbor chunk loaded - return empty (negative weight)
-      return packVoxel(-0.5, 0, 0);
-    }
-
-    return neighbor.getVoxel(nx, ny, nz);
-  }
-
-  /**
-   * Get weight with margin support.
-   */
-  getWeightWithMargin(x: number, y: number, z: number, neighbors: Map<string, Chunk>): number {
-    return getWeight(this.getVoxelWithMargin(x, y, z, neighbors));
-  }
-
-  /**
-   * Clear the dirty flag (call after meshing).
-   */
-  clearDirty(): void {
-    this.dirty = false;
-  }
-
-  // ============== Temp Data Management ==============
-
-  /**
-   * Initialize temp data buffer (for preview rendering).
-   * Copies current data to temp buffer.
-   */
-  initTempData(): void {
-    if (!this.tempData) {
-      this.tempData = new Uint16Array(VOXELS_PER_CHUNK);
-    }
-    this.tempData.set(this.data);
-    this.tempActive = false;
-  }
-
-  /**
-   * Copy current data to temp buffer (reset preview to current state).
-   */
-  copyToTemp(): void {
-    if (!this.tempData) {
-      this.tempData = new Uint16Array(VOXELS_PER_CHUNK);
-    }
-    this.tempData.set(this.data);
-  }
-
-  /**
-   * Copy temp buffer back to data (commit preview changes).
-   */
-  copyFromTemp(): void {
-    if (this.tempData) {
-      this.data.set(this.tempData);
-      this.dirty = true;
-    }
-  }
-
-  /**
-   * Discard temp data (cancel preview).
-   */
-  discardTemp(): void {
-    this.tempData = null;
-    this.tempActive = false;
-  }
-
-  /**
-   * Check if temp data exists.
-   */
-  hasTempData(): boolean {
-    return this.tempData !== null;
-  }
-
-  /**
-   * Get data array to use for rendering (temp if active, otherwise main).
-   */
-  getRenderData(): Uint16Array {
-    return (this.tempActive && this.tempData) ? this.tempData : this.data;
-  }
-
-  /**
-   * Set whether temp data should be used for rendering.
-   */
-  setTempActive(active: boolean): void {
-    this.tempActive = active && this.tempData !== null;
   }
 }

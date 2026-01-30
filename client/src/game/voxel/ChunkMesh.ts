@@ -3,7 +3,8 @@
  */
 
 import * as THREE from 'three';
-import { VOXEL_SCALE, Chunk } from '@worldify/shared';
+import { VOXEL_SCALE } from '@worldify/shared';
+import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import { getMaterialColor, voxelMaterial } from './VoxelMaterials.js';
 
