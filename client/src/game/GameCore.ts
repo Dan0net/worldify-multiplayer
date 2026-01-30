@@ -19,8 +19,8 @@ import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera 
 import { setupLighting } from './scene/lighting';
 import { storeBridge } from '../state/bridge';
 import { controls } from './player/controls';
-import { onSnapshot, onBuildCommit } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, BuildResult } from '@worldify/shared';
+import { on } from '../net/decode';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -88,6 +88,9 @@ export class GameCore {
       this.builder.onBuildCommit = (modifiedChunks: string[]) => {
         this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
       };
+
+      // Enable server-based chunk loading
+      this.voxelIntegration.world.enableServerChunks();
     }
 
     // Request pointer lock on canvas click (only when playing)
@@ -98,8 +101,9 @@ export class GameCore {
     });
 
     // Register for network events
-    onSnapshot(this.handleSnapshot);
-    onBuildCommit(this.handleBuildCommit);
+    on('snapshot', this.handleSnapshot);
+    on('buildCommit', this.handleBuildCommit);
+    on('chunkData', this.handleChunkData);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
@@ -140,6 +144,16 @@ export class GameCore {
     if (modifiedChunks.length > 0) {
       this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
     }
+  };
+
+  /**
+   * Handle chunk data from server - apply to voxel world
+   */
+  private handleChunkData = (chunkData: VoxelChunkData): void => {
+    if (!this.voxelIntegration) return;
+    
+    // Apply chunk data to voxel world
+    this.voxelIntegration.world.receiveChunkData(chunkData);
   };
 
   /**

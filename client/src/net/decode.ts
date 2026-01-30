@@ -10,35 +10,51 @@ import {
   MSG_ERROR,
   MSG_PONG,
   MSG_VOXEL_BUILD_COMMIT,
+  MSG_VOXEL_CHUNK_DATA,
   ByteReader,
   decodeSnapshot,
   decodeVoxelBuildCommit,
+  decodeVoxelChunkData,
   RoomSnapshot,
   VoxelBuildCommit,
+  VoxelChunkData,
   BuildResult,
   buildResultToString,
 } from '@worldify/shared';
 import { storeBridge } from '../state/bridge';
 import { registerHandler, dispatch } from './MessageRegistry';
 
-// Callback for snapshot updates (set by game core)
-let onSnapshotCallback: ((snapshot: RoomSnapshot) => void) | null = null;
+// ============== Typed Event System ==============
 
-// Callback for build commit updates (set by game core)
-let onBuildCommitCallback: ((commit: VoxelBuildCommit) => void) | null = null;
-
-/**
- * Register callback for snapshot updates
- */
-export function onSnapshot(callback: (snapshot: RoomSnapshot) => void): void {
-  onSnapshotCallback = callback;
+/** Event types and their payloads */
+interface GameEvents {
+  snapshot: RoomSnapshot;
+  buildCommit: VoxelBuildCommit;
+  chunkData: VoxelChunkData;
 }
 
+type EventCallback<T> = (data: T) => void;
+
+/** Single registry for all game event callbacks */
+const eventCallbacks: { [K in keyof GameEvents]?: EventCallback<GameEvents[K]> } = {};
+
 /**
- * Register callback for build commit updates
+ * Register a callback for a game event.
+ * Only one callback per event type (last one wins).
  */
-export function onBuildCommit(callback: (commit: VoxelBuildCommit) => void): void {
-  onBuildCommitCallback = callback;
+export function on<K extends keyof GameEvents>(
+  event: K,
+  callback: EventCallback<GameEvents[K]>
+): void {
+  eventCallbacks[event] = callback as EventCallback<GameEvents[keyof GameEvents]>;
+}
+
+/** Emit an event to its registered callback */
+function emit<K extends keyof GameEvents>(event: K, data: GameEvents[K]): void {
+  const callback = eventCallbacks[event];
+  if (callback) {
+    (callback as EventCallback<GameEvents[K]>)(data);
+  }
 }
 
 /**
@@ -75,9 +91,7 @@ function handleSnapshot(reader: ByteReader): void {
   storeBridge.updateServerTick(snapshot.tick);
   
   // Notify game core of new snapshot
-  if (onSnapshotCallback) {
-    onSnapshotCallback(snapshot);
-  }
+  emit('snapshot', snapshot);
 }
 
 function handleError(reader: ByteReader): void {
@@ -96,14 +110,18 @@ function handleBuildCommit(reader: ByteReader): void {
   
   if (commit.result === BuildResult.SUCCESS) {
     console.log(`[net] Build commit seq=${commit.buildSeq} from player ${commit.playerId}`);
-    
-    // Notify game core to apply the build
-    if (onBuildCommitCallback) {
-      onBuildCommitCallback(commit);
-    }
+    emit('buildCommit', commit);
   } else {
     console.warn(`[net] Build rejected: ${buildResultToString(commit.result)}`);
   }
+}
+
+function handleChunkData(reader: ByteReader): void {
+  const chunkData = decodeVoxelChunkData(reader);
+  
+  console.log(`[net] Received chunk (${chunkData.chunkX}, ${chunkData.chunkY}, ${chunkData.chunkZ}) seq=${chunkData.lastBuildSeq}`);
+  
+  emit('chunkData', chunkData);
 }
 
 // Register all message handlers
@@ -113,3 +131,4 @@ registerHandler(MSG_SNAPSHOT, handleSnapshot);
 registerHandler(MSG_ERROR, handleError);
 registerHandler(MSG_PONG, handlePong);
 registerHandler(MSG_VOXEL_BUILD_COMMIT, handleBuildCommit);
+registerHandler(MSG_VOXEL_CHUNK_DATA, handleChunkData);

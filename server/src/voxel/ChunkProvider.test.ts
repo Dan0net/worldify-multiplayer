@@ -10,7 +10,7 @@ import {
   TerrainGenerator,
   ChunkStore,
 } from './ChunkProvider.js';
-import { ChunkData, getWeight, CHUNK_SIZE } from '@worldify/shared';
+import { ChunkData, getWeight } from '@worldify/shared';
 
 describe('MapChunkStore', () => {
   let store: MapChunkStore;

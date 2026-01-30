@@ -12,10 +12,16 @@ import {
   BuildOperation,
   getAffectedChunks,
   drawToChunk,
+  VoxelChunkData,
+  encodeVoxelChunkRequest,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
+import { sendBinary } from '../../net/netClient.js';
+
+/** Callback type for requesting chunk data from server */
+export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
 /**
  * Manages the voxel world - chunk loading, unloading, and streaming.
@@ -26,6 +32,9 @@ export class VoxelWorld {
 
   /** All chunk meshes, keyed by "cx,cy,cz" */
   readonly meshes: Map<string, ChunkMesh> = new Map();
+
+  /** Chunks pending data from server, keyed by "cx,cy,cz" */
+  private pendingChunks: Set<string> = new Set();
 
   /** Reference to the Three.js scene */
   readonly scene: THREE.Scene;
@@ -46,12 +55,24 @@ export class VoxelWorld {
   /** Whether the world has been initialized */
   private initialized = false;
 
-  /** Terrain generator for procedural chunk generation */
+  /** Terrain generator for procedural chunk generation (fallback) */
   private readonly terrainGenerator: TerrainGenerator;
+
+  /** Whether to use server for chunk data (true) or generate locally (false) */
+  private useServerChunks: boolean = false;
 
   constructor(scene: THREE.Scene, seed: number = 12345) {
     this.scene = scene;
     this.terrainGenerator = new TerrainGenerator({ seed });
+  }
+
+  /**
+   * Enable server-based chunk loading.
+   * When enabled, chunks will be requested from the server instead of generated locally.
+   */
+  enableServerChunks(): void {
+    this.useServerChunks = true;
+    console.log('[VoxelWorld] Server chunk loading enabled');
   }
 
   /**
@@ -154,12 +175,15 @@ export class VoxelWorld {
       for (let cy = newMinCy; cy <= newMaxCy; cy++) {
         for (let cx = newMinCx; cx <= newMaxCx; cx++) {
           const key = chunkKey(cx, cy, cz);
-          if (!this.chunks.has(key)) {
-            this.loadChunk(cx, cy, cz);
-            this.remeshQueue.add(key);
+          if (!this.chunks.has(key) && !this.pendingChunks.has(key)) {
+            const chunk = this.loadChunk(cx, cy, cz);
             
-            // Also queue neighbors for remesh (for seamless boundaries)
-            this.queueNeighborRemesh(cx, cy, cz);
+            // Only queue for remesh if chunk was generated locally (not server mode)
+            if (chunk) {
+              this.remeshQueue.add(key);
+              // Also queue neighbors for remesh (for seamless boundaries)
+              this.queueNeighborRemesh(cx, cy, cz);
+            }
           }
         }
       }
@@ -174,19 +198,77 @@ export class VoxelWorld {
 
   /**
    * Load a chunk at the given coordinates.
+   * If server chunks are enabled, sends a request instead of generating locally.
    */
-  private loadChunk(cx: number, cy: number, cz: number): Chunk {
+  private loadChunk(cx: number, cy: number, cz: number): Chunk | null {
     const key = chunkKey(cx, cy, cz);
     
     // Check if already loaded
     const existing = this.chunks.get(key);
     if (existing) return existing;
 
-    // Generate new chunk
-    const chunk = this.generateChunk(cx, cy, cz);
-    this.chunks.set(key, chunk);
+    // Check if already pending from server
+    if (this.pendingChunks.has(key)) {
+      return null;
+    }
 
-    return chunk;
+    if (this.useServerChunks) {
+      // Request from server
+      this.requestChunkFromServer(cx, cy, cz);
+      return null;
+    } else {
+      // Generate locally (fallback)
+      const chunk = this.generateChunk(cx, cy, cz);
+      this.chunks.set(key, chunk);
+      return chunk;
+    }
+  }
+
+  /**
+   * Request a chunk from the server.
+   */
+  private requestChunkFromServer(cx: number, cy: number, cz: number): void {
+    const key = chunkKey(cx, cy, cz);
+    this.pendingChunks.add(key);
+    
+    const request = encodeVoxelChunkRequest({ chunkX: cx, chunkY: cy, chunkZ: cz });
+    sendBinary(request);
+    
+    console.log(`[VoxelWorld] Requested chunk (${cx}, ${cy}, ${cz}) from server`);
+  }
+
+  /**
+   * Receive chunk data from the server.
+   * Called by the network layer when chunk data arrives.
+   */
+  receiveChunkData(chunkData: VoxelChunkData): void {
+    const { chunkX, chunkY, chunkZ, voxelData, lastBuildSeq } = chunkData;
+    const key = chunkKey(chunkX, chunkY, chunkZ);
+    
+    // Remove from pending
+    this.pendingChunks.delete(key);
+    
+    // Check if still in range (might have moved away while waiting)
+    // For now, always accept the data - unload logic will handle it
+    
+    // Create or update chunk
+    let chunk = this.chunks.get(key);
+    if (!chunk) {
+      chunk = new Chunk(chunkX, chunkY, chunkZ);
+      this.chunks.set(key, chunk);
+    }
+    
+    // Copy voxel data
+    chunk.data.set(voxelData);
+    chunk.dirty = true;
+    
+    // Queue for remeshing
+    this.remeshQueue.add(key);
+    
+    // Also queue neighbors for seamless boundaries
+    this.queueNeighborRemesh(chunkX, chunkY, chunkZ);
+    
+    console.log(`[VoxelWorld] Received chunk (${chunkX}, ${chunkY}, ${chunkZ}) seq=${lastBuildSeq}, ${voxelData.length} voxels`);
   }
 
   /**
@@ -202,6 +284,9 @@ export class VoxelWorld {
 
     // Remove from remesh queue
     this.remeshQueue.delete(key);
+
+    // Remove from pending if it was still pending
+    this.pendingChunks.delete(key);
 
     // Remove chunk
     this.chunks.delete(key);
