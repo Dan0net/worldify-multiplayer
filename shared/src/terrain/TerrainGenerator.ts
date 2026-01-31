@@ -69,21 +69,21 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   baseHeight: 0,
   heightLayers: [
     {
-      // Primary hills - broad rolling terrain
-      frequency: 0.008,
-      amplitude: 12,
+      // Primary hills - broad rolling terrain (~12m wavelength)
+      frequency: 0.25,
+      amplitude: 20, // ~5m height variation
       octaves: 3,
       lacunarity: 2.0,
       persistence: 0.5,
     },
     {
-      // Detail layer - small undulations
-      frequency: 0.03,
-      amplitude: 4,
+      // Medium detail - bumps and mounds (~3m wavelength)
+      frequency: 4.0,
+      amplitude: 2, // ~3m height variation
       octaves: 2,
       lacunarity: 2.0,
-      persistence: 0.4,
-    },
+      persistence: 0.5,
+    }
   ],
   domainWarp: {
     enabled: true,
@@ -233,23 +233,22 @@ export class TerrainGenerator {
   }
 
   /**
-   * Sample a single noise layer with octave support
+   * Sample a single noise layer with octave support (FBM - Fractal Brownian Motion)
+   * Returns height contribution in voxels
    */
   private sampleNoiseLayer(worldX: number, worldZ: number, layer: NoiseLayerConfig): number {
     let value = 0;
     let frequency = layer.frequency;
     let amplitude = layer.amplitude;
-    let maxAmplitude = 0;
 
+    // Accumulate octaves - each octave adds finer detail at reduced amplitude
     for (let o = 0; o < layer.octaves; o++) {
       value += this.heightNoise.GetNoise(worldX * frequency, worldZ * frequency) * amplitude;
-      maxAmplitude += amplitude;
       frequency *= layer.lacunarity;
       amplitude *= layer.persistence;
     }
 
-    // Normalize by max amplitude to keep values in expected range
-    return (value / maxAmplitude) * layer.amplitude;
+    return value;
   }
 
   /**
