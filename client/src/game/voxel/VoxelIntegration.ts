@@ -57,8 +57,8 @@ export class VoxelIntegration implements TerrainRaycaster {
   /** Whether the system has been initialized */
   private initialized = false;
   
-  /** Track which chunks have colliders built */
-  private colliderBuiltChunks: Set<string> = new Set();
+  /** Track which chunks have colliders built and their mesh generation */
+  private colliderGenerations: Map<string, number> = new Map();
 
   constructor(scene: THREE.Scene, config: VoxelConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -113,30 +113,42 @@ export class VoxelIntegration implements TerrainRaycaster {
 
   /**
    * Synchronize colliders with chunk meshes.
-   * Adds colliders for new meshes, removes colliders for unloaded chunks.
+   * Adds colliders for new meshes, updates when geometry changes, removes for unloaded chunks.
    */
   private syncColliders(): void {
-    // Build colliders for chunks that have meshes but no collider
+    // Build or update colliders for chunks that have meshes
     for (const [key, chunkMesh] of this.world.meshes) {
-      if (!this.colliderBuiltChunks.has(key) && chunkMesh.hasGeometry()) {
-        const mesh = chunkMesh.getMesh();
-        if (mesh) {
-          this.collision.addCollider(key, mesh);
-          this.colliderBuiltChunks.add(key);
-        }
+      if (!chunkMesh.hasGeometry()) continue;
+      
+      const mesh = chunkMesh.getMesh();
+      if (!mesh) continue;
+      
+      const currentGeneration = chunkMesh.meshGeneration;
+      const storedGeneration = this.colliderGenerations.get(key);
+      
+      // Skip if collider exists and mesh hasn't changed
+      if (storedGeneration === currentGeneration) continue;
+      
+      // Remove old collider if it exists (mesh was regenerated)
+      if (storedGeneration !== undefined) {
+        this.collision.removeCollider(key);
       }
+      
+      // Add new collider with current geometry
+      this.collision.addCollider(key, mesh);
+      this.colliderGenerations.set(key, currentGeneration);
     }
     
     // Remove colliders for chunks that were unloaded
     const chunksToRemove: string[] = [];
-    for (const key of this.colliderBuiltChunks) {
+    for (const key of this.colliderGenerations.keys()) {
       if (!this.world.chunks.has(key)) {
         chunksToRemove.push(key);
       }
     }
     for (const key of chunksToRemove) {
       this.collision.removeCollider(key);
-      this.colliderBuiltChunks.delete(key);
+      this.colliderGenerations.delete(key);
     }
   }
 
@@ -155,14 +167,14 @@ export class VoxelIntegration implements TerrainRaycaster {
       if (!mesh) continue;
 
       // Remove old collider if exists
-      if (this.colliderBuiltChunks.has(key)) {
+      if (this.colliderGenerations.has(key)) {
         this.collision.removeCollider(key);
-        this.colliderBuiltChunks.delete(key);
+        this.colliderGenerations.delete(key);
       }
 
       // Add new collider with updated geometry
       this.collision.addCollider(key, mesh);
-      this.colliderBuiltChunks.add(key);
+      this.colliderGenerations.set(key, chunkMesh.meshGeneration);
     }
   }
 
@@ -250,7 +262,7 @@ export class VoxelIntegration implements TerrainRaycaster {
    */
   refresh(): void {
     // Clear collider tracking
-    this.colliderBuiltChunks.clear();
+    this.colliderGenerations.clear();
     this.collision.dispose();
     
     // Refresh world
@@ -267,7 +279,7 @@ export class VoxelIntegration implements TerrainRaycaster {
     this.debug.dispose();
     this.collision.dispose();
     this.world.dispose();
-    this.colliderBuiltChunks.clear();
+    this.colliderGenerations.clear();
     this.initialized = false;
   }
 }
