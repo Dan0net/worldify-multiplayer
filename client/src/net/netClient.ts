@@ -48,42 +48,58 @@ async function connectWebSocket(
   roomId: string,
   playerId: number,
   token: string,
-  _isReconnect: boolean
+  isReconnect: boolean
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    ws = new WebSocket(`${WS_URL}?token=${token}`);
-    ws.binaryType = 'arraybuffer';
+    // Close any existing socket before creating new one
+    if (ws) {
+      ws.onclose = null; // Prevent old socket's onclose from triggering reconnect
+      ws.onerror = null;
+      ws.close();
+    }
+    
+    const newSocket = new WebSocket(`${WS_URL}?token=${token}`);
+    newSocket.binaryType = 'arraybuffer';
+    ws = newSocket;
 
-    ws.onopen = () => {
+    newSocket.onopen = () => {
+      console.log('[net] WebSocket connected');
       storeBridge.updateConnectionStatus('connected');
       storeBridge.updateRoomInfo(roomId, playerId);
-      ws?.send(encodeJoin(PROTOCOL_VERSION, playerId));
+      newSocket.send(encodeJoin(PROTOCOL_VERSION, playerId));
       reconnectAttempts = 0;
       
       // Notify on reconnect if callback registered
-      if (onReconnectedCallback) {
+      if (isReconnect && onReconnectedCallback) {
         onReconnectedCallback();
       }
       
       resolve();
     };
 
-    ws.onmessage = (event) => {
+    newSocket.onmessage = (event) => {
       const data = event.data as ArrayBuffer;
       decodeMessage(new Uint8Array(data));
     };
 
-    ws.onclose = () => {
-      storeBridge.updateConnectionStatus('disconnected');
-      ws = null;
-      
-      // Attempt reconnect
-      scheduleReconnect();
+    newSocket.onclose = () => {
+      console.log('[net] WebSocket closed');
+      // Only handle if this is still the current socket
+      if (ws === newSocket) {
+        storeBridge.updateConnectionStatus('disconnected');
+        ws = null;
+        // Attempt reconnect
+        scheduleReconnect();
+      }
     };
 
-    ws.onerror = () => {
-      storeBridge.updateConnectionStatus('disconnected');
-      reject(new Error('WebSocket connection failed'));
+    newSocket.onerror = () => {
+      console.error('[net] WebSocket error');
+      // Only handle if this is still the current socket
+      if (ws === newSocket) {
+        storeBridge.updateConnectionStatus('disconnected');
+        reject(new Error('WebSocket connection failed'));
+      }
     };
   });
 }
