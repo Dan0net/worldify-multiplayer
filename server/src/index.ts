@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { setupRoutes } from './http/routes.js';
 import { setupWebSocket } from './ws/wsServer.js';
-import { initChunkStorage, shutdownChunkStorage, flushChunkStorage } from './rooms/BuildHandler.js';
+import { initChunkStorage, shutdownChunkStorage, flushChunkStorage } from './storage/StorageManager.js';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const HOST = process.env.HOST || '0.0.0.0';

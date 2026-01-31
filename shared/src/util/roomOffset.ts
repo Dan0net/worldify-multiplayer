@@ -27,8 +27,6 @@ function hashString(str: string): number {
  * @returns World position offset { x, z } in meters
  */
 export function roomToOffset(roomName: string): { x: number; z: number } {
-  const hash = hashString(roomName);
-  
   // Use a grid layout based on room index for predictability
   const index = ROOM_NAMES.indexOf(roomName as RoomName);
   
@@ -44,6 +42,7 @@ export function roomToOffset(roomName: string): { x: number; z: number } {
     gridZ = Math.floor(index / GRID_WIDTH) - 2; // -2 to +1
   } else {
     // Hash-based fallback for unknown room names
+    const hash = hashString(roomName);
     const GRID_SIZE = 100;
     gridX = (hash % GRID_SIZE) - GRID_SIZE / 2;
     gridZ = (Math.floor(hash / GRID_SIZE) % GRID_SIZE) - GRID_SIZE / 2;

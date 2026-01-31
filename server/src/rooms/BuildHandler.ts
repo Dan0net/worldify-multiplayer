@@ -21,74 +21,18 @@ import {
 } from '@worldify/shared';
 import { Room } from './room.js';
 import { RateLimiter } from '../util/RateLimiter.js';
-import { ChunkProvider } from '../voxel/ChunkProvider.js';
-import { PersistentChunkStore } from '../storage/PersistentChunkStore.js';
-import { WorldStorage } from '../storage/WorldStorage.js';
+import { getChunkProvider } from '../storage/StorageManager.js';
 
 // ============== Module-level instances ==============
 
 /** Rate limiter for build actions (100ms between builds) */
 const buildRateLimiter = new RateLimiter(100);
 
-/** Global persistent chunk store (shared across all rooms) */
-let globalChunkStore: PersistentChunkStore | null = null;
-
-/** Global chunk provider (shared across all rooms - uses global store) */
-let globalChunkProvider: ChunkProvider | null = null;
-
 /** Build sequence tracking per chunk (in-memory, could be persisted later) */
 const chunkBuildSeq = new Map<string, number>();
 
 /** Next build sequence number (global across all rooms) */
 let nextBuildSeq = 1;
-
-// ============== Initialization ==============
-
-/**
- * Initialize the global chunk storage. Must be called before handling any builds.
- */
-export async function initChunkStorage(): Promise<void> {
-  const storage = WorldStorage.getInstance();
-  await storage.open();
-  
-  globalChunkStore = new PersistentChunkStore(storage);
-  globalChunkProvider = new ChunkProvider(globalChunkStore, storage.seed);
-  
-  console.log('[build] Chunk storage initialized');
-}
-
-/**
- * Flush pending chunk changes to disk.
- */
-export async function flushChunkStorage(): Promise<void> {
-  if (globalChunkStore) {
-    await globalChunkStore.flush();
-  }
-}
-
-/**
- * Shutdown chunk storage gracefully.
- */
-export async function shutdownChunkStorage(): Promise<void> {
-  if (globalChunkStore) {
-    await globalChunkStore.flush();
-  }
-  const storage = WorldStorage.getInstance();
-  await storage.close();
-  console.log('[build] Chunk storage shutdown complete');
-}
-
-// ============== Chunk Provider Access ==============
-
-/**
- * Get the global ChunkProvider.
- */
-function getChunkProvider(): ChunkProvider {
-  if (!globalChunkProvider) {
-    throw new Error('Chunk storage not initialized. Call initChunkStorage() first.');
-  }
-  return globalChunkProvider;
-}
 
 // ============== Validation ==============
 

@@ -30,16 +30,6 @@ export class PersistentChunkStore implements ChunkStore {
   
   /** Reference to the world storage singleton */
   private readonly storage: WorldStorage;
-  
-  /** Whether initial load from disk has completed (reserved for future use) */
-  // @ts-expect-error Reserved for future async loading
-  private _ready = false;
-  
-  /** Keys that are currently being loaded from disk */
-  private readonly loadingKeys = new Set<string>();
-  
-  /** Callbacks waiting for a key to load */
-  private readonly loadCallbacks = new Map<string, Array<(chunk: ChunkData | undefined) => void>>();
 
   constructor(storage?: WorldStorage) {
     this.storage = storage ?? WorldStorage.getInstance();
@@ -47,18 +37,10 @@ export class PersistentChunkStore implements ChunkStore {
 
   /**
    * Get a chunk from cache. Returns undefined if not in cache.
-   * Triggers async load from disk if not cached.
+   * Does NOT trigger async load - use getAsync() to load from disk.
    */
   get(key: string): ChunkData | undefined {
-    const cached = this.cache.get(key);
-    if (cached) return cached;
-
-    // Trigger async load if not already loading
-    if (!this.loadingKeys.has(key)) {
-      this.loadFromDisk(key);
-    }
-
-    return undefined;
+    return this.cache.get(key);
   }
 
   /**
@@ -130,65 +112,22 @@ export class PersistentChunkStore implements ChunkStore {
   }
 
   /**
-   * Load a specific chunk from disk (async).
-   */
-  private async loadFromDisk(key: string): Promise<void> {
-    this.loadingKeys.add(key);
-
-    try {
-      const buffer = await this.storage.get(CHUNK_KEY_PREFIX + key);
-      let chunk: ChunkData | undefined;
-
-      if (buffer) {
-        chunk = this.deserializeChunk(buffer, key);
-        this.cache.set(key, chunk);
-      }
-
-      // Notify any waiting callbacks
-      const callbacks = this.loadCallbacks.get(key);
-      if (callbacks) {
-        for (const cb of callbacks) {
-          cb(chunk);
-        }
-        this.loadCallbacks.delete(key);
-      }
-    } finally {
-      this.loadingKeys.delete(key);
-    }
-  }
-
-  /**
-   * Get a chunk, waiting for disk load if necessary.
+   * Get a chunk, loading from disk if necessary.
    */
   async getAsync(key: string): Promise<ChunkData | undefined> {
     // Check cache first
     const cached = this.cache.get(key);
     if (cached) return cached;
 
-    // Check if already loading
-    if (this.loadingKeys.has(key)) {
-      return new Promise((resolve) => {
-        const callbacks = this.loadCallbacks.get(key) ?? [];
-        callbacks.push(resolve);
-        this.loadCallbacks.set(key, callbacks);
-      });
-    }
-
     // Load from disk
-    this.loadingKeys.add(key);
-
-    try {
-      const buffer = await this.storage.get(CHUNK_KEY_PREFIX + key);
-      if (buffer) {
-        const chunk = this.deserializeChunk(buffer, key);
-        this.cache.set(key, chunk);
-        console.log(`[storage] Loaded chunk ${key} from disk`);
-        return chunk;
-      }
-      return undefined;
-    } finally {
-      this.loadingKeys.delete(key);
+    const buffer = await this.storage.get(CHUNK_KEY_PREFIX + key);
+    if (buffer) {
+      const chunk = this.deserializeChunk(buffer, key);
+      this.cache.set(key, chunk);
+      console.log(`[storage] Loaded chunk ${key} from disk`);
+      return chunk;
     }
+    return undefined;
   }
 
   /**
