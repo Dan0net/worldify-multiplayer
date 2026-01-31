@@ -25,7 +25,7 @@ export function DebugPanel() {
   } = useGameStore();
 
   const [cacheClearing, setCacheClearing] = useState(false);
-  const [chunksClearing, setChunksClearing] = useState(false);
+  const [_chunksClearing, setChunksClearing] = useState(false);
 
   const handleClearTextureCache = async () => {
     setCacheClearing(true);

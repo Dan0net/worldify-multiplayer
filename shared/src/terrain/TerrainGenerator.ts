@@ -6,6 +6,12 @@
 import FastNoiseLite from 'fastnoise-lite';
 import { CHUNK_SIZE, VOXEL_SCALE } from '../voxel/constants.js';
 import { packVoxel } from '../voxel/voxelData.js';
+import {
+  StampPointGenerator,
+  StampPlacer,
+  type StampDistributionConfig,
+  type HeightSampler,
+} from './stamps/index.js';
 
 // ============== Configuration Types ==============
 
@@ -53,6 +59,10 @@ export interface TerrainConfig {
   materialLayers: MaterialLayerConfig[];
   /** Default/fallback material ID for deep terrain */
   defaultMaterial: number;
+  /** Enable stamp generation (trees, rocks) */
+  enableStamps: boolean;
+  /** Stamp distribution configuration (optional, uses defaults if not provided) */
+  stampConfig?: Partial<StampDistributionConfig>;
 }
 
 // ============== Material Constants ==============
@@ -97,15 +107,20 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
     { materialId: MATERIAL_ROCK2, maxDepth: Infinity }, // Stone: 8+ voxels
   ],
   defaultMaterial: MATERIAL_ROCK2,
+  enableStamps: true,
 };
 
 // ============== Terrain Generator ==============
 
-export class TerrainGenerator {
+export class TerrainGenerator implements HeightSampler {
   private config: TerrainConfig;
   private heightNoise: FastNoiseLite;
   private warpNoiseX: FastNoiseLite;
   private warpNoiseZ: FastNoiseLite;
+  
+  // Stamp system
+  private stampPointGenerator: StampPointGenerator | null = null;
+  private stampPlacer: StampPlacer | null = null;
 
   constructor(config: Partial<TerrainConfig> = {}) {
     this.config = { ...DEFAULT_TERRAIN_CONFIG, ...config };
@@ -138,6 +153,23 @@ export class TerrainGenerator {
     this.warpNoiseZ.SetFractalType(FastNoiseLite.FractalType.FBm);
     
     this.updateWarpConfig();
+    
+    // Initialize stamp system if enabled
+    if (this.config.enableStamps) {
+      this.initializeStampSystem();
+    }
+  }
+  
+  /**
+   * Initialize the stamp generation system
+   */
+  private initializeStampSystem(): void {
+    const stampConfig = {
+      seed: this.config.seed + 10000, // Offset seed for stamps
+      ...this.config.stampConfig,
+    };
+    this.stampPointGenerator = new StampPointGenerator(stampConfig);
+    this.stampPlacer = new StampPlacer();
   }
 
   /**
@@ -303,6 +335,12 @@ export class TerrainGenerator {
           data[index] = packVoxel(weight, material, light);
         }
       }
+    }
+
+    // Apply stamps (trees, rocks) if enabled
+    if (this.stampPointGenerator && this.stampPlacer) {
+      const placements = this.stampPointGenerator.generateForChunk(cx, cz);
+      this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 
     return data;
