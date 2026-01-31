@@ -6,6 +6,8 @@
 import { useGameStore } from '../state/store';
 import { controls } from '../game/player/controls';
 import { GameMode } from '@worldify/shared';
+import { materialManager } from '../game/material';
+import { useState, useEffect } from 'react';
 
 export function SpectatorOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
@@ -14,6 +16,14 @@ export function SpectatorOverlay() {
   const roomId = useGameStore((s) => s.roomId);
   const spawnReady = useGameStore((s) => s.spawnReady);
   const setGameMode = useGameStore((s) => s.setGameMode);
+  const textureState = useGameStore((s) => s.textureState);
+  
+  const [hdCached, setHdCached] = useState<boolean | null>(null);
+
+  // Check if HD textures are cached on mount
+  useEffect(() => {
+    materialManager.checkHighResAvailable().then(setHdCached);
+  }, []);
 
   // Only show in MainMenu mode
   if (gameMode !== GameMode.MainMenu) {
@@ -22,6 +32,10 @@ export function SpectatorOverlay() {
 
   const isConnected = connectionStatus === 'connected';
   const canStart = isConnected && spawnReady;
+  const isLoadingTextures = textureState === 'loading-low' || textureState === 'loading-high';
+  const hasHD = textureState === 'high';
+  // Only show HD button if: we have low textures, HD is not cached, and not already loading
+  const showHDButton = textureState === 'low' && hdCached === false;
 
   const handleStart = () => {
     if (!canStart) return;
@@ -29,6 +43,11 @@ export function SpectatorOverlay() {
     setGameMode(GameMode.Playing);
     // Lock pointer for FPS controls
     controls.requestPointerLock();
+  };
+
+  const handleDownloadHD = () => {
+    if (isLoadingTextures || hasHD) return;
+    materialManager.upgradeToHighResolution();
   };
 
   return (
@@ -70,6 +89,23 @@ export function SpectatorOverlay() {
         >
           {spawnReady ? '▶ Start' : '⏳ Loading...'}
         </button>
+      )}
+
+      {/* HD Textures download button - only show if low-res and HD not cached */}
+      {isConnected && showHDButton && (
+        <button
+          onClick={handleDownloadHD}
+          className="mt-4 py-3 px-8 text-sm text-white border border-white/30 rounded-lg pointer-events-auto transition-all duration-100 bg-white/10 hover:bg-white/20 cursor-pointer"
+        >
+          ⬇ Download HD Textures (~540 MB)
+        </button>
+      )}
+      
+      {/* Show HD active indicator */}
+      {isConnected && hasHD && (
+        <div className="mt-4 py-2 px-4 text-xs text-green-400 bg-green-900/30 rounded">
+          ✓ HD Textures Active
+        </div>
       )}
 
       {/* Controls hint - only show when connected */}

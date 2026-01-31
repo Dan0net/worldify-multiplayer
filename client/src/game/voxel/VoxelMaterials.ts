@@ -3,6 +3,10 @@
  */
 
 import * as THREE from 'three';
+import { getTerrainMaterial, getTransparentTerrainMaterial } from '../material/TerrainMaterial.js';
+
+// Re-export terrain material getters for easy access
+export { getTerrainMaterial, getTransparentTerrainMaterial };
 
 // ============== Material Color Palette ==============
 
@@ -81,10 +85,12 @@ export const wireframeMaterial = new THREE.MeshBasicMaterial({
 });
 
 /**
- * Set wireframe mode on the shared voxel material.
- * This affects all chunk meshes that use voxelMaterial.
+ * Set wireframe mode on terrain materials.
+ * This affects all chunk meshes using TerrainMaterial.
  * @param enabled Whether to enable wireframe rendering
  */
 export function setVoxelWireframe(enabled: boolean): void {
   voxelMaterial.wireframe = enabled;
+  getTerrainMaterial().wireframe = enabled;
+  getTransparentTerrainMaterial().wireframe = enabled;
 }

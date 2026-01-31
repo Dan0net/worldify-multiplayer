@@ -27,6 +27,7 @@ import { GameLoop } from './GameLoop';
 import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
+import { materialManager } from './material';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -55,6 +56,11 @@ export class GameCore {
   }
 
   async init(): Promise<void> {
+    // Initialize material system early (non-blocking)
+    materialManager.initialize().catch(err => {
+      console.warn('Material initialization failed, using fallback colors:', err);
+    });
+
     // Create renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);

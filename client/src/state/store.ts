@@ -3,6 +3,9 @@ import { BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
+/** Texture loading state */
+export type TextureLoadingState = 'none' | 'loading-low' | 'low' | 'loading-high' | 'high';
+
 /** Voxel debug visualization toggles */
 export interface VoxelDebugToggles {
   showChunkBounds: boolean;
@@ -46,6 +49,10 @@ interface GameState {
   // Network chunk streaming
   useServerChunks: boolean;
 
+  // Material/texture loading
+  textureState: TextureLoadingState;
+  textureProgress: number; // 0-1 for loading progress
+
   // Voxel build system
   build: BuildState;
 
@@ -78,6 +85,10 @@ interface GameState {
   setBuildPreset: (presetId: number) => void;
   setBuildRotation: (rotationSteps: number) => void;
   setBuildHasValidTarget: (valid: boolean) => void;
+  
+  // Material/texture actions
+  setTextureState: (state: TextureLoadingState) => void;
+  setTextureProgress: (progress: number) => void;
 }
 
 export const useGameStore = create<GameState>((set) => ({
@@ -90,6 +101,8 @@ export const useGameStore = create<GameState>((set) => ({
   gameMode: GameMode.MainMenu, // Start in main menu
   spawnReady: false, // Terrain not found yet
   useServerChunks: true, // Default to server chunks in multiplayer
+  textureState: 'none',
+  textureProgress: 0,
   fps: 0,
   tickMs: 0,
   serverTick: 0,
@@ -156,4 +169,8 @@ export const useGameStore = create<GameState>((set) => ({
   setBuildHasValidTarget: (hasValidTarget) => set((state) => ({
     build: { ...state.build, hasValidTarget },
   })),
+  
+  // Material/texture actions
+  setTextureState: (textureState) => set({ textureState }),
+  setTextureProgress: (textureProgress) => set({ textureProgress }),
 }));

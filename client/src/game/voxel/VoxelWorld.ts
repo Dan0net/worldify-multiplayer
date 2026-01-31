@@ -74,7 +74,7 @@ export class VoxelWorld {
 
     // If using server chunks, don't generate locally - wait for server data
     if (storeBridge.useServerChunks) {
-      console.log('[VoxelWorld] Waiting for server chunks...');
+      // console.log('[VoxelWorld] Waiting for server chunks...');
       this.initialized = true;
       return;
     }
@@ -233,7 +233,7 @@ export class VoxelWorld {
     const request = encodeVoxelChunkRequest({ chunkX: cx, chunkY: cy, chunkZ: cz });
     sendBinary(request);
     
-    console.log(`[VoxelWorld] Requested chunk (${cx}, ${cy}, ${cz}) from server`);
+    // console.log(`[VoxelWorld] Requested chunk (${cx}, ${cy}, ${cz}) from server`);
   }
 
   /**
@@ -267,7 +267,7 @@ export class VoxelWorld {
     // Also queue neighbors for seamless boundaries
     this.queueNeighborRemesh(chunkX, chunkY, chunkZ);
     
-    console.log(`[VoxelWorld] Received chunk (${chunkX}, ${chunkY}, ${chunkZ}) seq=${lastBuildSeq}, ${voxelData.length} voxels`);
+    // console.log(`[VoxelWorld] Received chunk (${chunkX}, ${chunkY}, ${chunkZ}) seq=${lastBuildSeq}, ${voxelData.length} voxels`);
   }
 
   /**
@@ -309,7 +309,7 @@ export class VoxelWorld {
       if (material > 0) solidCount++;
     }
     // eslint-disable-next-line no-console
-    console.log(`Chunk [${cx},${cy},${cz}] solid voxels: ${solidCount}`);
+    // console.log(`Chunk [${cx},${cy},${cz}] solid voxels: ${solidCount}`);
 
     return chunk;
   }
@@ -486,7 +486,7 @@ export class VoxelWorld {
       }
     }
 
-    console.log(`[VoxelWorld] Applied build to ${modifiedKeys.length}/${affectedKeys.length} loaded chunks`);
+    // console.log(`[VoxelWorld] Applied build to ${modifiedKeys.length}/${affectedKeys.length} loaded chunks`);
     return modifiedKeys;
   }
 

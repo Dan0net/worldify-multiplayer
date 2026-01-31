@@ -10,7 +10,7 @@
  * - Clean separation between React and imperative game code
  */
 
-import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState } from './store';
+import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState } from './store';
 import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 
 // Cache getState for cleaner access - always returns fresh state
@@ -150,6 +150,24 @@ class StoreBridge {
    */
   setBuildHasValidTarget(valid: boolean): void {
     getState().setBuildHasValidTarget(valid);
+  }
+
+  // Texture/material system
+
+  get textureState(): TextureLoadingState {
+    return getState().textureState;
+  }
+
+  get textureProgress(): number {
+    return getState().textureProgress;
+  }
+
+  setTextureState(state: TextureLoadingState): void {
+    getState().setTextureState(state);
+  }
+
+  setTextureProgress(progress: number): void {
+    getState().setTextureProgress(progress);
   }
 }
 

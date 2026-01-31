@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { VOXEL_SCALE } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
-import { getMaterialColor, voxelMaterial } from './VoxelMaterials.js';
+import { getMaterialColor, getTerrainMaterial } from './VoxelMaterials.js';
 
 // ============== Helper Functions ==============
 
@@ -30,7 +30,7 @@ function createGeometryFromOutput(output: SurfaceNetOutput): THREE.BufferGeometr
   // Indices
   geometry.setIndex(new THREE.BufferAttribute(output.indices, 1));
 
-  // Vertex colors from materials
+  // Vertex colors from materials (fallback for simple rendering)
   const colors = new Float32Array(output.vertexCount * 3);
   for (let i = 0; i < output.vertexCount; i++) {
     const materialId = output.materials[i];
@@ -40,6 +40,28 @@ function createGeometryFromOutput(output: SurfaceNetOutput): THREE.BufferGeometr
     colors[i * 3 + 2] = color.b;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  // Material IDs for TerrainMaterial shader (vec3: primary, secondary, tertiary)
+  // Currently using single material per vertex - future: add blending from SurfaceNet
+  const materialIds = new Float32Array(output.vertexCount * 3);
+  for (let i = 0; i < output.vertexCount; i++) {
+    const materialId = output.materials[i];
+    // Set all three slots to the same material (no blending yet)
+    materialIds[i * 3] = materialId;
+    materialIds[i * 3 + 1] = materialId;
+    materialIds[i * 3 + 2] = materialId;
+  }
+  geometry.setAttribute('materialIds', new THREE.BufferAttribute(materialIds, 3));
+
+  // Material weights for blending (vec3: weights for primary, secondary, tertiary)
+  // Currently 100% primary material - future: add smooth blending
+  const materialWeights = new Float32Array(output.vertexCount * 3);
+  for (let i = 0; i < output.vertexCount; i++) {
+    materialWeights[i * 3] = 1.0;     // Primary = 100%
+    materialWeights[i * 3 + 1] = 0.0; // Secondary = 0%
+    materialWeights[i * 3 + 2] = 0.0; // Tertiary = 0%
+  }
+  geometry.setAttribute('materialWeights', new THREE.BufferAttribute(materialWeights, 3));
 
   // Compute bounds for frustum culling
   geometry.computeBoundingBox();
@@ -52,7 +74,7 @@ function createGeometryFromOutput(output: SurfaceNetOutput): THREE.BufferGeometr
  * Create a mesh from geometry with standard settings.
  */
 function createMesh(geometry: THREE.BufferGeometry, chunkKey: string): THREE.Mesh {
-  const mesh = new THREE.Mesh(geometry, voxelMaterial);
+  const mesh = new THREE.Mesh(geometry, getTerrainMaterial());
   mesh.userData.chunkKey = chunkKey;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
