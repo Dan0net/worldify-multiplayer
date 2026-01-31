@@ -134,6 +134,96 @@ Route for viewing stamps and terrain samples.
 
 ---
 
+## Map System
+
+### Architecture
+
+WebSocket-based tile streaming (same pattern as voxel chunks).
+
+```
+┌─────────────┐     SubscribeMapRegion      ┌─────────────┐
+│   Client    │ ──────────────────────────► │   Server    │
+│  (Canvas)   │                             │  (Room)     │
+│             │ ◄────────────────────────── │             │
+└─────────────┘       MapTile (PNG)         └─────────────┘
+                                                   │
+                                                   ▼
+                                            ┌─────────────┐
+                                            │   LevelDB   │
+                                            │  (tiles/)   │
+                                            └─────────────┘
+```
+
+### Why WebSocket (not HTTP)?
+
+- Tiles update in real-time when players build
+- Same infrastructure as voxel streaming
+- Server pushes updates, no polling needed
+- Consistent architecture
+
+### Protocol Messages
+
+```typescript
+// Client → Server (0x30-0x3F range)
+SubscribeMapRegion   0x30  { minX: i16, minZ: i16, maxX: i16, maxZ: i16, zoom: u8 }
+UnsubscribeMapRegion 0x31  { }
+
+// Server → Client (0xB0-0xBF range)
+MapTile              0xB0  { x: i16, z: i16, zoom: u8, png: bytes }
+```
+
+### Client: Canvas-based Map Component
+
+Custom canvas (not Leaflet) for WS compatibility.
+
+```typescript
+// MapUI.tsx
+- Pan: mouse drag
+- Zoom: wheel (discrete zoom levels)
+- Click: teleport to location
+- Render: draw tile images on canvas grid
+- Subscribe: send region on pan/zoom, receive tile updates
+```
+
+### Server: Tile Generation + Subscription
+
+```typescript
+// TileManager.ts
+class TileManager {
+  // Track which clients are viewing which regions
+  private subscriptions: Map<ClientId, MapRegion>;
+  
+  // Generate tile from HeightSampler
+  generateTile(x: number, z: number, zoom: number): Uint8Array;
+  
+  // On chunk modification, regenerate affected tile + push to viewers
+  onChunkModified(cx: number, cy: number, cz: number): void;
+}
+```
+
+### Tile Storage (LevelDB)
+
+```
+Key:    tile:{zoom}:{x}:{z}
+Value:  PNG bytes (256×256)
+
+Key:    tileHeight:{x}:{z}
+Value:  Float32Array (256×256) - for spawn placement
+```
+
+### Tile Invalidation Flow
+
+```
+Player builds → Chunk modified → markTileDirty(tileX, tileZ)
+                                        │
+                ┌───────────────────────┴───────────────────────┐
+                ▼                                               ▼
+        Regenerate tile                                 Push to subscribers
+        Store in LevelDB                                (if any viewing)
+```
+
+---
+
 ## File Structure
 
 ```
@@ -156,12 +246,32 @@ shared/src/terrain/
 
 ## Implementation Order
 
-1. **FastNoiseLite setup** - Add package, create NoiseLayer wrapper
-2. **HeightSampler** - Composable layers with warp
-3. **Refactor TerrainGenerator** - Use new HeightSampler
-4. **Cache toggle** - F8 debug mode
-5. **StampData + generators** - Tree/rock stamps
-6. **StampPlacer** - Margin-aware placement
-7. **Preview page** - Stamp/terrain viewer
-8. **MaterialSampler** - 3D underground materials
-9. **LevelDB height cache** - Map tile support
+### Phase 1: Map View (Visual Feedback First)
+
+1. **Canvas MapUI component** - Pan/zoom/render tiles on canvas
+2. **Map protocol messages** - SubscribeMapRegion, MapTile in shared
+3. **Server TileManager** - Generate tiles from current HeightSampler, track subscriptions
+4. **Wire up client↔server** - Subscribe on map open, render received tiles
+
+### Phase 2: Noise Upgrade
+
+5. **FastNoiseLite setup** - Add package, create NoiseLayer wrapper
+6. **HeightSampler refactor** - Composable layers with warp
+7. **Integrate HeightSampler** - Replace current noise in TerrainGenerator
+
+### Phase 3: Dev Tooling
+
+8. **F8 cache toggle** - Disable chunk saving/caching, clear cache
+9. **Tile invalidation** - Regenerate + push tiles on chunk modification
+
+### Phase 4: Stamps & Objects
+
+10. **StampData + generators** - Tree/rock stamp definitions
+11. **StampPlacer** - Margin-aware placement in chunks
+12. **Preview page** - `/preview` route for stamp/terrain viewing
+
+### Phase 5: Polish
+
+13. **MaterialSampler** - 3D underground materials
+14. **Height storage** - LevelDB cache for spawn placement
+
