@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useGameStore, TERRAIN_DEBUG_MODE_NAMES } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode, TerrainDebugMode } from '../game/material/TerrainMaterial';
+import { togglePostProcessing as togglePostProcessingEffect } from '../game/scene/postprocessing';
 
 export function DebugPanel() {
   const { 
@@ -18,6 +19,8 @@ export function DebugPanel() {
     terrainDebugMode,
     cycleTerrainDebugMode,
     setTerrainDebugMode,
+    postProcessingEnabled,
+    togglePostProcessing,
   } = useGameStore();
 
   const [cacheClearing, setCacheClearing] = useState(false);
@@ -27,6 +30,11 @@ export function DebugPanel() {
     await textureCache.clearCache();
     setCacheClearing(false);
     console.log('Texture cache cleared - reload page to re-download');
+  };
+
+  const handleTogglePostProcessing = () => {
+    togglePostProcessingEffect();
+    togglePostProcessing();
   };
 
   // Keyboard shortcuts for voxel debug toggles
@@ -61,6 +69,10 @@ export function DebugPanel() {
         case 'F7':
           e.preventDefault();
           cycleTerrainDebugMode();
+          break;
+        case 'F8':
+          e.preventDefault();
+          handleTogglePostProcessing();
           break;
       }
     };
@@ -143,7 +155,7 @@ export function DebugPanel() {
       
       {/* Terrain Shader Debug */}
       <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
-        <div className="mb-1 text-green-500">Shader (F7):</div>
+        <div className="mb-1 text-green-500">Shader (F7-F8):</div>
         <label 
           className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
           onClick={cycleTerrainDebugMode}
@@ -152,6 +164,15 @@ export function DebugPanel() {
             {terrainDebugMode > 0 ? '🔍' : '○'}
           </span>
           <span>F7 {TERRAIN_DEBUG_MODE_NAMES[terrainDebugMode]}</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+          <input
+            type="checkbox"
+            checked={postProcessingEnabled}
+            onChange={handleTogglePostProcessing}
+            className="accent-yellow-400"
+          />
+          <span>F8 Post-FX</span>
         </label>
       </div>
       

@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
 import { setupLighting, updateShadowLight } from './scene/lighting';
+import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
 import { storeBridge } from '../state/bridge';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
@@ -81,8 +82,24 @@ export class GameCore {
     createCamera();
     setupLighting();
 
-    // Initialize voxel terrain system
+    // Initialize post-processing (ambient occlusion + bloom)
     const scene = getScene();
+    const camera = getCamera();
+    if (scene && camera) {
+      initPostProcessing(this.renderer, scene, camera, {
+        enabled: true,
+        // SSAO settings from worldify-app
+        ssaoKernelRadius: 12,
+        ssaoMinDistance: 0.002,
+        // Bloom settings from worldify-app
+        bloomEnabled: true,
+        bloomIntensity: 0.3,
+        bloomThreshold: 0.85,
+        bloomRadius: 0.4,
+      });
+    }
+
+    // Initialize voxel terrain system
     if (scene) {
       this.voxelIntegration = new VoxelIntegration(scene, {
         debugEnabled: false,
@@ -210,10 +227,14 @@ export class GameCore {
     // Always update remote players (visible in all modes)
     this.playerManager.updateRemotePlayers(deltaMs);
 
-    // Render
+    // Render with post-processing (SSAO + bloom) or fallback to direct render
     const scene = getScene();
     if (scene && camera) {
-      this.renderer.render(scene, camera);
+      if (isPostProcessingEnabled()) {
+        renderWithPostProcessing();
+      } else {
+        this.renderer.render(scene, camera);
+      }
     }
   };
 
@@ -330,6 +351,7 @@ export class GameCore {
       camera.updateProjectionMatrix();
     }
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    resizePostProcessing(window.innerWidth, window.innerHeight);
   };
 
   dispose(): void {
@@ -349,6 +371,9 @@ export class GameCore {
     if (this.voxelIntegration) {
       this.voxelIntegration.dispose();
     }
+
+    // Clean up post-processing
+    disposePostProcessing();
 
     window.removeEventListener('resize', this.onResize);
     this.renderer.dispose();

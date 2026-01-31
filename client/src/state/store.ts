@@ -71,6 +71,9 @@ interface GameState {
   
   // Terrain shader debug
   terrainDebugMode: TerrainDebugMode;
+  
+  // Post-processing (SSAO + bloom)
+  postProcessingEnabled: boolean;
 
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -91,6 +94,10 @@ interface GameState {
   // Terrain debug actions
   setTerrainDebugMode: (mode: TerrainDebugMode) => void;
   cycleTerrainDebugMode: () => void;
+  
+  // Post-processing actions
+  togglePostProcessing: () => void;
+  setPostProcessingEnabled: (enabled: boolean) => void;
   
   // Build actions
   setBuildPreset: (presetId: number) => void;
@@ -141,6 +148,9 @@ export const useGameStore = create<GameState>((set) => ({
   
   // Terrain debug initial state
   terrainDebugMode: 0 as TerrainDebugMode,
+  
+  // Post-processing initial state
+  postProcessingEnabled: true,
 
   // Actions
   setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -178,6 +188,12 @@ export const useGameStore = create<GameState>((set) => ({
   cycleTerrainDebugMode: () => set((state) => ({
     terrainDebugMode: ((state.terrainDebugMode + 1) % 9) as TerrainDebugMode,
   })),
+  
+  // Post-processing actions
+  togglePostProcessing: () => set((state) => ({
+    postProcessingEnabled: !state.postProcessingEnabled,
+  })),
+  setPostProcessingEnabled: (enabled) => set({ postProcessingEnabled: enabled }),
   
   // Build actions
   setBuildPreset: (presetId) => set((state) => ({
