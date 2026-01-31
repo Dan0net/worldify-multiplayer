@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
-import { setupLighting } from './scene/lighting';
+import { setupLighting, updateShadowLight } from './scene/lighting';
 import { storeBridge } from '../state/bridge';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
@@ -60,6 +60,10 @@ export class GameCore {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x87ceeb); // Sky blue
+    
+    // Enable shadow mapping
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.VSMShadowMap;
 
     // Add canvas to DOM
     const canvas = this.renderer.domElement;
@@ -302,6 +306,9 @@ export class GameCore {
     if (this.voxelIntegration) {
       this.voxelIntegration.update(localPlayer.position);
     }
+
+    // Update shadow light to follow player
+    updateShadowLight(localPlayer.position);
 
     // Update camera and build system
     if (camera) {

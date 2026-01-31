@@ -32,6 +32,8 @@ export class PlayerRemote {
     });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     body.position.y = -0.65;
+    body.castShadow = true;
+    body.receiveShadow = true;
     this.mesh.add(body);
 
     // Head (larger, rounder for friendly look)
@@ -43,6 +45,8 @@ export class PlayerRemote {
     });
     const head = new THREE.Mesh(headGeo, headMat);
     head.position.y = 0.08;
+    head.castShadow = true;
+    head.receiveShadow = true;
     this.mesh.add(head);
 
     // --- Face elements ---
