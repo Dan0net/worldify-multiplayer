@@ -17,6 +17,7 @@ export function SpectatorOverlay() {
   const spawnReady = useGameStore((s) => s.spawnReady);
   const setGameMode = useGameStore((s) => s.setGameMode);
   const textureState = useGameStore((s) => s.textureState);
+  const textureProgress = useGameStore((s) => s.textureProgress);
   
   const [hdCached, setHdCached] = useState<boolean | null>(null);
 
@@ -32,10 +33,8 @@ export function SpectatorOverlay() {
 
   const isConnected = connectionStatus === 'connected';
   const canStart = isConnected && spawnReady;
-  const isLoadingTextures = textureState === 'loading-low' || textureState === 'loading-high';
+  const isLoadingHD = textureState === 'loading-high';
   const hasHD = textureState === 'high';
-  // Only show HD button if: we have low textures, HD is not cached, and not already loading
-  const showHDButton = textureState === 'low' && hdCached === false;
 
   const handleStart = () => {
     if (!canStart) return;
@@ -45,18 +44,32 @@ export function SpectatorOverlay() {
     controls.requestPointerLock();
   };
 
-  const handleDownloadHD = () => {
-    if (isLoadingTextures || hasHD) return;
-    materialManager.upgradeToHighResolution();
-  };
-
   const handleToggleHD = () => {
-    if (isLoadingTextures) return;
+    if (isLoadingHD) return;
     if (hasHD) {
       materialManager.downgradeToLowResolution();
     } else {
       materialManager.upgradeToHighResolution();
     }
+  };
+
+  // Determine the label text for HD toggle
+  const getHDLabel = () => {
+    const progress = Math.round(textureProgress * 100);
+    if (isLoadingHD) {
+      // Check if loading from cache or downloading
+      if (hdCached) {
+        return `Loading from cache ${progress}%`;
+      }
+      return `Downloading ${progress}%`;
+    }
+    if (textureState === 'loading-low') {
+      return `Loading ${progress}%`;
+    }
+    if (hasHD) {
+      return 'HD textures';
+    }
+    return 'HD textures (~540MB)';
   };
 
   return (
@@ -100,57 +113,42 @@ export function SpectatorOverlay() {
         </button>
       )}
 
-      {/* HD Textures download button - only show if low-res and HD not cached */}
-      {isConnected && showHDButton && (
-        <button
-          onClick={handleDownloadHD}
-          className="mt-4 py-3 px-8 text-sm text-white border border-white/30 rounded-lg pointer-events-auto transition-all duration-100 bg-white/10 hover:bg-white/20 cursor-pointer"
-        >
-          ⬇ Download HD Textures (~540 MB)
-        </button>
-      )}
-      
-      {/* HD Textures toggle - show when HD is active, cached, or loading */}
-      {isConnected && (hasHD || (textureState === 'low' && hdCached) || isLoadingTextures) && (
+      {/* HD Textures toggle - always show when connected */}
+      {isConnected && (
         <button
           onClick={handleToggleHD}
-          disabled={isLoadingTextures}
-          className={`mt-4 py-2 px-4 text-xs rounded pointer-events-auto transition-all duration-100 flex items-center gap-2 w-40 ${
-            isLoadingTextures
+          disabled={isLoadingHD || textureState === 'loading-low'}
+          className={`mt-4 py-2 px-4 text-xs rounded pointer-events-auto transition-all duration-100 flex items-center gap-2 ${
+            isLoadingHD || textureState === 'loading-low'
               ? 'text-yellow-400 bg-yellow-900/30 cursor-wait'
               : hasHD
                 ? 'text-green-400 bg-green-900/30 hover:bg-green-900/50 cursor-pointer'
                 : 'text-gray-400 bg-gray-900/30 hover:bg-gray-900/50 cursor-pointer'
           }`}
         >
-          {isLoadingTextures ? (
-            <>
-              <span className="inline-block w-9 h-5 rounded-full relative bg-yellow-600/50">
-                <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow flex items-center justify-center">
-                  <svg className="animate-spin w-3 h-3 text-yellow-600" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                </span>
-              </span>
-              <span>Loading...</span>
-            </>
-          ) : (
-            <>
-              <span 
-                className={`inline-block w-9 h-5 rounded-full relative transition-colors ${
-                  hasHD ? 'bg-green-600' : 'bg-gray-600'
-                }`}
-              >
-                <span 
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
-                    hasHD ? 'translate-x-4' : 'translate-x-0'
-                  }`} 
-                />
-              </span>
-              <span>HD Textures</span>
-            </>
-          )}
+          <span 
+            className={`inline-block w-9 h-5 rounded-full relative transition-colors ${
+              isLoadingHD || textureState === 'loading-low'
+                ? 'bg-yellow-600/50' 
+                : hasHD 
+                  ? 'bg-green-600' 
+                  : 'bg-gray-600'
+            }`}
+          >
+            <span 
+              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 flex items-center justify-center ${
+                hasHD || isLoadingHD ? 'translate-x-4' : 'translate-x-0'
+              }`}
+            >
+              {(isLoadingHD || textureState === 'loading-low') && (
+                <svg className="animate-spin w-3 h-3 text-yellow-600" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+              )}
+            </span>
+          </span>
+          <span>{getHDLabel()}</span>
         </button>
       )}
 
