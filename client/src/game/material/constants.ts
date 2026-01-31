@@ -13,7 +13,7 @@ export const MATERIAL_BASE_URL = import.meta.env.VITE_MATERIAL_URL || '/material
  * Texture repeat scale for tri-planar mapping.
  * Lower values = more zoomed in, higher = more repetition.
  */
-export const TERRAIN_MATERIAL_REPEAT_SCALE = 0.6;
+export const TERRAIN_MATERIAL_REPEAT_SCALE = 2.0;
 
 /**
  * Blend offset for tri-planar normal rotation (radians).

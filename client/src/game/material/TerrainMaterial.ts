@@ -234,6 +234,15 @@ const fragmentShaderPrefix = /* glsl */ `
     vec4 m2 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.z);
     return m0 * matBlend.x + m1 * matBlend.y + m2 * matBlend.z;
   }
+  
+  // Sample a single axis with material blending
+  vec4 sampleAxisMaterialBlend(sampler2DArray tex, vec2 uv) {
+    vec3 matBlend = getWeightedBlend();
+    vec4 m0 = texture(tex, vec3(uv * repeatScale, vMaterialIds.x));
+    vec4 m1 = texture(tex, vec3(uv * repeatScale, vMaterialIds.y));
+    vec4 m2 = texture(tex, vec3(uv * repeatScale, vMaterialIds.z));
+    return m0 * matBlend.x + m1 * matBlend.y + m2 * matBlend.z;
+  }
 `;
 
 // ============== TerrainMaterial Class ==============
@@ -255,6 +264,9 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       metalness: 0.05,
       transparent: isTransparent,
       side: isTransparent ? THREE.DoubleSide : THREE.FrontSide,
+      // Enable normal mapping - requires a dummy texture to activate USE_NORMALMAP
+      normalMap: new THREE.Texture(),
+      normalScale: new THREE.Vector2(-1, -1),
     });
     
     // Set up dummy textures initially
@@ -315,6 +327,37 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
           vec3 triBlend_ao = getTriPlanarBlend(vWorldNormal);
           float ambientOcclusion = sampleMaterialBlend(aoArray, pos_ao, triBlend_ao).r;
           reflectedLight.indirectDiffuse *= ambientOcclusion;
+        `
+      );
+      
+      // Replace normal map calculation with tri-planar tangent frame
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <normal_fragment_maps>',
+        /* glsl */ `
+          #ifdef USE_NORMALMAP
+            vec3 pos_n = vWorldPosition / 8.0;
+            vec3 triBlend_n = getTriPlanarBlend(vWorldNormal);
+            
+            // Sample normal maps for each axis with material blending
+            vec3 normalSampleX = sampleAxisMaterialBlend(normalArray, pos_n.zy).xyz * 2.0 - 1.0;
+            normalSampleX.xy *= normalScale;
+            vec3 normalSampleY = sampleAxisMaterialBlend(normalArray, pos_n.xz).xyz * 2.0 - 1.0;
+            normalSampleY.xy *= normalScale;
+            vec3 normalSampleZ = sampleAxisMaterialBlend(normalArray, pos_n.xy).xyz * 2.0 - 1.0;
+            normalSampleZ.xy *= normalScale;
+            
+            // Compute tangent frames for each projection axis
+            mat3 tbnX = getTangentFrame(-vViewPosition, normalize(vNormal), pos_n.zy);
+            mat3 tbnY = getTangentFrame(-vViewPosition, normalize(vNormal), pos_n.xz);
+            mat3 tbnZ = getTangentFrame(-vViewPosition, normalize(vNormal), pos_n.xy);
+            
+            // Transform normals to world space and blend
+            vec3 normalX = normalize(tbnX * normalSampleX);
+            vec3 normalY = normalize(tbnY * normalSampleY);
+            vec3 normalZ = normalize(tbnZ * normalSampleZ);
+            
+            normal = normalize(normalX * triBlend_n.x + normalY * triBlend_n.y + normalZ * triBlend_n.z);
+          #endif
         `
       );
     };
