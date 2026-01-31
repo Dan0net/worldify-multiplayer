@@ -130,7 +130,9 @@ export function DebugPanel() {
       
       {/* Texture Cache */}
       <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
-        <div className="mb-1 text-green-500">Textures: {textureState}</div>
+        <a href="/materials" className="mb-1 text-green-500 hover:text-green-300 underline block">
+          Textures: {textureState}
+        </a>
         <label 
           className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
           onClick={handleClearTextureCache}
