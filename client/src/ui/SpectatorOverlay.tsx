@@ -50,6 +50,15 @@ export function SpectatorOverlay() {
     materialManager.upgradeToHighResolution();
   };
 
+  const handleToggleHD = () => {
+    if (isLoadingTextures) return;
+    if (hasHD) {
+      materialManager.downgradeToLowResolution();
+    } else {
+      materialManager.upgradeToHighResolution();
+    }
+  };
+
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/30 z-50 pointer-events-none">
       {/* Game title and info */}
@@ -101,11 +110,48 @@ export function SpectatorOverlay() {
         </button>
       )}
       
-      {/* Show HD active indicator */}
-      {isConnected && hasHD && (
-        <div className="mt-4 py-2 px-4 text-xs text-green-400 bg-green-900/30 rounded">
-          ✓ HD Textures Active
-        </div>
+      {/* HD Textures toggle - show when HD is active, cached, or loading */}
+      {isConnected && (hasHD || (textureState === 'low' && hdCached) || isLoadingTextures) && (
+        <button
+          onClick={handleToggleHD}
+          disabled={isLoadingTextures}
+          className={`mt-4 py-2 px-4 text-xs rounded pointer-events-auto transition-all duration-100 flex items-center gap-2 w-40 ${
+            isLoadingTextures
+              ? 'text-yellow-400 bg-yellow-900/30 cursor-wait'
+              : hasHD
+                ? 'text-green-400 bg-green-900/30 hover:bg-green-900/50 cursor-pointer'
+                : 'text-gray-400 bg-gray-900/30 hover:bg-gray-900/50 cursor-pointer'
+          }`}
+        >
+          {isLoadingTextures ? (
+            <>
+              <span className="inline-block w-9 h-5 rounded-full relative bg-yellow-600/50">
+                <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow flex items-center justify-center">
+                  <svg className="animate-spin w-3 h-3 text-yellow-600" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                </span>
+              </span>
+              <span>Loading...</span>
+            </>
+          ) : (
+            <>
+              <span 
+                className={`inline-block w-9 h-5 rounded-full relative transition-colors ${
+                  hasHD ? 'bg-green-600' : 'bg-gray-600'
+                }`}
+              >
+                <span 
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                    hasHD ? 'translate-x-4' : 'translate-x-0'
+                  }`} 
+                />
+              </span>
+              <span>HD Textures</span>
+            </>
+          )}
+        </button>
       )}
 
       {/* Controls hint - only show when connected */}

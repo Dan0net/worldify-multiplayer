@@ -39,6 +39,16 @@ export class Controls {
   private onKeyDown = (e: KeyboardEvent): void => {
     this.keys.add(e.code);
 
+    // Debug: F6 to clear texture cache
+    if (e.code === 'F6') {
+      import('../material/TextureCache.js').then(({ textureCache }) => {
+        textureCache.clearCache().then(() => {
+          console.log('Texture cache cleared - reload page to re-download');
+        });
+      });
+      return;
+    }
+
     // Build preset selection (0-9)
     if (e.code >= 'Digit0' && e.code <= 'Digit9') {
       const digit = parseInt(e.code.charAt(5));

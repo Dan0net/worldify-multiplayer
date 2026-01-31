@@ -175,6 +175,48 @@ class TextureCache {
       return false;
     }
   }
+
+  /**
+   * Get the user's preferred texture resolution.
+   * Returns 'high' if user explicitly enabled HD, 'low' if disabled, null if no preference.
+   */
+  async getUserPreference(): Promise<'low' | 'high' | null> {
+    try {
+      const db = await this.openDB();
+      
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(META_STORE, 'readonly');
+        const store = transaction.objectStore(META_STORE);
+        const request = store.get('userPreference');
+        
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result || null);
+      });
+    } catch (error) {
+      console.error('Error fetching user preference:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Save the user's preferred texture resolution.
+   */
+  async setUserPreference(preference: 'low' | 'high'): Promise<void> {
+    try {
+      const db = await this.openDB();
+      
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction(META_STORE, 'readwrite');
+        const store = transaction.objectStore(META_STORE);
+        const request = store.put(preference, 'userPreference');
+        
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve();
+      });
+    } catch (error) {
+      console.error('Error saving user preference:', error);
+    }
+  }
 }
 
 export const textureCache = new TextureCache();

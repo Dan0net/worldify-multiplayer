@@ -10,6 +10,7 @@ import {
   upgradeToHighRes, 
   isHighResCached 
 } from './TerrainMaterial.js';
+import { textureCache } from './TextureCache.js';
 
 class MaterialManager {
   private initialized = false;
@@ -17,15 +18,21 @@ class MaterialManager {
 
   /**
    * Initialize the material system.
-   * Loads HD textures if cached, otherwise loads low-res.
+   * Respects user preference: if user chose HD and it's cached, load HD.
+   * If user chose low, load low. If no preference and HD cached, load HD.
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    // Check if HD is cached - if so, load it directly
     const hdCached = await isHighResCached();
+    const userPref = await textureCache.getUserPreference();
     
-    if (hdCached) {
+    // Decide which resolution to load:
+    // - If user explicitly chose 'low', use low
+    // - If user chose 'high' or no preference, use HD if cached
+    const shouldLoadHD = userPref === 'high' || (userPref !== 'low' && hdCached);
+    
+    if (shouldLoadHD && hdCached) {
       storeBridge.setTextureState('loading-high');
       storeBridge.setTextureProgress(0);
 
@@ -38,10 +45,10 @@ class MaterialManager {
         storeBridge.setTextureProgress(1);
         this.initialized = true;
 
-        console.log('Material system initialized with cached HD textures');
+        console.log('Material system initialized with HD textures (user preference)');
         return;
       } catch (error) {
-        console.warn('Failed to load cached HD textures, falling back to low-res:', error);
+        console.warn('Failed to load HD textures, falling back to low-res:', error);
       }
     }
 
@@ -86,12 +93,50 @@ class MaterialManager {
 
       storeBridge.setTextureState('high');
       storeBridge.setTextureProgress(1);
+      
+      // Save user preference
+      await textureCache.setUserPreference('high');
 
       console.log('Upgraded to high-res textures');
     } catch (error) {
       console.error('Failed to upgrade to high-res textures:', error);
       // Revert to low state
       storeBridge.setTextureState('low');
+    } finally {
+      this.upgrading = false;
+    }
+  }
+
+  /**
+   * Downgrade to low-resolution textures.
+   * Call this when user wants to reduce memory usage.
+   */
+  async downgradeToLowResolution(): Promise<void> {
+    if (this.upgrading) return;
+    if (storeBridge.textureState === 'low' || storeBridge.textureState === 'loading-low') {
+      return;
+    }
+
+    this.upgrading = true;
+    storeBridge.setTextureState('loading-low');
+    storeBridge.setTextureProgress(0);
+
+    try {
+      await initializeMaterials('low', (loaded, total) => {
+        storeBridge.setTextureProgress(loaded / total);
+      });
+
+      storeBridge.setTextureState('low');
+      storeBridge.setTextureProgress(1);
+      
+      // Save user preference
+      await textureCache.setUserPreference('low');
+
+      console.log('Downgraded to low-res textures');
+    } catch (error) {
+      console.error('Failed to downgrade to low-res textures:', error);
+      // Keep high state if downgrade fails
+      storeBridge.setTextureState('high');
     } finally {
       this.upgrading = false;
     }

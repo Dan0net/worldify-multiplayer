@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useGameStore } from '../state/store';
+import { textureCache } from '../game/material/TextureCache';
 
 export function DebugPanel() {
   const { 
@@ -12,7 +13,17 @@ export function DebugPanel() {
     voxelDebug,
     voxelStats,
     toggleVoxelDebug,
+    textureState,
   } = useGameStore();
+
+  const [cacheClearing, setCacheClearing] = useState(false);
+
+  const handleClearTextureCache = async () => {
+    setCacheClearing(true);
+    await textureCache.clearCache();
+    setCacheClearing(false);
+    console.log('Texture cache cleared - reload page to re-download');
+  };
 
   // Keyboard shortcuts for voxel debug toggles
   useEffect(() => {
@@ -114,6 +125,20 @@ export function DebugPanel() {
             className="accent-yellow-400"
           />
           <span>F5 Wireframe</span>
+        </label>
+      </div>
+      
+      {/* Texture Cache */}
+      <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
+        <div className="mb-1 text-green-500">Textures: {textureState}</div>
+        <label 
+          className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
+          onClick={handleClearTextureCache}
+        >
+          <span className="w-4 h-4 flex items-center justify-center text-red-400">
+            {cacheClearing ? '⏳' : '✕'}
+          </span>
+          <span>F6 Clear Cache</span>
         </label>
       </div>
     </div>
