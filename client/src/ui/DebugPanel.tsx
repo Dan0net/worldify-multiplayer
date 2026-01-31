@@ -3,6 +3,7 @@ import { useGameStore, TERRAIN_DEBUG_MODE_NAMES } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
 import { togglePostProcessing as togglePostProcessingEffect } from '../game/scene/postprocessing';
+import { storeBridge } from '../state/bridge';
 
 export function DebugPanel() {
   const { 
@@ -20,15 +21,30 @@ export function DebugPanel() {
     cycleTerrainDebugMode,
     postProcessingEnabled,
     togglePostProcessing,
+    forceRegenerateChunks,
   } = useGameStore();
 
   const [cacheClearing, setCacheClearing] = useState(false);
+  const [chunksClearing, setChunksClearing] = useState(false);
 
   const handleClearTextureCache = async () => {
     setCacheClearing(true);
     await textureCache.clearCache();
     setCacheClearing(false);
     console.log('Texture cache cleared - reload page to re-download');
+  };
+
+  const handleClearChunks = () => {
+    setChunksClearing(true);
+    storeBridge.clearAndReloadChunks();
+    // Reset after a short delay (chunks will reload async)
+    setTimeout(() => setChunksClearing(false), 500);
+  };
+
+  const handleToggleForceRegenerate = () => {
+    storeBridge.toggleForceRegenerate();
+    // Also clear chunks so they reload with new setting
+    handleClearChunks();
   };
 
   const handleTogglePostProcessing = () => {
@@ -72,6 +88,10 @@ export function DebugPanel() {
         case 'F8':
           e.preventDefault();
           handleTogglePostProcessing();
+          break;
+        case 'F9':
+          e.preventDefault();
+          handleToggleForceRegenerate();
           break;
       }
     };
@@ -188,6 +208,18 @@ export function DebugPanel() {
             {cacheClearing ? '⏳' : '✕'}
           </span>
           <span>F6 Clear Cache</span>
+        </label>
+        <label 
+          className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
+          onClick={handleToggleForceRegenerate}
+        >
+          <input
+            type="checkbox"
+            checked={forceRegenerateChunks}
+            onChange={handleToggleForceRegenerate}
+            className="accent-red-400"
+          />
+          <span className={forceRegenerateChunks ? 'text-red-400' : ''}>F9 Force Regen</span>
         </label>
       </div>
     </div>

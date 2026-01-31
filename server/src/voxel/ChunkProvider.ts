@@ -11,6 +11,7 @@ import {
   chunkKey,
   TerrainGenerator,
 } from '@worldify/shared';
+import { isForceRegenerate } from '../storage/StorageManager.js';
 
 /**
  * Interface for chunk storage - allows different backing stores.
@@ -57,32 +58,42 @@ export class ChunkProvider {
   /**
    * Get a chunk asynchronously, loading from disk if available.
    * Creates with terrain generation if not found anywhere.
+   * Respects forceRegenerate mode from StorageManager.
    */
   async getOrCreateAsync(cx: number, cy: number, cz: number): Promise<ChunkData> {
     const key = chunkKey(cx, cy, cz);
     
-    // Try cache first
-    let chunk = this.store.get(key);
-    if (chunk) {
-      console.log(`[chunk] ${key} from cache`);
-      return chunk;
-    }
-
-    // Try async load from disk if supported
-    if (this.store.getAsync) {
-      chunk = await this.store.getAsync(key);
+    // Check if force regenerate mode is enabled
+    const forceRegen = isForceRegenerate();
+    
+    if (!forceRegen) {
+      // Try cache first
+      let chunk = this.store.get(key);
       if (chunk) {
-        console.log(`[chunk] ${key} loaded from disk`);
+        console.log(`[chunk] ${key} from cache`);
         return chunk;
+      }
+
+      // Try async load from disk if supported
+      if (this.store.getAsync) {
+        chunk = await this.store.getAsync(key);
+        if (chunk) {
+          console.log(`[chunk] ${key} loaded from disk`);
+          return chunk;
+        }
       }
     }
 
-    // Generate new chunk
-    console.log(`[chunk] ${key} generated (not on disk)`);
-    chunk = new ChunkData(cx, cy, cz);
+    // Generate new chunk (or force regenerate)
+    console.log(`[chunk] ${key} generated${forceRegen ? ' (force regen)' : ' (not on disk)'}`);
+    const chunk = new ChunkData(cx, cy, cz);
     const generatedData = this.terrainGenerator.generateChunk(cx, cy, cz);
     chunk.data.set(generatedData);
-    this.store.set(key, chunk);
+    
+    // Only persist if not in force regenerate mode
+    if (!forceRegen) {
+      this.store.set(key, chunk);
+    }
 
     return chunk;
   }

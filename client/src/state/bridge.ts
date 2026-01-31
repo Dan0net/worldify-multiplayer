@@ -11,7 +11,8 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState } from './store';
-import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode, encodeDevMode } from '@worldify/shared';
+import { sendBinary } from '../net/netClient.js';
 
 // Cache getState for cleaner access - always returns fresh state
 const getState = useGameStore.getState;
@@ -19,6 +20,9 @@ const getState = useGameStore.getState;
 class StoreBridge {
   private lastUpdateTime = 0;
   private readonly updateIntervalMs = 100; // 10 Hz
+
+  // Callback for clearing chunks (set by GameCore)
+  private clearChunksCallback: (() => void) | null = null;
 
   // ============== READS (game code reads state here) ==============
 
@@ -168,6 +172,49 @@ class StoreBridge {
 
   setTextureProgress(progress: number): void {
     getState().setTextureProgress(progress);
+  }
+
+  // Chunk clearing (for dev/debug)
+
+  /**
+   * Register callback for clearing chunks.
+   * Called by GameCore during initialization.
+   */
+  setClearChunksCallback(callback: () => void): void {
+    this.clearChunksCallback = callback;
+  }
+
+  /**
+   * Clear all chunks and reload from server.
+   * Used by F9 debug key.
+   */
+  clearAndReloadChunks(): void {
+    if (this.clearChunksCallback) {
+      this.clearChunksCallback();
+    } else {
+      console.warn('[StoreBridge] No chunk clear callback registered');
+    }
+  }
+
+  // Force regenerate mode (dev/debug)
+
+  get forceRegenerateChunks(): boolean {
+    return getState().forceRegenerateChunks;
+  }
+
+  /**
+   * Toggle force regenerate mode and send to server.
+   * When enabled, server will regenerate chunks instead of loading from cache/disk.
+   */
+  toggleForceRegenerate(): void {
+    const newValue = !this.forceRegenerateChunks;
+    getState().setForceRegenerateChunks(newValue);
+    
+    // Send to server
+    const message = encodeDevMode({ forceRegenerate: newValue });
+    sendBinary(message);
+    
+    console.log(`[StoreBridge] Force regenerate: ${newValue ? 'ON' : 'OFF'}`);
   }
 }
 

@@ -273,6 +273,24 @@ export class VoxelIntegration implements TerrainRaycaster {
   }
 
   /**
+   * Clear all chunks and reload from server.
+   * Used for dev/debug to force fresh chunk generation.
+   * @param playerPos Current player position (to reload chunks around)
+   */
+  clearAndReload(playerPos?: THREE.Vector3): void {
+    console.log('[VoxelIntegration] Clearing and reloading all chunks...');
+    
+    // Clear colliders
+    this.colliderGenerations.clear();
+    this.collision.dispose();
+    
+    // Clear and reload world
+    this.world.clearAndReload(playerPos);
+    
+    // Debug will auto-update on next frame
+  }
+
+  /**
    * Dispose of all resources.
    */
   dispose(): void {

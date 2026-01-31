@@ -503,9 +503,31 @@ export class VoxelWorld {
     // Clear chunks
     this.chunks.clear();
 
+    // Clear pending
+    this.pendingChunks.clear();
+
     // Clear queue
     this.remeshQueue.clear();
 
     this.initialized = false;
+  }
+
+  /**
+   * Clear all chunks and reload from server.
+   * Used for dev/debug to force fresh chunk generation.
+   */
+  clearAndReload(playerPos?: THREE.Vector3): void {
+    console.log('[VoxelWorld] Clearing all chunks and reloading...');
+    
+    // Dispose everything
+    this.dispose();
+    
+    // Re-initialize
+    this.initialized = true;
+    
+    // If player position provided, trigger update to reload chunks
+    if (playerPos) {
+      this.update(playerPos);
+    }
   }
 }

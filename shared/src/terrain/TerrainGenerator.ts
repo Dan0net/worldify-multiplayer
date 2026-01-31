@@ -1,6 +1,6 @@
 /**
  * Terrain generation framework
- * Generates chunk voxel data using layered noise functions
+ * Generates chunk voxel data using layered noise functions with domain warping
  */
 
 import FastNoiseLite from 'fastnoise-lite';
@@ -12,7 +12,7 @@ import { packVoxel } from '../voxel/voxelData.js';
 export interface NoiseLayerConfig {
   /** Frequency of the noise (higher = more detail, smaller features) */
   frequency: number;
-  /** Amplitude of the noise (height contribution) */
+  /** Amplitude of the noise (height contribution in voxels) */
   amplitude: number;
   /** Number of octaves for fractal noise */
   octaves: number;
@@ -22,6 +22,24 @@ export interface NoiseLayerConfig {
   persistence: number;
 }
 
+export interface DomainWarpConfig {
+  /** Whether domain warping is enabled */
+  enabled: boolean;
+  /** Frequency of the warp noise */
+  frequency: number;
+  /** Strength of the warp in world units (meters) */
+  amplitude: number;
+  /** Number of octaves for warp noise */
+  octaves: number;
+}
+
+export interface MaterialLayerConfig {
+  /** Material ID to use */
+  materialId: number;
+  /** Maximum depth from surface where this material appears (in voxels) */
+  maxDepth: number;
+}
+
 export interface TerrainConfig {
   /** Seed for reproducible generation */
   seed: number;
@@ -29,32 +47,65 @@ export interface TerrainConfig {
   baseHeight: number;
   /** Noise layers for height generation */
   heightLayers: NoiseLayerConfig[];
-  /** Default material ID for terrain */
+  /** Domain warp configuration for organic terrain shapes */
+  domainWarp: DomainWarpConfig;
+  /** Material layers ordered from surface down (first = top layer) */
+  materialLayers: MaterialLayerConfig[];
+  /** Default/fallback material ID for deep terrain */
   defaultMaterial: number;
 }
+
+// ============== Material Constants ==============
+// Material IDs from pallet.json
+
+export const MATERIAL_MOSS2 = 0;   // Grass/moss surface
+export const MATERIAL_ROCK = 1;    // Rocky underlayer
+export const MATERIAL_ROCK2 = 3;   // Deep stone
 
 // ============== Default Configuration ==============
 
 export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   seed: 12345,
-  baseHeight: 0, // Base height in voxels (so surface appears in cy=-1)
+  baseHeight: 0,
   heightLayers: [
     {
-      frequency: 0.02,   // Low frequency for broad hills
-      amplitude: 16,     // 16 voxels of height variation
-      octaves: 1,        // Single octave to start
+      // Primary hills - broad rolling terrain
+      frequency: 0.008,
+      amplitude: 12,
+      octaves: 3,
       lacunarity: 2.0,
       persistence: 0.5,
     },
+    {
+      // Detail layer - small undulations
+      frequency: 0.03,
+      amplitude: 4,
+      octaves: 2,
+      lacunarity: 2.0,
+      persistence: 0.4,
+    },
   ],
-  defaultMaterial: 1, // Default terrain material
+  domainWarp: {
+    enabled: true,
+    frequency: 0.01,
+    amplitude: 8,
+    octaves: 2,
+  },
+  materialLayers: [
+    { materialId: MATERIAL_MOSS2, maxDepth: 2 },   // Grass: 0-2 voxels deep
+    { materialId: MATERIAL_ROCK, maxDepth: 8 },    // Rock: 2-8 voxels deep
+    { materialId: MATERIAL_ROCK2, maxDepth: Infinity }, // Stone: 8+ voxels
+  ],
+  defaultMaterial: MATERIAL_ROCK2,
 };
 
 // ============== Terrain Generator ==============
 
 export class TerrainGenerator {
   private config: TerrainConfig;
-  private noise: FastNoiseLite;
+  private heightNoise: FastNoiseLite;
+  private warpNoiseX: FastNoiseLite;
+  private warpNoiseZ: FastNoiseLite;
 
   constructor(config: Partial<TerrainConfig> = {}) {
     this.config = { ...DEFAULT_TERRAIN_CONFIG, ...config };
@@ -63,9 +114,30 @@ export class TerrainGenerator {
     if (config.heightLayers) {
       this.config.heightLayers = config.heightLayers;
     }
+    if (config.materialLayers) {
+      this.config.materialLayers = config.materialLayers;
+    }
+    if (config.domainWarp) {
+      this.config.domainWarp = { ...DEFAULT_TERRAIN_CONFIG.domainWarp, ...config.domainWarp };
+    }
     
-    this.noise = new FastNoiseLite(this.config.seed);
-    this.noise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    // Initialize noise generators
+    let seed = this.config.seed;
+    
+    // Height noise
+    this.heightNoise = new FastNoiseLite(seed++);
+    this.heightNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    
+    // Domain warp noise (separate for X and Z)
+    this.warpNoiseX = new FastNoiseLite(seed++);
+    this.warpNoiseX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.warpNoiseX.SetFractalType(FastNoiseLite.FractalType.FBm);
+    
+    this.warpNoiseZ = new FastNoiseLite(seed++);
+    this.warpNoiseZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.warpNoiseZ.SetFractalType(FastNoiseLite.FractalType.FBm);
+    
+    this.updateWarpConfig();
   }
 
   /**
@@ -77,10 +149,31 @@ export class TerrainGenerator {
     if (config.heightLayers) {
       this.config.heightLayers = config.heightLayers;
     }
+    if (config.materialLayers) {
+      this.config.materialLayers = config.materialLayers;
+    }
+    if (config.domainWarp) {
+      this.config.domainWarp = { ...this.config.domainWarp, ...config.domainWarp };
+      this.updateWarpConfig();
+    }
     
     if (config.seed !== undefined) {
-      this.noise.SetSeed(config.seed);
+      let seed = config.seed;
+      this.heightNoise.SetSeed(seed++);
+      this.warpNoiseX.SetSeed(seed++);
+      this.warpNoiseZ.SetSeed(seed++);
     }
+  }
+
+  /**
+   * Update domain warp noise configuration
+   */
+  private updateWarpConfig(): void {
+    const warp = this.config.domainWarp;
+    this.warpNoiseX.SetFrequency(warp.frequency);
+    this.warpNoiseX.SetFractalOctaves(warp.octaves);
+    this.warpNoiseZ.SetFrequency(warp.frequency);
+    this.warpNoiseZ.SetFractalOctaves(warp.octaves);
   }
 
   /**
@@ -91,19 +184,52 @@ export class TerrainGenerator {
   }
 
   /**
+   * Apply domain warping to coordinates
+   * @returns Warped [x, z] coordinates
+   */
+  private applyDomainWarp(worldX: number, worldZ: number): [number, number] {
+    if (!this.config.domainWarp.enabled) {
+      return [worldX, worldZ];
+    }
+    
+    const amp = this.config.domainWarp.amplitude;
+    const warpX = this.warpNoiseX.GetNoise(worldX, worldZ) * amp;
+    const warpZ = this.warpNoiseZ.GetNoise(worldX, worldZ) * amp;
+    
+    return [worldX + warpX, worldZ + warpZ];
+  }
+
+  /**
    * Sample terrain height at a world position
    * @param worldX - World X coordinate in meters
    * @param worldZ - World Z coordinate in meters
    * @returns Height in voxels
    */
   sampleHeight(worldX: number, worldZ: number): number {
+    // Apply domain warping for organic shapes
+    const [warpedX, warpedZ] = this.applyDomainWarp(worldX, worldZ);
+    
     let height = this.config.baseHeight;
 
     for (const layer of this.config.heightLayers) {
-      height += this.sampleNoiseLayer(worldX, worldZ, layer);
+      height += this.sampleNoiseLayer(warpedX, warpedZ, layer);
     }
 
     return height;
+  }
+
+  /**
+   * Get material ID based on depth from surface
+   * @param depthFromSurface - Depth in voxels (positive = inside terrain)
+   * @returns Material ID
+   */
+  private getMaterialAtDepth(depthFromSurface: number): number {
+    for (const layer of this.config.materialLayers) {
+      if (depthFromSurface <= layer.maxDepth) {
+        return layer.materialId;
+      }
+    }
+    return this.config.defaultMaterial;
   }
 
   /**
@@ -116,7 +242,7 @@ export class TerrainGenerator {
     let maxAmplitude = 0;
 
     for (let o = 0; o < layer.octaves; o++) {
-      value += this.noise.GetNoise(worldX * frequency, worldZ * frequency) * amplitude;
+      value += this.heightNoise.GetNoise(worldX * frequency, worldZ * frequency) * amplitude;
       maxAmplitude += amplitude;
       frequency *= layer.lacunarity;
       amplitude *= layer.persistence;
@@ -162,8 +288,13 @@ export class TerrainGenerator {
           // Clamp to [-0.5, 0.5] range
           const weight = Math.max(-0.5, Math.min(0.5, distanceFromSurface * 0.5));
           
-          // Determine material (0 for air, default material for solid)
-          const material = weight > 0 ? this.config.defaultMaterial : 0;
+          // Determine material based on depth from surface
+          let material = 0;
+          if (weight > -0.5) {
+            // Only assign material if not fully air
+            const depthFromSurface = Math.max(0, distanceFromSurface);
+            material = this.getMaterialAtDepth(depthFromSurface);
+          }
           
           // Default light level
           const light = 0;

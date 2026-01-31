@@ -75,6 +75,9 @@ interface GameState {
   // Post-processing (SSAO + bloom)
   postProcessingEnabled: boolean;
 
+  // Dev mode - force regenerate chunks on server
+  forceRegenerateChunks: boolean;
+
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
   setRoomInfo: (roomId: string, playerId: number) => void;
@@ -107,6 +110,10 @@ interface GameState {
   // Material/texture actions
   setTextureState: (state: TextureLoadingState) => void;
   setTextureProgress: (progress: number) => void;
+  
+  // Dev mode actions
+  setForceRegenerateChunks: (enabled: boolean) => void;
+  toggleForceRegenerateChunks: () => void;
 }
 
 export const useGameStore = create<GameState>((set) => ({
@@ -151,6 +158,9 @@ export const useGameStore = create<GameState>((set) => ({
   
   // Post-processing initial state
   postProcessingEnabled: true,
+
+  // Dev mode initial state
+  forceRegenerateChunks: false,
 
   // Actions
   setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -209,4 +219,10 @@ export const useGameStore = create<GameState>((set) => ({
   // Material/texture actions
   setTextureState: (textureState) => set({ textureState }),
   setTextureProgress: (textureProgress) => set({ textureProgress }),
+  
+  // Dev mode actions
+  setForceRegenerateChunks: (forceRegenerateChunks) => set({ forceRegenerateChunks }),
+  toggleForceRegenerateChunks: () => set((state) => ({
+    forceRegenerateChunks: !state.forceRegenerateChunks,
+  })),
 }));

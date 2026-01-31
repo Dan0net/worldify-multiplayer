@@ -88,6 +88,7 @@ import { VOXELS_PER_CHUNK } from '../voxel/constants.js';
 
 export const MSG_VOXEL_BUILD_INTENT = 0x06;
 export const MSG_VOXEL_CHUNK_REQUEST = 0x07;
+export const MSG_DEV_MODE = 0x08;
 export const MSG_VOXEL_BUILD_COMMIT = 0x87;
 export const MSG_VOXEL_CHUNK_DATA = 0x88;
 
@@ -444,6 +445,36 @@ export function decodeVoxelChunkRequest(reader: ByteReader): VoxelChunkRequest {
     chunkX: reader.readInt16(),
     chunkY: reader.readInt16(),
     chunkZ: reader.readInt16(),
+  };
+}
+
+// ============== DEV_MODE ==============
+
+/**
+ * Dev mode settings sent from client to server.
+ */
+export interface DevModeSettings {
+  /** If true, server regenerates chunks instead of loading from cache/disk */
+  forceRegenerate: boolean;
+}
+
+/**
+ * Encode dev mode settings for network transmission.
+ */
+export function encodeDevMode(settings: DevModeSettings): Uint8Array {
+  const writer = new ByteWriter(2);
+  writer.writeUint8(MSG_DEV_MODE);
+  writer.writeUint8(settings.forceRegenerate ? 1 : 0);
+  return writer.toUint8Array();
+}
+
+/**
+ * Decode dev mode settings from network data.
+ * Assumes message ID has already been read.
+ */
+export function decodeDevMode(reader: ByteReader): DevModeSettings {
+  return {
+    forceRegenerate: reader.readUint8() === 1,
   };
 }
 

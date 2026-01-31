@@ -133,6 +133,12 @@ export class GameCore {
       this.builder.onBuildCommit = (modifiedChunks: string[]) => {
         this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
       };
+
+      // Register chunk clearing callback for F9 debug
+      storeBridge.setClearChunksCallback(() => {
+        const playerPos = this.playerManager.getLocalPlayer().position.clone();
+        this.voxelIntegration.clearAndReload(playerPos);
+      });
     }
 
     // Request pointer lock on canvas click (only when playing)
