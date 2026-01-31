@@ -292,7 +292,7 @@ function generateRock(type: StampType, variant: number): StampDefinition {
           const weight = Math.min(0.5, Math.max(-0.4, edgeDist * 0.4));
           voxels.push({
             x,
-            y: y - Math.floor(radius * 0.3), // Sink into ground slightly
+            y: y - Math.floor(radius * 0.15), // Sink into ground slightly (25-50% protrudes)
             z,
             material,
             weight,

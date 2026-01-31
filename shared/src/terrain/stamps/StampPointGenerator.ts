@@ -1,9 +1,8 @@
 /**
- * Generates stamp placement points using noise-based distribution
+ * Generates stamp placement points using grid-based distribution with jitter
  * Points are deterministic based on world position and seed
  */
 
-import FastNoiseLite from 'fastnoise-lite';
 import { CHUNK_SIZE, CHUNK_WORLD_SIZE, VOXEL_SCALE } from '../../voxel/constants.js';
 import { StampType, getStamp } from './StampDefinitions.js';
 
@@ -19,14 +18,14 @@ export interface StampDistributionConfig {
 export interface StampDistribution {
   /** Which stamp type to place */
   type: StampType;
-  /** Base density (stamps per chunk on average) */
-  density: number;
-  /** Minimum spacing between stamps of this type (in voxels) */
-  minSpacing: number;
-  /** Noise frequency for density variation (0 = uniform) */
-  densityNoiseFreq: number;
-  /** How much noise affects density (0-1) */
-  densityNoiseAmp: number;
+  /** Priority order - lower = generated first, claims space (rocks before trees) */
+  priority: number;
+  /** Grid cell size in meters - one stamp per cell */
+  gridSize: number;
+  /** Jitter amount as fraction of grid size (0-0.5, e.g., 0.4 = ±40% from center) */
+  jitter: number;
+  /** Exclusion radius - minimum distance from ANY other stamp (in meters) */
+  exclusionRadius: number;
 }
 
 export interface StampPlacement {
@@ -47,40 +46,42 @@ export interface StampPlacement {
 export const DEFAULT_STAMP_DISTRIBUTION: StampDistributionConfig = {
   seed: 54321,
   distributions: [
+    // Rocks generated first (priority 0-2) - they claim space
     {
-      type: StampType.TREE_PINE,
-      density: 2.0,           // ~2 per chunk
-      minSpacing: 8,          // 2m minimum spacing
-      densityNoiseFreq: 0.02,
-      densityNoiseAmp: 0.8,   // Creates forest/clearing patterns
-    },
-    {
-      type: StampType.TREE_OAK,
-      density: 1.0,
-      minSpacing: 10,
-      densityNoiseFreq: 0.015,
-      densityNoiseAmp: 0.9,
-    },
-    {
-      type: StampType.ROCK_SMALL,
-      density: 3.0,
-      minSpacing: 4,
-      densityNoiseFreq: 0.05,
-      densityNoiseAmp: 0.6,
+      type: StampType.ROCK_LARGE,
+      priority: 0,
+      gridSize: 24,           // Large grid = sparse placement
+      jitter: 0.4,            // ±40% jitter from cell center
+      exclusionRadius: 1,     // 4m exclusion from other stamps
     },
     {
       type: StampType.ROCK_MEDIUM,
-      density: 1.0,
-      minSpacing: 8,
-      densityNoiseFreq: 0.03,
-      densityNoiseAmp: 0.7,
+      priority: 1,
+      gridSize: 10,           // Medium grid
+      jitter: 0.4,
+      exclusionRadius: 0,
     },
     {
-      type: StampType.ROCK_LARGE,
-      density: 0.3,
-      minSpacing: 16,
-      densityNoiseFreq: 0.02,
-      densityNoiseAmp: 0.8,
+      type: StampType.ROCK_SMALL,
+      priority: 2,
+      gridSize: 6,            // Smaller grid = denser
+      jitter: 0.35,
+      exclusionRadius: 0,     // No exclusion - can be close to others
+    },
+    // Trees generated after rocks (priority 10-11)
+    {
+      type: StampType.TREE_OAK,
+      priority: 10,
+      gridSize: 7,
+      jitter: 0.4,
+      exclusionRadius: 0,
+    },
+    {
+      type: StampType.TREE_PINE,
+      priority: 11,
+      gridSize: 6,
+      jitter: 0.4,
+      exclusionRadius: 0,
     },
   ],
 };
@@ -89,29 +90,12 @@ export const DEFAULT_STAMP_DISTRIBUTION: StampDistributionConfig = {
 
 export class StampPointGenerator {
   private config: StampDistributionConfig;
-  private densityNoise: FastNoiseLite;
-  private positionNoise: FastNoiseLite;
-  private variantNoise: FastNoiseLite;
 
   constructor(config: Partial<StampDistributionConfig> = {}) {
     this.config = { ...DEFAULT_STAMP_DISTRIBUTION, ...config };
     if (config.distributions) {
       this.config.distributions = config.distributions;
     }
-
-    let seed = this.config.seed;
-    
-    // Noise for density variation
-    this.densityNoise = new FastNoiseLite(seed++);
-    this.densityNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    
-    // Noise for jittering point positions  
-    this.positionNoise = new FastNoiseLite(seed++);
-    this.positionNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    
-    // Noise for variant selection
-    this.variantNoise = new FastNoiseLite(seed++);
-    this.variantNoise.SetNoiseType(FastNoiseLite.NoiseType.Value);
   }
 
   /**
@@ -156,65 +140,120 @@ export class StampPointGenerator {
 
   /**
    * Generate raw stamp points within a single chunk (no neighbor check)
+   * Uses fixed grid per stamp type with jitter, processes in priority order
    */
   private generateChunkPoints(cx: number, cz: number): StampPlacement[] {
     const placements: StampPlacement[] = [];
     const chunkWorldX = cx * CHUNK_WORLD_SIZE;
     const chunkWorldZ = cz * CHUNK_WORLD_SIZE;
     
-    for (const dist of this.config.distributions) {
-      // Sample density at chunk center
-      const centerX = chunkWorldX + CHUNK_WORLD_SIZE / 2;
-      const centerZ = chunkWorldZ + CHUNK_WORLD_SIZE / 2;
+    // Sort distributions by priority (lower = first)
+    const sortedDists = [...this.config.distributions].sort((a, b) => a.priority - b.priority);
+    
+    for (const dist of sortedDists) {
+      // Generate grid cells that overlap this chunk
+      const gridCells = this.getGridCellsForChunk(cx, cz, dist.gridSize);
       
-      let density = dist.density;
-      if (dist.densityNoiseFreq > 0) {
-        const noiseVal = this.densityNoise.GetNoise(
-          centerX * dist.densityNoiseFreq,
-          centerZ * dist.densityNoiseFreq
-        );
-        // Map noise from [-1,1] to density multiplier
-        density *= 1 + noiseVal * dist.densityNoiseAmp;
-        density = Math.max(0, density);
-      }
-      
-      // Generate points using stratified sampling with jitter
-      const gridSize = Math.max(1, Math.floor(Math.sqrt(density * 2)));
-      const cellSize = CHUNK_WORLD_SIZE / gridSize;
-      
-      for (let gz = 0; gz < gridSize; gz++) {
-        for (let gx = 0; gx < gridSize; gx++) {
-          // Deterministic random for this cell
-          const cellSeed = this.hashCell(cx, cz, gx, gz, dist.type);
-          const rand = this.seededRandom(cellSeed);
-          
-          // Probability check based on density
-          const cellDensity = density / (gridSize * gridSize);
-          if (rand() > cellDensity) continue;
-          
-          // Jitter position within cell
-          const jitterX = rand() * cellSize;
-          const jitterZ = rand() * cellSize;
-          
-          const worldX = chunkWorldX + gx * cellSize + jitterX;
-          const worldZ = chunkWorldZ + gz * cellSize + jitterZ;
-          
-          // Select variant based on position
-          const variantNoise = this.variantNoise.GetNoise(worldX * 100, worldZ * 100);
-          const variant = Math.floor((variantNoise + 1) * 2) % 4;
-          
-          placements.push({
-            type: dist.type,
-            variant,
-            worldX,
-            worldZ,
-            rotation: rand() * Math.PI * 2,
-          });
+      for (const cell of gridCells) {
+        // Deterministic random for this cell
+        const cellSeed = this.hashGridCell(cell.gx, cell.gz, dist.type);
+        const rand = this.seededRandom(cellSeed);
+        
+        // Calculate cell centroid in world space
+        const cellCenterX = (cell.gx + 0.5) * dist.gridSize;
+        const cellCenterZ = (cell.gz + 0.5) * dist.gridSize;
+        
+        // Apply jitter (±jitter% from center)
+        const maxJitter = dist.gridSize * dist.jitter;
+        const jitterX = (rand() * 2 - 1) * maxJitter;
+        const jitterZ = (rand() * 2 - 1) * maxJitter;
+        
+        const worldX = cellCenterX + jitterX;
+        const worldZ = cellCenterZ + jitterZ;
+        
+        // Skip if outside this chunk (will be handled by that chunk)
+        if (worldX < chunkWorldX || worldX >= chunkWorldX + CHUNK_WORLD_SIZE ||
+            worldZ < chunkWorldZ || worldZ >= chunkWorldZ + CHUNK_WORLD_SIZE) {
+          continue;
         }
+        
+        // Check collision with existing placements
+        if (!this.isValidPlacement(worldX, worldZ, dist, placements)) {
+          continue;
+        }
+        
+        // Select variant (0-3)
+        const variant = Math.floor(rand() * 4);
+        
+        placements.push({
+          type: dist.type,
+          variant,
+          worldX,
+          worldZ,
+          rotation: rand() * Math.PI * 2,
+        });
       }
     }
     
     return placements;
+  }
+
+  /**
+   * Get all grid cells that could place a stamp in or near this chunk
+   */
+  private getGridCellsForChunk(cx: number, cz: number, gridSize: number): Array<{gx: number, gz: number}> {
+    const chunkWorldX = cx * CHUNK_WORLD_SIZE;
+    const chunkWorldZ = cz * CHUNK_WORLD_SIZE;
+    
+    // Find grid cell range that could affect this chunk (with 1 cell margin for jitter)
+    const minGx = Math.floor((chunkWorldX - gridSize) / gridSize);
+    const maxGx = Math.floor((chunkWorldX + CHUNK_WORLD_SIZE + gridSize) / gridSize);
+    const minGz = Math.floor((chunkWorldZ - gridSize) / gridSize);
+    const maxGz = Math.floor((chunkWorldZ + CHUNK_WORLD_SIZE + gridSize) / gridSize);
+    
+    const cells: Array<{gx: number, gz: number}> = [];
+    for (let gz = minGz; gz <= maxGz; gz++) {
+      for (let gx = minGx; gx <= maxGx; gx++) {
+        cells.push({ gx, gz });
+      }
+    }
+    return cells;
+  }
+  
+  /**
+   * Check if a placement is valid (not too close to existing stamps)
+   * Grid spacing handles same-type collision, this checks cross-type exclusion
+   */
+  private isValidPlacement(
+    worldX: number,
+    worldZ: number,
+    dist: StampDistribution,
+    existingPlacements: StampPlacement[]
+  ): boolean {
+    const exclusionRadius = dist.exclusionRadius;
+    
+    // No exclusion configured, always valid
+    if (exclusionRadius <= 0) {
+      return true;
+    }
+    
+    for (const existing of existingPlacements) {
+      const dx = worldX - existing.worldX;
+      const dz = worldZ - existing.worldZ;
+      const distSq = dx * dx + dz * dz;
+      
+      // Check cross-type exclusion
+      // Use the larger of the two exclusion radii
+      const existingDist = this.config.distributions.find(d => d.type === existing.type);
+      const existingExclusion = existingDist?.exclusionRadius ?? 0;
+      const combinedExclusion = Math.max(exclusionRadius, existingExclusion);
+      
+      if (distSq < combinedExclusion * combinedExclusion) {
+        return false;
+      }
+    }
+    
+    return true;
   }
 
   /**
@@ -253,15 +292,14 @@ export class StampPointGenerator {
   }
 
   /**
-   * Simple hash for cell coordinates
+   * Hash for global grid cell (not chunk-relative)
    */
-  private hashCell(cx: number, cz: number, gx: number, gz: number, type: StampType): number {
+  private hashGridCell(gx: number, gz: number, type: StampType): number {
     let hash = this.config.seed;
-    hash = hash * 31 + cx;
-    hash = hash * 31 + cz;
     hash = hash * 31 + gx;
     hash = hash * 31 + gz;
-    hash = hash * 31 + type.length;
+    // Use first char code of type for differentiation
+    hash = hash * 31 + type.charCodeAt(0);
     return hash >>> 0;
   }
 

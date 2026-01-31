@@ -43,7 +43,7 @@ export interface HeightSampler {
 // ============== Stamp Placer ==============
 
 const DEFAULT_CONFIG: StampPlacerConfig = {
-  blendMode: BlendMode.MAX_WEIGHT,
+  blendMode: BlendMode.REPLACE_SOLID,
 };
 
 /**
