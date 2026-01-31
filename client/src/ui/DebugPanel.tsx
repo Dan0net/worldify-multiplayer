@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useGameStore, TERRAIN_DEBUG_MODE_NAMES } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
-import { setTerrainDebugMode as setShaderDebugMode, TerrainDebugMode } from '../game/material/TerrainMaterial';
+import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
 import { togglePostProcessing as togglePostProcessingEffect } from '../game/scene/postprocessing';
 
 export function DebugPanel() {
@@ -18,7 +18,6 @@ export function DebugPanel() {
     textureState,
     terrainDebugMode,
     cycleTerrainDebugMode,
-    setTerrainDebugMode,
     postProcessingEnabled,
     togglePostProcessing,
   } = useGameStore();

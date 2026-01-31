@@ -25,5 +25,8 @@
   },
   "devDependencies": {
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "fastnoise-lite": "^1.1.1"
   }
 }

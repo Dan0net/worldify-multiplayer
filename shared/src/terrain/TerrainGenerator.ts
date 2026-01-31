@@ -3,7 +3,7 @@
  * Generates chunk voxel data using layered noise functions
  */
 
-import { SimplexNoise } from './SimplexNoise.js';
+import FastNoiseLite from 'fastnoise-lite';
 import { CHUNK_SIZE, VOXEL_SCALE } from '../voxel/constants.js';
 import { packVoxel } from '../voxel/voxelData.js';
 
@@ -54,7 +54,7 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
 
 export class TerrainGenerator {
   private config: TerrainConfig;
-  private noise: SimplexNoise;
+  private noise: FastNoiseLite;
 
   constructor(config: Partial<TerrainConfig> = {}) {
     this.config = { ...DEFAULT_TERRAIN_CONFIG, ...config };
@@ -64,7 +64,8 @@ export class TerrainGenerator {
       this.config.heightLayers = config.heightLayers;
     }
     
-    this.noise = new SimplexNoise(this.config.seed);
+    this.noise = new FastNoiseLite(this.config.seed);
+    this.noise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
   }
 
   /**
@@ -78,7 +79,7 @@ export class TerrainGenerator {
     }
     
     if (config.seed !== undefined) {
-      this.noise.seed(config.seed);
+      this.noise.SetSeed(config.seed);
     }
   }
 
@@ -115,7 +116,7 @@ export class TerrainGenerator {
     let maxAmplitude = 0;
 
     for (let o = 0; o < layer.octaves; o++) {
-      value += this.noise.noise2D(worldX * frequency, worldZ * frequency) * amplitude;
+      value += this.noise.GetNoise(worldX * frequency, worldZ * frequency) * amplitude;
       maxAmplitude += amplitude;
       frequency *= layer.lacunarity;
       amplitude *= layer.persistence;
@@ -175,56 +176,5 @@ export class TerrainGenerator {
     }
 
     return data;
-  }
-
-  /**
-   * Check if a chunk would be completely empty (all air)
-   * Useful for culling chunks that don't need generation
-   */
-  isChunkEmpty(cx: number, cy: number, cz: number): boolean {
-    const chunkBottomY = cy * CHUNK_SIZE;
-
-    // Sample corners and center to estimate if chunk might contain terrain
-    const chunkWorldX = cx * CHUNK_SIZE * VOXEL_SCALE;
-    const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
-    const chunkSizeWorld = CHUNK_SIZE * VOXEL_SCALE;
-
-    const samples = [
-      this.sampleHeight(chunkWorldX, chunkWorldZ),
-      this.sampleHeight(chunkWorldX + chunkSizeWorld, chunkWorldZ),
-      this.sampleHeight(chunkWorldX, chunkWorldZ + chunkSizeWorld),
-      this.sampleHeight(chunkWorldX + chunkSizeWorld, chunkWorldZ + chunkSizeWorld),
-      this.sampleHeight(chunkWorldX + chunkSizeWorld * 0.5, chunkWorldZ + chunkSizeWorld * 0.5),
-    ];
-
-    const maxHeight = Math.max(...samples);
-    
-    // If the max sampled height is below the chunk, it's empty
-    return maxHeight < chunkBottomY;
-  }
-
-  /**
-   * Check if a chunk would be completely solid
-   * Useful for optimization
-   */
-  isChunkSolid(cx: number, cy: number, cz: number): boolean {
-    const chunkTopY = (cy + 1) * CHUNK_SIZE;
-
-    const chunkWorldX = cx * CHUNK_SIZE * VOXEL_SCALE;
-    const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
-    const chunkSizeWorld = CHUNK_SIZE * VOXEL_SCALE;
-
-    const samples = [
-      this.sampleHeight(chunkWorldX, chunkWorldZ),
-      this.sampleHeight(chunkWorldX + chunkSizeWorld, chunkWorldZ),
-      this.sampleHeight(chunkWorldX, chunkWorldZ + chunkSizeWorld),
-      this.sampleHeight(chunkWorldX + chunkSizeWorld, chunkWorldZ + chunkSizeWorld),
-      this.sampleHeight(chunkWorldX + chunkSizeWorld * 0.5, chunkWorldZ + chunkSizeWorld * 0.5),
-    ];
-
-    const minHeight = Math.min(...samples);
-    
-    // If the min sampled height is above the chunk top, it's solid
-    return minHeight > chunkTopY;
   }
 }

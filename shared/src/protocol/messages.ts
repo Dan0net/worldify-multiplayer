@@ -75,12 +75,14 @@ export function decodePing(reader: ByteReader): { timestamp: number } {
  * Confirms room assignment to client
  */
 export function encodeWelcome(playerId: number, roomId: string): Uint8Array {
-  const writer = new ByteWriter(16);
+  const roomBytes = new TextEncoder().encode(roomId);
+  const writer = new ByteWriter(4 + roomBytes.length);
   writer.writeUint8(MSG_WELCOME);
   writer.writeUint16(playerId);
-  // Write room ID as fixed 8 bytes (pad with zeros)
-  for (let i = 0; i < 8; i++) {
-    writer.writeUint8(roomId.charCodeAt(i) || 0);
+  // Write room ID as length-prefixed string
+  writer.writeUint8(roomBytes.length);
+  for (let i = 0; i < roomBytes.length; i++) {
+    writer.writeUint8(roomBytes[i]);
   }
   return writer.toUint8Array();
 }
@@ -90,10 +92,10 @@ export function encodeWelcome(playerId: number, roomId: string): Uint8Array {
  */
 export function decodeWelcome(reader: ByteReader): { playerId: number; roomId: string } {
   const playerId = reader.readUint16();
+  const roomLength = reader.readUint8();
   const roomBytes: number[] = [];
-  for (let i = 0; i < 8; i++) {
-    const byte = reader.readUint8();
-    if (byte !== 0) roomBytes.push(byte);
+  for (let i = 0; i < roomLength; i++) {
+    roomBytes.push(reader.readUint8());
   }
   const roomId = String.fromCharCode(...roomBytes);
   return { playerId, roomId };

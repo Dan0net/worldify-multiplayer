@@ -69,7 +69,7 @@ function createDataArrayTexture(
   
   // IMPORTANT: Pass the Uint8Array directly, not data.buffer
   // data.buffer may reference a larger ArrayBuffer if data is a view
-  const texture = new THREE.DataArrayTexture(data, width, height, layers);
+  const texture = new THREE.DataArrayTexture(data as unknown as BufferSource, width, height, layers);
   
   // Set format based on channel count
   if (channelCount === 4) {

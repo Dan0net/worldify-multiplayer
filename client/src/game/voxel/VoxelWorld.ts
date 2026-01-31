@@ -241,7 +241,7 @@ export class VoxelWorld {
    * Called by the network layer when chunk data arrives.
    */
   receiveChunkData(chunkData: VoxelChunkData): void {
-    const { chunkX, chunkY, chunkZ, voxelData, lastBuildSeq } = chunkData;
+    const { chunkX, chunkY, chunkZ, voxelData } = chunkData;
     const key = chunkKey(chunkX, chunkY, chunkZ);
     
     // Remove from pending
