@@ -65,17 +65,21 @@ function createDataArrayTexture(
   channels: string,
   resolution: TextureResolution
 ): THREE.DataArrayTexture {
-  // Create a new typed array with a proper ArrayBuffer to satisfy Three.js types
-  const texture = new THREE.DataArrayTexture(data.buffer as ArrayBuffer, width, height, layers);
+  const channelCount = channels.length;
+  
+  // IMPORTANT: Pass the Uint8Array directly, not data.buffer
+  // data.buffer may reference a larger ArrayBuffer if data is a view
+  const texture = new THREE.DataArrayTexture(data, width, height, layers);
   
   // Set format based on channel count
-  if (channels.length === 4) {
+  if (channelCount === 4) {
     texture.format = THREE.RGBAFormat;
-  } else if (channels.length === 1) {
+  } else if (channelCount === 1) {
     texture.format = THREE.RedFormat;
   }
   
   texture.type = THREE.UnsignedByteType;
+  texture.internalFormat = channelCount === 4 ? 'RGBA8' : 'R8';
   
   // Filtering based on resolution
   if (resolution === 'low') {
@@ -289,7 +293,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
           vec3 pos = vWorldPosition / 8.0;
           vec3 triBlend = getTriPlanarBlend(vWorldNormal);
           vec4 sampledAlbedo = sampleMaterialBlend(mapArray, pos, triBlend);
-          vec4 diffuseColor = vec4(sampledAlbedo.rgb, opacity * sampledAlbedo.a);
+          vec4 diffuseColor = vec4(sampledAlbedo.rgb, opacity);
         `
       );
       
@@ -307,12 +311,10 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <aomap_fragment>',
         /* glsl */ `
-          #ifdef USE_AOMAP
-            vec3 pos_ao = vWorldPosition / 8.0;
-            vec3 triBlend_ao = getTriPlanarBlend(vWorldNormal);
-            float ambientOcclusion = sampleMaterialBlend(aoArray, pos_ao, triBlend_ao).r;
-            reflectedLight.indirectDiffuse *= ambientOcclusion;
-          #endif
+          vec3 pos_ao = vWorldPosition / 8.0;
+          vec3 triBlend_ao = getTriPlanarBlend(vWorldNormal);
+          float ambientOcclusion = sampleMaterialBlend(aoArray, pos_ao, triBlend_ao).r;
+          reflectedLight.indirectDiffuse *= ambientOcclusion;
         `
       );
     };
