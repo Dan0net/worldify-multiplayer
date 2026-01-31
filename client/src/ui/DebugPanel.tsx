@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useGameStore } from '../state/store';
+import { useGameStore, TERRAIN_DEBUG_MODE_NAMES } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
+import { setTerrainDebugMode as setShaderDebugMode, TerrainDebugMode } from '../game/material/TerrainMaterial';
 
 export function DebugPanel() {
   const { 
@@ -14,6 +15,9 @@ export function DebugPanel() {
     voxelStats,
     toggleVoxelDebug,
     textureState,
+    terrainDebugMode,
+    cycleTerrainDebugMode,
+    setTerrainDebugMode,
   } = useGameStore();
 
   const [cacheClearing, setCacheClearing] = useState(false);
@@ -54,12 +58,21 @@ export function DebugPanel() {
           e.preventDefault();
           toggleVoxelDebug('showWireframe');
           break;
+        case 'F7':
+          e.preventDefault();
+          cycleTerrainDebugMode();
+          break;
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleVoxelDebug]);
+  }, [toggleVoxelDebug, cycleTerrainDebugMode]);
+  
+  // Sync terrain debug mode to shader when it changes
+  useEffect(() => {
+    setShaderDebugMode(terrainDebugMode);
+  }, [terrainDebugMode]);
 
   return (
     <div className="fixed top-5 left-5 py-2.5 px-4 bg-black/60 text-green-500 font-mono text-xs rounded-lg z-50">
@@ -125,6 +138,20 @@ export function DebugPanel() {
             className="accent-yellow-400"
           />
           <span>F5 Wireframe</span>
+        </label>
+      </div>
+      
+      {/* Terrain Shader Debug */}
+      <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
+        <div className="mb-1 text-green-500">Shader (F7):</div>
+        <label 
+          className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
+          onClick={cycleTerrainDebugMode}
+        >
+          <span className="w-4 h-4 flex items-center justify-center">
+            {terrainDebugMode > 0 ? '🔍' : '○'}
+          </span>
+          <span>F7 {TERRAIN_DEBUG_MODE_NAMES[terrainDebugMode]}</span>
         </label>
       </div>
       

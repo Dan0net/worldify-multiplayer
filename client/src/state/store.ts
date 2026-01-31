@@ -6,6 +6,10 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 /** Texture loading state */
 export type TextureLoadingState = 'none' | 'loading-low' | 'low' | 'loading-high' | 'high';
 
+/** Terrain shader debug modes */
+export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Albedo', 'Normal', 'AO', 'Roughness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal'] as const;
+export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+
 /** Voxel debug visualization toggles */
 export interface VoxelDebugToggles {
   showChunkBounds: boolean;
@@ -64,6 +68,9 @@ interface GameState {
   // Voxel debug
   voxelDebug: VoxelDebugToggles;
   voxelStats: VoxelStats;
+  
+  // Terrain shader debug
+  terrainDebugMode: TerrainDebugMode;
 
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -80,6 +87,10 @@ interface GameState {
   toggleVoxelDebug: (key: keyof VoxelDebugToggles) => void;
   setVoxelDebug: (updates: Partial<VoxelDebugToggles>) => void;
   setVoxelStats: (stats: Partial<VoxelStats>) => void;
+  
+  // Terrain debug actions
+  setTerrainDebugMode: (mode: TerrainDebugMode) => void;
+  cycleTerrainDebugMode: () => void;
   
   // Build actions
   setBuildPreset: (presetId: number) => void;
@@ -127,6 +138,9 @@ export const useGameStore = create<GameState>((set) => ({
     meshesVisible: 0,
     debugObjects: 0,
   },
+  
+  // Terrain debug initial state
+  terrainDebugMode: 0 as TerrainDebugMode,
 
   // Actions
   setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -157,6 +171,12 @@ export const useGameStore = create<GameState>((set) => ({
       ...state.voxelStats,
       ...stats,
     },
+  })),
+  
+  // Terrain debug actions
+  setTerrainDebugMode: (mode) => set({ terrainDebugMode: mode }),
+  cycleTerrainDebugMode: () => set((state) => ({
+    terrainDebugMode: ((state.terrainDebugMode + 1) % 9) as TerrainDebugMode,
   })),
   
   // Build actions

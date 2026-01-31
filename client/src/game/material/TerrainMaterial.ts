@@ -199,6 +199,7 @@ const fragmentShaderPrefix = /* glsl */ `
   uniform sampler2DArray roughnessArray;
   uniform float repeatScale;
   uniform mat3 blendOffset;
+  uniform int debugMode; // 0=off, 1=albedo, 2=normal, 3=ao, 4=roughness, 5=triBlend, 6=materialIds
   
   flat varying vec3 vMaterialIds;
   varying vec3 vMaterialWeights;
@@ -287,6 +288,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.roughnessArray = { value: this.textures?.roughness };
       shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
       shader.uniforms.blendOffset = { value: this.createBlendOffsetMatrix() };
+      shader.uniforms.debugMode = { value: 0 };
       
       // Modify vertex shader
       shader.vertexShader = vertexShaderPrefix + shader.vertexShader;
@@ -360,6 +362,64 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
           #endif
         `
       );
+      
+      // Add debug output before final color output
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        /* glsl */ `
+          #include <dithering_fragment>
+          
+          // Debug mode visualization
+          if (debugMode > 0) {
+            vec3 pos_dbg = vWorldPosition / 8.0;
+            vec3 triBlend_dbg = getTriPlanarBlend(vWorldNormal);
+            
+            if (debugMode == 1) {
+              // Albedo only
+              gl_FragColor = vec4(sampleMaterialBlend(mapArray, pos_dbg, triBlend_dbg).rgb, 1.0);
+            } else if (debugMode == 2) {
+              // Normal map (remap from -1,1 to 0,1 for visualization)
+              vec3 nSample = sampleMaterialBlend(normalArray, pos_dbg, triBlend_dbg).xyz;
+              gl_FragColor = vec4(nSample, 1.0);
+            } else if (debugMode == 3) {
+              // AO
+              float ao = sampleMaterialBlend(aoArray, pos_dbg, triBlend_dbg).r;
+              gl_FragColor = vec4(ao, ao, ao, 1.0);
+            } else if (debugMode == 4) {
+              // Roughness
+              float r = sampleMaterialBlend(roughnessArray, pos_dbg, triBlend_dbg).r;
+              gl_FragColor = vec4(r, r, r, 1.0);
+            } else if (debugMode == 5) {
+              // Tri-planar blend weights
+              gl_FragColor = vec4(triBlend_dbg, 1.0);
+            } else if (debugMode == 6) {
+              // Material IDs - use modulo and color mapping for visibility
+              // Each channel shows different material, with distinct colors
+              vec3 ids = vMaterialIds;
+              // Create distinct colors by using sine waves at different phases
+              vec3 idColor = vec3(
+                sin(ids.x * 0.5) * 0.5 + 0.5,
+                sin(ids.y * 0.7 + 2.0) * 0.5 + 0.5,
+                sin(ids.z * 0.9 + 4.0) * 0.5 + 0.5
+              );
+              // Also show primary material ID as brightness
+              float primaryId = ids.x;
+              vec3 hue = vec3(
+                sin(primaryId * 0.4) * 0.5 + 0.5,
+                sin(primaryId * 0.4 + 2.094) * 0.5 + 0.5,
+                sin(primaryId * 0.4 + 4.188) * 0.5 + 0.5
+              );
+              gl_FragColor = vec4(hue, 1.0);
+            } else if (debugMode == 7) {
+              // Material weights
+              gl_FragColor = vec4(getWeightedBlend(), 1.0);
+            } else if (debugMode == 8) {
+              // World normal
+              gl_FragColor = vec4(vWorldNormal * 0.5 + 0.5, 1.0);
+            }
+          }
+        `
+      );
     };
   }
   
@@ -389,7 +449,33 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       this.needsUpdate = true;
     }
   }
+  
+  /**
+   * Set debug visualization mode.
+   * 0=off, 1=albedo, 2=normal, 3=ao, 4=roughness, 5=triBlend, 6=materialIds, 7=materialWeights, 8=worldNormal
+   */
+  setDebugMode(mode: number): void {
+    if (this._shader) {
+      this._shader.uniforms.debugMode.value = mode;
+    }
+  }
 }
+
+// ============== Debug Mode Constants ==============
+
+export const TERRAIN_DEBUG_MODES = {
+  OFF: 0,
+  ALBEDO: 1,
+  NORMAL: 2,
+  AO: 3,
+  ROUGHNESS: 4,
+  TRI_BLEND: 5,
+  MATERIAL_IDS: 6,
+  MATERIAL_WEIGHTS: 7,
+  WORLD_NORMAL: 8,
+} as const;
+
+export type TerrainDebugMode = typeof TERRAIN_DEBUG_MODES[keyof typeof TERRAIN_DEBUG_MODES];
 
 // ============== Singleton Instances ==============
 
@@ -452,4 +538,34 @@ export async function upgradeToHighRes(
  */
 export async function isHighResCached(): Promise<boolean> {
   return textureCache.hasResolution('high');
+}
+
+/**
+ * Set debug mode for all terrain materials.
+ * Use TERRAIN_DEBUG_MODES constants or numbers 0-8.
+ */
+export function setTerrainDebugMode(mode: TerrainDebugMode): void {
+  getTerrainMaterial().setDebugMode(mode);
+  getTransparentTerrainMaterial().setDebugMode(mode);
+  
+  const modeNames = ['OFF', 'ALBEDO', 'NORMAL', 'AO', 'ROUGHNESS', 'TRI_BLEND', 'MATERIAL_IDS', 'MATERIAL_WEIGHTS', 'WORLD_NORMAL'];
+  console.log(`Terrain debug mode: ${modeNames[mode] || mode}`);
+}
+
+// Expose debug controls to window for console access
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).terrainDebug = {
+    modes: TERRAIN_DEBUG_MODES,
+    set: setTerrainDebugMode,
+    off: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.OFF),
+    albedo: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.ALBEDO),
+    normal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.NORMAL),
+    ao: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.AO),
+    roughness: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.ROUGHNESS),
+    triBlend: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.TRI_BLEND),
+    materialIds: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_IDS),
+    materialWeights: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_WEIGHTS),
+    worldNormal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.WORLD_NORMAL),
+  };
+  console.log('Terrain debug controls available: window.terrainDebug.albedo(), .normal(), .ao(), .roughness(), .off(), etc.');
 }
