@@ -14,16 +14,17 @@ import {
 } from '@worldify/shared';
 
 /**
- * Encode WELCOME message (server-specific: includes room ID as fixed bytes)
+ * Encode WELCOME message (server-specific: includes room ID as length-prefixed string)
  */
 export function encodeWelcome(playerId: number, roomId: string): Uint8Array {
-  const writer = new ByteWriter(32);
+  const roomBytes = Buffer.from(roomId, 'utf8');
+  const writer = new ByteWriter(4 + roomBytes.length);
   writer.writeUint8(MSG_WELCOME);
   writer.writeUint16(playerId);
-  // Write room ID as fixed 8 bytes (hex)
-  const roomBytes = Buffer.from(roomId, 'utf8');
-  for (let i = 0; i < 8; i++) {
-    writer.writeUint8(roomBytes[i] || 0);
+  // Write room ID as length-prefixed string
+  writer.writeUint8(roomBytes.length);
+  for (let i = 0; i < roomBytes.length; i++) {
+    writer.writeUint8(roomBytes[i]);
   }
   return writer.toUint8Array();
 }

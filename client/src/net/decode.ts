@@ -67,11 +67,11 @@ export function decodeMessage(data: Uint8Array): void {
 
 function handleWelcome(reader: ByteReader): void {
   const playerId = reader.readUint16();
-  // Read 8-byte room ID
+  // Read length-prefixed room ID
+  const roomLength = reader.readUint8();
   const roomBytes: number[] = [];
-  for (let i = 0; i < 8; i++) {
-    const byte = reader.readUint8();
-    if (byte !== 0) roomBytes.push(byte);
+  for (let i = 0; i < roomLength; i++) {
+    roomBytes.push(reader.readUint8());
   }
   const roomId = String.fromCharCode(...roomBytes);
   storeBridge.updateRoomInfo(roomId, playerId);

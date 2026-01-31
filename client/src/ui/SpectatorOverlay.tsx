@@ -37,7 +37,7 @@ export function SpectatorOverlay() {
       <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-16 mb-4" />
 
       {/* Room info / connection status */}
-      <div className="mb-8 py-4 px-8 bg-black/70 rounded-lg text-white text-center min-w-[200px]">
+      <div className="mb-8 py-4 px-8 bg-black/70 rounded-lg text-white text-center whitespace-nowrap">
         {isConnected ? (
           <>
             <div className="text-sm opacity-70 mb-1">
