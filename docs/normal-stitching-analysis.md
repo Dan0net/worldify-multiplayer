@@ -73,34 +73,6 @@ chunk.renderMesh(true).then(() => {
 })
 ```
 
----
-
-## Part 2: What's Wrong with worldify-multiplayer's OLD Approach
-
-### Current Implementation Issues
-
-1. **NormalStitcher is NEVER CALLED**
-   - The functions exist in `NormalStitcher.ts` but are never imported/used anywhere in the codebase.
-
-2. **Different Coordinate System**
-   - worldify-app uses voxel-space (0 to ~34 for a 32-voxel chunk with margins)
-   - worldify-multiplayer uses world-space (0 to 8m for a chunk)
-   - The boundary range calculation may be wrong
-
-3. **Averaging vs Copying**
-   - worldify-multiplayer averages normals from both chunks
-   - worldify-app copies normals from one chunk to another
-   - Averaging can cause order-dependent issues
-
-4. **Spatial Hash Precision**
-   - worldify-multiplayer uses `SPATIAL_HASH_PRECISION` from shared (if it exists)
-   - This constant may not be tuned correctly for the voxel scale
-
-5. **Missing Utility**
-   - `BOUNDARY_RANGE`, `SPATIAL_HASH_PRECISION`, and `spatialHashKey` are imported from `@worldify/shared` but may not exist in the source files (only in dist from stale builds)
-
----
-
 ### Phase 1: Prove Vertex Matching Works (Visual Debug)
 
 **Goal**: Before any normal work, PROVE we can find matching vertices at boundaries.

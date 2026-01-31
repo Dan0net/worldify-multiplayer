@@ -34,8 +34,7 @@ export function SpectatorOverlay() {
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/30 z-50 pointer-events-none">
       {/* Game title and info */}
-      <h1 className="text-5xl text-white mb-2">wrldy</h1>
-      <p className="text-xl text-white opacity-80 mb-8">Rapid Survival</p>
+      <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-16 mb-4" />
 
       {/* Room info / connection status */}
       <div className="mb-8 py-4 px-8 bg-black/70 rounded-lg text-white text-center min-w-[200px]">

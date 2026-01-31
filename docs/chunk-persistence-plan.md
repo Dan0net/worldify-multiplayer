@@ -1,5 +1,7 @@
 # Chunk Persistence Plan
 
+**Status: ✅ Implemented**
+
 ## Overview
 
 Implement persistent chunk storage so player builds survive server restarts. Uses a single shared world where room names represent spawn regions spread across an infinite terrain.
