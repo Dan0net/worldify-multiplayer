@@ -1,6 +1,6 @@
 import { GameCore } from './GameCore';
 import { storeBridge } from '../state/bridge';
-import { connectToServer, getPlayerId } from '../net/netClient';
+import { connectToServer, getPlayerId, setOnReconnected } from '../net/netClient';
 
 let gameCore: GameCore | null = null;
 
@@ -23,6 +23,15 @@ export async function createGame(): Promise<GameCore> {
   if (playerId !== null) {
     gameCore.setLocalPlayerId(playerId);
   }
+
+  // Set up reconnection handler to update player ID after reconnect
+  setOnReconnected(() => {
+    const newPlayerId = getPlayerId();
+    if (gameCore && newPlayerId !== null) {
+      console.log(`[game] Reconnected with new player ID: ${newPlayerId}`);
+      gameCore.setLocalPlayerId(newPlayerId);
+    }
+  });
 
   return gameCore;
 }

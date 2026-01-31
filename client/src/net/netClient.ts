@@ -91,6 +91,7 @@ async function connectWebSocket(
 function scheduleReconnect(): void {
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.error('[net] Max reconnect attempts reached');
+    // Status stays 'disconnected' - user needs to refresh
     return;
   }
   
@@ -99,6 +100,9 @@ function scheduleReconnect(): void {
   }
   
   reconnectAttempts++;
+  // Show connecting state during reconnection attempts
+  storeBridge.updateConnectionStatus('connecting');
+  console.log(`[net] Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
   
   reconnectTimeout = setTimeout(async () => {
     try {
