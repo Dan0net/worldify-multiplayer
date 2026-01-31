@@ -13,7 +13,6 @@ import {
   VoxelBuildCommit,
   VoxelChunkRequest,
   BuildResult,
-  ChunkData,
   encodeVoxelBuildCommit,
   encodeVoxelChunkData,
   MAX_BUILD_DISTANCE,
@@ -23,36 +22,72 @@ import {
 import { Room } from './room.js';
 import { RateLimiter } from '../util/RateLimiter.js';
 import { ChunkProvider } from '../voxel/ChunkProvider.js';
+import { PersistentChunkStore } from '../storage/PersistentChunkStore.js';
+import { WorldStorage } from '../storage/WorldStorage.js';
 
 // ============== Module-level instances ==============
-// These are shared across all rooms. For per-room instances, inject via Room.
 
 /** Rate limiter for build actions (100ms between builds) */
 const buildRateLimiter = new RateLimiter(100);
 
-/** Chunk providers per room */
-const roomChunkProviders = new Map<string, ChunkProvider>();
+/** Global persistent chunk store (shared across all rooms) */
+let globalChunkStore: PersistentChunkStore | null = null;
+
+/** Global chunk provider (shared across all rooms - uses global store) */
+let globalChunkProvider: ChunkProvider | null = null;
+
+/** Build sequence tracking per chunk (in-memory, could be persisted later) */
+const chunkBuildSeq = new Map<string, number>();
+
+/** Next build sequence number (global across all rooms) */
+let nextBuildSeq = 1;
+
+// ============== Initialization ==============
+
+/**
+ * Initialize the global chunk storage. Must be called before handling any builds.
+ */
+export async function initChunkStorage(): Promise<void> {
+  const storage = WorldStorage.getInstance();
+  await storage.open();
+  
+  globalChunkStore = new PersistentChunkStore(storage);
+  globalChunkProvider = new ChunkProvider(globalChunkStore, storage.seed);
+  
+  console.log('[build] Chunk storage initialized');
+}
+
+/**
+ * Flush pending chunk changes to disk.
+ */
+export async function flushChunkStorage(): Promise<void> {
+  if (globalChunkStore) {
+    await globalChunkStore.flush();
+  }
+}
+
+/**
+ * Shutdown chunk storage gracefully.
+ */
+export async function shutdownChunkStorage(): Promise<void> {
+  if (globalChunkStore) {
+    await globalChunkStore.flush();
+  }
+  const storage = WorldStorage.getInstance();
+  await storage.close();
+  console.log('[build] Chunk storage shutdown complete');
+}
 
 // ============== Chunk Provider Access ==============
 
 /**
- * Get or create the ChunkProvider for a room.
+ * Get the global ChunkProvider.
  */
-function getChunkProvider(room: Room): ChunkProvider {
-  let provider = roomChunkProviders.get(room.id);
-  if (!provider) {
-    // Create a provider backed by the room's chunk storage
-    const store = {
-      get: (key: string) => room.voxelChunks.get(key),
-      set: (key: string, chunk: ChunkData) => {
-        room.voxelChunks.set(key, chunk);
-        room.chunkBuildSeq.set(key, 0);
-      },
-    };
-    provider = new ChunkProvider(store);
-    roomChunkProviders.set(room.id, provider);
+function getChunkProvider(): ChunkProvider {
+  if (!globalChunkProvider) {
+    throw new Error('Chunk storage not initialized. Call initChunkStorage() first.');
   }
-  return provider;
+  return globalChunkProvider;
 }
 
 // ============== Validation ==============
@@ -103,7 +138,7 @@ export function handleBuildIntent(
   // Rate limit check
   if (buildRateLimiter.check(rateLimitKey)) {
     return {
-      buildSeq: room.nextBuildSeq,
+      buildSeq: nextBuildSeq,
       playerId,
       result: BuildResult.RATE_LIMITED,
     };
@@ -112,7 +147,7 @@ export function handleBuildIntent(
   // Distance check
   if (!isWithinRange(room, playerId, intent.center)) {
     return {
-      buildSeq: room.nextBuildSeq,
+      buildSeq: nextBuildSeq,
       playerId,
       result: BuildResult.TOO_FAR,
     };
@@ -121,14 +156,14 @@ export function handleBuildIntent(
   // Config validation
   if (!isValidConfig(intent)) {
     return {
-      buildSeq: room.nextBuildSeq,
+      buildSeq: nextBuildSeq,
       playerId,
       result: BuildResult.INVALID_CONFIG,
     };
   }
 
   // Get chunk provider
-  const chunkProvider = getChunkProvider(room);
+  const chunkProvider = getChunkProvider();
 
   // Build operation
   const operation = {
@@ -151,16 +186,18 @@ export function handleBuildIntent(
     const changed = drawToChunk(chunk, operation);
     if (changed) {
       modifiedKeys.push(key);
+      // Mark chunk as dirty for persistence
+      chunkProvider.markDirty(cx, cy, cz);
     }
   }
 
   // Increment build sequence
-  room.nextBuildSeq++;
-  const buildSeq = room.nextBuildSeq;
+  nextBuildSeq++;
+  const buildSeq = nextBuildSeq;
 
   // Update lastBuildSeq for modified chunks
   for (const key of modifiedKeys) {
-    room.chunkBuildSeq.set(key, buildSeq);
+    chunkBuildSeq.set(key, buildSeq);
   }
 
   return {
@@ -175,16 +212,21 @@ export function handleBuildIntent(
 
 /**
  * Handle a chunk data request from a client.
+ * Uses async loading to properly fetch from disk if not in cache.
  */
-export function handleChunkRequest(
-  room: Room,
+export async function handleChunkRequest(
+  _room: Room,
   _playerId: number,
   request: VoxelChunkRequest,
   ws: WebSocket
-): void {
-  const chunkProvider = getChunkProvider(room);
-  const chunk = chunkProvider.getOrCreate(request.chunkX, request.chunkY, request.chunkZ);
-  const lastBuildSeq = room.chunkBuildSeq.get(chunk.key) ?? 0;
+): Promise<void> {
+  const chunkProvider = getChunkProvider();
+  
+  console.log(`[build] Chunk request: ${request.chunkX},${request.chunkY},${request.chunkZ}`);
+  
+  // Use async method to properly load from disk
+  const chunk = await chunkProvider.getOrCreateAsync(request.chunkX, request.chunkY, request.chunkZ);
+  const lastBuildSeq = chunkBuildSeq.get(chunk.key) ?? 0;
 
   const chunkData = {
     chunkX: chunk.cx,
@@ -227,8 +269,9 @@ export function cleanupPlayer(roomId: string, playerId: number): void {
 
 /**
  * Clean up all state for a removed room.
+ * Note: Chunk data persists in global storage, only rate limiters are cleared.
  */
 export function cleanupRoom(roomId: string): void {
   buildRateLimiter.removeByPrefix(`${roomId}:`);
-  roomChunkProviders.delete(roomId);
+  // Chunk data persists globally - no cleanup needed
 }

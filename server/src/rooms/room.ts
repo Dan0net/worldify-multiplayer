@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { PLAYER_HEIGHT, GROUND_LEVEL, ChunkData } from '@worldify/shared';
+import { PLAYER_HEIGHT, GROUND_LEVEL, ChunkData, roomToSpawnPosition } from '@worldify/shared';
 
 // Re-export for backward compatibility (prefer importing directly from shared)
 export const PLAYER_EYE_HEIGHT = PLAYER_HEIGHT;
@@ -58,18 +58,25 @@ export function createRoom(id: string): Room {
 }
 
 /**
- * Create initial player state with spawn position
+ * Create initial player state with spawn position.
+ * @param playerId Unique player ID
+ * @param roomId Room name (used to determine spawn offset)
  */
-export function createPlayerState(playerId: number): PlayerState {
-  // Spawn in a circle around center
+export function createPlayerState(playerId: number, roomId?: string): PlayerState {
+  // Get room spawn position (defaults to origin if no roomId)
+  const spawnPos = roomId 
+    ? roomToSpawnPosition(roomId, GROUND_LEVEL + PLAYER_HEIGHT)
+    : { x: 0, y: GROUND_LEVEL + PLAYER_HEIGHT, z: 0 };
+  
+  // Spread players in a circle around the room's spawn point
   const angle = (playerId * 0.618033988749895) * Math.PI * 2;
   const radius = 10 + (playerId % 10) * 2;
   
   return {
     playerId,
-    x: Math.cos(angle) * radius,
-    y: GROUND_LEVEL + PLAYER_EYE_HEIGHT, // Ground + eye height
-    z: Math.sin(angle) * radius,
+    x: spawnPos.x + Math.cos(angle) * radius,
+    y: spawnPos.y, // Ground + eye height
+    z: spawnPos.z + Math.sin(angle) * radius,
     yaw: -angle + Math.PI, // Face center
     pitch: 0,
     velocityY: 0,

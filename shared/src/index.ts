@@ -12,6 +12,7 @@ export * from './util/bytes.js';
 export * from './util/quantize.js';
 export * from './util/movement.js';
 export * from './util/logger.js';
+export * from './util/roomOffset.js';
 
 // Voxel terrain
 export * from './voxel/constants.js';

@@ -18,6 +18,10 @@ import {
 export interface ChunkStore {
   get(key: string): ChunkData | undefined;
   set(key: string, chunk: ChunkData): void;
+  /** Async get for stores that need disk access */
+  getAsync?(key: string): Promise<ChunkData | undefined>;
+  /** Mark a chunk as modified (for persistence) */
+  markDirty?(key: string): void;
 }
 
 /**
@@ -33,7 +37,8 @@ export class ChunkProvider {
   }
 
   /**
-   * Get a chunk, creating it if it doesn't exist.
+   * Get a chunk synchronously from cache, creating it if not cached.
+   * NOTE: For persistent stores, use getOrCreateAsync to properly load from disk.
    */
   getOrCreate(cx: number, cy: number, cz: number): ChunkData {
     const key = chunkKey(cx, cy, cz);
@@ -47,6 +52,49 @@ export class ChunkProvider {
     }
 
     return chunk;
+  }
+
+  /**
+   * Get a chunk asynchronously, loading from disk if available.
+   * Creates with terrain generation if not found anywhere.
+   */
+  async getOrCreateAsync(cx: number, cy: number, cz: number): Promise<ChunkData> {
+    const key = chunkKey(cx, cy, cz);
+    
+    // Try cache first
+    let chunk = this.store.get(key);
+    if (chunk) {
+      console.log(`[chunk] ${key} from cache`);
+      return chunk;
+    }
+
+    // Try async load from disk if supported
+    if (this.store.getAsync) {
+      chunk = await this.store.getAsync(key);
+      if (chunk) {
+        console.log(`[chunk] ${key} loaded from disk`);
+        return chunk;
+      }
+    }
+
+    // Generate new chunk
+    console.log(`[chunk] ${key} generated (not on disk)`);
+    chunk = new ChunkData(cx, cy, cz);
+    const generatedData = this.terrainGenerator.generateChunk(cx, cy, cz);
+    chunk.data.set(generatedData);
+    this.store.set(key, chunk);
+
+    return chunk;
+  }
+
+  /**
+   * Mark a chunk as modified (for persistence).
+   */
+  markDirty(cx: number, cy: number, cz: number): void {
+    const key = chunkKey(cx, cy, cz);
+    if (this.store.markDirty) {
+      this.store.markDirty(key);
+    }
   }
 
   /**

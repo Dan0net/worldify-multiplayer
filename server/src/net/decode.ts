@@ -95,17 +95,29 @@ function handleVoxelBuildIntent(roomId: string, playerId: number, reader: ByteRe
 }
 
 function handleVoxelChunkRequest(roomId: string, playerId: number, reader: ByteReader): void {
+  console.log(`[decode] Chunk request from player ${playerId} in room ${roomId}`);
+  
   const room = roomManager.getRoom(roomId);
-  if (!room) return;
+  if (!room) {
+    console.log(`[decode] Room ${roomId} not found`);
+    return;
+  }
   
   const ws = room.connections.get(playerId);
-  if (!ws) return;
+  if (!ws) {
+    console.log(`[decode] Player ${playerId} connection not found`);
+    return;
+  }
   
   // Decode the chunk request
   const request = decodeVoxelChunkRequest(reader);
+  console.log(`[decode] Requesting chunk ${request.chunkX},${request.chunkY},${request.chunkZ}`);
   
-  // Handle the request (sends chunk data to the player)
-  handleChunkRequest(room, playerId, request, ws);
+  // Handle the request async (sends chunk data to the player)
+  // Fire and forget - errors are logged but don't crash the handler
+  handleChunkRequest(room, playerId, request, ws).catch((err) => {
+    console.error('[decode] Error handling chunk request:', err);
+  });
 }
 
 // Register all message handlers

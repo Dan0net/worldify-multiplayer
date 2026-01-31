@@ -32,10 +32,8 @@ export function setupRoutes(req: IncomingMessage, res: ServerResponse): void {
   // Rooms info endpoint (for landing page)
   if (url.pathname === '/api/rooms' && req.method === 'GET') {
     const rooms = roomManager.getRooms();
-    const currentRoomId = roomManager.getCurrentRoomId();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      currentRoomId,
       rooms,
     }));
     return;
@@ -63,7 +61,18 @@ export function setupRoutes(req: IncomingMessage, res: ServerResponse): void {
         }
 
         // Get room assignment
-        const { roomId, playerId, token } = roomManager.assignPlayer();
+        const assignment = roomManager.assignPlayer();
+        
+        if (!assignment) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'server_full',
+            message: 'Server is at capacity. Please try again later.',
+          }));
+          return;
+        }
+        
+        const { roomId, playerId, token } = assignment;
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({

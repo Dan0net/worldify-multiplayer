@@ -2,7 +2,12 @@ import crypto from 'node:crypto';
 import { Room, createRoom, createPlayerState } from './room.js';
 import { startRoomTick, stopRoomTick } from './roomTick.js';
 import { cleanupPlayer, cleanupRoom } from './BuildHandler.js';
-import { MAX_PLAYERS_PER_ROOM, EMPTY_ROOM_TIMEOUT_MS } from '@worldify/shared';
+import { 
+  MAX_PLAYERS_PER_ROOM, 
+  EMPTY_ROOM_TIMEOUT_MS, 
+  ROOM_NAMES,
+  RoomName,
+} from '@worldify/shared';
 import type { WebSocket } from 'ws';
 
 interface PendingJoin {
@@ -13,7 +18,6 @@ interface PendingJoin {
 
 class RoomManager {
   private rooms: Map<string, Room> = new Map();
-  private currentRoomId: string | null = null;
   private pendingJoins: Map<string, PendingJoin> = new Map();
   private nextPlayerId = 1;
 
@@ -22,20 +26,20 @@ class RoomManager {
     setInterval(() => this.cleanup(), 10000);
   }
 
-  assignPlayer(): { roomId: string; playerId: number; token: string } {
-    // Get or create current room
-    if (!this.currentRoomId || !this.rooms.has(this.currentRoomId)) {
-      this.currentRoomId = this.createNewRoom();
+  /**
+   * Assign a player to a room.
+   * Strategy: Fill busiest room first, then next busiest, create new if all full.
+   */
+  assignPlayer(): { roomId: string; playerId: number; token: string } | null {
+    // Find the best room to join
+    const roomId = this.findBestRoom();
+    
+    if (!roomId) {
+      console.log('[room] Server at capacity - all rooms full');
+      return null;
     }
 
-    const room = this.rooms.get(this.currentRoomId)!;
-
-    // Check if room is full
-    if (room.playerCount >= MAX_PLAYERS_PER_ROOM) {
-      this.currentRoomId = this.createNewRoom();
-    }
-
-    const roomId = this.currentRoomId;
+    const room = this.rooms.get(roomId)!;
     const playerId = this.nextPlayerId++;
     const token = this.generateToken();
 
@@ -47,10 +51,51 @@ class RoomManager {
     });
 
     // Reserve spot
-    const currentRoom = this.rooms.get(roomId)!;
-    currentRoom.playerCount++;
+    room.playerCount++;
 
     return { roomId, playerId, token };
+  }
+
+  /**
+   * Find the best room to join:
+   * 1. Sort active rooms by player count (descending - busiest first)
+   * 2. Pick the first room that isn't full
+   * 3. If all full, create a new room with an unused name
+   * 4. If all names used and full, return null (server at capacity)
+   */
+  private findBestRoom(): string | null {
+    // Get active rooms sorted by player count (descending)
+    const activeRooms = Array.from(this.rooms.entries())
+      .map(([id, room]) => ({ id, playerCount: room.playerCount }))
+      .sort((a, b) => b.playerCount - a.playerCount);
+
+    // Find first room that isn't full
+    for (const { id, playerCount } of activeRooms) {
+      if (playerCount < MAX_PLAYERS_PER_ROOM) {
+        return id;
+      }
+    }
+
+    // All rooms are full (or no rooms exist) - create a new one
+    const unusedName = this.getUnusedRoomName();
+    if (unusedName) {
+      return this.createNewRoom(unusedName);
+    }
+
+    // All room names used and full - server at capacity
+    return null;
+  }
+
+  /**
+   * Get an unused room name from the pool.
+   */
+  private getUnusedRoomName(): RoomName | null {
+    for (const name of ROOM_NAMES) {
+      if (!this.rooms.has(name)) {
+        return name;
+      }
+    }
+    return null;
   }
 
   validateToken(token: string): PendingJoin | null {
@@ -73,8 +118,8 @@ class RoomManager {
 
     room.connections.set(playerId, ws);
     
-    // Create player state
-    const playerState = createPlayerState(playerId);
+    // Create player state with room-specific spawn position
+    const playerState = createPlayerState(playerId, roomId);
     room.players.set(playerId, playerState);
     
     console.log(`[room ${roomId}] Player ${playerId} connected (${room.connections.size}/${room.playerCount}) at (${playerState.x.toFixed(1)}, ${playerState.z.toFixed(1)})`);
@@ -120,20 +165,18 @@ class RoomManager {
     return rooms;
   }
 
-  getCurrentRoomId(): string | null {
-    return this.currentRoomId;
-  }
-
-  private createNewRoom(): string {
-    const roomId = this.generateRoomId();
-    const room = createRoom(roomId);
-    this.rooms.set(roomId, room);
+  /**
+   * Create a new room with the given name.
+   */
+  private createNewRoom(roomName: string): string {
+    const room = createRoom(roomName);
+    this.rooms.set(roomName, room);
     
     // Start room tick loop
     startRoomTick(room);
     
-    console.log(`[room] Created new room: ${roomId}`);
-    return roomId;
+    console.log(`[room] Created new room: ${roomName}`);
+    return roomName;
   }
 
   private cleanup(): void {
@@ -151,24 +194,17 @@ class RoomManager {
       }
     }
 
-    // Clean up empty rooms
+    // Clean up empty rooms (but don't delete world data - that persists)
     for (const [roomId, room] of this.rooms) {
       if (room.playerCount === 0 && now - room.createdAt > EMPTY_ROOM_TIMEOUT_MS) {
         // Stop room ticks before removing
         stopRoomTick(room);
-        // Clean up build handler state for this room
+        // Clean up build handler state for this room (in-memory only)
         cleanupRoom(roomId);
         this.rooms.delete(roomId);
-        console.log(`[room] Removed empty room: ${roomId}`);
-        if (this.currentRoomId === roomId) {
-          this.currentRoomId = null;
-        }
+        console.log(`[room] Removed empty room: ${roomId} (world data persists)`);
       }
     }
-  }
-
-  private generateRoomId(): string {
-    return crypto.randomBytes(4).toString('hex');
   }
 
   private generateToken(): string {

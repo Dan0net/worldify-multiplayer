@@ -8,6 +8,9 @@ server/dist/
 **/dist/
 *.tsbuildinfo
 
+# Persistent world data
+server/data/
+
 # Environment
 .env
 .env.local

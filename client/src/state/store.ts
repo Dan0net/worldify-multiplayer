@@ -89,7 +89,7 @@ export const useGameStore = create<GameState>((set) => ({
   ping: 0,
   gameMode: GameMode.MainMenu, // Start in main menu
   spawnReady: false, // Terrain not found yet
-  useServerChunks: false, // Default to server chunks in multiplayer
+  useServerChunks: true, // Default to server chunks in multiplayer
   fps: 0,
   tickMs: 0,
   serverTick: 0,
