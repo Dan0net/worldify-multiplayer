@@ -49,8 +49,10 @@ export interface MaterialLayerConfig {
 export interface PathwayConfig {
   /** Enable pathway generation */
   enabled: boolean;
-  /** Material ID for pathways (default: pebbles = 11) */
-  materialId: number;
+  /** Material IDs for pathways - selected via noise */
+  materials: number[];
+  /** Frequency for material selection noise (lower = materials change less frequently) */
+  materialNoiseFrequency: number;
   /** Frequency of the cellular noise (lower = larger cells, sparser paths) */
   frequency: number;
   /** Path width in world units (meters) - how far to sample for edge detection */
@@ -61,6 +63,12 @@ export interface PathwayConfig {
   warpFrequency: number;
   /** Domain warp amplitude in world units */
   warpAmplitude: number;
+  /** Wall height in voxels for cobble paths (0 to disable) */
+  wallHeight: number;
+  /** Wall material ID */
+  wallMaterial: number;
+  /** Materials that should have walls */
+  wallMaterials: number[];
 }
 
 export interface TerrainConfig {
@@ -90,18 +98,29 @@ export interface TerrainConfig {
 export const MATERIAL_MOSS2 = 0;   // Grass/moss surface
 export const MATERIAL_ROCK = 1;    // Rocky underlayer
 export const MATERIAL_ROCK2 = 3;   // Deep stone
-export const MATERIAL_PEBBLES = 11; // Pathway material
+export const MATERIAL_BRICK2 = 6;  // Wall material for cobble paths
+export const MATERIAL_COBBLE = 7;  // Pathway material variant
+export const MATERIAL_COBBLE2 = 8; // Pathway material variant
+export const MATERIAL_PEBBLES = 11; // Pathway material variant
+export const MATERIAL_GRAVEL = 25; // Pathway material variant
+
+// All pathway material options
+export const PATHWAY_MATERIALS = [MATERIAL_PEBBLES, MATERIAL_COBBLE, MATERIAL_COBBLE2, MATERIAL_GRAVEL];
 
 // ============== Default Pathway Configuration ==============
 
 export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   enabled: true,
-  materialId: MATERIAL_PEBBLES,
+  materials: PATHWAY_MATERIALS,
+  materialNoiseFrequency: 0.007, // Low frequency so material doesn't change too often
   frequency: 0.012,         // Large cells = sparse path network
   pathWidth: 3.0,           // Path width in meters
   maxDepth: 2,              // Only surface voxels
   warpFrequency: 0.009,     // Low frequency for smooth curves
   warpAmplitude: 90,        // Strong warping for organic curves
+  wallHeight: 5,            // Short wall height in voxels
+  wallMaterial: MATERIAL_BRICK2,
+  wallMaterials: [MATERIAL_COBBLE, MATERIAL_COBBLE2], // Only cobble paths get walls
 };
 
 // ============== Default Configuration ==
@@ -155,6 +174,7 @@ export class TerrainGenerator implements HeightSampler {
   private pathwayCellular: FastNoiseLite;
   private pathwayWarpX: FastNoiseLite;
   private pathwayWarpZ: FastNoiseLite;
+  private pathwayMaterialNoise: FastNoiseLite;
   
   // Stamp system
   private stampPointGenerator: StampPointGenerator | null = null;
@@ -211,6 +231,10 @@ export class TerrainGenerator implements HeightSampler {
     this.pathwayWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.pathwayWarpZ.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.pathwayWarpZ.SetFractalOctaves(2);
+    
+    // Pathway material selection noise - low frequency for gradual material transitions
+    this.pathwayMaterialNoise = new FastNoiseLite(seed++);
+    this.pathwayMaterialNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     
     this.updatePathwayConfig();
     
@@ -276,6 +300,29 @@ export class TerrainGenerator implements HeightSampler {
     this.pathwayCellular.SetFrequency(path.frequency);
     this.pathwayWarpX.SetFrequency(path.warpFrequency);
     this.pathwayWarpZ.SetFrequency(path.warpFrequency);
+    this.pathwayMaterialNoise.SetFrequency(path.materialNoiseFrequency);
+  }
+
+  /**
+   * Get the pathway material at a world position using noise-based selection
+   * @param worldX - World X coordinate in meters
+   * @param worldZ - World Z coordinate in meters
+   * @returns Material ID for the pathway at this position
+   */
+  getPathwayMaterial(worldX: number, worldZ: number): number {
+    const materials = this.config.pathwayConfig.materials;
+    if (materials.length === 0) {
+      return MATERIAL_PEBBLES; // Fallback
+    }
+    if (materials.length === 1) {
+      return materials[0];
+    }
+    
+    // Use noise to select material - noise returns -1 to 1, map to material index
+    const noise = this.pathwayMaterialNoise.GetNoise(worldX, worldZ);
+    const normalized = (noise + 1) * 0.5; // Map to 0-1
+    const index = Math.min(Math.floor(normalized * materials.length), materials.length - 1);
+    return materials[index];
   }
 
   /**
@@ -330,6 +377,81 @@ export class TerrainGenerator implements HeightSampler {
            Math.abs(centerCell - cell2) > eps ||
            Math.abs(centerCell - cell3) > eps ||
            Math.abs(centerCell - cell4) > eps;
+  }
+
+  /**
+   * Check if a world position is on the outer wall edge of a pathway
+   * Returns true if this position is just outside the path on one side
+   * (the side where centerCell > neighborCell for consistent single-sided walls)
+   * @param worldX - World X coordinate in meters
+   * @param worldZ - World Z coordinate in meters
+   * @returns true if position should have a wall
+   */
+  isOnPathwayWall(worldX: number, worldZ: number): boolean {
+    if (!this.config.pathwayConfig.enabled || this.config.pathwayConfig.wallHeight <= 0) {
+      return false;
+    }
+    
+    const path = this.config.pathwayConfig;
+    const halfWidth = path.pathWidth * 0.5;
+    const wallOffset = halfWidth + 0.5; // Just outside the path
+    
+    // Apply domain warping for organic curved cells
+    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
+    
+    // Get cell value at center
+    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    
+    // Sample at offsets to detect if we're near a cell edge
+    const [wx1, wz1] = this.applyPathwayWarp(worldX + wallOffset, worldZ);
+    const [wx2, wz2] = this.applyPathwayWarp(worldX - wallOffset, worldZ);
+    const [wx3, wz3] = this.applyPathwayWarp(worldX, worldZ + wallOffset);
+    const [wx4, wz4] = this.applyPathwayWarp(worldX, worldZ - wallOffset);
+    
+    const cell1 = this.pathwayCellular.GetNoise(wx1, wz1);
+    const cell2 = this.pathwayCellular.GetNoise(wx2, wz2);
+    const cell3 = this.pathwayCellular.GetNoise(wx3, wz3);
+    const cell4 = this.pathwayCellular.GetNoise(wx4, wz4);
+    
+    const eps = 0.001;
+    
+    // Only place wall on one side - where we're outside the path but adjacent to it
+    // Check if we're NOT on the path but a neighbor IS on the path
+    // Use consistent rule: wall on the "greater cell value" side
+    const onPath = this.isOnPathway(worldX, worldZ);
+    if (onPath) {
+      return false; // Don't place wall on the path itself
+    }
+    
+    // Check if any adjacent position is on the path AND we're on the "greater" side
+    const isEdge1 = Math.abs(centerCell - cell1) > eps && centerCell > cell1;
+    const isEdge2 = Math.abs(centerCell - cell2) > eps && centerCell > cell2;
+    const isEdge3 = Math.abs(centerCell - cell3) > eps && centerCell > cell3;
+    const isEdge4 = Math.abs(centerCell - cell4) > eps && centerCell > cell4;
+    
+    if (!(isEdge1 || isEdge2 || isEdge3 || isEdge4)) {
+      return false;
+    }
+    
+    // Check if the adjacent path position uses cobble material
+    // Sample the path material at the nearest path position
+    const checkPositions = [
+      isEdge1 ? [worldX + wallOffset, worldZ] : null,
+      isEdge2 ? [worldX - wallOffset, worldZ] : null,
+      isEdge3 ? [worldX, worldZ + wallOffset] : null,
+      isEdge4 ? [worldX, worldZ - wallOffset] : null,
+    ].filter(Boolean) as [number, number][];
+    
+    for (const [px, pz] of checkPositions) {
+      if (this.isOnPathway(px, pz)) {
+        const pathMaterial = this.getPathwayMaterial(px, pz);
+        if (this.config.pathwayConfig.wallMaterials.includes(pathMaterial)) {
+          return true;
+        }
+      }
+    }
+    
+    return false;
   }
 
   /**
@@ -430,6 +552,10 @@ export class TerrainGenerator implements HeightSampler {
         
         // Sample terrain height at this XZ position
         const terrainHeight = this.sampleHeight(worldX, worldZ);
+        
+        // Cache pathway wall check for this column (only depends on X/Z)
+        // Use -1 as "not checked yet", 0 as "no wall", 1 as "has wall"
+        let isWallColumn = -1;
 
         for (let ly = 0; ly < CHUNK_SIZE; ly++) {
           // Calculate voxel's Y position in world voxel space
@@ -445,6 +571,8 @@ export class TerrainGenerator implements HeightSampler {
           
           // Determine material based on depth from surface
           let material = 0;
+          let finalWeight = weight;
+          
           if (weight > -0.5) {
             // Only assign material if not fully air
             const depthFromSurface = Math.max(0, distanceFromSurface);
@@ -453,7 +581,25 @@ export class TerrainGenerator implements HeightSampler {
             // Check for pathway override on surface voxels
             if (depthFromSurface <= this.config.pathwayConfig.maxDepth && 
                 this.isOnPathway(worldX, worldZ)) {
-              material = this.config.pathwayConfig.materialId;
+              material = this.getPathwayMaterial(worldX, worldZ);
+            }
+          }
+          
+          // Check for pathway wall (short brick wall on one side of cobble paths)
+          // Only check if we're within wall height range of surface (cheap check first)
+          const wallHeight = this.config.pathwayConfig.wallHeight;
+          const heightAboveSurface = voxelY - terrainHeight;
+          if (wallHeight > 0 && 
+              heightAboveSurface >= 0 && 
+              heightAboveSurface < wallHeight) {
+            // Lazy evaluate wall check - only compute once per column
+            if (isWallColumn === -1) {
+              isWallColumn = this.isOnPathwayWall(worldX, worldZ) ? 1 : 0;
+            }
+            if (isWallColumn === 1) {
+              // Make this voxel solid with wall material
+              finalWeight = 0.5;
+              material = this.config.pathwayConfig.wallMaterial;
             }
           }
           
@@ -462,7 +608,7 @@ export class TerrainGenerator implements HeightSampler {
           
           // Pack and store voxel
           const index = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
-          data[index] = packVoxel(weight, material, light);
+          data[index] = packVoxel(finalWeight, material, light);
         }
       }
     }
