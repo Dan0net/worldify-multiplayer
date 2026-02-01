@@ -69,6 +69,12 @@ export interface PathwayConfig {
   wallMaterial: number;
   /** Materials that should have walls */
   wallMaterials: number[];
+  /** Depth to dip the path in the middle (in voxels) */
+  dipDepth: number;
+  /** Border width in meters along path edges (where no wall) */
+  borderWidth: number;
+  /** Border material ID */
+  borderMaterial: number;
 }
 
 export interface TerrainConfig {
@@ -103,6 +109,7 @@ export const MATERIAL_COBBLE = 7;  // Pathway material variant
 export const MATERIAL_COBBLE2 = 8; // Pathway material variant
 export const MATERIAL_PEBBLES = 11; // Pathway material variant
 export const MATERIAL_GRAVEL = 25; // Pathway material variant
+export const MATERIAL_DIRT2 = 39;  // Border material for paths
 
 // All pathway material options
 export const PATHWAY_MATERIALS = [MATERIAL_PEBBLES, MATERIAL_COBBLE, MATERIAL_COBBLE2, MATERIAL_GRAVEL];
@@ -113,14 +120,17 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   enabled: true,
   materials: PATHWAY_MATERIALS,
   materialNoiseFrequency: 0.007, // Low frequency so material doesn't change too often
-  frequency: 0.012,         // Large cells = sparse path network
+  frequency: 0.01,         // Large cells = sparse path network
   pathWidth: 3.0,           // Path width in meters
   maxDepth: 2,              // Only surface voxels
   warpFrequency: 0.009,     // Low frequency for smooth curves
   warpAmplitude: 90,        // Strong warping for organic curves
-  wallHeight: 5,            // Short wall height in voxels
+  wallHeight: 5,            // Wall height in voxels
   wallMaterial: MATERIAL_BRICK2,
   wallMaterials: [MATERIAL_COBBLE, MATERIAL_COBBLE2], // Only cobble paths get walls
+  dipDepth: 2,              // Path dips 2 voxels in the middle
+  borderWidth: 0.4,         // Dirt border width in meters
+  borderMaterial: MATERIAL_DIRT2,
 };
 
 // ============== Default Configuration ==
@@ -380,6 +390,58 @@ export class TerrainGenerator implements HeightSampler {
   }
 
   /**
+   * Get how far "into" the path a position is (0 = edge, 1 = center)
+   * Used for gradual dipping effect
+   * @param worldX - World X coordinate in meters
+   * @param worldZ - World Z coordinate in meters
+   * @returns 0-1 depth factor, or 0 if not on path
+   */
+  getPathwayDepthFactor(worldX: number, worldZ: number): number {
+    if (!this.config.pathwayConfig.enabled) {
+      return 0;
+    }
+    
+    const path = this.config.pathwayConfig;
+    const halfWidth = path.pathWidth * 0.5;
+    
+    // Apply domain warping
+    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
+    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    
+    // Binary search to find distance to nearest cell edge
+    // Start from center position and check at increasing distances
+    const eps = 0.001;
+    let minEdgeDist = halfWidth; // Start assuming we're at center
+    
+    // Check multiple sample points to find closest edge
+    const sampleCount = 8;
+    for (let i = 0; i < sampleCount; i++) {
+      const angle = (i / sampleCount) * Math.PI * 2;
+      const dx = Math.cos(angle);
+      const dz = Math.sin(angle);
+      
+      // Sample at increasing distances to find where cell changes
+      for (let dist = 0.1; dist <= halfWidth; dist += 0.2) {
+        const [wx, wz] = this.applyPathwayWarp(worldX + dx * dist, worldZ + dz * dist);
+        const cell = this.pathwayCellular.GetNoise(wx, wz);
+        
+        if (Math.abs(centerCell - cell) > eps) {
+          // Found edge at this distance
+          minEdgeDist = Math.min(minEdgeDist, dist);
+          break;
+        }
+      }
+    }
+    
+    // Convert distance to cell boundary into depth factor
+    // minEdgeDist is SMALL at center (near cell boundary), LARGE at path edge
+    // We want depth factor to be 1 at center, 0 at edge, so invert
+    const t = 1 - Math.min(1, minEdgeDist / halfWidth);
+    // Smoothstep: 3t² - 2t³
+    return t * t * (3 - 2 * t);
+  }
+
+  /**
    * Check if a world position is on the outer wall edge of a pathway
    * Returns true if this position is just outside the path on one side
    * (the side where centerCell > neighborCell for consistent single-sided walls)
@@ -452,6 +514,61 @@ export class TerrainGenerator implements HeightSampler {
     }
     
     return false;
+  }
+
+  /**
+   * Check if a world position is on the border of a pathway (just outside, no wall)
+   * Used for the dirt border around paths
+   * @param worldX - World X coordinate in meters
+   * @param worldZ - World Z coordinate in meters
+   * @returns true if position should have border material
+   */
+  isOnPathwayBorder(worldX: number, worldZ: number): boolean {
+    if (!this.config.pathwayConfig.enabled || this.config.pathwayConfig.borderWidth <= 0) {
+      return false;
+    }
+    
+    // If we're on the path itself, not a border
+    if (this.isOnPathway(worldX, worldZ)) {
+      return false;
+    }
+    
+    // If we're on a wall, not a border
+    if (this.isOnPathwayWall(worldX, worldZ)) {
+      return false;
+    }
+    
+    const path = this.config.pathwayConfig;
+    const halfWidth = path.pathWidth * 0.5;
+    const borderDist = halfWidth + path.borderWidth;
+    
+    // Apply domain warping for organic curved cells
+    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
+    
+    // Get cell value at center
+    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    
+    // Sample at border distance to detect if we're near a cell edge
+    const [wx1, wz1] = this.applyPathwayWarp(worldX + borderDist, worldZ);
+    const [wx2, wz2] = this.applyPathwayWarp(worldX - borderDist, worldZ);
+    const [wx3, wz3] = this.applyPathwayWarp(worldX, worldZ + borderDist);
+    const [wx4, wz4] = this.applyPathwayWarp(worldX, worldZ - borderDist);
+    
+    const cell1 = this.pathwayCellular.GetNoise(wx1, wz1);
+    const cell2 = this.pathwayCellular.GetNoise(wx2, wz2);
+    const cell3 = this.pathwayCellular.GetNoise(wx3, wz3);
+    const cell4 = this.pathwayCellular.GetNoise(wx4, wz4);
+    
+    const eps = 0.001;
+    
+    // Check if we're near a cell edge (within border distance)
+    // Only on the side without walls (where centerCell < neighborCell)
+    const isEdge1 = Math.abs(centerCell - cell1) > eps && centerCell < cell1;
+    const isEdge2 = Math.abs(centerCell - cell2) > eps && centerCell < cell2;
+    const isEdge3 = Math.abs(centerCell - cell3) > eps && centerCell < cell3;
+    const isEdge4 = Math.abs(centerCell - cell4) > eps && centerCell < cell4;
+    
+    return isEdge1 || isEdge2 || isEdge3 || isEdge4;
   }
 
   /**
@@ -551,11 +668,18 @@ export class TerrainGenerator implements HeightSampler {
         const worldZ = chunkWorldZ + lz * VOXEL_SCALE;
         
         // Sample terrain height at this XZ position
-        const terrainHeight = this.sampleHeight(worldX, worldZ);
+        let terrainHeight = this.sampleHeight(worldX, worldZ);
         
-        // Cache pathway wall check for this column (only depends on X/Z)
-        // Use -1 as "not checked yet", 0 as "no wall", 1 as "has wall"
-        let isWallColumn = -1;
+        // Cache pathway checks for this column (only depends on X/Z)
+        const isPathColumn = this.isOnPathway(worldX, worldZ);
+        let isWallColumn = -1; // -1 = not checked, 0 = no, 1 = yes
+        let isBorderColumn = -1;
+        
+        // Apply gradual dip to terrain height on pathways (deeper in center)
+        if (isPathColumn && this.config.pathwayConfig.dipDepth > 0) {
+          const depthFactor = this.getPathwayDepthFactor(worldX, worldZ);
+          terrainHeight -= this.config.pathwayConfig.dipDepth * depthFactor;
+        }
 
         for (let ly = 0; ly < CHUNK_SIZE; ly++) {
           // Calculate voxel's Y position in world voxel space
@@ -578,10 +702,19 @@ export class TerrainGenerator implements HeightSampler {
             const depthFromSurface = Math.max(0, distanceFromSurface);
             material = this.getMaterialAtDepth(depthFromSurface);
             
-            // Check for pathway override on surface voxels
-            if (depthFromSurface <= this.config.pathwayConfig.maxDepth && 
-                this.isOnPathway(worldX, worldZ)) {
+            // Check for pathway override on surface voxels (use cached check)
+            if (depthFromSurface <= this.config.pathwayConfig.maxDepth && isPathColumn) {
               material = this.getPathwayMaterial(worldX, worldZ);
+            }
+            
+            // Check for border material (dirt2 along path edges, not on wall side)
+            if (depthFromSurface <= this.config.pathwayConfig.maxDepth && !isPathColumn) {
+              if (isBorderColumn === -1) {
+                isBorderColumn = this.isOnPathwayBorder(worldX, worldZ) ? 1 : 0;
+              }
+              if (isBorderColumn === 1) {
+                material = this.config.pathwayConfig.borderMaterial;
+              }
             }
           }
           
