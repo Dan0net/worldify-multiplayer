@@ -46,6 +46,23 @@ export interface MaterialLayerConfig {
   maxDepth: number;
 }
 
+export interface PathwayConfig {
+  /** Enable pathway generation */
+  enabled: boolean;
+  /** Material ID for pathways (default: pebbles = 11) */
+  materialId: number;
+  /** Frequency of the cellular noise (lower = larger cells, sparser paths) */
+  frequency: number;
+  /** Path width in world units (meters) - how far to sample for edge detection */
+  pathWidth: number;
+  /** Maximum depth from surface where pathway material appears (in voxels) */
+  maxDepth: number;
+  /** Domain warp frequency for organic curves */
+  warpFrequency: number;
+  /** Domain warp amplitude in world units */
+  warpAmplitude: number;
+}
+
 export interface TerrainConfig {
   /** Seed for reproducible generation */
   seed: number;
@@ -63,6 +80,8 @@ export interface TerrainConfig {
   enableStamps: boolean;
   /** Stamp distribution configuration (optional, uses defaults if not provided) */
   stampConfig?: Partial<StampDistributionConfig>;
+  /** Pathway generation configuration */
+  pathwayConfig: PathwayConfig;
 }
 
 // ============== Material Constants ==============
@@ -71,8 +90,21 @@ export interface TerrainConfig {
 export const MATERIAL_MOSS2 = 0;   // Grass/moss surface
 export const MATERIAL_ROCK = 1;    // Rocky underlayer
 export const MATERIAL_ROCK2 = 3;   // Deep stone
+export const MATERIAL_PEBBLES = 11; // Pathway material
 
-// ============== Default Configuration ==============
+// ============== Default Pathway Configuration ==============
+
+export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
+  enabled: true,
+  materialId: MATERIAL_PEBBLES,
+  frequency: 0.012,         // Large cells = sparse path network
+  pathWidth: 3.0,           // Path width in meters
+  maxDepth: 2,              // Only surface voxels
+  warpFrequency: 0.009,     // Low frequency for smooth curves
+  warpAmplitude: 90,        // Strong warping for organic curves
+};
+
+// ============== Default Configuration ==
 
 export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   seed: 12345,
@@ -108,6 +140,7 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   ],
   defaultMaterial: MATERIAL_ROCK2,
   enableStamps: true,
+  pathwayConfig: DEFAULT_PATHWAY_CONFIG,
 };
 
 // ============== Terrain Generator ==============
@@ -117,6 +150,11 @@ export class TerrainGenerator implements HeightSampler {
   private heightNoise: FastNoiseLite;
   private warpNoiseX: FastNoiseLite;
   private warpNoiseZ: FastNoiseLite;
+  
+  // Pathway system - cellular noise with domain warping
+  private pathwayCellular: FastNoiseLite;
+  private pathwayWarpX: FastNoiseLite;
+  private pathwayWarpZ: FastNoiseLite;
   
   // Stamp system
   private stampPointGenerator: StampPointGenerator | null = null;
@@ -134,6 +172,9 @@ export class TerrainGenerator implements HeightSampler {
     }
     if (config.domainWarp) {
       this.config.domainWarp = { ...DEFAULT_TERRAIN_CONFIG.domainWarp, ...config.domainWarp };
+    }
+    if (config.pathwayConfig) {
+      this.config.pathwayConfig = { ...DEFAULT_PATHWAY_CONFIG, ...config.pathwayConfig };
     }
     
     // Initialize noise generators
@@ -153,6 +194,25 @@ export class TerrainGenerator implements HeightSampler {
     this.warpNoiseZ.SetFractalType(FastNoiseLite.FractalType.FBm);
     
     this.updateWarpConfig();
+    
+    // Pathway cellular noise - uses CellValue for unique cell IDs, then we detect edges
+    this.pathwayCellular = new FastNoiseLite(seed++);
+    this.pathwayCellular.SetNoiseType(FastNoiseLite.NoiseType.Cellular);
+    this.pathwayCellular.SetCellularReturnType(FastNoiseLite.CellularReturnType.CellValue);
+    this.pathwayCellular.SetCellularDistanceFunction(FastNoiseLite.CellularDistanceFunction.EuclideanSq);
+    
+    // Pathway domain warp noise for organic curved edges
+    this.pathwayWarpX = new FastNoiseLite(seed++);
+    this.pathwayWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.pathwayWarpX.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.pathwayWarpX.SetFractalOctaves(2);
+    
+    this.pathwayWarpZ = new FastNoiseLite(seed++);
+    this.pathwayWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.pathwayWarpZ.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.pathwayWarpZ.SetFractalOctaves(2);
+    
+    this.updatePathwayConfig();
     
     // Initialize stamp system if enabled
     if (this.config.enableStamps) {
@@ -206,6 +266,70 @@ export class TerrainGenerator implements HeightSampler {
     this.warpNoiseX.SetFractalOctaves(warp.octaves);
     this.warpNoiseZ.SetFrequency(warp.frequency);
     this.warpNoiseZ.SetFractalOctaves(warp.octaves);
+  }
+
+  /**
+   * Update pathway noise configuration
+   */
+  private updatePathwayConfig(): void {
+    const path = this.config.pathwayConfig;
+    this.pathwayCellular.SetFrequency(path.frequency);
+    this.pathwayWarpX.SetFrequency(path.warpFrequency);
+    this.pathwayWarpZ.SetFrequency(path.warpFrequency);
+  }
+
+  /**
+   * Apply domain warping for pathway coordinates
+   * @returns Warped [x, z] coordinates
+   */
+  private applyPathwayWarp(worldX: number, worldZ: number): [number, number] {
+    const path = this.config.pathwayConfig;
+    const warpX = this.pathwayWarpX.GetNoise(worldX, worldZ) * path.warpAmplitude;
+    const warpZ = this.pathwayWarpZ.GetNoise(worldX, worldZ) * path.warpAmplitude;
+    return [worldX + warpX, worldZ + warpZ];
+  }
+
+  /**
+   * Check if a world position is on a pathway
+   * Uses cellular noise with CellValue, applies domain warping, then detects edges
+   * by comparing cell values at neighboring positions for uniform-width contiguous paths
+   * @param worldX - World X coordinate in meters
+   * @param worldZ - World Z coordinate in meters
+   * @returns true if position is on a pathway
+   */
+  isOnPathway(worldX: number, worldZ: number): boolean {
+    if (!this.config.pathwayConfig.enabled) {
+      return false;
+    }
+    
+    const path = this.config.pathwayConfig;
+    const halfWidth = path.pathWidth * 0.5;
+    
+    // Apply domain warping for organic curved cells
+    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
+    
+    // Get cell value at center
+    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    
+    // Sample at offsets to detect if we're near a cell edge
+    // Check 4 cardinal directions at pathWidth distance
+    const [wx1, wz1] = this.applyPathwayWarp(worldX + halfWidth, worldZ);
+    const [wx2, wz2] = this.applyPathwayWarp(worldX - halfWidth, worldZ);
+    const [wx3, wz3] = this.applyPathwayWarp(worldX, worldZ + halfWidth);
+    const [wx4, wz4] = this.applyPathwayWarp(worldX, worldZ - halfWidth);
+    
+    const cell1 = this.pathwayCellular.GetNoise(wx1, wz1);
+    const cell2 = this.pathwayCellular.GetNoise(wx2, wz2);
+    const cell3 = this.pathwayCellular.GetNoise(wx3, wz3);
+    const cell4 = this.pathwayCellular.GetNoise(wx4, wz4);
+    
+    // If any neighbor has a different cell value, we're on an edge (pathway)
+    // Use small epsilon for float comparison
+    const eps = 0.001;
+    return Math.abs(centerCell - cell1) > eps ||
+           Math.abs(centerCell - cell2) > eps ||
+           Math.abs(centerCell - cell3) > eps ||
+           Math.abs(centerCell - cell4) > eps;
   }
 
   /**
@@ -325,6 +449,12 @@ export class TerrainGenerator implements HeightSampler {
             // Only assign material if not fully air
             const depthFromSurface = Math.max(0, distanceFromSurface);
             material = this.getMaterialAtDepth(depthFromSurface);
+            
+            // Check for pathway override on surface voxels
+            if (depthFromSurface <= this.config.pathwayConfig.maxDepth && 
+                this.isOnPathway(worldX, worldZ)) {
+              material = this.config.pathwayConfig.materialId;
+            }
           }
           
           // Default light level
