@@ -120,10 +120,10 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   enabled: true,
   materials: PATHWAY_MATERIALS,
   materialNoiseFrequency: 0.007, // Low frequency so material doesn't change too often
-  frequency: 0.01,         // Large cells = sparse path network
+  frequency: 0.008,         // Large cells = sparse path network
   pathWidth: 3.0,           // Path width in meters
   maxDepth: 2,              // Only surface voxels
-  warpFrequency: 0.009,     // Low frequency for smooth curves
+  warpFrequency: 0.011,     // Low frequency for smooth curves
   warpAmplitude: 90,        // Strong warping for organic curves
   wallHeight: 5,            // Wall height in voxels
   wallMaterial: MATERIAL_BRICK2,
