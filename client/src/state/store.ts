@@ -116,7 +116,16 @@ interface GameState {
   toggleForceRegenerateChunks: () => void;
 }
 
-export const useGameStore = create<GameState>((set) => ({
+// Persist store across HMR to prevent React/game code store instance mismatch
+const storeKey = '__GAME_STORE__';
+declare global {
+  interface Window {
+    [storeKey]?: ReturnType<typeof create<GameState>>;
+  }
+}
+
+// Use existing store if available (HMR), otherwise create new one
+export const useGameStore = window[storeKey] ?? create<GameState>((set) => ({
   // Initial state
   connectionStatus: 'disconnected',
   roomId: null,
@@ -226,3 +235,6 @@ export const useGameStore = create<GameState>((set) => ({
     forceRegenerateChunks: !state.forceRegenerateChunks,
   })),
 }));
+
+// Store the instance on window for HMR persistence
+window[storeKey] = useGameStore;

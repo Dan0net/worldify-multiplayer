@@ -24,12 +24,14 @@ export async function createGame(): Promise<GameCore> {
     gameCore.setLocalPlayerId(playerId);
   }
 
-  // Set up reconnection handler to update player ID after reconnect
+  // Set up reconnection handler to reset game state after reconnect
   setOnReconnected(() => {
     const newPlayerId = getPlayerId();
     if (gameCore && newPlayerId !== null) {
       console.log(`[game] Reconnected with new player ID: ${newPlayerId}`);
       gameCore.setLocalPlayerId(newPlayerId);
+      // Reset game state for fresh start with new server
+      gameCore.handleReconnect();
     }
   });
 

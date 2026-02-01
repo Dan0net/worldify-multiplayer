@@ -26,6 +26,10 @@ class StoreBridge {
 
   // ============== READS (game code reads state here) ==============
 
+  get connectionStatus(): ConnectionStatus {
+    return getState().connectionStatus;
+  }
+
   get gameMode(): GameMode {
     return getState().gameMode;
   }

@@ -278,6 +278,17 @@ export class SpawnManager {
   }
 
   /**
+   * Reset spawn state for reconnection.
+   * Clears cached spawn position and forces re-detection.
+   */
+  reset(): void {
+    this.cachedSpawnPosition = null;
+    this.spawnFound = false;
+    this.lastMeshCount = 0;
+    this.clearDebugVisualization();
+  }
+
+  /**
    * Dispose all resources.
    */
   dispose(): void {

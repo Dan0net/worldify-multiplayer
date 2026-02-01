@@ -168,6 +168,34 @@ export class GameCore {
     this.playerManager.setLocalPlayerId(playerId);
   }
 
+  /**
+   * Handle reconnection after server restart.
+   * Resets game state to allow fresh start with new server.
+   */
+  handleReconnect(): void {
+    console.log('[GameCore] Handling reconnection...');
+    
+    // Reset game mode to MainMenu so player sees spectator overlay
+    storeBridge.setGameMode(GameMode.MainMenu);
+    
+    // Reset spawn state so terrain detection starts fresh
+    if (this.spawnManager) {
+      this.spawnManager.reset();
+    }
+    storeBridge.setSpawnReady(false);
+    
+    // Clear and reload chunks from new server
+    if (this.voxelIntegration) {
+      const playerPos = this.playerManager.getLocalPlayer().position.clone();
+      this.voxelIntegration.clearAndReload(playerPos);
+    }
+    
+    // Reset player spawned flag
+    this.hasSpawnedPlayer = false;
+    
+    console.log('[GameCore] Reconnection handling complete');
+  }
+
   private handleSnapshot = (snapshot: RoomSnapshot): void => {
     const scene = getScene();
     if (!scene) return;

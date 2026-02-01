@@ -509,6 +509,9 @@ export class VoxelWorld {
     // Clear queue
     this.remeshQueue.clear();
 
+    // Reset player chunk tracking so next update triggers chunk loading
+    this.lastPlayerChunk = null;
+
     this.initialized = false;
   }
 
