@@ -18,12 +18,17 @@ export const MAT_BRICK = 6;     // brick2 - walls
 export const MAT_BRICK2 = 18;   // brick3 - variation
 export const MAT_BRICK7 = 29;   // brick7 - variation
 export const MAT_COBBLE = 7;    // cobble - foundations
+export const MAT_COBBLE2 = 8;    // cobble2 - foundations
+export const MAT_BRICK8 = 30;   // brick8 - floors
+export const MAT_TILE3 = 31;    // tile3 - floors
+export const MAT_STONE2 = 39;   // stone2 - foundations
 export const MAT_PLASTER = 12;  // plaster - walls
 export const MAT_PLASTER2 = 17; // plaster2 - variation
 export const MAT_ROOF = 13;     // roof - rooftops
 export const MAT_ROOF2 = 34;    // roof2 - variation
+export const MAT_METAL = 32;    // roof2 - variation
 export const MAT_WOOD = 2;      // wood - floors, beams
-export const MAT_WOOD2 = 43;    // wood2 - variation
+export const MAT_WOOD2 = 44;    // wood3 - variation
 export const MAT_CONCRETE = 9;  // concrete - modern buildings
 
 // ============== Types ==============
@@ -418,16 +423,18 @@ function pitchedRoof(
 function generateSmallBuilding(variant: number): StampDefinition {
   const voxels: StampVoxel[] = [];
   
-  // Variation parameters
-  const widthBase = 12 + (variant % 3) * 4;   // 12-20 voxels (3-5m)
-  const depthBase = 10 + (variant % 2) * 4;   // 10-14 voxels (2.5-3.5m)
-  const heightBase = 12 + (variant % 3) * 4;  // 12-20 voxels (3-5m)
+  // Variation parameters - wider base, lower height for better proportions
+  const widthBase = 24 + (variant % 3) * 12;   // 24-48 voxels (6-12m)
+  const depthBase = Math.max(widthBase, 24 + (variant % 2) * 12);   // At least as deep as wide
+  const heightBase = 14 + (variant % 3) * 2;  // 12-16 voxels (3-4m)
   
   // Material selection based on variant
   const wallMaterials = [MAT_BRICK, MAT_BRICK7, MAT_BRICK2];  // brick2, brick7, brick3
   const roofMaterials = [MAT_ROOF, MAT_ROOF2];
+  const floorMaterials = [MAT_BRICK8, MAT_TILE3];  // brick8, tile3
   const wallMaterial = wallMaterials[variant % wallMaterials.length];
   const roofMaterial = roofMaterials[variant % roofMaterials.length];
+  const floorMaterial = floorMaterials[variant % floorMaterials.length];
   const foundationMaterial = MAT_COBBLE;
   
   const halfWidth = Math.floor(widthBase / 2);
@@ -436,7 +443,7 @@ function generateSmallBuilding(variant: number): StampDefinition {
   // Foundation (2 voxels thick, extends slightly underground)
   voxels.push(...box(
     -halfWidth - 1, halfWidth + 1,
-    -2, 0,
+    -4, 0,
     -halfDepth - 1, halfDepth + 1,
     foundationMaterial, false
   ));
@@ -446,7 +453,7 @@ function generateSmallBuilding(variant: number): StampDefinition {
     -halfWidth + 1, halfWidth - 1,
     0, 0,
     -halfDepth + 1, halfDepth - 1,
-    MAT_WOOD, false
+    floorMaterial, false
   ));
   
   // Walls (hollow box)
@@ -456,6 +463,23 @@ function generateSmallBuilding(variant: number): StampDefinition {
     -halfDepth, halfDepth,
     wallMaterial, true, 1
   ));
+  
+  // Concrete ceiling layer inside the building
+  voxels.push(...box(
+    -halfWidth + 1, halfWidth - 1,
+    heightBase, heightBase,
+    -halfDepth + 1, halfDepth - 1,
+    MAT_CONCRETE, false
+  ));
+  
+  // Interior air (carve out hollow space to remove overlapping trees/rocks)
+  for (let y = 1; y < heightBase; y++) {
+    for (let x = -halfWidth + 1; x < halfWidth; x++) {
+      for (let z = -halfDepth + 1; z < halfDepth; z++) {
+        voxels.push({ x, y, z, material: 0, weight: -0.5 });
+      }
+    }
+  }
   
   // Door opening (cut a gap in front wall) - 8 voxels tall (2m) to fit player (1.6m)
   const doorWidth = 3;
@@ -474,19 +498,50 @@ function generateSmallBuilding(variant: number): StampDefinition {
   
   // Window openings on sides
   const windowY = 5;
-  const windowSize = 2;
-  // Left wall window
-  for (let y = windowY; y < windowY + windowSize + 1; y++) {
-    for (let z = -windowSize; z <= windowSize; z++) {
-      const idx = voxels.findIndex(v => v.x === -halfWidth && v.y === y && v.z === z);
-      if (idx !== -1) voxels.splice(idx, 1);
+  const windowSize = 3;
+  
+  // Calculate number of windows based on building size
+  const numSideWindows = Math.max(1, Math.floor(halfDepth / 8));  // 1 window per 8 voxels of depth
+  const numBackWindows = Math.max(1, Math.floor(halfWidth / 8));  // 1 window per 8 voxels of width
+  
+  // Left wall windows
+  for (let w = 0; w < numSideWindows; w++) {
+    const windowZ = Math.floor(-halfDepth / 2 + (w + 0.5) * (halfDepth / numSideWindows));
+    for (let y = windowY; y < windowY + windowSize + 1; y++) {
+      for (let z = windowZ - windowSize; z <= windowZ + windowSize; z++) {
+        const idx = voxels.findIndex(v => v.x === -halfWidth && v.y === y && v.z === z);
+        if (idx !== -1) voxels.splice(idx, 1);
+      }
     }
   }
-  // Right wall window
-  for (let y = windowY; y < windowY + windowSize + 1; y++) {
-    for (let z = -windowSize; z <= windowSize; z++) {
-      const idx = voxels.findIndex(v => v.x === halfWidth && v.y === y && v.z === z);
-      if (idx !== -1) voxels.splice(idx, 1);
+  // Right wall windows
+  for (let w = 0; w < numSideWindows; w++) {
+    const windowZ = Math.floor(-halfDepth / 2 + (w + 0.5) * (halfDepth / numSideWindows));
+    for (let y = windowY; y < windowY + windowSize + 1; y++) {
+      for (let z = windowZ - windowSize; z <= windowZ + windowSize; z++) {
+        const idx = voxels.findIndex(v => v.x === halfWidth && v.y === y && v.z === z);
+        if (idx !== -1) voxels.splice(idx, 1);
+      }
+    }
+  }
+  // Back wall windows (opposite door)
+  for (let w = 0; w < numBackWindows; w++) {
+    const windowX = Math.floor(-halfWidth / 2 + (w + 0.5) * (halfWidth / numBackWindows));
+    for (let y = windowY; y < windowY + windowSize + 1; y++) {
+      for (let x = windowX - windowSize; x <= windowX + windowSize; x++) {
+        const idx = voxels.findIndex(v => v.x === x && v.y === y && v.z === halfDepth);
+        if (idx !== -1) voxels.splice(idx, 1);
+      }
+    }
+  }
+  
+  // Stairs in front of doorway (descending from floor level)
+  const stairDepth = 4;  // 4 steps
+  for (let step = 0; step < stairDepth; step++) {
+    const stairY = -step;  // Each step goes down
+    const stairZ = -halfDepth - 1 - step;  // Each step extends further out
+    for (let x = -doorWidth; x <= doorWidth; x++) {
+      voxels.push({ x, y: stairY, z: stairZ, material: foundationMaterial, weight: 0.45 });
     }
   }
   
@@ -513,14 +568,15 @@ function generateHut(variant: number): StampDefinition {
   const voxels: StampVoxel[] = [];
   
   // Variation parameters - larger huts
-  const radius = 8 + (variant % 3) * 2;       // 8-12 voxels radius (2-3m)
+  const radius = 10 + (variant % 3) * 2;      // 10-14 voxels radius (2.5-3.5m)
   const wallHeight = 12 + (variant % 2) * 2;  // 12-14 voxels (3-3.5m)
   const roofHeight = radius + 3;
   
   // Material selection - wood walls for huts
-  const wallMaterials = [MAT_WOOD, MAT_WOOD2, MAT_BARK];
-  const roofMaterials = [MAT_WOOD, MAT_WOOD2, MAT_ROOF];
-  const floorMaterial = MAT_WOOD;
+  const wallMaterials = [MAT_WOOD, MAT_WOOD2];
+  const roofMaterials = [MAT_ROOF, MAT_ROOF2, MAT_METAL];
+  const floorMaterial = MAT_COBBLE2;
+  const foundationMaterial = MAT_STONE2;
   const wallMaterial = wallMaterials[variant % wallMaterials.length];
   const roofMaterial = roofMaterials[variant % roofMaterials.length];
   
@@ -531,12 +587,46 @@ function generateHut(variant: number): StampDefinition {
   // Wall thickness (2 voxels to avoid notches)
   const wallThickness = 2;
   
-  // Solid circular floor
-  const floorR2 = (radius - wallThickness) * (radius - wallThickness);
-  for (let x = -radius + wallThickness; x <= radius - wallThickness; x++) {
-    for (let z = -radius + wallThickness; z <= radius - wallThickness; z++) {
+  // Foundation (extends slightly underground like small buildings)
+  const foundationR2 = (radius + 1) * (radius + 1);
+  for (let y = -2; y < 0; y++) {
+    for (let x = -radius - 1; x <= radius + 1; x++) {
+      for (let z = -radius - 1; z <= radius + 1; z++) {
+        if (x * x + z * z <= foundationR2) {
+          voxels.push({ x, y, z, material: foundationMaterial, weight: 0.45 });
+        }
+      }
+    }
+  }
+  
+  // Solid circular floor (encompasses wall perimeter like small buildings)
+  const floorR2 = radius * radius;
+  for (let x = -radius; x <= radius; x++) {
+    for (let z = -radius; z <= radius; z++) {
       if (x * x + z * z <= floorR2) {
         voxels.push({ x, y: 0, z, material: floorMaterial, weight: 0.45 });
+      }
+    }
+  }
+  
+  // Concrete ceiling layer inside the hut (under the roof)
+  const ceilingR2 = (radius - wallThickness) * (radius - wallThickness);
+  for (let x = -radius + wallThickness; x <= radius - wallThickness; x++) {
+    for (let z = -radius + wallThickness; z <= radius - wallThickness; z++) {
+      if (x * x + z * z <= ceilingR2) {
+        voxels.push({ x, y: wallHeight - 1, z, material: MAT_CONCRETE, weight: 0.45 });
+      }
+    }
+  }
+  
+  // Interior air (carve out hollow space to remove overlapping trees/rocks)
+  const interiorR2 = (radius - wallThickness) * (radius - wallThickness);
+  for (let y = 1; y < wallHeight - 1; y++) {  // Stop before ceiling
+    for (let x = -radius + wallThickness; x <= radius - wallThickness; x++) {
+      for (let z = -radius + wallThickness; z <= radius - wallThickness; z++) {
+        if (x * x + z * z < interiorR2) {
+          voxels.push({ x, y, z, material: 0, weight: -0.5 });
+        }
       }
     }
   }
@@ -544,6 +634,11 @@ function generateHut(variant: number): StampDefinition {
   // Circular walls (hollow cylinder with 2-voxel thickness)
   const r2Outer = radius * radius;
   const r2Inner = (radius - wallThickness) * (radius - wallThickness);
+  
+  // Window parameters
+  const windowY = 5;
+  const windowHeight = 4;  // 4 voxels tall (1m)
+  const windowWidth = 3;   // 3 voxels wide
   
   for (let y = 1; y < wallHeight; y++) {
     for (let x = -radius; x <= radius; x++) {
@@ -554,6 +649,14 @@ function generateHut(variant: number): StampDefinition {
           // Leave a door gap - wider and taller
           if (z < -radius + wallThickness + 1 && Math.abs(x) <= doorWidth && y < doorHeight) continue;
           
+          // Window openings on sides (left and right of hut, opposite to door)
+          // Left window (negative X side)
+          if (x < -radius + wallThickness + 1 && Math.abs(z) <= windowWidth && y >= windowY && y < windowY + windowHeight) continue;
+          // Right window (positive X side)
+          if (x > radius - wallThickness - 1 && Math.abs(z) <= windowWidth && y >= windowY && y < windowY + windowHeight) continue;
+          // Back window (positive Z side, opposite door)
+          if (z > radius - wallThickness - 1 && Math.abs(x) <= windowWidth && y >= windowY && y < windowY + windowHeight) continue;
+          
           voxels.push({
             x, y, z,
             material: wallMaterial,
@@ -561,6 +664,16 @@ function generateHut(variant: number): StampDefinition {
           });
         }
       }
+    }
+  }
+  
+  // Stairs in front of doorway (descending from floor level)
+  const stairDepth = 4;  // 4 steps
+  for (let step = 0; step < stairDepth; step++) {
+    const stairY = -step;  // Each step goes down
+    const stairZ = -radius - 1 - step;  // Each step extends further out from door
+    for (let x = -doorWidth; x <= doorWidth; x++) {
+      voxels.push({ x, y: stairY, z: stairZ, material: foundationMaterial, weight: 0.45 });
     }
   }
   

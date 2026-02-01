@@ -5,7 +5,7 @@
 
 import { CHUNK_SIZE, VOXEL_SCALE } from '../../voxel/constants.js';
 import { packVoxel, getWeight, voxelIndex } from '../../voxel/voxelData.js';
-import { getStamp, StampVoxel } from './StampDefinitions.js';
+import { getStamp, StampType, StampVoxel } from './StampDefinitions.js';
 import { StampPlacement } from './StampPointGenerator.js';
 
 // ============== Types ==============
@@ -80,7 +80,17 @@ export class StampPlacer {
     const chunkVoxelY = cy * CHUNK_SIZE;
     const chunkVoxelZ = cz * CHUNK_SIZE;
 
-    for (const placement of placements) {
+    // Sort placements so buildings are applied last
+    // This ensures their interior carving voxels remove any overlapping trees/rocks
+    const sortedPlacements = [...placements].sort((a, b) => {
+      const aIsBuilding = a.type === StampType.BUILDING_SMALL || a.type === StampType.BUILDING_HUT;
+      const bIsBuilding = b.type === StampType.BUILDING_SMALL || b.type === StampType.BUILDING_HUT;
+      if (aIsBuilding && !bIsBuilding) return 1;  // a after b
+      if (!aIsBuilding && bIsBuilding) return -1; // a before b
+      return 0;
+    });
+
+    for (const placement of sortedPlacements) {
       this.applyStamp(
         data,
         placement,
@@ -149,6 +159,16 @@ export class StampPlacer {
    */
   private blendVoxel(existing: number, stamp: StampVoxel): number | null {
     const existingWeight = getWeight(existing);
+    
+    // Air voxels (negative weight, material 0) always carve out space
+    // This is used by buildings to create hollow interiors
+    if (stamp.material === 0 && stamp.weight < 0) {
+      // Only carve if existing is solid
+      if (existingWeight > stamp.weight) {
+        return packVoxel(stamp.weight, 0, 0);
+      }
+      return null;
+    }
     
     switch (this.config.blendMode) {
       case BlendMode.MAX_WEIGHT:
