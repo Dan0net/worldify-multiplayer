@@ -113,7 +113,8 @@ export class StampPlacer {
     chunkVoxelZ: number,
     heightSampler: HeightSampler
   ): void {
-    const stamp = getStamp(placement.type, placement.variant);
+    // Pass rotation to getStamp for buildings (SDF-based rotation)
+    const stamp = getStamp(placement.type, placement.variant, placement.rotation);
     
     // Get terrain height at stamp position
     const terrainHeight = heightSampler.sampleHeight(placement.worldX, placement.worldZ);

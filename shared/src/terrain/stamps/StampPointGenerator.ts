@@ -285,7 +285,8 @@ export class StampPointGenerator {
     cz: number,
     margin: number
   ): boolean {
-    const stamp = getStamp(placement.type, placement.variant);
+    // Pass rotation to getStamp for buildings (affects bounds calculation)
+    const stamp = getStamp(placement.type, placement.variant, placement.rotation);
     const bounds = stamp.bounds;
     
     // Convert placement to voxel coordinates

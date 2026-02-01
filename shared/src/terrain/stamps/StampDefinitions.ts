@@ -3,6 +3,11 @@
  * Stamps are small voxel patterns that get applied on top of terrain
  */
 
+import { sdfBox, sdfCylinder } from '../../voxel/shapes.js';
+
+// SDF threshold for voxel inclusion - sqrt(2)/2 handles 45° rotations
+const SDF_THRESHOLD = 0.71;
+
 // ============== Material IDs (from pallet.json indices) ==============
 
 export const MAT_BARK = 4;      // bark2 - tree trunks
@@ -346,212 +351,89 @@ function generateRock(type: StampType, variant: number): StampDefinition {
   };
 }
 
-// ============== Building Helpers ==============
+// ============== SDF-Based Building Generators (With Rotation Support) ==============
 
 /**
- * Create a box of voxels (used for building walls, floors)
+ * Rotate a 2D point around the origin by angle (radians)
+ * Used to transform query points for rotated SDF sampling
  */
-function box(
-  minX: number, maxX: number,
-  minY: number, maxY: number,
-  minZ: number, maxZ: number,
-  material: number,
-  hollow: boolean = false,
-  wallThickness: number = 1
-): StampVoxel[] {
-  const voxels: StampVoxel[] = [];
-  
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      for (let z = minZ; z <= maxZ; z++) {
-        if (hollow) {
-          // Only add if on the edge
-          const onXEdge = x < minX + wallThickness || x > maxX - wallThickness;
-          const onYEdge = y < minY + wallThickness || y > maxY - wallThickness;
-          const onZEdge = z < minZ + wallThickness || z > maxZ - wallThickness;
-          if (!onXEdge && !onYEdge && !onZEdge) continue;
-        }
-        
-        // Solid weight for buildings
-        voxels.push({
-          x, y, z,
-          material,
-          weight: 0.45,
-        });
-      }
-    }
-  }
-  return voxels;
+function rotateXZ(x: number, z: number, cos: number, sin: number): { rx: number; rz: number } {
+  return {
+    rx: x * cos + z * sin,
+    rz: -x * sin + z * cos,
+  };
 }
 
 /**
- * Create a pitched roof (triangular prism)
+ * Generate a small rectangular building using proper SDF sampling with rotation
  */
-function pitchedRoof(
-  minX: number, maxX: number,
-  baseY: number,
-  minZ: number, maxZ: number,
-  material: number,
-  overhang: number = 1
-): StampVoxel[] {
-  const voxels: StampVoxel[] = [];
-  const width = maxX - minX;
-  const peakHeight = Math.floor(width / 2) + 2;
-  const centerX = (minX + maxX) / 2;
-  
-  for (let y = 0; y < peakHeight; y++) {
-    // Width narrows as we go up
-    const halfWidth = Math.floor((width / 2) + overhang - y * 0.8);
-    if (halfWidth < 0) break;
-    
-    for (let x = Math.floor(centerX) - halfWidth; x <= Math.floor(centerX) + halfWidth; x++) {
-      for (let z = minZ - overhang; z <= maxZ + overhang; z++) {
-        voxels.push({
-          x, y: baseY + y, z,
-          material,
-          weight: 0.45,
-        });
-      }
-    }
-  }
-  return voxels;
-}
-
-/**
- * Generate a small rectangular building stamp
- */
-function generateSmallBuilding(variant: number): StampDefinition {
+function generateSmallBuildingSDF(variant: number, rotation: number): StampDefinition {
   const voxels: StampVoxel[] = [];
   
-  // Variation parameters - wider base, lower height for better proportions
+  // Variation parameters
   const widthBase = 24 + (variant % 3) * 12;   // 24-48 voxels (6-12m)
-  const depthBase = Math.max(widthBase, 24 + (variant % 2) * 12);   // At least as deep as wide
-  const heightBase = 14 + (variant % 3) * 2;  // 12-16 voxels (3-4m)
+  const depthBase = Math.max(widthBase, 24 + (variant % 2) * 12);
+  const heightBase = 14 + (variant % 3) * 2;  // 14-18 voxels (3.5-4.5m)
   
-  // Material selection based on variant
-  const wallMaterials = [MAT_BRICK, MAT_BRICK7, MAT_BRICK2];  // brick2, brick7, brick3
+  // Material selection
+  const wallMaterials = [MAT_BRICK, MAT_BRICK7, MAT_BRICK2];
   const roofMaterials = [MAT_ROOF, MAT_ROOF2];
-  const floorMaterials = [MAT_BRICK8, MAT_TILE3];  // brick8, tile3
+  const floorMaterials = [MAT_BRICK8, MAT_TILE3];
   const wallMaterial = wallMaterials[variant % wallMaterials.length];
   const roofMaterial = roofMaterials[variant % roofMaterials.length];
   const floorMaterial = floorMaterials[variant % floorMaterials.length];
   const foundationMaterial = MAT_COBBLE;
   
-  const halfWidth = Math.floor(widthBase / 2);
-  const halfDepth = Math.floor(depthBase / 2);
+  const halfWidth = widthBase / 2;
+  const halfDepth = depthBase / 2;
+  const wallThickness = 2;  // 2 voxels for proper rotation support
   
-  // Foundation (2 voxels thick, extends slightly underground)
-  voxels.push(...box(
-    -halfWidth - 1, halfWidth + 1,
-    -4, 0,
-    -halfDepth - 1, halfDepth + 1,
-    foundationMaterial, false
-  ));
+  // Roof parameters
+  const roofPeakHeight = Math.floor(widthBase / 2) + 2;
+  const roofOverhang = 2;
   
-  // Solid floor inside the building
-  voxels.push(...box(
-    -halfWidth + 1, halfWidth - 1,
-    0, 0,
-    -halfDepth + 1, halfDepth - 1,
-    floorMaterial, false
-  ));
+  // Pre-compute rotation
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
   
-  // Walls (hollow box)
-  voxels.push(...box(
-    -halfWidth, halfWidth,
-    1, heightBase,
-    -halfDepth, halfDepth,
-    wallMaterial, true, 1
-  ));
-  
-  // Concrete ceiling layer inside the building
-  voxels.push(...box(
-    -halfWidth + 1, halfWidth - 1,
-    heightBase, heightBase,
-    -halfDepth + 1, halfDepth - 1,
-    MAT_CONCRETE, false
-  ));
-  
-  // Interior air (carve out hollow space to remove overlapping trees/rocks)
-  for (let y = 1; y < heightBase; y++) {
-    for (let x = -halfWidth + 1; x < halfWidth; x++) {
-      for (let z = -halfDepth + 1; z < halfDepth; z++) {
-        voxels.push({ x, y, z, material: 0, weight: -0.5 });
-      }
-    }
-  }
-  
-  // Door opening (cut a gap in front wall) - 8 voxels tall (2m) to fit player (1.6m)
-  const doorWidth = 3;
+  // Door and window parameters
+  const doorHalfWidth = 3;
   const doorHeight = 8;
-  for (let y = 1; y <= doorHeight; y++) {
-    for (let x = -doorWidth; x <= doorWidth; x++) {
-      // Remove front wall voxels for door
-      const doorIndex = voxels.findIndex(v => 
-        v.x === x && v.y === y && v.z === -halfDepth
-      );
-      if (doorIndex !== -1) {
-        voxels.splice(doorIndex, 1);
-      }
-    }
-  }
-  
-  // Window openings on sides
   const windowY = 5;
-  const windowSize = 3;
+  const windowHalfSize = 3;
+  const windowHeight = 4;
   
-  // Calculate number of windows based on building size
-  const numSideWindows = Math.max(1, Math.floor(halfDepth / 8));  // 1 window per 8 voxels of depth
-  const numBackWindows = Math.max(1, Math.floor(halfWidth / 8));  // 1 window per 8 voxels of width
+  // Calculate bounding box with rotation margin
+  const maxDim = Math.ceil(Math.max(halfWidth, halfDepth) + roofOverhang + 5);
+  const maxHeight = heightBase + roofPeakHeight + 2;
   
-  // Left wall windows
-  for (let w = 0; w < numSideWindows; w++) {
-    const windowZ = Math.floor(-halfDepth / 2 + (w + 0.5) * (halfDepth / numSideWindows));
-    for (let y = windowY; y < windowY + windowSize + 1; y++) {
-      for (let z = windowZ - windowSize; z <= windowZ + windowSize; z++) {
-        const idx = voxels.findIndex(v => v.x === -halfWidth && v.y === y && v.z === z);
-        if (idx !== -1) voxels.splice(idx, 1);
+  // Sample SDF over the entire bounding volume
+  for (let y = -4; y <= maxHeight; y++) {
+    for (let x = -maxDim; x <= maxDim; x++) {
+      for (let z = -maxDim; z <= maxDim; z++) {
+        // Rotate query point to local building space (inverse rotation)
+        const { rx, rz } = rotateXZ(x, z, cos, -sin);
+        
+        // Evaluate what's at this rotated position using proper SDFs
+        const voxelData = evaluateSmallBuildingSDF(
+          rx, y, rz,
+          halfWidth, halfDepth, heightBase, wallThickness,
+          roofPeakHeight, roofOverhang,
+          doorHalfWidth, doorHeight,
+          windowY, windowHalfSize, windowHeight,
+          wallMaterial, foundationMaterial, floorMaterial, roofMaterial
+        );
+        
+        if (voxelData) {
+          voxels.push({
+            x, y, z,
+            material: voxelData.material,
+            weight: voxelData.weight,
+          });
+        }
       }
     }
   }
-  // Right wall windows
-  for (let w = 0; w < numSideWindows; w++) {
-    const windowZ = Math.floor(-halfDepth / 2 + (w + 0.5) * (halfDepth / numSideWindows));
-    for (let y = windowY; y < windowY + windowSize + 1; y++) {
-      for (let z = windowZ - windowSize; z <= windowZ + windowSize; z++) {
-        const idx = voxels.findIndex(v => v.x === halfWidth && v.y === y && v.z === z);
-        if (idx !== -1) voxels.splice(idx, 1);
-      }
-    }
-  }
-  // Back wall windows (opposite door)
-  for (let w = 0; w < numBackWindows; w++) {
-    const windowX = Math.floor(-halfWidth / 2 + (w + 0.5) * (halfWidth / numBackWindows));
-    for (let y = windowY; y < windowY + windowSize + 1; y++) {
-      for (let x = windowX - windowSize; x <= windowX + windowSize; x++) {
-        const idx = voxels.findIndex(v => v.x === x && v.y === y && v.z === halfDepth);
-        if (idx !== -1) voxels.splice(idx, 1);
-      }
-    }
-  }
-  
-  // Stairs in front of doorway (descending from floor level)
-  const stairDepth = 4;  // 4 steps
-  for (let step = 0; step < stairDepth; step++) {
-    const stairY = -step;  // Each step goes down
-    const stairZ = -halfDepth - 1 - step;  // Each step extends further out
-    for (let x = -doorWidth; x <= doorWidth; x++) {
-      voxels.push({ x, y: stairY, z: stairZ, material: foundationMaterial, weight: 0.45 });
-    }
-  }
-  
-  // Pitched roof
-  voxels.push(...pitchedRoof(
-    -halfWidth, halfWidth,
-    heightBase + 1,
-    -halfDepth, halfDepth,
-    roofMaterial, 2
-  ));
   
   return {
     type: StampType.BUILDING_SMALL,
@@ -562,17 +444,173 @@ function generateSmallBuilding(variant: number): StampDefinition {
 }
 
 /**
- * Generate a round hut with conical roof
+ * Evaluate small building using proper SDF at a point in local (unrotated) space
  */
-function generateHut(variant: number): StampDefinition {
+function evaluateSmallBuildingSDF(
+  x: number, y: number, z: number,
+  halfWidth: number, halfDepth: number, heightBase: number, wallThickness: number,
+  roofPeakHeight: number, roofOverhang: number,
+  doorHalfWidth: number, doorHeight: number,
+  windowY: number, windowHalfSize: number, windowHeight: number,
+  wallMaterial: number, foundationMaterial: number, floorMaterial: number, roofMaterial: number
+): { material: number; weight: number } | null {
+  
+  // Foundation SDF (-4 to 0, extends slightly beyond walls)
+  const foundationHalfHeight = 2;
+  const foundationY = -2; // Center at y=-2
+  const foundationDist = sdfBox(
+    { x, y: y - foundationY, z },
+    { x: halfWidth + 1, y: foundationHalfHeight, z: halfDepth + 1 }
+  );
+  if (foundationDist < SDF_THRESHOLD && y >= -4 && y <= 0) {
+    return { material: foundationMaterial, weight: 0.45 };
+  }
+  
+  // Stairs in front of door
+  if (y >= -3 && y <= 0) {
+    const stairStep = -y;
+    for (let step = 0; step < 4; step++) {
+      if (stairStep === step) {
+        const stairZ = -halfDepth - 1.5 - step;
+        const stairDist = sdfBox(
+          { x, y: 0, z: z - stairZ },
+          { x: doorHalfWidth, y: 0.5, z: 0.5 }
+        );
+        if (stairDist < SDF_THRESHOLD) {
+          return { material: foundationMaterial, weight: 0.45 };
+        }
+      }
+    }
+  }
+  
+  // Floor SDF (y = 0, inside walls)
+  if (y >= 0 && y < 1) {
+    const floorDist = sdfBox(
+      { x, y: y - 0.5, z },
+      { x: halfWidth - 0.5, y: 0.5, z: halfDepth - 0.5 }
+    );
+    if (floorDist < SDF_THRESHOLD) {
+      return { material: floorMaterial, weight: 0.45 };
+    }
+  }
+  
+  // Interior air (carve out inside) - must check before walls
+  if (y >= 1 && y < heightBase) {
+    const interiorDist = sdfBox(
+      { x, y: y - heightBase / 2, z },
+      { x: halfWidth - wallThickness, y: heightBase / 2, z: halfDepth - wallThickness }
+    );
+    if (interiorDist < -SDF_THRESHOLD) {  // Well inside interior
+      return { material: 0, weight: -0.5 };
+    }
+  }
+  
+  // Ceiling
+  if (y >= heightBase - 1 && y <= heightBase) {
+    const ceilingDist = sdfBox(
+      { x, y: y - heightBase + 0.5, z },
+      { x: halfWidth - 0.5, y: 0.5, z: halfDepth - 0.5 }
+    );
+    if (ceilingDist < SDF_THRESHOLD) {
+      return { material: MAT_CONCRETE, weight: 0.45 };
+    }
+  }
+  
+  // Walls using hollow box SDF
+  if (y >= 1 && y <= heightBase) {
+    // Outer box
+    const outerDist = sdfBox(
+      { x, y: y - (heightBase + 1) / 2, z },
+      { x: halfWidth, y: heightBase / 2, z: halfDepth }
+    );
+    // Inner box (hollow)
+    const innerDist = sdfBox(
+      { x, y: y - (heightBase + 1) / 2, z },
+      { x: halfWidth - wallThickness, y: heightBase / 2 + 1, z: halfDepth - wallThickness }
+    );
+    
+    // Wall shell: inside outer, outside inner
+    if (outerDist < SDF_THRESHOLD && innerDist > -SDF_THRESHOLD) {
+      // Check for door (front wall, negative Z)
+      if (z < -halfDepth + wallThickness + SDF_THRESHOLD && y <= doorHeight) {
+        const doorDist = sdfBox(
+          { x, y: y - doorHeight / 2, z: z + halfDepth },
+          { x: doorHalfWidth, y: doorHeight / 2, z: wallThickness + 1 }
+        );
+        if (doorDist < SDF_THRESHOLD) {
+          return null; // Door opening
+        }
+      }
+      
+      // Check for windows
+      const inWindowY = y >= windowY && y < windowY + windowHeight;
+      if (inWindowY) {
+        // Side windows (on X walls)
+        if (Math.abs(x) > halfWidth - wallThickness - SDF_THRESHOLD) {
+          const numSideWindows = Math.max(1, Math.floor(halfDepth / 8));
+          for (let w = 0; w < numSideWindows; w++) {
+            const windowZ = -halfDepth / 2 + (w + 0.5) * (halfDepth / numSideWindows);
+            const windowDist = sdfBox(
+              { x: 0, y: y - windowY - windowHeight / 2, z: z - windowZ },
+              { x: wallThickness + 1, y: windowHeight / 2, z: windowHalfSize }
+            );
+            if (windowDist < SDF_THRESHOLD) {
+              return null; // Window opening
+            }
+          }
+        }
+        
+        // Back windows (on positive Z wall)
+        if (z > halfDepth - wallThickness - SDF_THRESHOLD) {
+          const numBackWindows = Math.max(1, Math.floor(halfWidth / 8));
+          for (let w = 0; w < numBackWindows; w++) {
+            const windowX = -halfWidth / 2 + (w + 0.5) * (halfWidth / numBackWindows);
+            const windowDist = sdfBox(
+              { x: x - windowX, y: y - windowY - windowHeight / 2, z: 0 },
+              { x: windowHalfSize, y: windowHeight / 2, z: wallThickness + 1 }
+            );
+            if (windowDist < SDF_THRESHOLD) {
+              return null; // Window opening
+            }
+          }
+        }
+      }
+      
+      return { material: wallMaterial, weight: 0.45 };
+    }
+  }
+  
+  // Pitched roof
+  if (y > heightBase && y <= heightBase + roofPeakHeight) {
+    const roofY = y - heightBase - 1;
+    const halfWidthAtY = halfWidth + roofOverhang - roofY * 0.8;
+    
+    if (halfWidthAtY >= 0) {
+      const roofDist = sdfBox(
+        { x, y: 0, z },
+        { x: halfWidthAtY, y: 0.5, z: halfDepth + roofOverhang }
+      );
+      if (roofDist < SDF_THRESHOLD) {
+        return { material: roofMaterial, weight: 0.45 };
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Generate a round hut using proper SDF sampling with rotation
+ */
+function generateHutSDF(variant: number, rotation: number): StampDefinition {
   const voxels: StampVoxel[] = [];
   
-  // Variation parameters - larger huts
-  const radius = 10 + (variant % 3) * 2;      // 10-14 voxels radius (2.5-3.5m)
-  const wallHeight = 12 + (variant % 2) * 2;  // 12-14 voxels (3-3.5m)
+  // Variation parameters
+  const radius = 10 + (variant % 3) * 2;      // 10-14 voxels radius
+  const wallHeight = 12 + (variant % 2) * 2;  // 12-14 voxels
   const roofHeight = radius + 3;
   
-  // Material selection - wood walls for huts
+  // Material selection
   const wallMaterials = [MAT_WOOD, MAT_WOOD2];
   const roofMaterials = [MAT_ROOF, MAT_ROOF2, MAT_METAL];
   const floorMaterial = MAT_COBBLE2;
@@ -580,115 +618,42 @@ function generateHut(variant: number): StampDefinition {
   const wallMaterial = wallMaterials[variant % wallMaterials.length];
   const roofMaterial = roofMaterials[variant % roofMaterials.length];
   
-  // Door dimensions - 8 voxels tall (2m) to fit player (1.6m)
-  const doorWidth = 3;   // -3 to +3 = 7 voxels (1.75m)
-  const doorHeight = 8;  // 8 voxels (2m)
-  
-  // Wall thickness (2 voxels to avoid notches)
   const wallThickness = 2;
-  
-  // Foundation (extends slightly underground like small buildings)
-  const foundationR2 = (radius + 1) * (radius + 1);
-  for (let y = -2; y < 0; y++) {
-    for (let x = -radius - 1; x <= radius + 1; x++) {
-      for (let z = -radius - 1; z <= radius + 1; z++) {
-        if (x * x + z * z <= foundationR2) {
-          voxels.push({ x, y, z, material: foundationMaterial, weight: 0.45 });
-        }
-      }
-    }
-  }
-  
-  // Solid circular floor (encompasses wall perimeter like small buildings)
-  const floorR2 = radius * radius;
-  for (let x = -radius; x <= radius; x++) {
-    for (let z = -radius; z <= radius; z++) {
-      if (x * x + z * z <= floorR2) {
-        voxels.push({ x, y: 0, z, material: floorMaterial, weight: 0.45 });
-      }
-    }
-  }
-  
-  // Concrete ceiling layer inside the hut (under the roof)
-  const ceilingR2 = (radius - wallThickness) * (radius - wallThickness);
-  for (let x = -radius + wallThickness; x <= radius - wallThickness; x++) {
-    for (let z = -radius + wallThickness; z <= radius - wallThickness; z++) {
-      if (x * x + z * z <= ceilingR2) {
-        voxels.push({ x, y: wallHeight - 1, z, material: MAT_CONCRETE, weight: 0.45 });
-      }
-    }
-  }
-  
-  // Interior air (carve out hollow space to remove overlapping trees/rocks)
-  const interiorR2 = (radius - wallThickness) * (radius - wallThickness);
-  for (let y = 1; y < wallHeight - 1; y++) {  // Stop before ceiling
-    for (let x = -radius + wallThickness; x <= radius - wallThickness; x++) {
-      for (let z = -radius + wallThickness; z <= radius - wallThickness; z++) {
-        if (x * x + z * z < interiorR2) {
-          voxels.push({ x, y, z, material: 0, weight: -0.5 });
-        }
-      }
-    }
-  }
-  
-  // Circular walls (hollow cylinder with 2-voxel thickness)
-  const r2Outer = radius * radius;
-  const r2Inner = (radius - wallThickness) * (radius - wallThickness);
-  
-  // Window parameters
+  const doorHalfWidth = 3;
+  const doorHeight = 8;
   const windowY = 5;
-  const windowHeight = 4;  // 4 voxels tall (1m)
-  const windowWidth = 3;   // 3 voxels wide
+  const windowHeight = 4;
+  const windowHalfWidth = 3;
   
-  for (let y = 1; y < wallHeight; y++) {
-    for (let x = -radius; x <= radius; x++) {
-      for (let z = -radius; z <= radius; z++) {
-        const dist2 = x * x + z * z;
-        // Wall ring (2 voxels thick)
-        if (dist2 <= r2Outer && dist2 >= r2Inner) {
-          // Leave a door gap - wider and taller
-          if (z < -radius + wallThickness + 1 && Math.abs(x) <= doorWidth && y < doorHeight) continue;
-          
-          // Window openings on sides (left and right of hut, opposite to door)
-          // Left window (negative X side)
-          if (x < -radius + wallThickness + 1 && Math.abs(z) <= windowWidth && y >= windowY && y < windowY + windowHeight) continue;
-          // Right window (positive X side)
-          if (x > radius - wallThickness - 1 && Math.abs(z) <= windowWidth && y >= windowY && y < windowY + windowHeight) continue;
-          // Back window (positive Z side, opposite door)
-          if (z > radius - wallThickness - 1 && Math.abs(x) <= windowWidth && y >= windowY && y < windowY + windowHeight) continue;
-          
+  // Pre-compute rotation
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  
+  // Bounding box with margin for rotation
+  const maxDim = radius + 5;
+  const maxHeight = wallHeight + roofHeight + 2;
+  
+  // Sample SDF over the entire bounding volume
+  for (let y = -2; y <= maxHeight; y++) {
+    for (let x = -maxDim; x <= maxDim; x++) {
+      for (let z = -maxDim; z <= maxDim; z++) {
+        // Rotate query point to local building space (inverse rotation)
+        const { rx, rz } = rotateXZ(x, z, cos, -sin);
+        
+        // Evaluate what's at this rotated position using proper SDFs
+        const voxelData = evaluateHutSDF(
+          rx, y, rz,
+          radius, wallHeight, roofHeight, wallThickness,
+          doorHalfWidth, doorHeight,
+          windowY, windowHeight, windowHalfWidth,
+          wallMaterial, foundationMaterial, floorMaterial, roofMaterial
+        );
+        
+        if (voxelData) {
           voxels.push({
             x, y, z,
-            material: wallMaterial,
-            weight: 0.45,
-          });
-        }
-      }
-    }
-  }
-  
-  // Stairs in front of doorway (descending from floor level)
-  const stairDepth = 4;  // 4 steps
-  for (let step = 0; step < stairDepth; step++) {
-    const stairY = -step;  // Each step goes down
-    const stairZ = -radius - 1 - step;  // Each step extends further out from door
-    for (let x = -doorWidth; x <= doorWidth; x++) {
-      voxels.push({ x, y: stairY, z: stairZ, material: foundationMaterial, weight: 0.45 });
-    }
-  }
-  
-  // Conical roof
-  for (let y = 0; y < roofHeight; y++) {
-    const roofRadius = radius + 1 - (y * (radius + 1) / roofHeight);
-    const rr2 = roofRadius * roofRadius;
-    
-    for (let x = -Math.ceil(roofRadius); x <= Math.ceil(roofRadius); x++) {
-      for (let z = -Math.ceil(roofRadius); z <= Math.ceil(roofRadius); z++) {
-        if (x * x + z * z <= rr2) {
-          voxels.push({
-            x, y: wallHeight + y, z,
-            material: roofMaterial,
-            weight: 0.45,
+            material: voxelData.material,
+            weight: voxelData.weight,
           });
         }
       }
@@ -703,32 +668,176 @@ function generateHut(variant: number): StampDefinition {
   };
 }
 
+/**
+ * Evaluate hut using proper SDF at a point in local (unrotated) space
+ */
+function evaluateHutSDF(
+  x: number, y: number, z: number,
+  radius: number, wallHeight: number, roofHeight: number, wallThickness: number,
+  doorHalfWidth: number, doorHeight: number,
+  windowY: number, windowHeight: number, windowHalfWidth: number,
+  wallMaterial: number, foundationMaterial: number, floorMaterial: number, roofMaterial: number
+): { material: number; weight: number } | null {
+  
+  // Foundation SDF (-2 to 0)
+  if (y >= -2 && y < 0) {
+    const foundationDist = sdfCylinder({ x, y: y + 1, z }, radius + 1, 1);
+    if (foundationDist < SDF_THRESHOLD) {
+      return { material: foundationMaterial, weight: 0.45 };
+    }
+    // Stairs in front of door
+    const stairStep = -y - 1;
+    if (stairStep >= 0 && stairStep < 4) {
+      const stairZ = -radius - 1.5 - stairStep;
+      const stairDist = sdfBox(
+        { x, y: 0, z: z - stairZ },
+        { x: doorHalfWidth, y: 0.5, z: 0.5 }
+      );
+      if (stairDist < SDF_THRESHOLD) {
+        return { material: foundationMaterial, weight: 0.45 };
+      }
+    }
+  }
+  
+  // Floor (y = 0)
+  if (y >= 0 && y < 1) {
+    const floorDist = sdfCylinder({ x, y: y - 0.5, z }, radius, 0.5);
+    if (floorDist < SDF_THRESHOLD) {
+      return { material: floorMaterial, weight: 0.45 };
+    }
+  }
+  
+  // Interior air
+  if (y >= 1 && y < wallHeight - 1) {
+    const interiorDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, radius - wallThickness, wallHeight / 2);
+    if (interiorDist < -SDF_THRESHOLD) {
+      return { material: 0, weight: -0.5 };
+    }
+  }
+  
+  // Ceiling
+  if (y >= wallHeight - 2 && y < wallHeight) {
+    const ceilingDist = sdfCylinder({ x, y: y - wallHeight + 1, z }, radius - wallThickness, 1);
+    if (ceilingDist < SDF_THRESHOLD) {
+      return { material: MAT_CONCRETE, weight: 0.45 };
+    }
+  }
+  
+  // Walls (hollow cylinder)
+  if (y >= 1 && y < wallHeight) {
+    const outerDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, radius, wallHeight / 2);
+    const innerDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, radius - wallThickness, wallHeight / 2 + 1);
+    
+    // Wall shell: inside outer, outside inner
+    if (outerDist < SDF_THRESHOLD && innerDist > -SDF_THRESHOLD) {
+      // Door opening (negative Z side)
+      if (z < -radius + wallThickness + SDF_THRESHOLD && y < doorHeight) {
+        const doorDist = sdfBox(
+          { x, y: y - doorHeight / 2, z: z + radius },
+          { x: doorHalfWidth, y: doorHeight / 2, z: wallThickness + 1 }
+        );
+        if (doorDist < SDF_THRESHOLD) {
+          return null;
+        }
+      }
+      
+      // Window openings
+      const inWindowY = y >= windowY && y < windowY + windowHeight;
+      if (inWindowY) {
+        // Left window (negative X)
+        if (x < -radius + wallThickness + SDF_THRESHOLD) {
+          const windowDist = sdfBox(
+            { x: x + radius, y: y - windowY - windowHeight / 2, z },
+            { x: wallThickness + 1, y: windowHeight / 2, z: windowHalfWidth }
+          );
+          if (windowDist < SDF_THRESHOLD) {
+            return null;
+          }
+        }
+        // Right window (positive X)
+        if (x > radius - wallThickness - SDF_THRESHOLD) {
+          const windowDist = sdfBox(
+            { x: x - radius, y: y - windowY - windowHeight / 2, z },
+            { x: wallThickness + 1, y: windowHeight / 2, z: windowHalfWidth }
+          );
+          if (windowDist < SDF_THRESHOLD) {
+            return null;
+          }
+        }
+        // Back window (positive Z)
+        if (z > radius - wallThickness - SDF_THRESHOLD) {
+          const windowDist = sdfBox(
+            { x, y: y - windowY - windowHeight / 2, z: z - radius },
+            { x: windowHalfWidth, y: windowHeight / 2, z: wallThickness + 1 }
+          );
+          if (windowDist < SDF_THRESHOLD) {
+            return null;
+          }
+        }
+      }
+      
+      return { material: wallMaterial, weight: 0.45 };
+    }
+  }
+  
+  // Conical roof
+  if (y >= wallHeight && y < wallHeight + roofHeight) {
+    const roofY = y - wallHeight;
+    const roofRadius = radius + 1 - (roofY * (radius + 1) / roofHeight);
+    const roofDist = sdfCylinder({ x, y: 0, z }, roofRadius, 0.5);
+    if (roofDist < SDF_THRESHOLD) {
+      return { material: roofMaterial, weight: 0.45 };
+    }
+  }
+  
+  return null;
+}
+
 // ============== Stamp Registry ==============
 
 const VARIANTS_PER_TYPE = 4;
 
-/** Pre-generated stamp definitions */
-const stampCache = new Map<string, StampDefinition>();
+/**
+ * Check if a stamp type is a building that supports rotation
+ */
+export function isRotatableStamp(type: StampType): boolean {
+  return type === StampType.BUILDING_SMALL || type === StampType.BUILDING_HUT;
+}
 
 /**
- * Get a stamp definition by type and variant
+ * Get a stamp definition by type, variant, and optional rotation
+ * Buildings are generated fresh each time with rotation applied to SDF sampling
+ * Non-buildings are cached by type+variant
+ * 
+ * @param type - Stamp type
+ * @param variant - Variant index (0-3)
+ * @param rotation - Rotation in radians around Y axis (only used for buildings)
  */
-export function getStamp(type: StampType, variant: number): StampDefinition {
+export function getStamp(type: StampType, variant: number, rotation: number = 0): StampDefinition {
   const normalizedVariant = variant % VARIANTS_PER_TYPE;
-  const key = `${type}:${normalizedVariant}`;
   
-  let stamp = stampCache.get(key);
+  // Buildings are generated fresh with rotation - no caching
+  if (isRotatableStamp(type)) {
+    return createStamp(type, normalizedVariant, rotation);
+  }
+  
+  // Non-buildings are cached (trees, rocks don't need rotation)
+  const key = `${type}:${normalizedVariant}`;
+  let stamp = stampCacheNonBuildings.get(key);
   if (!stamp) {
-    stamp = createStamp(type, normalizedVariant);
-    stampCache.set(key, stamp);
+    stamp = createStamp(type, normalizedVariant, 0);
+    stampCacheNonBuildings.set(key, stamp);
   }
   return stamp;
 }
 
+/** Cache for non-building stamps only (trees, rocks) */
+const stampCacheNonBuildings = new Map<string, StampDefinition>();
+
 /**
  * Create a new stamp definition
  */
-function createStamp(type: StampType, variant: number): StampDefinition {
+function createStamp(type: StampType, variant: number, rotation: number = 0): StampDefinition {
   switch (type) {
     case StampType.TREE_PINE:
       return generatePineTree(variant);
@@ -739,9 +848,9 @@ function createStamp(type: StampType, variant: number): StampDefinition {
     case StampType.ROCK_LARGE:
       return generateRock(type, variant);
     case StampType.BUILDING_SMALL:
-      return generateSmallBuilding(variant);
+      return generateSmallBuildingSDF(variant, rotation);
     case StampType.BUILDING_HUT:
-      return generateHut(variant);
+      return generateHutSDF(variant, rotation);
     default:
       throw new Error(`Unknown stamp type: ${type}`);
   }

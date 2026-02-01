@@ -9,6 +9,7 @@ export {
   getStamp,
   getVariantCount,
   getAllStampTypes,
+  isRotatableStamp,
   // Material constants
   MAT_BARK,
   MAT_BARK_DARK,
