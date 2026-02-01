@@ -615,7 +615,9 @@ export class TerrainGenerator implements HeightSampler {
 
     // Apply stamps (trees, rocks) if enabled
     if (this.stampPointGenerator && this.stampPlacer) {
-      const placements = this.stampPointGenerator.generateForChunk(cx, cz);
+      const allPlacements = this.stampPointGenerator.generateForChunk(cx, cz);
+      // Filter out placements that are on pathways
+      const placements = allPlacements.filter(p => !this.isOnPathway(p.worldX, p.worldZ));
       this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 
