@@ -309,8 +309,8 @@ function generateRock(type: StampType, variant: number): StampDefinition {
   const materials = [MAT_ROCK, MAT_ROCK2, MAT_ROCK_MOSS];
   const material = materials[variant % materials.length];
   
-  // Flatten factor (rocks are wider than tall)
-  const yScale = 0.6 + (variant % 3) * 0.1;
+  // Vertical scale factor (values > 1 make rocks taller)
+  const yScale = 0.9 + (variant % 3) * 0.15;
   
   // Generate irregular sphere, centered slightly underground
   const voxels: StampVoxel[] = [];
@@ -483,6 +483,17 @@ function evaluateSmallBuildingSDF(
     }
   }
   
+  // Doorway carving - extends through wall and slightly in front to clear terrain
+  if (y >= 0 && y < doorHeight) {
+    const doorwayDist = sdfBox(
+      { x, y: y - doorHeight / 2, z: z + halfDepth + 1 },
+      { x: doorHalfWidth + 0.5, y: doorHeight / 2, z: wallThickness + 2 }
+    );
+    if (doorwayDist < SDF_THRESHOLD) {
+      return { material: 0, weight: -0.5 };  // Carve out doorway
+    }
+  }
+  
   // Floor SDF (y = 0, inside walls)
   if (y >= 0 && y < 1) {
     const floorDist = sdfBox(
@@ -542,12 +553,12 @@ function evaluateSmallBuildingSDF(
         }
       }
       
-      // Check for windows
+      // Check for windows - carve terrain like interior
       const inWindowY = y >= windowY && y < windowY + windowHeight;
       if (inWindowY) {
-        // Side windows (on X walls)
+        // Side windows (on X walls) - spaced further apart
         if (Math.abs(x) > halfWidth - wallThickness - SDF_THRESHOLD) {
-          const numSideWindows = Math.max(1, Math.floor(halfDepth / 8));
+          const numSideWindows = Math.max(1, Math.floor(halfDepth / 10));
           for (let w = 0; w < numSideWindows; w++) {
             const windowZ = -halfDepth / 2 + (w + 0.5) * (halfDepth / numSideWindows);
             const windowDist = sdfBox(
@@ -555,14 +566,14 @@ function evaluateSmallBuildingSDF(
               { x: wallThickness + 1, y: windowHeight / 2, z: windowHalfSize }
             );
             if (windowDist < SDF_THRESHOLD) {
-              return null; // Window opening
+              return { material: 0, weight: -0.5 }; // Carve window opening
             }
           }
         }
         
-        // Back windows (on positive Z wall)
+        // Back windows (on positive Z wall) - spaced further apart
         if (z > halfDepth - wallThickness - SDF_THRESHOLD) {
-          const numBackWindows = Math.max(1, Math.floor(halfWidth / 8));
+          const numBackWindows = Math.max(1, Math.floor(halfWidth / 10));
           for (let w = 0; w < numBackWindows; w++) {
             const windowX = -halfWidth / 2 + (w + 0.5) * (halfWidth / numBackWindows);
             const windowDist = sdfBox(
@@ -570,7 +581,7 @@ function evaluateSmallBuildingSDF(
               { x: windowHalfSize, y: windowHeight / 2, z: wallThickness + 1 }
             );
             if (windowDist < SDF_THRESHOLD) {
-              return null; // Window opening
+              return { material: 0, weight: -0.5 }; // Carve window opening
             }
           }
         }
@@ -699,6 +710,17 @@ function evaluateHutSDF(
     }
   }
   
+  // Doorway carving - extends through wall and slightly in front to clear terrain
+  if (y >= 0 && y < doorHeight) {
+    const doorwayDist = sdfBox(
+      { x, y: y - doorHeight / 2, z: z + radius + 1 },
+      { x: doorHalfWidth + 0.5, y: doorHeight / 2, z: wallThickness + 2 }
+    );
+    if (doorwayDist < SDF_THRESHOLD) {
+      return { material: 0, weight: -0.5 };  // Carve out doorway
+    }
+  }
+  
   // Floor (y = 0)
   if (y >= 0 && y < 1) {
     const floorDist = sdfCylinder({ x, y: y - 0.5, z }, radius, 0.5);
@@ -741,37 +763,37 @@ function evaluateHutSDF(
         }
       }
       
-      // Window openings
+      // Window openings - carve terrain like interior
       const inWindowY = y >= windowY && y < windowY + windowHeight;
       if (inWindowY) {
         // Left window (negative X)
         if (x < -radius + wallThickness + SDF_THRESHOLD) {
           const windowDist = sdfBox(
             { x: x + radius, y: y - windowY - windowHeight / 2, z },
-            { x: wallThickness + 1, y: windowHeight / 2, z: windowHalfWidth }
+            { x: wallThickness + 2, y: windowHeight / 2, z: windowHalfWidth }
           );
           if (windowDist < SDF_THRESHOLD) {
-            return null;
+            return { material: 0, weight: -0.5 }; // Carve window opening
           }
         }
         // Right window (positive X)
         if (x > radius - wallThickness - SDF_THRESHOLD) {
           const windowDist = sdfBox(
             { x: x - radius, y: y - windowY - windowHeight / 2, z },
-            { x: wallThickness + 1, y: windowHeight / 2, z: windowHalfWidth }
+            { x: wallThickness + 2, y: windowHeight / 2, z: windowHalfWidth }
           );
           if (windowDist < SDF_THRESHOLD) {
-            return null;
+            return { material: 0, weight: -0.5 }; // Carve window opening
           }
         }
         // Back window (positive Z)
         if (z > radius - wallThickness - SDF_THRESHOLD) {
           const windowDist = sdfBox(
             { x, y: y - windowY - windowHeight / 2, z: z - radius },
-            { x: windowHalfWidth, y: windowHeight / 2, z: wallThickness + 1 }
+            { x: windowHalfWidth, y: windowHeight / 2, z: wallThickness + 2 }
           );
           if (windowDist < SDF_THRESHOLD) {
-            return null;
+            return { material: 0, weight: -0.5 }; // Carve window opening
           }
         }
       }

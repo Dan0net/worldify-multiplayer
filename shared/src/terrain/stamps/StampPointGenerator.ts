@@ -80,14 +80,14 @@ export const DEFAULT_STAMP_DISTRIBUTION: StampDistributionConfig = {
       priority: 1,
       gridSize: 10,           // Medium grid
       jitter: 0.4,
-      exclusionRadius: 0,
+      exclusionRadius: 1,
     },
     {
       type: StampType.ROCK_SMALL,
       priority: 2,
       gridSize: 6,            // Smaller grid = denser
       jitter: 0.35,
-      exclusionRadius: 0,     // No exclusion - can be close to others
+      exclusionRadius: 1,     // No exclusion - can be close to others
     },
     // Trees generated after rocks (priority 10) - single unified grid, random type selection
     {
@@ -95,7 +95,7 @@ export const DEFAULT_STAMP_DISTRIBUTION: StampDistributionConfig = {
       priority: 10,
       gridSize: 5,
       jitter: 0.6,
-      exclusionRadius: 0,
+      exclusionRadius: 1,
       typePool: [StampType.TREE_OAK, StampType.TREE_PINE], // Randomly pick between oak and pine
     },
   ],
