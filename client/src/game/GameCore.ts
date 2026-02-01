@@ -49,6 +49,9 @@ export class GameCore {
   // Track if player has been properly spawned
   private hasSpawnedPlayer = false;
   private lastGameMode: GameMode = GameMode.MainMenu;
+  
+  // Center point for spectator camera orbit (updated when leaving Playing mode)
+  private spectatorCenter = new THREE.Vector3(0, 0, 0);
 
   constructor() {
     this.gameLoop = new GameLoop();
@@ -213,7 +216,7 @@ export class GameCore {
     const localPlayer = this.playerManager.getLocalPlayer();
 
     // Check for game mode transitions
-    this.handleGameModeTransition(gameMode);
+    this.handleGameModeTransition(gameMode, localPlayer);
 
     // Sync voxel debug state from store to VoxelDebugManager
     this.updateVoxelDebug();
@@ -247,10 +250,16 @@ export class GameCore {
   /**
    * Handle game mode transitions (e.g. MainMenu → Playing)
    */
-  private handleGameModeTransition(currentMode: GameMode): void {
+  private handleGameModeTransition(currentMode: GameMode, localPlayer: ReturnType<PlayerManager['getLocalPlayer']>): void {
     if (currentMode === this.lastGameMode) return;
     
+    const previousMode = this.lastGameMode;
     this.lastGameMode = currentMode;
+    
+    // Leaving Playing mode - capture player position for spectator center
+    if (previousMode === GameMode.Playing) {
+      this.spectatorCenter.copy(localPlayer.position);
+    }
     
     // Entering Playing mode - calculate proper spawn position
     if (currentMode === GameMode.Playing && !this.hasSpawnedPlayer) {
@@ -304,12 +313,12 @@ export class GameCore {
     elapsedTime: number
   ): void {
     if (camera) {
-      updateSpectatorCamera(camera, deltaMs, elapsedTime);
+      updateSpectatorCamera(camera, deltaMs, elapsedTime, this.spectatorCenter);
     }
 
-    // Update voxel terrain centered on origin
+    // Update voxel terrain centered on spectator center (preserves chunks when returning from playing)
     if (this.voxelIntegration) {
-      this.voxelIntegration.update(new THREE.Vector3(0, 10, 0));
+      this.voxelIntegration.update(this.spectatorCenter);
     }
     
     // Update spawn detection
