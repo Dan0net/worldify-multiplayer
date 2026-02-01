@@ -64,7 +64,7 @@ export const WEIGHT_RANGE = WEIGHT_MAX - WEIGHT_MIN; // 1.0
 
 // ============== Streaming ==============
 /** Number of chunks to load in each direction from player */
-export const STREAM_RADIUS = 4;
+export const STREAM_RADIUS = 6;
 
 /** Extra margin (in chunks) before unloading - prevents pop-in/out at boundaries */
 export const STREAM_UNLOAD_MARGIN = 1;

@@ -44,19 +44,21 @@ export function updateCameraFromPlayer(
 }
 
 /**
- * Update spectator camera - orbits around game area looking down
+ * Update spectator camera - orbits around a center point looking down
+ * @param center The point to orbit around (defaults to origin)
  */
 export function updateSpectatorCamera(
   camera: THREE.PerspectiveCamera,
   _deltaMs: number,
-  elapsedTime: number
+  elapsedTime: number,
+  center: THREE.Vector3 = new THREE.Vector3(0, 0, 0)
 ): void {
-  // Orbit around the origin
+  // Orbit around the center point
   const angle = elapsedTime * SPECTATOR_ROTATION_SPEED;
-  camera.position.x = Math.sin(angle) * SPECTATOR_DISTANCE;
-  camera.position.z = Math.cos(angle) * SPECTATOR_DISTANCE;
-  camera.position.y = SPECTATOR_HEIGHT;
+  camera.position.x = center.x + Math.sin(angle) * SPECTATOR_DISTANCE;
+  camera.position.z = center.z + Math.cos(angle) * SPECTATOR_DISTANCE;
+  camera.position.y = center.y + SPECTATOR_HEIGHT;
   
   // Look at a point above center to tilt camera up
-  camera.lookAt(0, SPECTATOR_LOOK_UP_OFFSET, 0);
+  camera.lookAt(center.x, center.y + SPECTATOR_LOOK_UP_OFFSET, center.z);
 }
