@@ -104,6 +104,7 @@ function cylinder(
 
 /**
  * Create a sphere of voxels (used for tree canopy, rocks)
+ * Uses smooth low-frequency noise for blobby irregularities
  */
 function sphere(
   centerX: number,
@@ -117,13 +118,27 @@ function sphere(
   const voxels: StampVoxel[] = [];
   const r = Math.ceil(radius);
   
+  // Precompute smooth noise samples at low frequency for blobby variation
+  // Sample at ~4 points around the sphere for smooth interpolation
+  const noiseFreq = 0.3; // Lower = smoother blobs
+  
   for (let y = -r; y <= r; y++) {
     for (let x = -r; x <= r; x++) {
       for (let z = -r; z <= r; z++) {
-        // Add irregularity using simple hash
-        const hash = Math.sin(seed + x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453;
-        const variation = (hash - Math.floor(hash)) * irregularity;
-        const effectiveRadius = radius + variation - irregularity * 0.5;
+        // Smooth noise: combine multiple low-frequency sine waves for organic shape
+        // This creates smooth undulations rather than per-voxel spikes
+        const nx = x * noiseFreq;
+        const ny = y * noiseFreq;
+        const nz = z * noiseFreq;
+        
+        // Layered smooth noise (pseudo-simplex-like)
+        const n1 = Math.sin(seed * 1.1 + nx * 1.7 + ny * 2.3 + nz * 1.9);
+        const n2 = Math.sin(seed * 2.3 + nx * 2.1 - nz * 1.3 + ny * 1.7) * 0.5;
+        const n3 = Math.sin(seed * 0.7 + ny * 1.9 + nz * 2.7 - nx * 1.1) * 0.3;
+        const smoothNoise = (n1 + n2 + n3) / 1.8; // Normalize to roughly -1 to 1
+        
+        const variation = smoothNoise * irregularity;
+        const effectiveRadius = radius + variation;
         
         const dist = Math.sqrt(x * x + y * y + z * z);
         if (dist <= effectiveRadius) {
@@ -169,6 +184,9 @@ function calculateBounds(voxels: StampVoxel[]): StampDefinition['bounds'] {
 
 // ============== Stamp Generators ==============
 
+// Shared tree constants for consistent appearance
+const TREE_TRUNK_HEIGHT = 16;  // Fixed trunk height in voxels (4m) - canopy starts here
+
 /**
  * Generate a pine tree stamp variant
  */
@@ -176,23 +194,23 @@ function generatePineTree(variant: number): StampDefinition {
   const voxels: StampVoxel[] = [];
   
   // Variation parameters based on variant
-  const heightBase = 24 + (variant % 3) * 4;  // 24-32 voxels tall (6-8m)
-  const trunkRadius = 1 + (variant % 2) * 0.5;
+  const trunkRadius = 1.2 + (variant % 2) * 0.2;  // 1.2-1.4 - consistent with oak
   const canopyLayers = 3 + (variant % 2);
   const barkMaterial = variant % 2 === 0 ? MAT_BARK : MAT_BARK_DARK;
   const leafMaterial = variant % 2 === 0 ? MAT_LEAVES : MAT_LEAVES2;
   
-  // Trunk
-  voxels.push(...cylinder(0, 0, trunkRadius, 0, heightBase * 0.7, barkMaterial));
+  // Trunk - fixed height so canopies align
+  voxels.push(...cylinder(0, 0, trunkRadius, 0, TREE_TRUNK_HEIGHT, barkMaterial));
   
-  // Canopy - layered cones
-  const canopyStart = Math.floor(heightBase * 0.35);
-  const canopyEnd = heightBase;
-  const layerHeight = (canopyEnd - canopyStart) / canopyLayers;
+  // Canopy - layered cones, 50% bigger
+  const canopyStart = TREE_TRUNK_HEIGHT;  // Start at trunk top, same as oak
+  const totalCanopyHeight = 20 + (variant % 3) * 4;  // 20-28 voxels of canopy
+  const layerHeight = totalCanopyHeight / canopyLayers;
   
   for (let layer = 0; layer < canopyLayers; layer++) {
     const layerY = canopyStart + layer * layerHeight;
-    const layerRadius = 4 - layer * 0.8 + (variant % 3) * 0.5;
+    // 50% bigger: 6-7.5 base radius instead of 4-5
+    const layerRadius = (6 - layer * 1.2 + (variant % 3) * 0.75);
     const layerTop = layerY + layerHeight * 1.3;
     
     // Create tapered canopy layer
@@ -217,19 +235,17 @@ function generatePineTree(variant: number): StampDefinition {
 function generateOakTree(variant: number): StampDefinition {
   const voxels: StampVoxel[] = [];
   
-  // Variation parameters
-  const heightBase = 20 + (variant % 4) * 3;  // 20-32 voxels (5-8m)
-  const trunkRadius = 1.5 + (variant % 2) * 0.5;
-  const canopyRadius = 5 + (variant % 3);
+  // Variation parameters - 50% bigger canopy
+  const trunkRadius = 1.3 + (variant % 2) * 0.2;  // 1.3-1.5 - consistent with pine
+  const canopyRadius = (7.5 + (variant % 3) * 1.5);  // 7.5-12 (was 5-8, now 50% bigger)
   const barkMaterial = variant % 2 === 0 ? MAT_BARK : MAT_BARK_DARK;
   const leafMaterial = variant % 2 === 0 ? MAT_LEAVES : MAT_LEAVES2;
   
-  // Trunk
-  const trunkHeight = Math.floor(heightBase * 0.5);
-  voxels.push(...cylinder(0, 0, trunkRadius, 0, trunkHeight, barkMaterial));
+  // Trunk - fixed height so canopies align with pine
+  voxels.push(...cylinder(0, 0, trunkRadius, 0, TREE_TRUNK_HEIGHT, barkMaterial));
   
-  // Canopy - larger irregular sphere
-  const canopyY = trunkHeight + canopyRadius * 0.3;
+  // Canopy - larger irregular sphere centered above trunk
+  const canopyY = TREE_TRUNK_HEIGHT + canopyRadius * 0.3;
   voxels.push(...sphere(0, Math.floor(canopyY), 0, canopyRadius, leafMaterial, 1.2, variant * 7));
   
   // Add some smaller spheres for irregular shape

@@ -16,7 +16,7 @@ export interface StampDistributionConfig {
 }
 
 export interface StampDistribution {
-  /** Which stamp type to place */
+  /** Which stamp type to place (or primary type if using typePool) */
   type: StampType;
   /** Priority order - lower = generated first, claims space (rocks before trees) */
   priority: number;
@@ -26,6 +26,12 @@ export interface StampDistribution {
   jitter: number;
   /** Exclusion radius - minimum distance from ANY other stamp (in meters) */
   exclusionRadius: number;
+  /** 
+   * Optional pool of stamp types to randomly select from at each placement.
+   * If provided, 'type' is ignored and one of these types is chosen randomly.
+   * Each entry has equal weight.
+   */
+  typePool?: StampType[];
 }
 
 export interface StampPlacement {
@@ -83,20 +89,14 @@ export const DEFAULT_STAMP_DISTRIBUTION: StampDistributionConfig = {
       jitter: 0.35,
       exclusionRadius: 0,     // No exclusion - can be close to others
     },
-    // Trees generated after rocks (priority 10-11)
+    // Trees generated after rocks (priority 10) - single unified grid, random type selection
     {
-      type: StampType.TREE_OAK,
+      type: StampType.TREE_OAK, // Primary type (used for hashing, actual type picked from pool)
       priority: 10,
-      gridSize: 7,
-      jitter: 0.4,
+      gridSize: 5,
+      jitter: 0.6,
       exclusionRadius: 0,
-    },
-    {
-      type: StampType.TREE_PINE,
-      priority: 11,
-      gridSize: 6,
-      jitter: 0.4,
-      exclusionRadius: 0,
+      typePool: [StampType.TREE_OAK, StampType.TREE_PINE], // Randomly pick between oak and pine
     },
   ],
 };
@@ -197,11 +197,18 @@ export class StampPointGenerator {
           continue;
         }
         
+        // Select stamp type: from pool (random) or single type
+        let stampType = dist.type;
+        if (dist.typePool && dist.typePool.length > 0) {
+          const typeIndex = Math.floor(rand() * dist.typePool.length);
+          stampType = dist.typePool[typeIndex];
+        }
+        
         // Select variant (0-3)
         const variant = Math.floor(rand() * 4);
         
         placements.push({
-          type: dist.type,
+          type: stampType,
           variant,
           worldX,
           worldZ,
