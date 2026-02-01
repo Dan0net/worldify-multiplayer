@@ -46,13 +46,28 @@ export interface StampPlacement {
 export const DEFAULT_STAMP_DISTRIBUTION: StampDistributionConfig = {
   seed: 54321,
   distributions: [
-    // Rocks generated first (priority 0-2) - they claim space
+    // Buildings generated first (priority -10 to -5) - they claim the most space
+    {
+      type: StampType.BUILDING_SMALL,
+      priority: -10,
+      gridSize: 50,           // Very sparse - one per 80m grid cell
+      jitter: 0.35,           // Some jitter but not too much
+      exclusionRadius: 20,    // 20m exclusion - large clearance around buildings
+    },
+    {
+      type: StampType.BUILDING_HUT,
+      priority: -5,
+      gridSize: 30,           // Slightly denser than small buildings
+      jitter: 0.4,
+      exclusionRadius: 15,    // 15m exclusion - huts need clearance too
+    },
+    // Rocks generated after buildings (priority 0-2) - they claim space
     {
       type: StampType.ROCK_LARGE,
       priority: 0,
       gridSize: 24,           // Large grid = sparse placement
       jitter: 0.4,            // ±40% jitter from cell center
-      exclusionRadius: 1,     // 4m exclusion from other stamps
+      exclusionRadius: 1,     // 1m exclusion from other stamps
     },
     {
       type: StampType.ROCK_MEDIUM,
@@ -232,11 +247,6 @@ export class StampPointGenerator {
   ): boolean {
     const exclusionRadius = dist.exclusionRadius;
     
-    // No exclusion configured, always valid
-    if (exclusionRadius <= 0) {
-      return true;
-    }
-    
     for (const existing of existingPlacements) {
       const dx = worldX - existing.worldX;
       const dz = worldZ - existing.worldZ;
@@ -247,6 +257,9 @@ export class StampPointGenerator {
       const existingDist = this.config.distributions.find(d => d.type === existing.type);
       const existingExclusion = existingDist?.exclusionRadius ?? 0;
       const combinedExclusion = Math.max(exclusionRadius, existingExclusion);
+      
+      // Skip if neither has exclusion
+      if (combinedExclusion <= 0) continue;
       
       if (distSq < combinedExclusion * combinedExclusion) {
         return false;

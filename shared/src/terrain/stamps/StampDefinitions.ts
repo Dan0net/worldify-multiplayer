@@ -13,6 +13,19 @@ export const MAT_ROCK = 1;      // rock - boulders
 export const MAT_ROCK2 = 3;     // rock2 - variation
 export const MAT_ROCK_MOSS = 23; // rock_moss - mossy rocks
 
+// Building materials
+export const MAT_BRICK = 6;     // brick2 - walls
+export const MAT_BRICK2 = 18;   // brick3 - variation
+export const MAT_BRICK7 = 29;   // brick7 - variation
+export const MAT_COBBLE = 7;    // cobble - foundations
+export const MAT_PLASTER = 12;  // plaster - walls
+export const MAT_PLASTER2 = 17; // plaster2 - variation
+export const MAT_ROOF = 13;     // roof - rooftops
+export const MAT_ROOF2 = 34;    // roof2 - variation
+export const MAT_WOOD = 2;      // wood - floors, beams
+export const MAT_WOOD2 = 43;    // wood2 - variation
+export const MAT_CONCRETE = 9;  // concrete - modern buildings
+
 // ============== Types ==============
 
 export interface StampVoxel {
@@ -47,6 +60,8 @@ export enum StampType {
   ROCK_SMALL = 'rock_small',
   ROCK_MEDIUM = 'rock_medium',
   ROCK_LARGE = 'rock_large',
+  BUILDING_SMALL = 'building_small',
+  BUILDING_HUT = 'building_hut',
 }
 
 // ============== Stamp Generation Helpers ==============
@@ -310,6 +325,255 @@ function generateRock(type: StampType, variant: number): StampDefinition {
   };
 }
 
+// ============== Building Helpers ==============
+
+/**
+ * Create a box of voxels (used for building walls, floors)
+ */
+function box(
+  minX: number, maxX: number,
+  minY: number, maxY: number,
+  minZ: number, maxZ: number,
+  material: number,
+  hollow: boolean = false,
+  wallThickness: number = 1
+): StampVoxel[] {
+  const voxels: StampVoxel[] = [];
+  
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        if (hollow) {
+          // Only add if on the edge
+          const onXEdge = x < minX + wallThickness || x > maxX - wallThickness;
+          const onYEdge = y < minY + wallThickness || y > maxY - wallThickness;
+          const onZEdge = z < minZ + wallThickness || z > maxZ - wallThickness;
+          if (!onXEdge && !onYEdge && !onZEdge) continue;
+        }
+        
+        // Solid weight for buildings
+        voxels.push({
+          x, y, z,
+          material,
+          weight: 0.45,
+        });
+      }
+    }
+  }
+  return voxels;
+}
+
+/**
+ * Create a pitched roof (triangular prism)
+ */
+function pitchedRoof(
+  minX: number, maxX: number,
+  baseY: number,
+  minZ: number, maxZ: number,
+  material: number,
+  overhang: number = 1
+): StampVoxel[] {
+  const voxels: StampVoxel[] = [];
+  const width = maxX - minX;
+  const peakHeight = Math.floor(width / 2) + 2;
+  const centerX = (minX + maxX) / 2;
+  
+  for (let y = 0; y < peakHeight; y++) {
+    // Width narrows as we go up
+    const halfWidth = Math.floor((width / 2) + overhang - y * 0.8);
+    if (halfWidth < 0) break;
+    
+    for (let x = Math.floor(centerX) - halfWidth; x <= Math.floor(centerX) + halfWidth; x++) {
+      for (let z = minZ - overhang; z <= maxZ + overhang; z++) {
+        voxels.push({
+          x, y: baseY + y, z,
+          material,
+          weight: 0.45,
+        });
+      }
+    }
+  }
+  return voxels;
+}
+
+/**
+ * Generate a small rectangular building stamp
+ */
+function generateSmallBuilding(variant: number): StampDefinition {
+  const voxels: StampVoxel[] = [];
+  
+  // Variation parameters
+  const widthBase = 12 + (variant % 3) * 4;   // 12-20 voxels (3-5m)
+  const depthBase = 10 + (variant % 2) * 4;   // 10-14 voxels (2.5-3.5m)
+  const heightBase = 12 + (variant % 3) * 4;  // 12-20 voxels (3-5m)
+  
+  // Material selection based on variant
+  const wallMaterials = [MAT_BRICK, MAT_BRICK7, MAT_BRICK2];  // brick2, brick7, brick3
+  const roofMaterials = [MAT_ROOF, MAT_ROOF2];
+  const wallMaterial = wallMaterials[variant % wallMaterials.length];
+  const roofMaterial = roofMaterials[variant % roofMaterials.length];
+  const foundationMaterial = MAT_COBBLE;
+  
+  const halfWidth = Math.floor(widthBase / 2);
+  const halfDepth = Math.floor(depthBase / 2);
+  
+  // Foundation (2 voxels thick, extends slightly underground)
+  voxels.push(...box(
+    -halfWidth - 1, halfWidth + 1,
+    -2, 0,
+    -halfDepth - 1, halfDepth + 1,
+    foundationMaterial, false
+  ));
+  
+  // Solid floor inside the building
+  voxels.push(...box(
+    -halfWidth + 1, halfWidth - 1,
+    0, 0,
+    -halfDepth + 1, halfDepth - 1,
+    MAT_WOOD, false
+  ));
+  
+  // Walls (hollow box)
+  voxels.push(...box(
+    -halfWidth, halfWidth,
+    1, heightBase,
+    -halfDepth, halfDepth,
+    wallMaterial, true, 1
+  ));
+  
+  // Door opening (cut a gap in front wall) - 8 voxels tall (2m) to fit player (1.6m)
+  const doorWidth = 3;
+  const doorHeight = 8;
+  for (let y = 1; y <= doorHeight; y++) {
+    for (let x = -doorWidth; x <= doorWidth; x++) {
+      // Remove front wall voxels for door
+      const doorIndex = voxels.findIndex(v => 
+        v.x === x && v.y === y && v.z === -halfDepth
+      );
+      if (doorIndex !== -1) {
+        voxels.splice(doorIndex, 1);
+      }
+    }
+  }
+  
+  // Window openings on sides
+  const windowY = 5;
+  const windowSize = 2;
+  // Left wall window
+  for (let y = windowY; y < windowY + windowSize + 1; y++) {
+    for (let z = -windowSize; z <= windowSize; z++) {
+      const idx = voxels.findIndex(v => v.x === -halfWidth && v.y === y && v.z === z);
+      if (idx !== -1) voxels.splice(idx, 1);
+    }
+  }
+  // Right wall window
+  for (let y = windowY; y < windowY + windowSize + 1; y++) {
+    for (let z = -windowSize; z <= windowSize; z++) {
+      const idx = voxels.findIndex(v => v.x === halfWidth && v.y === y && v.z === z);
+      if (idx !== -1) voxels.splice(idx, 1);
+    }
+  }
+  
+  // Pitched roof
+  voxels.push(...pitchedRoof(
+    -halfWidth, halfWidth,
+    heightBase + 1,
+    -halfDepth, halfDepth,
+    roofMaterial, 2
+  ));
+  
+  return {
+    type: StampType.BUILDING_SMALL,
+    variant,
+    voxels,
+    bounds: calculateBounds(voxels),
+  };
+}
+
+/**
+ * Generate a round hut with conical roof
+ */
+function generateHut(variant: number): StampDefinition {
+  const voxels: StampVoxel[] = [];
+  
+  // Variation parameters - larger huts
+  const radius = 8 + (variant % 3) * 2;       // 8-12 voxels radius (2-3m)
+  const wallHeight = 12 + (variant % 2) * 2;  // 12-14 voxels (3-3.5m)
+  const roofHeight = radius + 3;
+  
+  // Material selection - wood walls for huts
+  const wallMaterials = [MAT_WOOD, MAT_WOOD2, MAT_BARK];
+  const roofMaterials = [MAT_WOOD, MAT_WOOD2, MAT_ROOF];
+  const floorMaterial = MAT_WOOD;
+  const wallMaterial = wallMaterials[variant % wallMaterials.length];
+  const roofMaterial = roofMaterials[variant % roofMaterials.length];
+  
+  // Door dimensions - 8 voxels tall (2m) to fit player (1.6m)
+  const doorWidth = 3;   // -3 to +3 = 7 voxels (1.75m)
+  const doorHeight = 8;  // 8 voxels (2m)
+  
+  // Wall thickness (2 voxels to avoid notches)
+  const wallThickness = 2;
+  
+  // Solid circular floor
+  const floorR2 = (radius - wallThickness) * (radius - wallThickness);
+  for (let x = -radius + wallThickness; x <= radius - wallThickness; x++) {
+    for (let z = -radius + wallThickness; z <= radius - wallThickness; z++) {
+      if (x * x + z * z <= floorR2) {
+        voxels.push({ x, y: 0, z, material: floorMaterial, weight: 0.45 });
+      }
+    }
+  }
+  
+  // Circular walls (hollow cylinder with 2-voxel thickness)
+  const r2Outer = radius * radius;
+  const r2Inner = (radius - wallThickness) * (radius - wallThickness);
+  
+  for (let y = 1; y < wallHeight; y++) {
+    for (let x = -radius; x <= radius; x++) {
+      for (let z = -radius; z <= radius; z++) {
+        const dist2 = x * x + z * z;
+        // Wall ring (2 voxels thick)
+        if (dist2 <= r2Outer && dist2 >= r2Inner) {
+          // Leave a door gap - wider and taller
+          if (z < -radius + wallThickness + 1 && Math.abs(x) <= doorWidth && y < doorHeight) continue;
+          
+          voxels.push({
+            x, y, z,
+            material: wallMaterial,
+            weight: 0.45,
+          });
+        }
+      }
+    }
+  }
+  
+  // Conical roof
+  for (let y = 0; y < roofHeight; y++) {
+    const roofRadius = radius + 1 - (y * (radius + 1) / roofHeight);
+    const rr2 = roofRadius * roofRadius;
+    
+    for (let x = -Math.ceil(roofRadius); x <= Math.ceil(roofRadius); x++) {
+      for (let z = -Math.ceil(roofRadius); z <= Math.ceil(roofRadius); z++) {
+        if (x * x + z * z <= rr2) {
+          voxels.push({
+            x, y: wallHeight + y, z,
+            material: roofMaterial,
+            weight: 0.45,
+          });
+        }
+      }
+    }
+  }
+  
+  return {
+    type: StampType.BUILDING_HUT,
+    variant,
+    voxels,
+    bounds: calculateBounds(voxels),
+  };
+}
+
 // ============== Stamp Registry ==============
 
 const VARIANTS_PER_TYPE = 4;
@@ -345,6 +609,10 @@ function createStamp(type: StampType, variant: number): StampDefinition {
     case StampType.ROCK_MEDIUM:
     case StampType.ROCK_LARGE:
       return generateRock(type, variant);
+    case StampType.BUILDING_SMALL:
+      return generateSmallBuilding(variant);
+    case StampType.BUILDING_HUT:
+      return generateHut(variant);
     default:
       throw new Error(`Unknown stamp type: ${type}`);
   }
