@@ -5,7 +5,8 @@
   "workspaces": [
     "shared",
     "client",
-    "server"
+    "server",
+    "materials"
   ],
   "scripts": {
     "dev": "concurrently -n shared,server,client -c yellow,blue,green \"npm run dev -w shared\" \"npm run dev -w server\" \"npm run dev -w client\"",

@@ -7,6 +7,9 @@
 
 import pallet from './pallet.json' with { type: 'json' };
 
+// Export the raw pallet for client use
+export { pallet as MATERIAL_PALLET };
+
 // ============== Types ==============
 
 /** All valid material names from pallet.json */

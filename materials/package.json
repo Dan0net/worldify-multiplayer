@@ -1,0 +1,41 @@
+{
+  "name": "@worldify/materials",
+  "version": "1.0.0",
+  "description": "PBR material bundler, R2 management, and texture tools for Worldify",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:app": "tsc -b && vite build",
+    "preview": "vite preview",
+    "download-sources": "tsx scripts/download-sources.ts",
+    "build": "tsx scripts/bundle.ts",
+    "build:low": "tsx scripts/bundle.ts --resolution=low",
+    "build:high": "tsx scripts/bundle.ts --resolution=high",
+    "upload": "tsx scripts/upload.ts",
+    "upload:sources": "tsx scripts/upload-sources.ts"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.18",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/three": "^0.182.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "tailwindcss": "4.1.18",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "vite": "5.4.19"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
+    "dotenv": "^16.4.0",
+    "glob": "^10.3.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.0",
+    "sharp": "^0.33.0",
+    "three": "^0.182.0"
+  }
+}

@@ -1,0 +1,13 @@
+# Build outputs
+output/
+dist/
+
+# Source textures (download from R2 with: npm run download-sources)
+sources/
+
+# Node
+node_modules/
+
+# Environment
+.env
+.env.local

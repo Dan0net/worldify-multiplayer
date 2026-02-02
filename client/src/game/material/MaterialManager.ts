@@ -26,9 +26,9 @@ class MaterialManager {
     if (this.initialized) return;
 
     // Initialize placeholder textures from pallet colors immediately
-    // This gives visual feedback while full textures load
+    // This gives visual feedback while full textures load (sync - embedded pallet)
     try {
-      await initializePlaceholderTextures();
+      initializePlaceholderTextures();
     } catch (error) {
       console.warn('Failed to initialize placeholder textures:', error);
     }

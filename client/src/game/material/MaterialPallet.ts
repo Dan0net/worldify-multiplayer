@@ -1,10 +1,11 @@
 /**
- * MaterialPallet - Material manifest loader
+ * MaterialPallet - Material manifest from shared package
  * 
- * Loads and caches the pallet.json manifest from R2.
+ * Uses the embedded pallet.json from @worldify/shared.
+ * No network requests needed - material data is bundled at build time.
  */
 
-import { textureCache } from './TextureCache.js';
+import { MATERIAL_PALLET } from '@worldify/shared';
 
 export interface MapMetadata {
   width: number;
@@ -28,65 +29,47 @@ export interface MaterialPallet {
   colors: string[];
 }
 
-let cachedPallet: MaterialPallet | null = null;
+// Cast the imported data to our interface
+const materialPallet = MATERIAL_PALLET as unknown as MaterialPallet;
 
 /**
- * Fetch the material pallet manifest.
- * Caches the result for subsequent calls.
+ * Get the material pallet manifest (synchronous - embedded at build time).
  */
-export async function getMaterialPallet(): Promise<MaterialPallet> {
-  if (cachedPallet) {
-    return cachedPallet;
-  }
-
-  const baseUrl = await textureCache.getLatestMaterialUrl();
-  const response = await fetch(`${baseUrl}/pallet.json`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch material pallet: ${response.status}`);
-  }
-
-  cachedPallet = await response.json();
-  return cachedPallet!;
+export function getMaterialPallet(): MaterialPallet {
+  return materialPallet;
 }
 
 /**
  * Get the material index for a material name.
  */
-export function getMaterialIndex(pallet: MaterialPallet, name: string): number {
-  return pallet.indicies[name] ?? 0;
+export function getMaterialIndex(palletData: MaterialPallet, name: string): number {
+  return palletData.indicies[name] ?? 0;
 }
 
 /**
  * Get the material name for a material index.
  */
-export function getMaterialName(pallet: MaterialPallet, index: number): string {
-  return pallet.materials[index] ?? 'unknown';
+export function getMaterialName(palletData: MaterialPallet, index: number): string {
+  return palletData.materials[index] ?? 'unknown';
 }
 
 /**
  * Get the average color for a material index (as hex string).
  */
-export function getMaterialColorHex(pallet: MaterialPallet, index: number): string {
-  return pallet.colors[index] ?? '#ffffff';
+export function getMaterialColorHex(palletData: MaterialPallet, index: number): string {
+  return palletData.colors[index] ?? '#ffffff';
 }
 
 /**
  * Check if a material is transparent.
  */
-export function isMaterialTransparent(pallet: MaterialPallet, index: number): boolean {
-  return pallet.types.transparent.includes(index + 1); // types use 1-based indices
+export function isMaterialTransparent(palletData: MaterialPallet, index: number): boolean {
+  return palletData.types.transparent.includes(index + 1); // types use 1-based indices
 }
 
 /**
  * Check if a material is liquid.
  */
-export function isMaterialLiquid(pallet: MaterialPallet, index: number): boolean {
-  return pallet.types.liquid.includes(index + 1);
-}
-
-/**
- * Clear the cached pallet (useful for testing or reloading).
- */
-export function clearPalletCache(): void {
-  cachedPallet = null;
+export function isMaterialLiquid(palletData: MaterialPallet, index: number): boolean {
+  return palletData.types.liquid.includes(index + 1);
 }

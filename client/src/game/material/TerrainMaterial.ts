@@ -126,7 +126,7 @@ export async function loadDataArrayTextures(
   onProgress?: (loaded: number, total: number) => void
 ): Promise<LoadedTextures> {
   const mapTypes = ['albedo', 'normal', 'ao', 'roughness', 'metalness'] as const;
-  const pallet = await getMaterialPallet();
+  const pallet = getMaterialPallet();
   const version = await textureCache.getLatestVersion();
   const baseUrl = await textureCache.getLatestMaterialUrl();
   
@@ -444,8 +444,8 @@ function setAllMaterialTextures(textures: LoadedTextures): void {
  * Initialize placeholder textures from the pallet.
  * Call this early to show colored terrain while full textures load.
  */
-export async function initializePlaceholderTextures(): Promise<void> {
-  const textures = await loadPalletPlaceholders();
+export function initializePlaceholderTextures(): void {
+  const textures = loadPalletPlaceholders();
   setAllMaterialTextures(textures);
   console.log('Placeholder textures initialized from pallet');
 }

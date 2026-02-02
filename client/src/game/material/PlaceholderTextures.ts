@@ -138,7 +138,7 @@ export function createPalletPlaceholders(colors: string[]): LoadedTextures {
 }
 
 /** Fetch pallet and create placeholder textures from it */
-export async function loadPalletPlaceholders(): Promise<LoadedTextures> {
-  const pallet = await getMaterialPallet();
+export function loadPalletPlaceholders(): LoadedTextures {
+  const pallet = getMaterialPallet();
   return createPalletPlaceholders(pallet.colors);
 }

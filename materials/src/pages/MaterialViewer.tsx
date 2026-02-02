@@ -6,8 +6,9 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { MATERIAL_BASE_URL } from '../game/material/constants';
-import { getMaterialPallet } from '../game/material/MaterialPallet';
+import { Link } from 'react-router-dom';
+import { MATERIAL_BASE_URL } from '../constants';
+import type { MaterialPallet } from '../types';
 
 type MapType = 'albedo' | 'normal' | 'ao' | 'roughness' | 'metalness';
 type Resolution = 'low' | 'high';
@@ -23,23 +24,43 @@ interface TextureData {
 const MAP_TYPES: MapType[] = ['albedo', 'normal', 'ao', 'roughness', 'metalness'];
 
 export function MaterialViewer() {
-  // Use embedded pallet from shared package (sync, no loading needed)
-  const pallet = getMaterialPallet();
+  const [pallet, setPallet] = useState<MaterialPallet | null>(null);
   const [resolution, setResolution] = useState<Resolution>('low');
   const [selectedMap, setSelectedMap] = useState<MapType>('albedo');
   const [selectedMaterial, setSelectedMaterial] = useState<number>(0);
   const [textureData, setTextureData] = useState<TextureData | null>(null);
+  const [loading, setLoading] = useState(true);
   const [loadingTexture, setLoadingTexture] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Load pallet on mount
+  useEffect(() => {
+    async function loadPallet() {
+      try {
+        const response = await fetch(`${MATERIAL_BASE_URL}/pallet.json`);
+        if (!response.ok) throw new Error(`Failed to fetch pallet: ${response.status}`);
+        const data = await response.json();
+        setPallet(data);
+        setLoading(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load pallet');
+        setLoading(false);
+      }
+    }
+    loadPallet();
+  }, []);
+
   // Load texture data when selection changes
   useEffect(() => {
+    if (!pallet) return;
+
+    const currentPallet = pallet;
     async function loadTexture() {
       setLoadingTexture(true);
       try {
-        const meta = pallet.maps[resolution][selectedMap];
+        const meta = currentPallet.maps[resolution][selectedMap];
         if (!meta) {
           throw new Error(`No metadata for ${resolution}/${selectedMap}`);
         }
@@ -111,6 +132,14 @@ export function MaterialViewer() {
   const handleZoomOut = useCallback(() => setZoom(z => Math.max(z / 1.5, 0.25)), []);
   const handleResetZoom = useCallback(() => setZoom(1), []);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        <div className="text-xl">Loading material pallet...</div>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
@@ -118,6 +147,8 @@ export function MaterialViewer() {
       </div>
     );
   }
+
+  if (!pallet) return null;
 
   const materialColor = pallet.colors[selectedMaterial] || '#ffffff';
 
@@ -127,9 +158,9 @@ export function MaterialViewer() {
       <header className="bg-gray-800 border-b border-gray-700 px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <a href="/" className="text-gray-400 hover:text-white transition-colors">
-              ← Back to Game
-            </a>
+            <Link to="/" className="text-gray-400 hover:text-white transition-colors">
+              ← Back
+            </Link>
             <h1 className="text-2xl font-bold">Material Viewer</h1>
           </div>
           <div className="text-gray-400">
