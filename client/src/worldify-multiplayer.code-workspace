@@ -8,9 +8,6 @@
 		},
 		{
 			"path": "../../../worldify-firebase"
-		},
-		{
-			"path": "../../../worldify-materials"
 		}
 	],
 	"settings": {}

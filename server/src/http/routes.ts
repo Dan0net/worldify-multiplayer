@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { roomManager } from '../rooms/roomManager.js';
 import { PROTOCOL_VERSION } from '@worldify/shared';
+import { clearChunkStorage } from '../storage/StorageManager.js';
 
 export function setupRoutes(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
@@ -26,6 +27,28 @@ export function setupRoutes(req: IncomingMessage, res: ServerResponse): void {
       players: stats.playerCount,
       protocolVersion: PROTOCOL_VERSION,
     }));
+    return;
+  }
+
+  // Debug: Clear database (development only)
+  if (url.pathname === '/debug/clear-db' && req.method === 'POST') {
+    // Only allow in development
+    if (process.env.NODE_ENV === 'production') {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'forbidden', message: 'Not available in production' }));
+      return;
+    }
+
+    clearChunkStorage()
+      .then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, message: 'Database cleared and reinitialized' }));
+      })
+      .catch((err) => {
+        console.error('[routes] Error clearing database:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'clear_failed', message: String(err) }));
+      });
     return;
   }
 

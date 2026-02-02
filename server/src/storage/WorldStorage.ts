@@ -171,6 +171,38 @@ export class WorldStorage {
   }
 
   /**
+   * Clear all data from the database. USE WITH CAUTION.
+   * This will delete all chunks and world metadata.
+   */
+  async clear(): Promise<void> {
+    if (!this.db || !this._isOpen) {
+      throw new Error('WorldStorage not open');
+    }
+
+    console.log('[storage] Clearing all world data...');
+    
+    // Iterate and delete all keys
+    const keysToDelete: string[] = [];
+    for await (const key of this.db.keys()) {
+      keysToDelete.push(key);
+    }
+    
+    if (keysToDelete.length > 0) {
+      const batch = this.db.batch();
+      for (const key of keysToDelete) {
+        batch.del(key);
+      }
+      await batch.write();
+    }
+    
+    console.log(`[storage] Cleared ${keysToDelete.length} entries`);
+    
+    // Re-initialize with fresh metadata (new seed)
+    this._seed = Math.floor(Math.random() * 2147483647);
+    await this.initializeMeta();
+  }
+
+  /**
    * Initialize or load world metadata.
    */
   private async initializeMeta(): Promise<void> {

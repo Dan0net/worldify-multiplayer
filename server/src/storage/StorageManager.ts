@@ -50,6 +50,29 @@ export async function shutdownChunkStorage(): Promise<void> {
 }
 
 /**
+ * Clear all chunk storage data. USE WITH CAUTION.
+ * This will delete all persisted chunks and regenerate with a new seed.
+ */
+export async function clearChunkStorage(): Promise<void> {
+  const storage = WorldStorage.getInstance();
+  
+  // Clear the database
+  await storage.clear();
+  
+  // Clear in-memory cache if store exists
+  if (globalChunkStore) {
+    globalChunkStore.clearCache();
+  }
+  
+  // Update chunk provider with new seed
+  if (globalChunkProvider) {
+    globalChunkProvider = new ChunkProvider(globalChunkStore!, storage.seed);
+  }
+  
+  console.log('[storage] Chunk storage cleared and reinitialized');
+}
+
+/**
  * Get the global ChunkProvider.
  * @throws Error if storage not initialized
  */
