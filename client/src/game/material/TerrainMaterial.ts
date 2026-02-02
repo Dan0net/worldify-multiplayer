@@ -25,6 +25,7 @@ export interface LoadedTextures {
   normal: THREE.DataArrayTexture;
   ao: THREE.DataArrayTexture;
   roughness: THREE.DataArrayTexture;
+  metalness: THREE.DataArrayTexture;
 }
 
 /**
@@ -117,7 +118,7 @@ export async function loadDataArrayTextures(
   resolution: TextureResolution,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<LoadedTextures> {
-  const mapTypes = ['albedo', 'normal', 'ao', 'roughness'] as const;
+  const mapTypes = ['albedo', 'normal', 'ao', 'roughness', 'metalness'] as const;
   const pallet = await getMaterialPallet();
   
   // Fetch latest version from R2 (cached for session)
@@ -227,6 +228,7 @@ const fragmentShaderPrefix = /* glsl */ `
   uniform sampler2DArray normalArray;
   uniform sampler2DArray aoArray;
   uniform sampler2DArray roughnessArray;
+  uniform sampler2DArray metalnessArray;
   uniform float repeatScale;
   uniform mat3 blendOffset;
   uniform int debugMode; // 0=off, 1=albedo, 2=normal, 3=ao, 4=roughness, 5=triBlend, 6=materialIds
@@ -291,8 +293,8 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
   
   constructor(isTransparent: boolean = false) {
     super({
-      roughness: 0.8,
-      metalness: 0.05,
+      roughness: 1.0,  // Let texture maps define roughness fully
+      metalness: 1.0,  // Let texture maps define metalness fully
       transparent: isTransparent,
       side: isTransparent ? THREE.DoubleSide : THREE.FrontSide,
       // Enable alpha testing for transparent materials - used for shadow depth culling
@@ -309,6 +311,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       normal: createDummyTexture({ r: 128, g: 128, b: 255, a: 255 }),
       ao: createDummyTexture({ r: 255, g: 255, b: 255, a: 255 }),
       roughness: createDummyTexture({ r: 200, g: 200, b: 200, a: 255 }),
+      metalness: createDummyTexture({ r: 0, g: 0, b: 0, a: 255 }),
     });
     
     this.onBeforeCompile = (shader) => {
@@ -319,6 +322,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.normalArray = { value: this.textures?.normal };
       shader.uniforms.aoArray = { value: this.textures?.ao };
       shader.uniforms.roughnessArray = { value: this.textures?.roughness };
+      shader.uniforms.metalnessArray = { value: this.textures?.metalness };
       shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
       shader.uniforms.blendOffset = { value: this.createBlendOffsetMatrix() };
       shader.uniforms.debugMode = { value: 0 };
@@ -346,12 +350,13 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.fragmentShader = fragmentShaderPrefix + shader.fragmentShader;
       
       // Replace diffuse color calculation
+      // Compute triPos and triBlend ONCE here - reused by roughness, metalness, AO, normal, and debug
       shader.fragmentShader = shader.fragmentShader.replace(
         'vec4 diffuseColor = vec4( diffuse, opacity );',
         /* glsl */ `
-          vec3 pos = vWorldPosition / 8.0;
+          vec3 triPos = vWorldPosition / 8.0;
           vec3 triBlend = getTriPlanarBlend(vWorldNormal);
-          vec4 sampledAlbedo = sampleMaterialBlend(mapArray, pos, triBlend);
+          vec4 sampledAlbedo = sampleMaterialBlend(mapArray, triPos, triBlend);
           #ifdef USE_TEXTURE_ALPHA
             vec4 diffuseColor = vec4(sampledAlbedo.rgb, sampledAlbedo.a);
           #else
@@ -360,59 +365,60 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
         `
       );
       
-      // Replace roughness calculation
+      // Replace roughness calculation (reuses triPos/triBlend from diffuseColor)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <roughnessmap_fragment>',
         /* glsl */ `
-          vec3 pos_r = vWorldPosition / 8.0;
-          vec3 triBlend_r = getTriPlanarBlend(vWorldNormal);
-          float roughnessFactor = sampleMaterialBlend(roughnessArray, pos_r, triBlend_r).r;
+          float roughnessFactor = sampleMaterialBlend(roughnessArray, triPos, triBlend).r;
         `
       );
       
-      // Replace AO calculation  
+      // Replace metalness calculation (reuses triPos/triBlend from diffuseColor)
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <metalnessmap_fragment>',
+        /* glsl */ `
+          float metalnessFactor = sampleMaterialBlend(metalnessArray, triPos, triBlend).r;
+        `
+      );
+      
+      // Replace AO calculation (reuses triPos/triBlend from diffuseColor)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <aomap_fragment>',
         /* glsl */ `
-          vec3 pos_ao = vWorldPosition / 8.0;
-          vec3 triBlend_ao = getTriPlanarBlend(vWorldNormal);
-          float ambientOcclusion = sampleMaterialBlend(aoArray, pos_ao, triBlend_ao).r;
+          float ambientOcclusion = sampleMaterialBlend(aoArray, triPos, triBlend).r;
           reflectedLight.indirectDiffuse *= ambientOcclusion;
         `
       );
       
-      // Replace normal map calculation with tri-planar tangent frame
+      // Replace normal map calculation with tri-planar tangent frame (reuses triPos/triBlend from diffuseColor)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <normal_fragment_maps>',
         /* glsl */ `
           #ifdef USE_NORMALMAP
-            vec3 pos_n = vWorldPosition / 8.0;
-            vec3 triBlend_n = getTriPlanarBlend(vWorldNormal);
-            
             // Sample normal maps for each axis with material blending
-            vec3 normalSampleX = sampleAxisMaterialBlend(normalArray, pos_n.zy).xyz * 2.0 - 1.0;
+            vec3 normalSampleX = sampleAxisMaterialBlend(normalArray, triPos.zy).xyz * 2.0 - 1.0;
             normalSampleX.xy *= normalScale;
-            vec3 normalSampleY = sampleAxisMaterialBlend(normalArray, pos_n.xz).xyz * 2.0 - 1.0;
+            vec3 normalSampleY = sampleAxisMaterialBlend(normalArray, triPos.xz).xyz * 2.0 - 1.0;
             normalSampleY.xy *= normalScale;
-            vec3 normalSampleZ = sampleAxisMaterialBlend(normalArray, pos_n.xy).xyz * 2.0 - 1.0;
+            vec3 normalSampleZ = sampleAxisMaterialBlend(normalArray, triPos.xy).xyz * 2.0 - 1.0;
             normalSampleZ.xy *= normalScale;
             
             // Compute tangent frames for each projection axis
-            mat3 tbnX = getTangentFrame(-vViewPosition, normalize(vNormal), pos_n.zy);
-            mat3 tbnY = getTangentFrame(-vViewPosition, normalize(vNormal), pos_n.xz);
-            mat3 tbnZ = getTangentFrame(-vViewPosition, normalize(vNormal), pos_n.xy);
+            mat3 tbnX = getTangentFrame(-vViewPosition, normalize(vNormal), triPos.zy);
+            mat3 tbnY = getTangentFrame(-vViewPosition, normalize(vNormal), triPos.xz);
+            mat3 tbnZ = getTangentFrame(-vViewPosition, normalize(vNormal), triPos.xy);
             
             // Transform normals to world space and blend
             vec3 normalX = normalize(tbnX * normalSampleX);
             vec3 normalY = normalize(tbnY * normalSampleY);
             vec3 normalZ = normalize(tbnZ * normalSampleZ);
             
-            normal = normalize(normalX * triBlend_n.x + normalY * triBlend_n.y + normalZ * triBlend_n.z);
+            normal = normalize(normalX * triBlend.x + normalY * triBlend.y + normalZ * triBlend.z);
           #endif
         `
       );
       
-      // Add debug output before final color output
+      // Add debug output before final color output (reuses triPos/triBlend from diffuseColor)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <dithering_fragment>',
         /* glsl */ `
@@ -420,27 +426,24 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
           
           // Debug mode visualization
           if (debugMode > 0) {
-            vec3 pos_dbg = vWorldPosition / 8.0;
-            vec3 triBlend_dbg = getTriPlanarBlend(vWorldNormal);
-            
             if (debugMode == 1) {
               // Albedo only
-              gl_FragColor = vec4(sampleMaterialBlend(mapArray, pos_dbg, triBlend_dbg).rgb, 1.0);
+              gl_FragColor = vec4(sampleMaterialBlend(mapArray, triPos, triBlend).rgb, 1.0);
             } else if (debugMode == 2) {
               // Normal map (remap from -1,1 to 0,1 for visualization)
-              vec3 nSample = sampleMaterialBlend(normalArray, pos_dbg, triBlend_dbg).xyz;
+              vec3 nSample = sampleMaterialBlend(normalArray, triPos, triBlend).xyz;
               gl_FragColor = vec4(nSample, 1.0);
             } else if (debugMode == 3) {
               // AO
-              float ao = sampleMaterialBlend(aoArray, pos_dbg, triBlend_dbg).r;
+              float ao = sampleMaterialBlend(aoArray, triPos, triBlend).r;
               gl_FragColor = vec4(ao, ao, ao, 1.0);
             } else if (debugMode == 4) {
               // Roughness
-              float r = sampleMaterialBlend(roughnessArray, pos_dbg, triBlend_dbg).r;
+              float r = sampleMaterialBlend(roughnessArray, triPos, triBlend).r;
               gl_FragColor = vec4(r, r, r, 1.0);
             } else if (debugMode == 5) {
               // Tri-planar blend weights
-              gl_FragColor = vec4(triBlend_dbg, 1.0);
+              gl_FragColor = vec4(triBlend, 1.0);
             } else if (debugMode == 6) {
               // Material IDs - use modulo and color mapping for visibility
               // Each channel shows different material, with distinct colors
@@ -488,6 +491,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       this._shader.uniforms.normalArray.value = textures.normal;
       this._shader.uniforms.aoArray.value = textures.ao;
       this._shader.uniforms.roughnessArray.value = textures.roughness;
+      this._shader.uniforms.metalnessArray.value = textures.metalness;
       this.needsUpdate = true;
     }
   }
@@ -558,6 +562,7 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
       normal: createDummyTexture({ r: 128, g: 128, b: 255, a: 255 }),
       ao: createDummyTexture({ r: 255, g: 255, b: 255, a: 255 }),
       roughness: createDummyTexture({ r: 200, g: 200, b: 200, a: 255 }),
+      metalness: createDummyTexture({ r: 0, g: 0, b: 0, a: 255 }),
     });
 
     this.onBeforeCompile = (shader) => {

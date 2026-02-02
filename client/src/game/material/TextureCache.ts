@@ -244,7 +244,7 @@ class TextureCache {
       if (!meta) return false;
       
       // Check if we have all required textures for this resolution
-      const requiredMaps = ['albedo', 'normal', 'ao', 'roughness'];
+      const requiredMaps = ['albedo', 'normal', 'ao', 'roughness', 'metalness'];
       return requiredMaps.every(map => meta[`${resolution}/${map}`]);
     } catch {
       return false;
