@@ -99,7 +99,7 @@ export class Chunk extends ChunkData {
    * @param z Local Z coordinate (-1 to 32)
    * @param neighbors Map of chunk keys to Chunk objects
    * @param useTemp If true, prefer tempData over data (for preview rendering)
-   * @returns Packed voxel value, or empty voxel if neighbor doesn't exist
+   * @returns Packed voxel value, or extrapolated value if neighbor doesn't exist
    */
   getVoxelWithMargin(x: number, y: number, z: number, neighbors: Map<string, Chunk>, useTemp: boolean = false): number {
     // Check if within this chunk's bounds
@@ -144,8 +144,14 @@ export class Chunk extends ChunkData {
     const neighbor = neighbors.get(neighborKey);
 
     if (!neighbor) {
-      // No neighbor chunk loaded - return empty (negative weight)
-      return packVoxel(-0.5, 0, 0);
+      // No neighbor chunk loaded - extrapolate from nearest edge voxel in this chunk.
+      // This prevents artificial surfaces at chunk margins when edge/corner neighbors 
+      // aren't loaded. Clamp coordinates to valid range [0, CHUNK_SIZE-1].
+      const clampedX = Math.max(0, Math.min(CHUNK_SIZE - 1, x));
+      const clampedY = Math.max(0, Math.min(CHUNK_SIZE - 1, y));
+      const clampedZ = Math.max(0, Math.min(CHUNK_SIZE - 1, z));
+      const dataArray = (useTemp && this.tempData) ? this.tempData : this.data;
+      return dataArray[voxelIndex(clampedX, clampedY, clampedZ)];
     }
 
     // Use tempData if previewing and neighbor has temp data

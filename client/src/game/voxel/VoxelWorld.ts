@@ -381,20 +381,50 @@ export class VoxelWorld {
   }
 
   /**
+   * Check if any of the chunk's 6 face neighbors are still pending from server.
+   * If so, we should delay meshing to avoid stitching artifacts.
+   */
+  private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
+    return (
+      this.pendingChunks.has(chunkKey(cx - 1, cy, cz)) ||
+      this.pendingChunks.has(chunkKey(cx + 1, cy, cz)) ||
+      this.pendingChunks.has(chunkKey(cx, cy - 1, cz)) ||
+      this.pendingChunks.has(chunkKey(cx, cy + 1, cz)) ||
+      this.pendingChunks.has(chunkKey(cx, cy, cz - 1)) ||
+      this.pendingChunks.has(chunkKey(cx, cy, cz + 1))
+    );
+  }
+
+  /**
    * Process some items from the remesh queue.
    * @param maxCount Maximum number of chunks to remesh this call
    */
   private processRemeshQueue(maxCount: number): void {
     let count = 0;
+    const deferred: string[] = [];
+    
     for (const key of this.remeshQueue) {
       if (count >= maxCount) break;
 
       const chunk = this.chunks.get(key);
       if (chunk) {
+        // Defer meshing if any face neighbors are still pending from server
+        // This prevents stitching artifacts from missing neighbor data
+        if (this.hasNeighborsPending(chunk.cx, chunk.cy, chunk.cz)) {
+          deferred.push(key);
+          continue;
+        }
+        
         this.remeshChunk(chunk);
         count++;
       }
       this.remeshQueue.delete(key);
+    }
+    
+    // Re-add deferred chunks to be processed next frame
+    for (const key of deferred) {
+      this.remeshQueue.delete(key); // Remove from current iteration position
+      this.remeshQueue.add(key);    // Add back to end of Set
     }
   }
 

@@ -160,12 +160,17 @@ describe('Material Tests', () => {
 });
 
 describe('Vertex Position Tests', () => {
-  test('Vertices are within chunk bounds', () => {
+  test('Vertices are within expanded grid bounds', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
+    
+    // SurfaceNet uses a 34x34x34 expanded grid (CHUNK_SIZE + 2 margin).
+    // Vertices can be placed anywhere within this grid, so max position is ~33.
+    // Note: When missing neighbors are extrapolated, vertices may extend to the margin.
+    const maxBound = CHUNK_SIZE + 2; // 34
     
     for (let i = 0; i < result.solid.vertexCount; i++) {
       const x = result.solid.positions[i * 3];
@@ -173,11 +178,11 @@ describe('Vertex Position Tests', () => {
       const z = result.solid.positions[i * 3 + 2];
       
       expect(x).toBeGreaterThanOrEqual(0);
-      expect(x).toBeLessThanOrEqual(CHUNK_SIZE);
+      expect(x).toBeLessThanOrEqual(maxBound);
       expect(y).toBeGreaterThanOrEqual(0);
-      expect(y).toBeLessThanOrEqual(CHUNK_SIZE);
+      expect(y).toBeLessThanOrEqual(maxBound);
       expect(z).toBeGreaterThanOrEqual(0);
-      expect(z).toBeLessThanOrEqual(CHUNK_SIZE);
+      expect(z).toBeLessThanOrEqual(maxBound);
     }
   });
 
