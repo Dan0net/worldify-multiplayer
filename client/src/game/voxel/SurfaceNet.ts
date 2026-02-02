@@ -14,9 +14,12 @@
  * 
  * This is a PURE function - it takes voxel data and produces mesh data.
  * It has no knowledge of Chunks or any game-specific concepts.
+ * 
+ * OPTIMIZATION: Single-pass mesh generation with face binning by material type.
+ * Generates one vertex set, but separates faces into solid/transparent buckets.
  */
 
-import { getMaterial, MATERIAL_TYPE_LUT, MaterialTypeNum } from '@worldify/shared';
+import { getMaterial, MATERIAL_TYPE_LUT, MAT_TYPE_TRANSPARENT } from '@worldify/shared';
 
 // ============== Types ==============
 
@@ -36,6 +39,17 @@ export interface SurfaceNetOutput {
 }
 
 /**
+ * Combined output with separate solid and transparent meshes.
+ * Generated in a single pass for efficiency.
+ */
+export interface SplitSurfaceNetOutput {
+  /** Mesh for solid (opaque) materials */
+  solid: SurfaceNetOutput;
+  /** Mesh for transparent materials */
+  transparent: SurfaceNetOutput;
+}
+
+/**
  * Input data for surface net meshing.
  * Provides access to voxel weights and packed voxel data.
  */
@@ -51,12 +65,6 @@ export interface SurfaceNetInput {
    * When true, faces at dims[axis]-2 are skipped (no neighbor to stitch with).
    */
   skipHighBoundary?: [boolean, boolean, boolean];
-  /**
-   * Filter to only generate mesh for materials of a specific type.
-   * If undefined, all materials are included (legacy behavior).
-   * Use MAT_TYPE_SOLID, MAT_TYPE_TRANSPARENT, or MAT_TYPE_LIQUID.
-   */
-  materialTypeFilter?: MaterialTypeNum;
 }
 
 // ============== Pre-computed Tables ==============
@@ -145,238 +153,14 @@ function accumulateNormal(
 }
 
 /**
- * Generate a mesh from voxel data using SurfaceNets algorithm.
- * 
- * This is a pure function - give it voxel accessors and dimensions,
- * get back mesh geometry. No game-specific concepts.
- * 
- * @param input Voxel data accessors and dimensions
- * @returns SurfaceNet mesh output
+ * Build a SurfaceNetOutput from shared vertex data and a face list.
  */
-export function meshVoxels(input: SurfaceNetInput): SurfaceNetOutput {
-  const { dims, getWeight, getVoxel, skipHighBoundary = [false, false, false], materialTypeFilter } = input;
-  
-  // High boundary positions where we skip faces if no neighbor exists
-  // dims is CHUNK_SIZE+2, so dims[i]-2 = CHUNK_SIZE is the high boundary
-  const highBoundary = [dims[0] - 2, dims[1] - 2, dims[2] - 2];
-
-  // Vertex buffer - stores which vertex is at each grid position
-  let buffer = new Int32Array(4096);
-  
-  // Output arrays
-  const vertices: [number, number, number][] = [];
-  const materialIndices: number[] = [];
-  const faces: [number, number, number][] = [];
-  const normalAccum: [number, number, number][] = [];
-
-  // Grid traversal state
-  let n = 0; // Flat 1D grid index
-  const x = new Int32Array(3); // Current x,y,z coordinates
-  const R = new Int32Array([1, dims[0] + 1, (dims[0] + 1) * (dims[1] + 1)]); // Axis strides
-  const grid = new Float32Array(8); // Local 2x2x2 grid values
-  let bufNo = 1; // Buffer alternation flag
-
-  // Ensure buffer is large enough
-  if (R[2] * 2 > buffer.length) {
-    buffer = new Int32Array(R[2] * 2);
-  }
-
-  // March over the voxel grid
-  for (x[2] = 0; x[2] < dims[2] - 1; ++x[2], n += dims[0], bufNo ^= 1, R[2] = -R[2]) {
-    // Buffer pointer for this z-slice
-    let m = 1 + (dims[0] + 1) * (1 + bufNo * (dims[1] + 1));
-
-    for (x[1] = 0; x[1] < dims[1] - 1; ++x[1], ++n, m += 2) {
-      for (x[0] = 0; x[0] < dims[0] - 1; ++x[0], ++n, ++m) {
-        // Read 8 field values around this vertex and calculate mask
-        let mask = 0;
-        let g = 0;
-        let pMax = -Infinity;
-        let maxI = 0, maxJ = 0, maxK = 0;
-
-        // Sample 2x2x2 grid
-        for (let k = 0; k < 2; ++k) {
-          for (let j = 0; j < 2; ++j) {
-            for (let i = 0; i < 2; ++i, ++g) {
-              // Get local coordinates
-              const lx = x[0] + i;
-              const ly = x[1] + j;
-              const lz = x[2] + k;
-
-              let p = getWeight(lx, ly, lz);
-              
-              // If filtering by material type, treat non-matching materials as air
-              // This allows us to generate separate meshes for solid/transparent/liquid
-              if (materialTypeFilter !== undefined && p > 0) {
-                const voxel = getVoxel(lx, ly, lz);
-                const material = getMaterial(voxel);
-                if (MATERIAL_TYPE_LUT[material] !== materialTypeFilter) {
-                  p = -0.00001; // Treat as just outside surface (air)
-                }
-              }
-              
-              grid[g] = p;
-              
-              // Build mask: bit is set if weight < 0 (inside surface)
-              mask |= p < 0 ? 1 << g : 0;
-              
-              // Track max weight to find material
-              if (p > pMax) {
-                pMax = p;
-                maxI = i;
-                maxJ = j;
-                maxK = k;
-              }
-            }
-          }
-        }
-
-        // Skip if no surface crossing (all inside or all outside)
-        if (mask === 0 || mask === 0xff) {
-          continue;
-        }
-
-        // Sum up edge intersections to find vertex position
-        const edgeMask = EDGE_TABLE[mask];
-        const v: [number, number, number] = [0.0, 0.0, 0.0];
-        let eCount = 0;
-
-        // Check each of the 12 edges
-        for (let i = 0; i < 12; ++i) {
-          if (!(edgeMask & (1 << i))) {
-            continue;
-          }
-
-          ++eCount;
-
-          // Find intersection point on this edge
-          const e0 = CUBE_EDGES[i << 1];
-          const e1 = CUBE_EDGES[(i << 1) + 1];
-          const g0 = grid[e0];
-          const g1 = grid[e1];
-          let t = g0 - g1;
-          
-          if (Math.abs(t) > 1e-6) {
-            t = g0 / t;
-          } else {
-            continue;
-          }
-
-          // Interpolate position along edge
-          for (let j = 0, k = 1; j < 3; ++j, k <<= 1) {
-            const a = e0 & k;
-            const b = e1 & k;
-            if (a !== b) {
-              v[j] += a ? 1.0 - t : t;
-            } else {
-              v[j] += a ? 1.0 : 0;
-            }
-          }
-        }
-
-        // Average edge intersections and add to coordinate
-        if (eCount > 0) {
-          const s = 1.0 / eCount;
-          v[0] = x[0] + s * v[0];
-          v[1] = x[1] + s * v[1];
-          v[2] = x[2] + s * v[2];
-        }
-
-        // Store vertex index in buffer
-        buffer[m] = vertices.length;
-        vertices.push(v);
-        normalAccum.push([0, 0, 0]);
-        
-        // Get material from the solid voxel (highest weight)
-        const solidVoxel = getVoxel(x[0] + maxI, x[1] + maxJ, x[2] + maxK);
-        materialIndices.push(getMaterial(solidVoxel));
-
-        // Skip faces on low boundary (x=0, y=0, z=0) - those faces are rendered by adjacent chunk
-        // Also skip faces on high boundary if no neighbor exists (nothing to stitch with)
-        // Note: at x[i] = CHUNK_SIZE-1, the 2x2x2 grid samples x[i]+1 = CHUNK_SIZE which is in the margin
-        const onLowBoundary = (x[0] === 0 || x[1] === 0 || x[2] === 0);
-        const onHighBoundaryNoNeighbor = 
-          (skipHighBoundary[0] && x[0] >= highBoundary[0] - 1) ||
-          (skipHighBoundary[1] && x[1] >= highBoundary[1] - 1) ||
-          (skipHighBoundary[2] && x[2] >= highBoundary[2] - 1);
-        const ignoreFace = onLowBoundary || onHighBoundaryNoNeighbor;
-
-        // Generate faces for edges along each axis
-        for (let i = 0; i < 3; ++i) {
-          if (!(edgeMask & (1 << i))) {
-            continue;
-          }
-
-          const iu = (i + 1) % 3;
-          const iv = (i + 2) % 3;
-
-          // Skip if on low boundary (adjacent vertices don't exist in our buffer)
-          if (x[iu] === 0 || x[iv] === 0) {
-            continue;
-          }
-
-          // Look up adjacent vertices in buffer
-          const du = R[iu];
-          const dv = R[iv];
-
-          // Generate triangles with correct winding based on corner sign
-          if (mask & 1) {
-            const norm = generateFaceNormal(
-              vertices[buffer[m - du]],
-              vertices[buffer[m]],
-              vertices[buffer[m - du - dv]]
-            );
-            const norm2 = generateFaceNormal(
-              vertices[buffer[m - dv]],
-              vertices[buffer[m - du - dv]],
-              vertices[buffer[m]]
-            );
-
-            if (!ignoreFace) {
-              faces.push([buffer[m - du], buffer[m], buffer[m - du - dv]]);
-              faces.push([buffer[m - dv], buffer[m - du - dv], buffer[m]]);
-            }
-
-            // Accumulate normals for smooth shading
-            accumulateNormal(normalAccum, buffer[m - du], norm);
-            accumulateNormal(normalAccum, buffer[m], norm);
-            accumulateNormal(normalAccum, buffer[m - du - dv], norm);
-
-            accumulateNormal(normalAccum, buffer[m - dv], norm2);
-            accumulateNormal(normalAccum, buffer[m - du - dv], norm2);
-            accumulateNormal(normalAccum, buffer[m], norm2);
-          } else {
-            const norm = generateFaceNormal(
-              vertices[buffer[m - dv]],
-              vertices[buffer[m]],
-              vertices[buffer[m - du - dv]]
-            );
-            const norm2 = generateFaceNormal(
-              vertices[buffer[m - du]],
-              vertices[buffer[m - du - dv]],
-              vertices[buffer[m]]
-            );
-
-            if (!ignoreFace) {
-              faces.push([buffer[m - dv], buffer[m], buffer[m - du - dv]]);
-              faces.push([buffer[m - du], buffer[m - du - dv], buffer[m]]);
-            }
-
-            // Accumulate normals for smooth shading
-            accumulateNormal(normalAccum, buffer[m - dv], norm);
-            accumulateNormal(normalAccum, buffer[m], norm);
-            accumulateNormal(normalAccum, buffer[m - du - dv], norm);
-
-            accumulateNormal(normalAccum, buffer[m - du], norm2);
-            accumulateNormal(normalAccum, buffer[m - du - dv], norm2);
-            accumulateNormal(normalAccum, buffer[m], norm2);
-          }
-        }
-      }
-    }
-  }
-
-  // Convert to output format
+function buildOutput(
+  vertices: [number, number, number][],
+  normalAccum: [number, number, number][],
+  materialIndices: number[],
+  faces: [number, number, number][]
+): SurfaceNetOutput {
   const vertexCount = vertices.length;
   const triangleCount = faces.length;
 
@@ -429,6 +213,248 @@ export function meshVoxels(input: SurfaceNetInput): SurfaceNetOutput {
     vertexCount,
     triangleCount,
   };
+}
+
+/**
+ * Create an empty SurfaceNetOutput.
+ */
+function emptyOutput(): SurfaceNetOutput {
+  return {
+    positions: new Float32Array(0),
+    normals: new Float32Array(0),
+    indices: new Uint32Array(0),
+    materials: new Uint8Array(0),
+    vertexCount: 0,
+    triangleCount: 0,
+  };
+}
+
+/**
+ * Generate meshes from voxel data using SurfaceNets algorithm.
+ * 
+ * SINGLE-PASS: Generates one vertex set, but bins faces by material type
+ * into separate solid/transparent outputs. This is 2× faster than running
+ * the algorithm twice with different filters.
+ * 
+ * @param input Voxel data accessors and dimensions
+ * @returns Split mesh outputs for solid and transparent materials
+ */
+export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
+  const { dims, getWeight, getVoxel, skipHighBoundary = [false, false, false] } = input;
+  
+  // High boundary positions where we skip faces if no neighbor exists
+  const highBoundary = [dims[0] - 2, dims[1] - 2, dims[2] - 2];
+
+  // Vertex buffer - stores which vertex is at each grid position
+  let buffer = new Int32Array(4096);
+  
+  // Shared vertex data
+  const vertices: [number, number, number][] = [];
+  const materialIndices: number[] = [];
+  const normalAccum: [number, number, number][] = [];
+  
+  // Separate face lists by material type
+  const solidFaces: [number, number, number][] = [];
+  const transparentFaces: [number, number, number][] = [];
+
+  // Grid traversal state
+  let n = 0;
+  const x = new Int32Array(3);
+  const R = new Int32Array([1, dims[0] + 1, (dims[0] + 1) * (dims[1] + 1)]);
+  const grid = new Float32Array(8);
+  let bufNo = 1;
+
+  // Ensure buffer is large enough
+  if (R[2] * 2 > buffer.length) {
+    buffer = new Int32Array(R[2] * 2);
+  }
+
+  // March over the voxel grid
+  for (x[2] = 0; x[2] < dims[2] - 1; ++x[2], n += dims[0], bufNo ^= 1, R[2] = -R[2]) {
+    let m = 1 + (dims[0] + 1) * (1 + bufNo * (dims[1] + 1));
+
+    for (x[1] = 0; x[1] < dims[1] - 1; ++x[1], ++n, m += 2) {
+      for (x[0] = 0; x[0] < dims[0] - 1; ++x[0], ++n, ++m) {
+        // Read 8 field values and calculate mask
+        let mask = 0;
+        let g = 0;
+        let pMax = -Infinity;
+        let maxI = 0, maxJ = 0, maxK = 0;
+
+        // Sample 2x2x2 grid
+        for (let k = 0; k < 2; ++k) {
+          for (let j = 0; j < 2; ++j) {
+            for (let i = 0; i < 2; ++i, ++g) {
+              const lx = x[0] + i;
+              const ly = x[1] + j;
+              const lz = x[2] + k;
+
+              const p = getWeight(lx, ly, lz);
+              grid[g] = p;
+              mask |= p < 0 ? 1 << g : 0;
+              
+              if (p > pMax) {
+                pMax = p;
+                maxI = i;
+                maxJ = j;
+                maxK = k;
+              }
+            }
+          }
+        }
+
+        // Skip if no surface crossing
+        if (mask === 0 || mask === 0xff) {
+          continue;
+        }
+
+        // Sum up edge intersections
+        const edgeMask = EDGE_TABLE[mask];
+        const v: [number, number, number] = [0.0, 0.0, 0.0];
+        let eCount = 0;
+
+        for (let i = 0; i < 12; ++i) {
+          if (!(edgeMask & (1 << i))) {
+            continue;
+          }
+
+          ++eCount;
+
+          const e0 = CUBE_EDGES[i << 1];
+          const e1 = CUBE_EDGES[(i << 1) + 1];
+          const g0 = grid[e0];
+          const g1 = grid[e1];
+          let t = g0 - g1;
+          
+          if (Math.abs(t) > 1e-6) {
+            t = g0 / t;
+          } else {
+            continue;
+          }
+
+          for (let j = 0, k = 1; j < 3; ++j, k <<= 1) {
+            const a = e0 & k;
+            const b = e1 & k;
+            if (a !== b) {
+              v[j] += a ? 1.0 - t : t;
+            } else {
+              v[j] += a ? 1.0 : 0;
+            }
+          }
+        }
+
+        // Average edge intersections
+        if (eCount > 0) {
+          const s = 1.0 / eCount;
+          v[0] = x[0] + s * v[0];
+          v[1] = x[1] + s * v[1];
+          v[2] = x[2] + s * v[2];
+        }
+
+        // Store vertex
+        buffer[m] = vertices.length;
+        vertices.push(v);
+        normalAccum.push([0, 0, 0]);
+        
+        // Get material from solid voxel
+        const solidVoxel = getVoxel(x[0] + maxI, x[1] + maxJ, x[2] + maxK);
+        const material = getMaterial(solidVoxel);
+        materialIndices.push(material);
+        
+        // Determine material type for face binning
+        const isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+
+        // Check if we should skip this face
+        const onLowBoundary = (x[0] === 0 || x[1] === 0 || x[2] === 0);
+        const onHighBoundaryNoNeighbor = 
+          (skipHighBoundary[0] && x[0] >= highBoundary[0] - 1) ||
+          (skipHighBoundary[1] && x[1] >= highBoundary[1] - 1) ||
+          (skipHighBoundary[2] && x[2] >= highBoundary[2] - 1);
+        const ignoreFace = onLowBoundary || onHighBoundaryNoNeighbor;
+
+        // Choose which face list to add to based on material type
+        const targetFaces = isTransparent ? transparentFaces : solidFaces;
+
+        // Generate faces for edges along each axis
+        for (let i = 0; i < 3; ++i) {
+          if (!(edgeMask & (1 << i))) {
+            continue;
+          }
+
+          const iu = (i + 1) % 3;
+          const iv = (i + 2) % 3;
+
+          if (x[iu] === 0 || x[iv] === 0) {
+            continue;
+          }
+
+          const du = R[iu];
+          const dv = R[iv];
+
+          if (mask & 1) {
+            const norm = generateFaceNormal(
+              vertices[buffer[m - du]],
+              vertices[buffer[m]],
+              vertices[buffer[m - du - dv]]
+            );
+            const norm2 = generateFaceNormal(
+              vertices[buffer[m - dv]],
+              vertices[buffer[m - du - dv]],
+              vertices[buffer[m]]
+            );
+
+            if (!ignoreFace) {
+              targetFaces.push([buffer[m - du], buffer[m], buffer[m - du - dv]]);
+              targetFaces.push([buffer[m - dv], buffer[m - du - dv], buffer[m]]);
+            }
+
+            accumulateNormal(normalAccum, buffer[m - du], norm);
+            accumulateNormal(normalAccum, buffer[m], norm);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm);
+
+            accumulateNormal(normalAccum, buffer[m - dv], norm2);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm2);
+            accumulateNormal(normalAccum, buffer[m], norm2);
+          } else {
+            const norm = generateFaceNormal(
+              vertices[buffer[m - dv]],
+              vertices[buffer[m]],
+              vertices[buffer[m - du - dv]]
+            );
+            const norm2 = generateFaceNormal(
+              vertices[buffer[m - du]],
+              vertices[buffer[m - du - dv]],
+              vertices[buffer[m]]
+            );
+
+            if (!ignoreFace) {
+              targetFaces.push([buffer[m - dv], buffer[m], buffer[m - du - dv]]);
+              targetFaces.push([buffer[m - du], buffer[m - du - dv], buffer[m]]);
+            }
+
+            accumulateNormal(normalAccum, buffer[m - dv], norm);
+            accumulateNormal(normalAccum, buffer[m], norm);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm);
+
+            accumulateNormal(normalAccum, buffer[m - du], norm2);
+            accumulateNormal(normalAccum, buffer[m - du - dv], norm2);
+            accumulateNormal(normalAccum, buffer[m], norm2);
+          }
+        }
+      }
+    }
+  }
+
+  // Build outputs - share vertex data, separate face lists
+  const solid = solidFaces.length > 0 
+    ? buildOutput(vertices, normalAccum, materialIndices, solidFaces)
+    : emptyOutput();
+    
+  const transparent = transparentFaces.length > 0
+    ? buildOutput(vertices, normalAccum, materialIndices, transparentFaces)
+    : emptyOutput();
+
+  return { solid, transparent };
 }
 
 /**

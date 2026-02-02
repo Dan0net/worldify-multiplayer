@@ -15,7 +15,6 @@
 import * as THREE from 'three';
 import { VOXEL_SCALE } from '@worldify/shared';
 import { SurfaceNetOutput } from './SurfaceNet.js';
-import { getMaterialColor } from './VoxelMaterials.js';
 
 /**
  * Create a BufferGeometry from SurfaceNet output with material blending support.
@@ -35,7 +34,6 @@ export function createGeometryFromSurfaceNet(output: SurfaceNetOutput): THREE.Bu
   // Expanded arrays - 3 vertices per triangle, no sharing
   const positions = new Float32Array(expandedVertexCount * 3);
   const normals = new Float32Array(expandedVertexCount * 3);
-  const colors = new Float32Array(expandedVertexCount * 3);
   const materialIds = new Float32Array(expandedVertexCount * 3);
   const materialWeights = new Float32Array(expandedVertexCount * 3);
   const indices = new Uint32Array(expandedVertexCount);
@@ -83,23 +81,6 @@ export function createGeometryFromSurfaceNet(output: SurfaceNetOutput): THREE.Bu
     normals[v2 * 3 + 1] = output.normals[i2 * 3 + 1];
     normals[v2 * 3 + 2] = output.normals[i2 * 3 + 2];
     
-    // Colors from primary material (for fallback rendering)
-    const color0 = getMaterialColor(m0);
-    const color1 = getMaterialColor(m1);
-    const color2 = getMaterialColor(m2);
-    
-    colors[v0 * 3] = color0.r;
-    colors[v0 * 3 + 1] = color0.g;
-    colors[v0 * 3 + 2] = color0.b;
-    
-    colors[v1 * 3] = color1.r;
-    colors[v1 * 3 + 1] = color1.g;
-    colors[v1 * 3 + 2] = color1.b;
-    
-    colors[v2 * 3] = color2.r;
-    colors[v2 * 3 + 1] = color2.g;
-    colors[v2 * 3 + 2] = color2.b;
-    
     // Material IDs: ALL 3 materials assigned to EACH vertex of this triangle
     // This allows the shader to blend between all 3 materials
     materialIds[v0 * 3] = m0;
@@ -139,7 +120,6 @@ export function createGeometryFromSurfaceNet(output: SurfaceNetOutput): THREE.Bu
   // Set attributes
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geometry.setAttribute('materialIds', new THREE.BufferAttribute(materialIds, 3));
   geometry.setAttribute('materialWeights', new THREE.BufferAttribute(materialWeights, 3));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
