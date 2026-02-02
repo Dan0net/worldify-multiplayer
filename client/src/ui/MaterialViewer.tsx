@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { MATERIAL_BASE_URL } from '../game/material/constants';
 import { getMaterialPallet } from '../game/material/MaterialPallet';
+import { isLiquid, isTransparent, isSolid } from '@worldify/shared';
 
 type MapType = 'albedo' | 'normal' | 'ao' | 'roughness' | 'metalness';
 type Resolution = 'low' | 'high';
@@ -288,17 +289,17 @@ export function MaterialViewer() {
 
             {/* Material Type Badge */}
             <div className="ml-auto flex gap-2">
-              {pallet.types.solid.includes(selectedMaterial + 1) && (
+              {isSolid(selectedMaterial) && (
                 <span className="px-2 py-0.5 bg-green-600/30 text-green-400 rounded text-xs">
                   Solid
                 </span>
               )}
-              {pallet.types.liquid.includes(selectedMaterial + 1) && (
+              {isLiquid(selectedMaterial) && (
                 <span className="px-2 py-0.5 bg-blue-600/30 text-blue-400 rounded text-xs">
                   Liquid
                 </span>
               )}
-              {pallet.types.transparent.includes(selectedMaterial + 1) && (
+              {isTransparent(selectedMaterial) && (
                 <span className="px-2 py-0.5 bg-purple-600/30 text-purple-400 rounded text-xs">
                   Transparent
                 </span>

@@ -3,6 +3,14 @@
  * 
  * Uses the embedded pallet.json from @worldify/shared.
  * No network requests needed - material data is bundled at build time.
+ * 
+ * NOTE: For material lookups by name/id, use the Materials API from @worldify/shared:
+ *   - Materials.get(name) / mat(name) - Get ID by name
+ *   - Materials.getName(id) - Get name by ID
+ *   - Materials.getColor(id) - Get hex color by ID
+ *   - isLiquid(id), isTransparent(id), isSolid(id) - Type checks
+ * 
+ * This module only provides access to texture map metadata for loading binaries.
  */
 
 import { MATERIAL_PALLET } from '@worldify/shared';
@@ -34,42 +42,8 @@ const materialPallet = MATERIAL_PALLET as unknown as MaterialPallet;
 
 /**
  * Get the material pallet manifest (synchronous - embedded at build time).
+ * Use this for texture map metadata (dimensions, channels, layers).
  */
 export function getMaterialPallet(): MaterialPallet {
   return materialPallet;
-}
-
-/**
- * Get the material index for a material name.
- */
-export function getMaterialIndex(palletData: MaterialPallet, name: string): number {
-  return palletData.indicies[name] ?? 0;
-}
-
-/**
- * Get the material name for a material index.
- */
-export function getMaterialName(palletData: MaterialPallet, index: number): string {
-  return palletData.materials[index] ?? 'unknown';
-}
-
-/**
- * Get the average color for a material index (as hex string).
- */
-export function getMaterialColorHex(palletData: MaterialPallet, index: number): string {
-  return palletData.colors[index] ?? '#ffffff';
-}
-
-/**
- * Check if a material is transparent.
- */
-export function isMaterialTransparent(palletData: MaterialPallet, index: number): boolean {
-  return palletData.types.transparent.includes(index + 1); // types use 1-based indices
-}
-
-/**
- * Check if a material is liquid.
- */
-export function isMaterialLiquid(palletData: MaterialPallet, index: number): boolean {
-  return palletData.types.liquid.includes(index + 1);
 }

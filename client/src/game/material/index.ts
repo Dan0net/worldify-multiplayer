@@ -5,11 +5,6 @@
 export { textureCache } from './TextureCache.js';
 export { 
   getMaterialPallet, 
-  getMaterialIndex, 
-  getMaterialName, 
-  getMaterialColorHex,
-  isMaterialTransparent,
-  isMaterialLiquid,
   type MaterialPallet,
   type MapMetadata,
 } from './MaterialPallet.js';

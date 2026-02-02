@@ -112,12 +112,11 @@ export type MaterialTypeNum = typeof MAT_TYPE_SOLID | typeof MAT_TYPE_TRANSPAREN
 export const MATERIAL_TYPE_LUT = new Uint8Array(128);
 
 // Initialize LUT from pallet.json
-// Note: pallet.json types use 1-based indices, so subtract 1
 for (const id of pallet.types.transparent) {
-  MATERIAL_TYPE_LUT[id - 1] = MAT_TYPE_TRANSPARENT;
+  MATERIAL_TYPE_LUT[id] = MAT_TYPE_TRANSPARENT;
 }
 for (const id of pallet.types.liquid) {
-  MATERIAL_TYPE_LUT[id - 1] = MAT_TYPE_LIQUID;
+  MATERIAL_TYPE_LUT[id] = MAT_TYPE_LIQUID;
 }
 // Solid is default (0), no need to explicitly set
 
@@ -132,7 +131,6 @@ export function getMaterialTypeNum(id: number): MaterialTypeNum {
 
 // ============== Material Type Utilities (Set-based for flexibility) ==============
 
-// Note: pallet.json types use 1-based indices
 const liquidIds = new Set(pallet.types.liquid);
 const transparentIds = new Set(pallet.types.transparent);
 
@@ -140,14 +138,14 @@ const transparentIds = new Set(pallet.types.transparent);
  * Check if a material is liquid (water, lava).
  */
 export function isLiquid(id: number): boolean {
-  return liquidIds.has(id + 1); // types use 1-based indices
+  return liquidIds.has(id);
 }
 
 /**
  * Check if a material is transparent (leaves).
  */
 export function isTransparent(id: number): boolean {
-  return transparentIds.has(id + 1);
+  return transparentIds.has(id);
 }
 
 /**

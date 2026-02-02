@@ -222,8 +222,9 @@ async function buildTextures(resolution: 'low' | 'high') {
 
   for (const materialName of materialNames) {
     const material = config.materials[materialName];
-    materialIndices[materialName] = materialIndex++;
-    materialTypes[material.type].push(materialIndex);
+    const idx = materialIndex++;
+    materialIndices[materialName] = idx;
+    materialTypes[material.type].push(idx);
 
     for (const mapType of Object.keys(MAP_CHANNELS)) {
       const mapConfig = material[mapType as keyof MaterialConfig] as MapConfig | undefined;
