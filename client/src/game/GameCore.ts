@@ -16,9 +16,10 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
-import { setupLighting, updateShadowLight } from './scene/lighting';
+import { initTimeOfDay, updateTimeOfDay, applyEnvironmentSettings } from './scene/TimeOfDay';
 import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
 import { storeBridge } from '../state/bridge';
+import { useGameStore } from '../state/store';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
 import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult } from '@worldify/shared';
@@ -75,6 +76,10 @@ export class GameCore {
     // Using PCFSoftShadowMap to support customDepthMaterial for alpha-tested shadows
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    // Enable tone mapping for better HDR handling
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
 
     // Add canvas to DOM
     const canvas = this.renderer.domElement;
@@ -84,7 +89,13 @@ export class GameCore {
     // Initialize scene, camera, lighting
     createScene();
     createCamera();
-    setupLighting();
+    
+    // Initialize time of day lighting system (replaces setupLighting)
+    initTimeOfDay(this.renderer);
+    
+    // Apply initial environment settings from store
+    const initialEnv = useGameStore.getState().environment;
+    applyEnvironmentSettings(initialEnv);
 
     // Initialize post-processing (ambient occlusion + bloom)
     const scene = getScene();
@@ -381,8 +392,8 @@ export class GameCore {
       this.voxelIntegration.update(localPlayer.position);
     }
 
-    // Update shadow light to follow player
-    updateShadowLight(localPlayer.position);
+    // Update time of day lighting system (sun/moon positions, colors)
+    updateTimeOfDay(deltaMs / 1000, localPlayer.position);
 
     // Update camera and build system
     if (camera) {

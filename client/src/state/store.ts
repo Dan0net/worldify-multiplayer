@@ -1,5 +1,6 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
+import * as THREE from 'three';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -34,6 +35,70 @@ export interface BuildState {
   rotationSteps: number;
   /** Whether a valid build target is found */
   hasValidTarget: boolean;
+}
+
+/** Environment/lighting settings */
+export interface EnvironmentSettings {
+  // Time of day
+  timeOfDay: number;        // 0-1 normalized time
+  timeSpeed: number;        // Multiplier for real-time progression (0 = paused)
+  
+  // Sun settings
+  sunColor: string;         // Hex color
+  sunIntensity: number;     // 0-10
+  sunDistance: number;      // Distance from player for shadow positioning
+  
+  // Moon settings  
+  moonColor: string;        // Hex color
+  moonIntensity: number;    // 0-10
+  
+  // Ambient light
+  ambientColor: string;     // Hex color
+  ambientIntensity: number; // 0-2
+  
+  // Environment (IBL)
+  environmentIntensity: number; // 0-2
+  
+  // Shadow settings
+  shadowBias: number;       // -0.01 to 0.01
+  shadowNormalBias: number; // 0 to 0.1
+  shadowMapSize: number;    // 512, 1024, 2048, 4096
+  
+  // Tone mapping
+  toneMapping: THREE.ToneMapping;
+  toneMappingExposure: number; // 0.1 to 3
+}
+
+/** Default environment settings */
+export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
+  timeOfDay: 0.35,          // ~8:30am - nice morning light
+  timeSpeed: 0,             // Paused by default
+  
+  sunColor: '#ffcc00',
+  sunIntensity: 3.0,
+  sunDistance: 150,
+  
+  moonColor: '#8899bb',
+  moonIntensity: 0.3,
+  
+  ambientColor: '#ffffff',
+  ambientIntensity: 0.1,
+  
+  environmentIntensity: 1.0,
+  
+  shadowBias: -0.0001,
+  shadowNormalBias: 0.02,
+  shadowMapSize: 4096,
+  
+  toneMapping: THREE.ACESFilmicToneMapping,
+  toneMappingExposure: 1.0,
+};
+
+/** Debug panel section collapse state */
+export interface DebugPanelSections {
+  stats: boolean;
+  debug: boolean;
+  environment: boolean;
 }
 
 interface GameState {
@@ -78,6 +143,12 @@ interface GameState {
   // Dev mode - force regenerate chunks on server
   forceRegenerateChunks: boolean;
 
+  // Environment settings
+  environment: EnvironmentSettings;
+  
+  // Debug panel section collapse state
+  debugPanelSections: DebugPanelSections;
+
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
   setRoomInfo: (roomId: string, playerId: number) => void;
@@ -114,6 +185,14 @@ interface GameState {
   // Dev mode actions
   setForceRegenerateChunks: (enabled: boolean) => void;
   toggleForceRegenerateChunks: () => void;
+  
+  // Environment actions
+  setEnvironment: (updates: Partial<EnvironmentSettings>) => void;
+  setTimeOfDay: (time: number) => void;
+  setTimeSpeed: (speed: number) => void;
+  
+  // Debug panel actions
+  toggleDebugSection: (section: keyof DebugPanelSections) => void;
 }
 
 // Persist store across HMR to prevent React/game code store instance mismatch
@@ -170,6 +249,16 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
 
   // Dev mode initial state
   forceRegenerateChunks: false,
+
+  // Environment initial state
+  environment: { ...DEFAULT_ENVIRONMENT },
+  
+  // Debug panel sections (all expanded by default)
+  debugPanelSections: {
+    stats: true,
+    debug: false,
+    environment: false,
+  },
 
   // Actions
   setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -233,6 +322,25 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setForceRegenerateChunks: (forceRegenerateChunks) => set({ forceRegenerateChunks }),
   toggleForceRegenerateChunks: () => set((state) => ({
     forceRegenerateChunks: !state.forceRegenerateChunks,
+  })),
+  
+  // Environment actions
+  setEnvironment: (updates) => set((state) => ({
+    environment: { ...state.environment, ...updates },
+  })),
+  setTimeOfDay: (time) => set((state) => ({
+    environment: { ...state.environment, timeOfDay: Math.max(0, Math.min(1, time)) },
+  })),
+  setTimeSpeed: (speed) => set((state) => ({
+    environment: { ...state.environment, timeSpeed: Math.max(0, speed) },
+  })),
+  
+  // Debug panel actions
+  toggleDebugSection: (section) => set((state) => ({
+    debugPanelSections: {
+      ...state.debugPanelSections,
+      [section]: !state.debugPanelSections[section],
+    },
   })),
 }));
 

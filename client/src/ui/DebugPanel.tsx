@@ -1,9 +1,132 @@
-import { useEffect, useState } from 'react';
-import { useGameStore, TERRAIN_DEBUG_MODE_NAMES } from '../state/store';
+import { useEffect, useState, ReactNode } from 'react';
+import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
 import { togglePostProcessing as togglePostProcessingEffect } from '../game/scene/postprocessing';
+import { applyEnvironmentSettings, formatTimeOfDay, TONE_MAPPING_OPTIONS } from '../game/scene/TimeOfDay';
 import { storeBridge } from '../state/bridge';
+import * as THREE from 'three';
+
+// ============== Collapsible Section Component ==============
+
+interface SectionProps {
+  title: string;
+  isOpen: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  color?: string;
+}
+
+function Section({ title, isOpen, onToggle, children, color = 'green' }: SectionProps) {
+  const colorClasses: Record<string, string> = {
+    green: 'text-green-500 hover:text-green-300',
+    yellow: 'text-yellow-500 hover:text-yellow-300',
+    cyan: 'text-cyan-500 hover:text-cyan-300',
+  };
+  
+  return (
+    <div className="mt-2">
+      <button
+        onClick={onToggle}
+        className={`w-full flex items-center justify-between py-1 px-0 text-left ${colorClasses[color] || colorClasses.green} transition-colors`}
+      >
+        <span className="font-bold">{title}</span>
+        <span className="text-xs">{isOpen ? '▼' : '▶'}</span>
+      </button>
+      {isOpen && (
+        <div className="pl-2 border-l border-green-500/30">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============== Slider Component ==============
+
+interface SliderProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+  formatValue?: (value: number) => string;
+}
+
+function Slider({ label, value, min, max, step = 0.01, onChange, formatValue }: SliderProps) {
+  const displayValue = formatValue ? formatValue(value) : value.toFixed(2);
+  
+  return (
+    <div className="flex flex-col gap-0.5 mb-1">
+      <div className="flex justify-between text-xs">
+        <span>{label}</span>
+        <span className="text-yellow-400">{displayValue}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full h-1.5 bg-green-900 rounded-lg appearance-none cursor-pointer accent-yellow-400"
+      />
+    </div>
+  );
+}
+
+// ============== Color Picker Component ==============
+
+interface ColorPickerProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}
+
+function ColorPicker({ label, value, onChange }: ColorPickerProps) {
+  return (
+    <div className="flex items-center justify-between mb-1">
+      <span className="text-xs">{label}</span>
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-8 h-5 bg-transparent border border-green-500/50 rounded cursor-pointer"
+      />
+    </div>
+  );
+}
+
+// ============== Select Component ==============
+
+interface SelectProps<T> {
+  label: string;
+  value: T;
+  options: { label: string; value: T }[];
+  onChange: (value: T) => void;
+}
+
+function Select<T extends string | number>({ label, value, options, onChange }: SelectProps<T>) {
+  return (
+    <div className="flex items-center justify-between mb-1">
+      <span className="text-xs">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange((typeof value === 'number' ? parseInt(e.target.value) : e.target.value) as T)}
+        className="bg-black/50 border border-green-500/50 rounded text-xs px-1 py-0.5 text-yellow-400"
+      >
+        {options.map((opt) => (
+          <option key={String(opt.value)} value={opt.value as string | number}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// ============== Main Debug Panel ==============
 
 export function DebugPanel() {
   const { 
@@ -22,6 +145,10 @@ export function DebugPanel() {
     postProcessingEnabled,
     togglePostProcessing,
     forceRegenerateChunks,
+    environment,
+    setEnvironment,
+    debugPanelSections,
+    toggleDebugSection,
   } = useGameStore();
 
   const [cacheClearing, setCacheClearing] = useState(false);
@@ -37,13 +164,11 @@ export function DebugPanel() {
   const handleClearChunks = () => {
     setChunksClearing(true);
     storeBridge.clearAndReloadChunks();
-    // Reset after a short delay (chunks will reload async)
     setTimeout(() => setChunksClearing(false), 500);
   };
 
   const handleToggleForceRegenerate = () => {
     storeBridge.toggleForceRegenerate();
-    // Also clear chunks so they reload with new setting
     handleClearChunks();
   };
 
@@ -52,10 +177,15 @@ export function DebugPanel() {
     togglePostProcessing();
   };
 
-  // Keyboard shortcuts for voxel debug toggles
+  // Apply environment changes to the scene
+  const handleEnvironmentChange = (updates: Partial<EnvironmentSettings>) => {
+    setEnvironment(updates);
+    applyEnvironmentSettings({ ...environment, ...updates });
+  };
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Only handle if not typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -100,128 +230,308 @@ export function DebugPanel() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleVoxelDebug, cycleTerrainDebugMode]);
   
-  // Sync terrain debug mode to shader when it changes
+  // Sync terrain debug mode to shader
   useEffect(() => {
     setShaderDebugMode(terrainDebugMode);
   }, [terrainDebugMode]);
 
+  // Shadow map size options
+  const shadowMapOptions = [
+    { label: '512', value: 512 },
+    { label: '1024', value: 1024 },
+    { label: '2048', value: 2048 },
+    { label: '4096', value: 4096 },
+  ];
+
   return (
-    <div className="fixed top-5 left-5 py-2.5 px-4 bg-black/60 text-green-500 font-mono text-xs rounded-lg z-50">
-      {/* Connection & Performance Stats */}
-      <div>Status: {connectionStatus}</div>
-      <div>Players: {playerCount}</div>
-      <div>Ping: {ping}ms</div>
-      <div>FPS: {fps}</div>
-      <div>Tick: {tickMs.toFixed(1)}ms</div>
-      <div>Server: {serverTick}</div>
+    <div className="fixed top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg z-50 max-h-[90vh] overflow-y-auto min-w-[200px]">
       
-      {/* Voxel Stats */}
-      <div className="mt-2 pt-2 border-t border-green-500/30">
-        <div>Chunks: {voxelStats.chunksLoaded}</div>
-        <div>Meshes: {voxelStats.meshesVisible}</div>
-        <div>Debug: {voxelStats.debugObjects}</div>
-      </div>
-      
-      {/* Voxel Debug Toggles */}
-      <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
-        <div className="mb-1 text-green-500">Debug (F1-F5):</div>
-        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
-          <input
-            type="checkbox"
-            checked={voxelDebug.showChunkBounds}
-            onChange={() => toggleVoxelDebug('showChunkBounds')}
-            className="accent-yellow-400"
+      {/* ============== STATS SECTION ============== */}
+      <Section
+        title="📊 Stats"
+        isOpen={debugPanelSections.stats}
+        onToggle={() => toggleDebugSection('stats')}
+      >
+        <div>Status: {connectionStatus}</div>
+        <div>Players: {playerCount}</div>
+        <div>Ping: {ping}ms</div>
+        <div>FPS: {fps}</div>
+        <div>Tick: {tickMs.toFixed(1)}ms</div>
+        <div>Server: {serverTick}</div>
+        
+        <div className="mt-2 pt-2 border-t border-green-500/30">
+          <div>Chunks: {voxelStats.chunksLoaded}</div>
+          <div>Meshes: {voxelStats.meshesVisible}</div>
+          <div>Debug: {voxelStats.debugObjects}</div>
+        </div>
+        
+        <div className="mt-2 pt-2 border-t border-green-500/30">
+          <a href="/materials" className="text-green-500 hover:text-green-300 underline block">
+            Textures: {textureState}
+          </a>
+        </div>
+      </Section>
+
+      {/* ============== DEBUG SECTION ============== */}
+      <Section
+        title="🔧 Debug"
+        isOpen={debugPanelSections.debug}
+        onToggle={() => toggleDebugSection('debug')}
+        color="yellow"
+      >
+        <div className="text-yellow-400">
+          <div className="mb-1 text-green-500 text-xs">Voxel (F1-F5):</div>
+          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+            <input
+              type="checkbox"
+              checked={voxelDebug.showChunkBounds}
+              onChange={() => toggleVoxelDebug('showChunkBounds')}
+              className="accent-yellow-400"
+            />
+            <span>F1 Bounds</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+            <input
+              type="checkbox"
+              checked={voxelDebug.showEmptyChunks}
+              onChange={() => toggleVoxelDebug('showEmptyChunks')}
+              className="accent-yellow-400"
+            />
+            <span>F2 Empty</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+            <input
+              type="checkbox"
+              checked={voxelDebug.showCollisionMesh}
+              onChange={() => toggleVoxelDebug('showCollisionMesh')}
+              className="accent-yellow-400"
+            />
+            <span>F3 Collision</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+            <input
+              type="checkbox"
+              checked={voxelDebug.showChunkCoords}
+              onChange={() => toggleVoxelDebug('showChunkCoords')}
+              className="accent-yellow-400"
+            />
+            <span>F4 Coords</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+            <input
+              type="checkbox"
+              checked={voxelDebug.showWireframe}
+              onChange={() => toggleVoxelDebug('showWireframe')}
+              className="accent-yellow-400"
+            />
+            <span>F5 Wireframe</span>
+          </label>
+        </div>
+        
+        <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
+          <div className="mb-1 text-green-500 text-xs">Shader (F7-F8):</div>
+          <label 
+            className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
+            onClick={cycleTerrainDebugMode}
+          >
+            <span className="w-4 h-4 flex items-center justify-center">
+              {terrainDebugMode > 0 ? '🔍' : '○'}
+            </span>
+            <span>F7 {TERRAIN_DEBUG_MODE_NAMES[terrainDebugMode]}</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+            <input
+              type="checkbox"
+              checked={postProcessingEnabled}
+              onChange={handleTogglePostProcessing}
+              className="accent-yellow-400"
+            />
+            <span>F8 Post-FX</span>
+          </label>
+        </div>
+        
+        <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
+          <div className="mb-1 text-green-500 text-xs">Cache:</div>
+          <label 
+            className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
+            onClick={handleClearTextureCache}
+          >
+            <span className="w-4 h-4 flex items-center justify-center text-red-400">
+              {cacheClearing ? '⏳' : '✕'}
+            </span>
+            <span>Clear Texture Cache</span>
+          </label>
+          <label 
+            className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
+            onClick={handleToggleForceRegenerate}
+          >
+            <input
+              type="checkbox"
+              checked={forceRegenerateChunks}
+              onChange={handleToggleForceRegenerate}
+              className="accent-red-400"
+            />
+            <span className={forceRegenerateChunks ? 'text-red-400' : ''}>F9 Force Regen</span>
+          </label>
+        </div>
+      </Section>
+
+      {/* ============== ENVIRONMENT SECTION ============== */}
+      <Section
+        title="🌅 Environment"
+        isOpen={debugPanelSections.environment}
+        onToggle={() => toggleDebugSection('environment')}
+        color="cyan"
+      >
+        {/* Time of Day */}
+        <div className="mb-3">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">Time of Day</div>
+          <div className="text-center text-yellow-400 text-lg mb-1">
+            {formatTimeOfDay(environment.timeOfDay)}
+          </div>
+          <Slider
+            label="Time"
+            value={environment.timeOfDay}
+            min={0}
+            max={1}
+            step={0.001}
+            onChange={(v) => handleEnvironmentChange({ timeOfDay: v })}
+            formatValue={(v) => formatTimeOfDay(v)}
           />
-          <span>F1 Bounds</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
-          <input
-            type="checkbox"
-            checked={voxelDebug.showEmptyChunks}
-            onChange={() => toggleVoxelDebug('showEmptyChunks')}
-            className="accent-yellow-400"
+          <Slider
+            label="Speed (min/s)"
+            value={environment.timeSpeed}
+            min={0}
+            max={10}
+            step={0.1}
+            onChange={(v) => handleEnvironmentChange({ timeSpeed: v })}
+            formatValue={(v) => v === 0 ? 'Paused' : v.toFixed(1)}
           />
-          <span>F2 Empty</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
-          <input
-            type="checkbox"
-            checked={voxelDebug.showCollisionMesh}
-            onChange={() => toggleVoxelDebug('showCollisionMesh')}
-            className="accent-yellow-400"
+        </div>
+
+        {/* Sun Settings */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">☀️ Sun</div>
+          <ColorPicker
+            label="Color"
+            value={environment.sunColor}
+            onChange={(v) => handleEnvironmentChange({ sunColor: v })}
           />
-          <span>F3 Collision</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
-          <input
-            type="checkbox"
-            checked={voxelDebug.showChunkCoords}
-            onChange={() => toggleVoxelDebug('showChunkCoords')}
-            className="accent-yellow-400"
+          <Slider
+            label="Intensity"
+            value={environment.sunIntensity}
+            min={0}
+            max={10}
+            step={0.1}
+            onChange={(v) => handleEnvironmentChange({ sunIntensity: v })}
           />
-          <span>F4 Coords</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
-          <input
-            type="checkbox"
-            checked={voxelDebug.showWireframe}
-            onChange={() => toggleVoxelDebug('showWireframe')}
-            className="accent-yellow-400"
+          <Slider
+            label="Distance"
+            value={environment.sunDistance}
+            min={50}
+            max={300}
+            step={10}
+            onChange={(v) => handleEnvironmentChange({ sunDistance: v })}
           />
-          <span>F5 Wireframe</span>
-        </label>
-      </div>
-      
-      {/* Terrain Shader Debug */}
-      <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
-        <div className="mb-1 text-green-500">Shader (F7-F8):</div>
-        <label 
-          className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
-          onClick={cycleTerrainDebugMode}
-        >
-          <span className="w-4 h-4 flex items-center justify-center">
-            {terrainDebugMode > 0 ? '🔍' : '○'}
-          </span>
-          <span>F7 {TERRAIN_DEBUG_MODE_NAMES[terrainDebugMode]}</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
-          <input
-            type="checkbox"
-            checked={postProcessingEnabled}
-            onChange={handleTogglePostProcessing}
-            className="accent-yellow-400"
+        </div>
+
+        {/* Moon Settings */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🌙 Moon</div>
+          <ColorPicker
+            label="Color"
+            value={environment.moonColor}
+            onChange={(v) => handleEnvironmentChange({ moonColor: v })}
           />
-          <span>F8 Post-FX</span>
-        </label>
-      </div>
-      
-      {/* Texture Cache */}
-      <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
-        <a href="/materials" className="mb-1 text-green-500 hover:text-green-300 underline block">
-          Textures: {textureState}
-        </a>
-        <label 
-          className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
-          onClick={handleClearTextureCache}
-        >
-          <span className="w-4 h-4 flex items-center justify-center text-red-400">
-            {cacheClearing ? '⏳' : '✕'}
-          </span>
-          <span>F6 Clear Cache</span>
-        </label>
-        <label 
-          className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
-          onClick={handleToggleForceRegenerate}
-        >
-          <input
-            type="checkbox"
-            checked={forceRegenerateChunks}
-            onChange={handleToggleForceRegenerate}
-            className="accent-red-400"
+          <Slider
+            label="Intensity"
+            value={environment.moonIntensity}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleEnvironmentChange({ moonIntensity: v })}
           />
-          <span className={forceRegenerateChunks ? 'text-red-400' : ''}>F9 Force Regen</span>
-        </label>
-      </div>
+        </div>
+
+        {/* Ambient Light */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">💡 Ambient</div>
+          <ColorPicker
+            label="Color"
+            value={environment.ambientColor}
+            onChange={(v) => handleEnvironmentChange({ ambientColor: v })}
+          />
+          <Slider
+            label="Intensity"
+            value={environment.ambientIntensity}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleEnvironmentChange({ ambientIntensity: v })}
+          />
+        </div>
+
+        {/* Environment/IBL */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🌐 Environment (IBL)</div>
+          <Slider
+            label="Intensity"
+            value={environment.environmentIntensity}
+            min={0}
+            max={3}
+            step={0.1}
+            onChange={(v) => handleEnvironmentChange({ environmentIntensity: v })}
+          />
+        </div>
+
+        {/* Shadows */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🌑 Shadows</div>
+          <Slider
+            label="Bias"
+            value={environment.shadowBias}
+            min={-0.01}
+            max={0.01}
+            step={0.0001}
+            onChange={(v) => handleEnvironmentChange({ shadowBias: v })}
+            formatValue={(v) => v.toFixed(4)}
+          />
+          <Slider
+            label="Normal Bias"
+            value={environment.shadowNormalBias}
+            min={0}
+            max={0.1}
+            step={0.001}
+            onChange={(v) => handleEnvironmentChange({ shadowNormalBias: v })}
+            formatValue={(v) => v.toFixed(3)}
+          />
+          <Select
+            label="Map Size"
+            value={environment.shadowMapSize}
+            options={shadowMapOptions}
+            onChange={(v) => handleEnvironmentChange({ shadowMapSize: v })}
+          />
+        </div>
+
+        {/* Tone Mapping */}
+        <div className="mb-1 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🎨 Tone Mapping</div>
+          <Select
+            label="Type"
+            value={environment.toneMapping}
+            options={TONE_MAPPING_OPTIONS.map(o => ({ label: o.label, value: o.value as number }))}
+            onChange={(v) => handleEnvironmentChange({ toneMapping: v as THREE.ToneMapping })}
+          />
+          <Slider
+            label="Exposure"
+            value={environment.toneMappingExposure}
+            min={0.1}
+            max={3}
+            step={0.05}
+            onChange={(v) => handleEnvironmentChange({ toneMappingExposure: v })}
+          />
+        </div>
+      </Section>
     </div>
   );
 }
