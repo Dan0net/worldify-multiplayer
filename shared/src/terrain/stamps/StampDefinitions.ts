@@ -180,7 +180,7 @@ function generatePineTree(variant: number): StampDefinition {
   const trunkRadius = 1.2 + (variant % 2) * 0.2;  // 1.2-1.4 - consistent with oak
   const canopyLayers = 3 + (variant % 2);
   const barkMaterial = variant % 2 === 0 ? mat('bark2') : mat('bark3');
-  const leafMaterial = variant % 2 === 0 ? mat('leaves_trans') : mat('leaves2_trans');
+  const leafMaterial = mat('leaves_trans_3');
   
   // Trunk - fixed height so canopies align
   voxels.push(...cylinder(0, 0, trunkRadius, 0, TREE_TRUNK_HEIGHT, barkMaterial));
@@ -222,7 +222,7 @@ function generateOakTree(variant: number): StampDefinition {
   const trunkRadius = 1.3 + (variant % 2) * 0.2;  // 1.3-1.5 - consistent with pine
   const canopyRadius = (7.5 + (variant % 3) * 1.5);  // 7.5-12 (was 5-8, now 50% bigger)
   const barkMaterial = variant % 2 === 0 ? mat('bark2') : mat('bark3');
-  const leafMaterial = variant % 2 === 0 ? mat('leaves_trans') : mat('leaves2_trans');
+  const leafMaterial = mat('leaves_trans_3');
   
   // Trunk - fixed height so canopies align with pine
   voxels.push(...cylinder(0, 0, trunkRadius, 0, TREE_TRUNK_HEIGHT, barkMaterial));
