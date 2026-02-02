@@ -3,10 +3,10 @@
  */
 
 import * as THREE from 'three';
-import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial } from '../material/TerrainMaterial.js';
+import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, getTransparentDepthMaterial } from '../material/TerrainMaterial.js';
 
 // Re-export terrain material getters for easy access
-export { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial };
+export { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, getTransparentDepthMaterial };
 
 // ============== Material Color Palette ==============
 

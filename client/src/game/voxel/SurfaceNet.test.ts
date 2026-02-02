@@ -203,7 +203,7 @@ describe('Vertex Position Tests', () => {
       }
     }
     
-    const ratio = nearSurfaceCount / result.vertexCount;
+    const ratio = nearSurfaceCount / result.solid.vertexCount;
     expect(ratio).toBeGreaterThanOrEqual(0.9);
   });
 });
@@ -296,7 +296,7 @@ describe('Edge Cases', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.vertexCount).toBeGreaterThan(0);
+    expect(result.solid.vertexCount).toBeGreaterThan(0);
   });
 
   test('Chunk with surface at Y=30 produces geometry (inside chunk bounds)', () => {
@@ -306,7 +306,7 @@ describe('Edge Cases', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.vertexCount).toBeGreaterThan(0);
+    expect(result.solid.vertexCount).toBeGreaterThan(0);
   });
 
   test('Chunk with surface at Y=31 needs neighbors for boundary geometry', () => {
@@ -321,7 +321,7 @@ describe('Edge Cases', () => {
     
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.vertexCount).toBeGreaterThan(0);
+    expect(result.solid.vertexCount).toBeGreaterThan(0);
   });
 
   test('Single voxel island produces geometry when surrounded by neighbors', () => {
@@ -339,7 +339,7 @@ describe('Edge Cases', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.vertexCount).toBeGreaterThan(0);
-    expect(result.triangleCount).toBeGreaterThan(0);
+    expect(result.solid.vertexCount).toBeGreaterThan(0);
+    expect(result.solid.triangleCount).toBeGreaterThan(0);
   });
 });

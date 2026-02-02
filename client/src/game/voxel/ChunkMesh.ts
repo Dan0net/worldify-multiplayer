@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import { ChunkMeshOutput } from './ChunkMesher.js';
-import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial } from './VoxelMaterials.js';
+import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, getTransparentDepthMaterial } from './VoxelMaterials.js';
 import { createGeometryFromSurfaceNet } from './MeshGeometry.js';
 
 /**
@@ -35,6 +35,8 @@ function createTransparentMesh(geometry: THREE.BufferGeometry, chunkKey: string)
   mesh.userData.meshType = 'transparent';
   mesh.castShadow = true;
   mesh.receiveShadow = true;
+  // Use custom depth material for alpha-tested shadow casting
+  mesh.customDepthMaterial = getTransparentDepthMaterial();
   // Transparent objects should render after opaque ones
   mesh.renderOrder = 1;
   return mesh;

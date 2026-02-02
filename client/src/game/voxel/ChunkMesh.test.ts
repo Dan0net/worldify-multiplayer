@@ -51,13 +51,14 @@ describe('ChunkMesh Mesh Creation Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     
     expect(mesh).not.toBeNull();
     if (mesh) {
       expect(mesh.geometry.getAttribute('position')).toBeDefined();
       expect(mesh.geometry.getAttribute('normal')).toBeDefined();
-      expect(mesh.geometry.getAttribute('color')).toBeDefined();
+      expect(mesh.geometry.getAttribute('materialIds')).toBeDefined();
+      expect(mesh.geometry.getAttribute('materialWeights')).toBeDefined();
       expect(mesh.geometry.index).not.toBeNull();
       
       mesh.geometry.dispose();
@@ -71,7 +72,7 @@ describe('ChunkMesh Mesh Creation Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     
     expect(mesh).not.toBeNull();
     if (mesh) {
@@ -90,7 +91,7 @@ describe('ChunkMesh Mesh Creation Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     
     expect(mesh).toBeNull();
   });
@@ -102,7 +103,7 @@ describe('ChunkMesh Mesh Creation Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     
     expect(mesh).not.toBeNull();
     if (mesh) {
@@ -129,7 +130,7 @@ describe('ChunkMesh Mesh Creation Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     
     expect(mesh).not.toBeNull();
     if (mesh) {
@@ -161,7 +162,7 @@ describe('ChunkMesh Mesh Creation Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     
     expect(mesh).not.toBeNull();
     if (mesh) {
@@ -179,7 +180,7 @@ describe('ChunkMesh Mesh Creation Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     
     expect(mesh).not.toBeNull();
     if (mesh) {
@@ -201,7 +202,7 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output);
+    chunkMesh.updateMesh(output.solid);
     
     expect(chunkMesh.hasGeometry()).toBe(true);
     expect(chunkMesh.getVertexCount()).toBeGreaterThan(0);
@@ -219,7 +220,7 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output);
+    chunkMesh.updateMesh(output.solid);
     expect(chunkMesh.hasGeometry()).toBe(true);
     
     chunkMesh.disposeMesh();
@@ -238,7 +239,7 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output);
+    chunkMesh.updateMesh(output.solid);
     const firstVertCount = chunkMesh.getVertexCount();
     
     chunk.generateFlat(10, 1, 16);
@@ -260,7 +261,7 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output);
+    chunkMesh.updateMesh(output.solid);
     
     expect(chunkMesh.mesh).not.toBeNull();
     if (chunkMesh.mesh) {
@@ -297,7 +298,7 @@ describe('Scene Integration Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    const mesh = createMeshFromSurfaceNet(output, chunk);
+    const mesh = createMeshFromSurfaceNet(output.solid, chunk);
     expect(mesh).not.toBeNull();
     
     if (mesh) {
