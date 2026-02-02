@@ -15,6 +15,11 @@ export type TextureResolution = 'low' | 'high';
 /** Alpha threshold for shadow depth testing on transparent materials */
 const ALPHA_CUTOFF = 0.5;
 
+// Wind animation parameters
+const WIND_STRENGTH = 0.15;   // Maximum displacement in meters
+const WIND_SPEED = 1.2;        // Animation speed multiplier
+const WIND_FREQUENCY = 0.9;    // Spatial frequency of wind waves
+
 export interface LoadedTextures {
   albedo: THREE.DataArrayTexture;
   normal: THREE.DataArrayTexture;
@@ -191,6 +196,12 @@ const vertexShaderPrefix = /* glsl */ `
   varying vec3 vWorldNormal;
   
   uniform float repeatScale;
+  
+  #ifdef USE_WIND
+  uniform float uTime;
+  uniform float uWindStrength;
+  uniform float uWindFrequency;
+  #endif
 `;
 
 const vertexShaderSuffix = /* glsl */ `
@@ -198,6 +209,19 @@ const vertexShaderSuffix = /* glsl */ `
   vMaterialWeights = materialWeights;
   vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
   vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+  
+  #ifdef USE_WIND
+  // Wind animation - layered sine waves based on world position
+  // Uses original world position so adjacent chunk vertices match
+  float windPhase = uTime + vWorldPosition.x * uWindFrequency + vWorldPosition.z * uWindFrequency * 0.7;
+  float windX = sin(windPhase) * sin(windPhase * 0.4 + 1.3);
+  float windZ = sin(windPhase * 0.8 + 2.1) * sin(windPhase * 0.3);
+  
+  // Apply displacement to transformed position
+  vec3 windOffset = vec3(windX, 0.0, windZ) * uWindStrength;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position + windOffset, 1.0);
+  vWorldPosition += windOffset;
+  #endif
 `;
 
 const fragmentShaderPrefix = /* glsl */ `
@@ -305,6 +329,12 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       if (isTransparent) {
         shader.defines = shader.defines || {};
         shader.defines.USE_TEXTURE_ALPHA = '';
+        shader.defines.USE_WIND = '';
+        
+        // Wind uniforms
+        shader.uniforms.uTime = { value: 0.0 };
+        shader.uniforms.uWindStrength = { value: WIND_STRENGTH };
+        shader.uniforms.uWindFrequency = { value: WIND_FREQUENCY };
       }
       
       // Modify vertex shader
@@ -480,6 +510,15 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       this._shader.uniforms.debugMode.value = mode;
     }
   }
+  
+  /**
+   * Update wind animation time. Call each frame for transparent materials.
+   */
+  setWindTime(time: number): void {
+    if (this._shader?.uniforms.uTime) {
+      this._shader.uniforms.uTime.value = time * WIND_SPEED;
+    }
+  }
 }
 
 // ============== Debug Mode Constants ==============
@@ -531,6 +570,11 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
       shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
       shader.uniforms.blendOffset = { value: this.createBlendOffsetMatrix() };
       shader.uniforms.alphaCutoff = { value: ALPHA_CUTOFF };
+      
+      // Wind uniforms for matching vertex displacement
+      shader.uniforms.uTime = { value: 0.0 };
+      shader.uniforms.uWindStrength = { value: WIND_STRENGTH };
+      shader.uniforms.uWindFrequency = { value: WIND_FREQUENCY };
 
       // Add vertex shader prefix for attributes and varyings
       const depthVertexPrefix = /* glsl */ `
@@ -543,6 +587,9 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
         varying vec3 vWorldNormal;
         
         uniform float repeatScale;
+        uniform float uTime;
+        uniform float uWindStrength;
+        uniform float uWindFrequency;
       `;
 
       const depthVertexSuffix = /* glsl */ `
@@ -550,6 +597,15 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
         vMaterialWeights = materialWeights;
         vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
         vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+        
+        // Wind animation - must match TerrainMaterial displacement
+        // Uses original world position so adjacent chunk vertices match
+        float windPhase = uTime + vWorldPosition.x * uWindFrequency + vWorldPosition.z * uWindFrequency * 0.7;
+        float windX = sin(windPhase) * sin(windPhase * 0.4 + 1.3);
+        float windZ = sin(windPhase * 0.8 + 2.1) * sin(windPhase * 0.3);
+        vec3 windOffset = vec3(windX, 0.0, windZ) * uWindStrength;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position + windOffset, 1.0);
+        vWorldPosition += windOffset;
       `;
 
       // Add fragment shader prefix for texture sampling
@@ -664,6 +720,12 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
       this.needsUpdate = true;
     }
   }
+  
+  setWindTime(time: number): void {
+    if (this._shader?.uniforms.uTime) {
+      this._shader.uniforms.uTime.value = time * WIND_SPEED;
+    }
+  }
 }
 
 // ============== Singleton Instances ==============
@@ -770,6 +832,24 @@ export function setTerrainDebugMode(mode: TerrainDebugMode): void {
   
   const modeNames = ['OFF', 'ALBEDO', 'NORMAL', 'AO', 'ROUGHNESS', 'TRI_BLEND', 'MATERIAL_IDS', 'MATERIAL_WEIGHTS', 'WORLD_NORMAL'];
   console.log(`Terrain debug mode: ${modeNames[mode] || mode}`);
+}
+
+/**
+ * Update wind animation time for transparent materials.
+ * Call this each frame with elapsedTime from the game loop.
+ */
+export function updateWindTime(elapsedTime: number): void {
+  // Only transparent materials have wind animation
+  if (transparentMaterial) {
+    transparentMaterial.setWindTime(elapsedTime);
+  }
+  if (liquidMaterial) {
+    liquidMaterial.setWindTime(elapsedTime);
+  }
+  // Keep depth material in sync for matching shadow positions
+  if (transparentDepthMaterial) {
+    transparentDepthMaterial.setWindTime(elapsedTime);
+  }
 }
 
 // Expose debug controls to window for console access

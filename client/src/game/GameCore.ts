@@ -28,7 +28,7 @@ import { GameLoop } from './GameLoop';
 import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
-import { materialManager } from './material';
+import { materialManager, updateWindTime } from './material';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -264,6 +264,9 @@ export class GameCore {
 
     // Always update remote players (visible in all modes)
     this.playerManager.updateRemotePlayers(deltaMs);
+
+    // Update wind animation for foliage
+    updateWindTime(elapsedTime);
 
     // Render with post-processing (SSAO + bloom) or fallback to direct render
     const scene = getScene();
