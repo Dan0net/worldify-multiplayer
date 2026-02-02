@@ -19,7 +19,7 @@
  * Generates one vertex set, but separates faces into solid/transparent buckets.
  */
 
-import { getMaterial, MATERIAL_TYPE_LUT, MAT_TYPE_TRANSPARENT } from '@worldify/shared';
+import { getMaterial, getWeight as unpackWeight, MATERIAL_TYPE_LUT, MAT_TYPE_TRANSPARENT } from '@worldify/shared';
 
 // ============== Types ==============
 
@@ -51,15 +51,13 @@ export interface SplitSurfaceNetOutput {
 
 /**
  * Input data for surface net meshing.
- * Provides access to voxel weights and packed voxel data.
+ * Uses flat data array for cache-efficient direct access.
  */
 export interface SurfaceNetInput {
   /** Dimensions of the voxel grid [x, y, z] */
   dims: [number, number, number];
-  /** Get weight at coordinates (negative = inside, positive = outside) */
-  getWeight: (x: number, y: number, z: number) => number;
-  /** Get packed voxel data at coordinates (for material lookup) */
-  getVoxel: (x: number, y: number, z: number) => number;
+  /** Flat packed voxel data array (dims[0] * dims[1] * dims[2]) */
+  data: Uint16Array;
   /** 
    * Skip faces at high boundary for each axis [+X, +Y, +Z].
    * When true, faces at dims[axis]-2 are skipped (no neighbor to stitch with).
@@ -194,13 +192,18 @@ const FILTER_WEIGHT = -0.00001;
  * - solidGrid: transparent voxels → air (weight = -0.00001)
  * - transGrid: solid voxels → air (weight = -0.00001)
  * 
- * PERFORMANCE: All vertex/face computation is inlined to avoid function call overhead.
+ * PERFORMANCE: Uses direct flat array access with index arithmetic.
+ * All vertex/face computation is inlined to avoid function call overhead.
  * 
- * @param input Voxel data accessors and dimensions
+ * @param input Flat voxel data array and dimensions
  * @returns Split mesh outputs for solid and transparent materials
  */
 export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
-  const { dims, getWeight, getVoxel, skipHighBoundary = [false, false, false] } = input;
+  const { dims, data, skipHighBoundary = [false, false, false] } = input;
+  
+  // Pre-compute grid strides for index arithmetic
+  const dimsX = dims[0];
+  const dimsXY = dims[0] * dims[1];
   
   // High boundary positions where we skip faces if no neighbor exists
   const highBoundary = [dims[0] - 2, dims[1] - 2, dims[2] - 2];
@@ -241,61 +244,147 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
 
     for (x[1] = 0; x[1] < dims[1] - 1; ++x[1], ++n, m += 2) {
       for (x[0] = 0; x[0] < dims[0] - 1; ++x[0], ++n, ++m) {
-        // Sample 2x2x2 grid and build two adjusted grids
+        // Sample 2x2x2 grid using direct index arithmetic
+        // Base index in flat array for current cell position
+        const baseIdx = x[2] * dimsXY + x[1] * dimsX + x[0];
+        
         let solidMask = 0;
         let transMask = 0;
         let g = 0;
         
         // Track max weight voxels for material assignment
         let solidPMax = -Infinity;
-        let solidMaxI = 0, solidMaxJ = 0, solidMaxK = 0;
+        let solidMaxIdx = baseIdx;
         let transPMax = -Infinity;
-        let transMaxI = 0, transMaxJ = 0, transMaxK = 0;
+        let transMaxIdx = baseIdx;
 
-        for (let k = 0; k < 2; ++k) {
-          for (let j = 0; j < 2; ++j) {
-            for (let i = 0; i < 2; ++i, ++g) {
-              const lx = x[0] + i;
-              const ly = x[1] + j;
-              const lz = x[2] + k;
+        // Sample 2x2x2 grid with inline index arithmetic
+        // k=0, j=0, i=0
+        let idx = baseIdx;
+        let voxel = data[idx];
+        let weight = unpackWeight(voxel);
+        let material = getMaterial(voxel);
+        let isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        let solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        let transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        ++g;
 
-              const weight = getWeight(lx, ly, lz);
-              const voxel = getVoxel(lx, ly, lz);
-              const material = getMaterial(voxel);
-              const isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-              
-              // For solid grid: transparent voxels become air
-              let solidWeight = weight;
-              if (weight > 0 && isTransparent) {
-                solidWeight = FILTER_WEIGHT;
-              }
-              solidGrid[g] = solidWeight;
-              solidMask |= solidWeight < 0 ? 1 << g : 0;
-              
-              if (solidWeight > solidPMax) {
-                solidPMax = solidWeight;
-                solidMaxI = i;
-                solidMaxJ = j;
-                solidMaxK = k;
-              }
-              
-              // For transparent grid: solid voxels become air
-              let transWeight = weight;
-              if (weight > 0 && !isTransparent) {
-                transWeight = FILTER_WEIGHT;
-              }
-              transGrid[g] = transWeight;
-              transMask |= transWeight < 0 ? 1 << g : 0;
-              
-              if (transWeight > transPMax) {
-                transPMax = transWeight;
-                transMaxI = i;
-                transMaxJ = j;
-                transMaxK = k;
-              }
-            }
-          }
-        }
+        // k=0, j=0, i=1
+        idx = baseIdx + 1;
+        voxel = data[idx];
+        weight = unpackWeight(voxel);
+        material = getMaterial(voxel);
+        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        ++g;
+
+        // k=0, j=1, i=0
+        idx = baseIdx + dimsX;
+        voxel = data[idx];
+        weight = unpackWeight(voxel);
+        material = getMaterial(voxel);
+        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        ++g;
+
+        // k=0, j=1, i=1
+        idx = baseIdx + dimsX + 1;
+        voxel = data[idx];
+        weight = unpackWeight(voxel);
+        material = getMaterial(voxel);
+        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        ++g;
+
+        // k=1, j=0, i=0
+        idx = baseIdx + dimsXY;
+        voxel = data[idx];
+        weight = unpackWeight(voxel);
+        material = getMaterial(voxel);
+        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        ++g;
+
+        // k=1, j=0, i=1
+        idx = baseIdx + dimsXY + 1;
+        voxel = data[idx];
+        weight = unpackWeight(voxel);
+        material = getMaterial(voxel);
+        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        ++g;
+
+        // k=1, j=1, i=0
+        idx = baseIdx + dimsXY + dimsX;
+        voxel = data[idx];
+        weight = unpackWeight(voxel);
+        material = getMaterial(voxel);
+        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        ++g;
+
+        // k=1, j=1, i=1
+        idx = baseIdx + dimsXY + dimsX + 1;
+        voxel = data[idx];
+        weight = unpackWeight(voxel);
+        material = getMaterial(voxel);
+        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
+        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
+        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
+        solidGrid[g] = solidWeight;
+        transGrid[g] = transWeight;
+        solidMask |= solidWeight < 0 ? 1 << g : 0;
+        transMask |= transWeight < 0 ? 1 << g : 0;
+        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
+        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
 
         // Check boundary conditions
         const onLowBoundary = (x[0] === 0 || x[1] === 0 || x[2] === 0);
@@ -352,8 +441,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
             solidVertices.push([vx, vy, vz]);
             solidNormalAccum.push([0, 0, 0]);
             
-            const solidVoxel = getVoxel(x[0] + solidMaxI, x[1] + solidMaxJ, x[2] + solidMaxK);
-            solidMaterials.push(getMaterial(solidVoxel));
+            solidMaterials.push(getMaterial(data[solidMaxIdx]));
             
             // Generate faces inline
             for (let fi = 0; fi < 3; ++fi) {
@@ -500,8 +588,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
             transVertices.push([vx, vy, vz]);
             transNormalAccum.push([0, 0, 0]);
             
-            const transVoxel = getVoxel(x[0] + transMaxI, x[1] + transMaxJ, x[2] + transMaxK);
-            transMaterials.push(getMaterial(transVoxel));
+            transMaterials.push(getMaterial(data[transMaxIdx]));
             
             // Generate faces inline
             for (let fi = 0; fi < 3; ++fi) {
