@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { getScene } from './scene';
 
 // Shadow light configuration - offset from player position
-const SHADOW_LIGHT_OFFSET = new THREE.Vector3(75, 20, 70);
+// Higher Y value = more overhead sun, more vertical shadows
+const SHADOW_LIGHT_OFFSET = new THREE.Vector3(30, 150, 30);
 
 // Shadow map size (higher = sharper shadows, more expensive)
 const SHADOW_MAP_SIZE = 4096;
@@ -40,9 +41,9 @@ export function setupLighting(): void {
   shadowLight.shadow.camera.near = 0.5;
   shadowLight.shadow.camera.far = 500;
   
-  // Shadow bias to prevent shadow acne
-  shadowLight.shadow.bias = 0.0;
-  shadowLight.shadow.normalBias = 0.1;
+  // Shadow bias to prevent shadow acne (adjusted for PCFSoftShadowMap)
+  shadowLight.shadow.bias = -0.0001;
+  shadowLight.shadow.normalBias = 0.02;
   
   scene.add(shadowLight);
   scene.add(shadowLight.target);

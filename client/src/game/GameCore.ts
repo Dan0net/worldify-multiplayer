@@ -72,8 +72,9 @@ export class GameCore {
     this.renderer.setClearColor(0x87ceeb); // Sky blue
     
     // Enable shadow mapping
+    // Using PCFSoftShadowMap to support customDepthMaterial for alpha-tested shadows
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.VSMShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     // Add canvas to DOM
     const canvas = this.renderer.domElement;

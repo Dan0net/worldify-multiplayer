@@ -12,6 +12,9 @@ import { TERRAIN_MATERIAL_REPEAT_SCALE, TERRAIN_MATERIAL_BLEND_OFFSET_RAD } from
 
 export type TextureResolution = 'low' | 'high';
 
+/** Alpha threshold for shadow depth testing on transparent materials */
+const ALPHA_CUTOFF = 0.5;
+
 export interface LoadedTextures {
   albedo: THREE.DataArrayTexture;
   normal: THREE.DataArrayTexture;
@@ -270,6 +273,9 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       metalness: 0.05,
       transparent: isTransparent,
       side: isTransparent ? THREE.DoubleSide : THREE.FrontSide,
+      // Enable alpha testing for transparent materials - used for shadow depth culling
+      // Fragments with alpha < 0.5 will be discarded from shadows
+      alphaTest: isTransparent ? ALPHA_CUTOFF : 0,
       // Enable normal mapping - requires a dummy texture to activate USE_NORMALMAP
       normalMap: new THREE.Texture(),
       normalScale: new THREE.Vector2(-1, -1),
@@ -492,11 +498,180 @@ export const TERRAIN_DEBUG_MODES = {
 
 export type TerrainDebugMode = typeof TERRAIN_DEBUG_MODES[keyof typeof TERRAIN_DEBUG_MODES];
 
+// ============== Custom Depth Material for Transparent Shadows ==============
+
+/**
+ * Custom depth material for transparent terrain.
+ * Samples the albedo texture alpha and discards fragments below the threshold.
+ * This allows transparent materials (like leaves) to cast correct shadows.
+ */
+class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
+  private _shader: ShaderWithUniforms | null = null;
+  private textures: LoadedTextures | null = null;
+
+  constructor() {
+    super({
+      depthPacking: THREE.RGBADepthPacking,
+      side: THREE.DoubleSide,
+    });
+
+    // Set up dummy texture initially
+    this.setTextures({
+      albedo: createDummyTexture({ r: 128, g: 128, b: 128, a: 255 }),
+      normal: createDummyTexture({ r: 128, g: 128, b: 255, a: 255 }),
+      ao: createDummyTexture({ r: 255, g: 255, b: 255, a: 255 }),
+      roughness: createDummyTexture({ r: 200, g: 200, b: 200, a: 255 }),
+    });
+
+    this.onBeforeCompile = (shader) => {
+      this._shader = shader;
+
+      // Add uniforms for texture sampling
+      shader.uniforms.mapArray = { value: this.textures?.albedo };
+      shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
+      shader.uniforms.blendOffset = { value: this.createBlendOffsetMatrix() };
+      shader.uniforms.alphaCutoff = { value: ALPHA_CUTOFF };
+
+      // Add vertex shader prefix for attributes and varyings
+      const depthVertexPrefix = /* glsl */ `
+        attribute vec3 materialIds;
+        attribute vec3 materialWeights;
+        
+        flat varying vec3 vMaterialIds;
+        varying vec3 vMaterialWeights;
+        varying vec3 vWorldPosition;
+        varying vec3 vWorldNormal;
+        
+        uniform float repeatScale;
+      `;
+
+      const depthVertexSuffix = /* glsl */ `
+        vMaterialIds = materialIds;
+        vMaterialWeights = materialWeights;
+        vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+        vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+      `;
+
+      // Add fragment shader prefix for texture sampling
+      const depthFragmentPrefix = /* glsl */ `
+        uniform sampler2DArray mapArray;
+        uniform float repeatScale;
+        uniform mat3 blendOffset;
+        uniform float alphaCutoff;
+        
+        flat varying vec3 vMaterialIds;
+        varying vec3 vMaterialWeights;
+        varying vec3 vWorldPosition;
+        varying vec3 vWorldNormal;
+        
+        vec3 getTriPlanarBlend(vec3 normal) {
+          vec3 blending = blendOffset * normal;
+          blending = pow(abs(blending), vec3(2.0));
+          blending = normalize(max(blending, 0.00001));
+          float b = blending.x + blending.y + blending.z;
+          return blending / b;
+        }
+        
+        vec3 getWeightedBlend() {
+          vec3 w = vMaterialWeights;
+          w = pow(abs(w), vec3(2.0));
+          w = normalize(max(w, 0.00001));
+          return w / (w.x + w.y + w.z);
+        }
+        
+        vec4 sampleTriPlanar(sampler2DArray tex, vec3 pos, vec3 blend, float layer) {
+          vec4 xaxis = texture(tex, vec3(pos.zy * repeatScale, layer));
+          vec4 yaxis = texture(tex, vec3(pos.xz * repeatScale, layer));
+          vec4 zaxis = texture(tex, vec3(pos.xy * repeatScale, layer));
+          return xaxis * blend.x + yaxis * blend.y + zaxis * blend.z;
+        }
+        
+        vec4 sampleMaterialBlend(sampler2DArray tex, vec3 pos, vec3 triBlend) {
+          vec3 matBlend = getWeightedBlend();
+          vec4 m0 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.x);
+          vec4 m1 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.y);
+          vec4 m2 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.z);
+          return m0 * matBlend.x + m1 * matBlend.y + m2 * matBlend.z;
+        }
+      `;
+
+      // Alpha discard code to insert before depth packing
+      const alphaDiscardCode = /* glsl */ `
+        // Sample alpha from albedo texture and discard if below threshold
+        vec3 pos = vWorldPosition / 8.0;
+        vec3 triBlend = getTriPlanarBlend(vWorldNormal);
+        float alpha = sampleMaterialBlend(mapArray, pos, triBlend).a;
+        if (alpha < alphaCutoff) {
+          discard;
+        }
+      `;
+
+      // Modify vertex shader
+      shader.vertexShader = depthVertexPrefix + shader.vertexShader;
+      // MeshDepthMaterial uses #include <beginnormal_vertex> or #include <begin_vertex>
+      if (shader.vertexShader.includes('#include <skinning_vertex>')) {
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <skinning_vertex>',
+          `#include <skinning_vertex>\n${depthVertexSuffix}`
+        );
+      } else if (shader.vertexShader.includes('#include <project_vertex>')) {
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <project_vertex>',
+          `${depthVertexSuffix}\n#include <project_vertex>`
+        );
+      }
+
+      // Modify fragment shader
+      shader.fragmentShader = depthFragmentPrefix + shader.fragmentShader;
+      
+      // MeshDepthMaterial fragment shader structure:
+      // - starts with void main() { 
+      // - has vec4 diffuseColor = vec4( 1.0 );
+      // - then #include <map_fragment> (optional)
+      // - then #include <alphamap_fragment> (optional)
+      // - then #include <alphatest_fragment>
+      // - then depth packing with packDepthToRGBA or gl_FragColor
+      
+      // Insert our alpha test after diffuseColor declaration
+      if (shader.fragmentShader.includes('vec4 diffuseColor = vec4( 1.0 );')) {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'vec4 diffuseColor = vec4( 1.0 );',
+          `vec4 diffuseColor = vec4( 1.0 );\n${alphaDiscardCode}`
+        );
+      } else {
+        // Fallback: insert after clipping_planes_fragment
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <clipping_planes_fragment>',
+          `#include <clipping_planes_fragment>\n${alphaDiscardCode}`
+        );
+      }
+    };
+  }
+
+  private createBlendOffsetMatrix(): THREE.Matrix3 {
+    const rad = TERRAIN_MATERIAL_BLEND_OFFSET_RAD;
+    const euler = new THREE.Euler(rad, rad, rad, 'XYZ');
+    const quat = new THREE.Quaternion().setFromEuler(euler);
+    const mat4 = new THREE.Matrix4().makeRotationFromQuaternion(quat);
+    return new THREE.Matrix3().setFromMatrix4(mat4);
+  }
+
+  setTextures(textures: LoadedTextures): void {
+    this.textures = textures;
+
+    if (this._shader) {
+      this._shader.uniforms.mapArray.value = textures.albedo;
+      this.needsUpdate = true;
+    }
+  }
+}
+
 // ============== Singleton Instances ==============
 
 let solidMaterial: TerrainMaterial | null = null;
 let transparentMaterial: TerrainMaterial | null = null;
 let liquidMaterial: TerrainMaterial | null = null;
+let transparentDepthMaterial: TransparentDepthMaterial | null = null;
 
 /**
  * Get the shared solid terrain material instance.
@@ -531,6 +706,18 @@ export function getLiquidTerrainMaterial(): TerrainMaterial {
 }
 
 /**
+ * Get the shared transparent depth material instance.
+ * Used as customDepthMaterial for transparent meshes to enable
+ * alpha-tested shadow casting.
+ */
+export function getTransparentDepthMaterial(): TransparentDepthMaterial {
+  if (!transparentDepthMaterial) {
+    transparentDepthMaterial = new TransparentDepthMaterial();
+  }
+  return transparentDepthMaterial;
+}
+
+/**
  * Initialize the material system by loading textures.
  * Call this at app startup.
  */
@@ -543,6 +730,7 @@ export async function initializeMaterials(
   getTerrainMaterial().setTextures(textures);
   getTransparentTerrainMaterial().setTextures(textures);
   getLiquidTerrainMaterial().setTextures(textures);
+  getTransparentDepthMaterial().setTextures(textures);
   
   console.log(`Material system initialized with ${resolution} resolution`);
 }
@@ -559,6 +747,7 @@ export async function upgradeToHighRes(
   getTerrainMaterial().setTextures(textures);
   getTransparentTerrainMaterial().setTextures(textures);
   getLiquidTerrainMaterial().setTextures(textures);
+  getTransparentDepthMaterial().setTextures(textures);
   
   console.log('Upgraded to high resolution textures');
 }
