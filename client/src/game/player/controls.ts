@@ -13,6 +13,7 @@ import {
   GameMode,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
+import { textureCache } from '../material/TextureCache.js';
 
 /** Callback for build place action */
 export type BuildPlaceCallback = () => void;
@@ -41,10 +42,8 @@ export class Controls {
 
     // Debug: F6 to clear texture cache
     if (e.code === 'F6') {
-      import('../material/TextureCache.js').then(({ textureCache }) => {
-        textureCache.clearCache().then(() => {
-          console.log('Texture cache cleared - reload page to re-download');
-        });
+      textureCache.clearCache().then(() => {
+        console.log('Texture cache cleared - reload page to re-download');
       });
       return;
     }

@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
@@ -117,15 +117,15 @@ interface GameState {
 }
 
 // Persist store across HMR to prevent React/game code store instance mismatch
-const storeKey = '__GAME_STORE__';
+const storeKey = '__GAME_STORE__' as const;
 declare global {
   interface Window {
-    [storeKey]?: ReturnType<typeof create<GameState>>;
+    [storeKey]?: UseBoundStore<StoreApi<GameState>>;
   }
 }
 
 // Use existing store if available (HMR), otherwise create new one
-export const useGameStore = window[storeKey] ?? create<GameState>((set) => ({
+export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey] ?? create<GameState>((set) => ({
   // Initial state
   connectionStatus: 'disconnected',
   roomId: null,
