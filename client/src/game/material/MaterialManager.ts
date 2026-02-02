@@ -6,7 +6,8 @@
 
 import { storeBridge } from '../../state/bridge.js';
 import { 
-  initializeMaterials, 
+  initializeMaterials,
+  initializePlaceholderTextures,
   upgradeToHighRes, 
   isHighResCached 
 } from './TerrainMaterial.js';
@@ -23,6 +24,14 @@ class MaterialManager {
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
+
+    // Initialize placeholder textures from pallet colors immediately
+    // This gives visual feedback while full textures load
+    try {
+      await initializePlaceholderTextures();
+    } catch (error) {
+      console.warn('Failed to initialize placeholder textures:', error);
+    }
 
     const hdCached = await isHighResCached();
     const userPref = await textureCache.getUserPreference();

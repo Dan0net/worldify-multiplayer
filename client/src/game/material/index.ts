@@ -20,6 +20,7 @@ export {
   getLiquidTerrainMaterial,
   getWindNormalMaterial,
   initializeMaterials,
+  initializePlaceholderTextures,
   upgradeToHighRes,
   isHighResCached,
   loadDataArrayTextures,
@@ -33,3 +34,10 @@ export {
   TERRAIN_MATERIAL_BLEND_OFFSET_RAD,
 } from './constants.js';
 export { materialManager } from './MaterialManager.js';
+
+// Placeholder texture utilities (for direct use if needed)
+export {
+  createDefaultPlaceholders,
+  createPalletPlaceholders,
+  loadPalletPlaceholders,
+} from './PlaceholderTextures.js';
