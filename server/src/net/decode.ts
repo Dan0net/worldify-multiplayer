@@ -9,12 +9,10 @@ import {
   MSG_PING,
   MSG_VOXEL_BUILD_INTENT,
   MSG_VOXEL_CHUNK_REQUEST,
-  MSG_DEV_MODE,
   ByteReader,
   decodeInput,
   decodeVoxelBuildIntent,
   decodeVoxelChunkRequest,
-  decodeDevMode,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
 import { encodePong } from '@worldify/shared';
@@ -24,7 +22,6 @@ import {
   handleChunkRequest, 
   broadcastBuildCommit 
 } from '../rooms/BuildHandler.js';
-import { setForceRegenerate, getChunkProvider } from '../storage/StorageManager.js';
 
 /**
  * Decode and dispatch an incoming binary message.
@@ -123,27 +120,9 @@ function handleVoxelChunkRequest(roomId: string, playerId: number, reader: ByteR
   });
 }
 
-function handleDevMode(_roomId: string, playerId: number, reader: ByteReader): void {
-  const settings = decodeDevMode(reader);
-  console.log(`[decode] Player ${playerId} set forceRegenerate: ${settings.forceRegenerate}`);
-  
-  // Update global forceRegenerate mode
-  setForceRegenerate(settings.forceRegenerate);
-  
-  // Clear cache if enabling force regenerate
-  if (settings.forceRegenerate) {
-    const provider = getChunkProvider();
-    if (provider && 'clearCache' in provider) {
-      (provider as { clearCache: () => void }).clearCache();
-      console.log('[decode] Cleared chunk cache for force regenerate mode');
-    }
-  }
-}
-
 // Register all message handlers
 registerHandler(MSG_JOIN, handleJoin);
 registerHandler(MSG_INPUT, handleInput);
 registerHandler(MSG_PING, handlePing);
 registerHandler(MSG_VOXEL_BUILD_INTENT, handleVoxelBuildIntent);
 registerHandler(MSG_VOXEL_CHUNK_REQUEST, handleVoxelChunkRequest);
-registerHandler(MSG_DEV_MODE, handleDevMode);

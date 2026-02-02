@@ -166,10 +166,10 @@ export async function handleChunkRequest(
 ): Promise<void> {
   const chunkProvider = getChunkProvider();
   
-  console.log(`[build] Chunk request: ${request.chunkX},${request.chunkY},${request.chunkZ}`);
+  console.log(`[build] Chunk request: ${request.chunkX},${request.chunkY},${request.chunkZ}${request.forceRegen ? ' (force regen)' : ''}`);
   
-  // Use async method to properly load from disk
-  const chunk = await chunkProvider.getOrCreateAsync(request.chunkX, request.chunkY, request.chunkZ);
+  // Use async method to properly load from disk, passing forceRegen flag
+  const chunk = await chunkProvider.getOrCreateAsync(request.chunkX, request.chunkY, request.chunkZ, request.forceRegen);
   const lastBuildSeq = chunkBuildSeq.get(chunk.key) ?? 0;
 
   const chunkData = {

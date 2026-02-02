@@ -88,7 +88,6 @@ import { VOXELS_PER_CHUNK } from '../voxel/constants.js';
 
 export const MSG_VOXEL_BUILD_INTENT = 0x06;
 export const MSG_VOXEL_CHUNK_REQUEST = 0x07;
-export const MSG_DEV_MODE = 0x08;
 export const MSG_VOXEL_BUILD_COMMIT = 0x87;
 export const MSG_VOXEL_CHUNK_DATA = 0x88;
 
@@ -189,6 +188,8 @@ export interface VoxelChunkRequest {
   chunkX: number;
   chunkY: number;
   chunkZ: number;
+  /** If true, server regenerates chunk instead of loading from cache/disk */
+  forceRegen: boolean;
 }
 
 // ============== Intent Encoding (shared by INTENT and COMMIT) ==============
@@ -426,12 +427,13 @@ export function decodeVoxelChunkData(reader: ByteReader): VoxelChunkData {
  * Encode a chunk request for network transmission.
  */
 export function encodeVoxelChunkRequest(request: VoxelChunkRequest): Uint8Array {
-  const writer = new ByteWriter(7);
+  const writer = new ByteWriter(8);
   
   writer.writeUint8(MSG_VOXEL_CHUNK_REQUEST);
   writer.writeInt16(request.chunkX);
   writer.writeInt16(request.chunkY);
   writer.writeInt16(request.chunkZ);
+  writer.writeUint8(request.forceRegen ? 1 : 0);
   
   return writer.toUint8Array();
 }
@@ -445,36 +447,7 @@ export function decodeVoxelChunkRequest(reader: ByteReader): VoxelChunkRequest {
     chunkX: reader.readInt16(),
     chunkY: reader.readInt16(),
     chunkZ: reader.readInt16(),
-  };
-}
-
-// ============== DEV_MODE ==============
-
-/**
- * Dev mode settings sent from client to server.
- */
-export interface DevModeSettings {
-  /** If true, server regenerates chunks instead of loading from cache/disk */
-  forceRegenerate: boolean;
-}
-
-/**
- * Encode dev mode settings for network transmission.
- */
-export function encodeDevMode(settings: DevModeSettings): Uint8Array {
-  const writer = new ByteWriter(2);
-  writer.writeUint8(MSG_DEV_MODE);
-  writer.writeUint8(settings.forceRegenerate ? 1 : 0);
-  return writer.toUint8Array();
-}
-
-/**
- * Decode dev mode settings from network data.
- * Assumes message ID has already been read.
- */
-export function decodeDevMode(reader: ByteReader): DevModeSettings {
-  return {
-    forceRegenerate: reader.readUint8() === 1,
+    forceRegen: reader.readUint8() === 1,
   };
 }
 

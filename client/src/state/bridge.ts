@@ -11,8 +11,7 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState } from './store';
-import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode, encodeDevMode } from '@worldify/shared';
-import { sendBinary } from '../net/netClient.js';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 
 // Cache getState for cleaner access - always returns fresh state
 const getState = useGameStore.getState;
@@ -207,17 +206,12 @@ class StoreBridge {
   }
 
   /**
-   * Toggle force regenerate mode and send to server.
-   * When enabled, server will regenerate chunks instead of loading from cache/disk.
+   * Toggle force regenerate mode.
+   * When enabled, chunk requests will include forceRegen flag.
    */
   toggleForceRegenerate(): void {
     const newValue = !this.forceRegenerateChunks;
     getState().setForceRegenerateChunks(newValue);
-    
-    // Send to server
-    const message = encodeDevMode({ forceRegenerate: newValue });
-    sendBinary(message);
-    
     console.log(`[StoreBridge] Force regenerate: ${newValue ? 'ON' : 'OFF'}`);
   }
 }

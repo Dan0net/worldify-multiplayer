@@ -230,7 +230,12 @@ export class VoxelWorld {
     const key = chunkKey(cx, cy, cz);
     this.pendingChunks.add(key);
     
-    const request = encodeVoxelChunkRequest({ chunkX: cx, chunkY: cy, chunkZ: cz });
+    const request = encodeVoxelChunkRequest({
+      chunkX: cx,
+      chunkY: cy,
+      chunkZ: cz,
+      forceRegen: storeBridge.forceRegenerateChunks,
+    });
     sendBinary(request);
     
     // console.log(`[VoxelWorld] Requested chunk (${cx}, ${cy}, ${cz}) from server`);

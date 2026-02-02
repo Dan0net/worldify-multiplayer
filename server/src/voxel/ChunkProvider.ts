@@ -11,7 +11,6 @@ import {
   chunkKey,
   TerrainGenerator,
 } from '@worldify/shared';
-import { isForceRegenerate } from '../storage/StorageManager.js';
 
 /**
  * Interface for chunk storage - allows different backing stores.
@@ -58,13 +57,10 @@ export class ChunkProvider {
   /**
    * Get a chunk asynchronously, loading from disk if available.
    * Creates with terrain generation if not found anywhere.
-   * Respects forceRegenerate mode from StorageManager.
+   * @param forceRegen - If true, skip cache/disk and regenerate chunk
    */
-  async getOrCreateAsync(cx: number, cy: number, cz: number): Promise<ChunkData> {
+  async getOrCreateAsync(cx: number, cy: number, cz: number, forceRegen: boolean = false): Promise<ChunkData> {
     const key = chunkKey(cx, cy, cz);
-    
-    // Check if force regenerate mode is enabled
-    const forceRegen = isForceRegenerate();
     
     if (!forceRegen) {
       // Try cache first

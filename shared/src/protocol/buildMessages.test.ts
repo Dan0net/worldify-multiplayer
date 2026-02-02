@@ -283,12 +283,13 @@ describe('VOXEL_CHUNK_REQUEST Tests', () => {
       chunkX: 3,
       chunkY: -2,
       chunkZ: 15,
+      forceRegen: false,
     };
 
     const encoded = encodeVoxelChunkRequest(request);
     
     expect(encoded[0]).toBe(MSG_VOXEL_CHUNK_REQUEST);
-    expect(encoded.length).toBe(7);
+    expect(encoded.length).toBe(8);
   });
 
   test('decode VoxelChunkRequest round-trip', () => {
@@ -296,6 +297,7 @@ describe('VOXEL_CHUNK_REQUEST Tests', () => {
       chunkX: -100,
       chunkY: 50,
       chunkZ: 0,
+      forceRegen: false,
     };
 
     const encoded = encodeVoxelChunkRequest(original);
@@ -306,6 +308,26 @@ describe('VOXEL_CHUNK_REQUEST Tests', () => {
     expect(decoded.chunkX).toBe(-100);
     expect(decoded.chunkY).toBe(50);
     expect(decoded.chunkZ).toBe(0);
+    expect(decoded.forceRegen).toBe(false);
+  });
+
+  test('decode VoxelChunkRequest with forceRegen=true', () => {
+    const original: VoxelChunkRequest = {
+      chunkX: 5,
+      chunkY: -3,
+      chunkZ: 10,
+      forceRegen: true,
+    };
+
+    const encoded = encodeVoxelChunkRequest(original);
+    const reader = new ByteReader(encoded);
+    reader.readUint8(); // skip message ID
+    const decoded = decodeVoxelChunkRequest(reader);
+
+    expect(decoded.chunkX).toBe(5);
+    expect(decoded.chunkY).toBe(-3);
+    expect(decoded.chunkZ).toBe(10);
+    expect(decoded.forceRegen).toBe(true);
   });
 });
 

@@ -15,25 +15,6 @@ let globalChunkStore: PersistentChunkStore | null = null;
 /** Global chunk provider (shared across all rooms - uses global store) */
 let globalChunkProvider: ChunkProvider | null = null;
 
-/** Force regenerate mode - skip cache and disk when enabled */
-let forceRegenerateMode = false;
-
-/**
- * Set force regenerate mode. When enabled, chunks are always regenerated
- * instead of loading from cache or disk.
- */
-export function setForceRegenerate(enabled: boolean): void {
-  forceRegenerateMode = enabled;
-  console.log(`[storage] Force regenerate mode: ${enabled ? 'ON' : 'OFF'}`);
-}
-
-/**
- * Check if force regenerate mode is enabled.
- */
-export function isForceRegenerate(): boolean {
-  return forceRegenerateMode;
-}
-
 /**
  * Initialize the global chunk storage. Must be called before handling any builds.
  */
