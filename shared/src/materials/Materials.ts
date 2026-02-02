@@ -90,7 +90,44 @@ export const Materials = {
  */
 export const mat = Materials.get;
 
-// ============== Material Type Utilities ==============
+// ============== Material Type Constants ==============
+
+/** Numeric material type for fast lookup in hot paths (mesh generation) */
+export const MAT_TYPE_SOLID = 0;
+export const MAT_TYPE_TRANSPARENT = 1;
+export const MAT_TYPE_LIQUID = 2;
+
+export type MaterialTypeNum = typeof MAT_TYPE_SOLID | typeof MAT_TYPE_TRANSPARENT | typeof MAT_TYPE_LIQUID;
+
+// ============== Material Type LUT (Fast Lookup) ==============
+
+/**
+ * Material type lookup table.
+ * Index by material ID (0-based), value is material type (0=solid, 1=transparent, 2=liquid).
+ * 128 bytes fits in L1 cache for fast access in mesh generation hot path.
+ */
+export const MATERIAL_TYPE_LUT = new Uint8Array(128);
+
+// Initialize LUT from pallet.json
+// Note: pallet.json types use 1-based indices, so subtract 1
+for (const id of pallet.types.transparent) {
+  MATERIAL_TYPE_LUT[id - 1] = MAT_TYPE_TRANSPARENT;
+}
+for (const id of pallet.types.liquid) {
+  MATERIAL_TYPE_LUT[id - 1] = MAT_TYPE_LIQUID;
+}
+// Solid is default (0), no need to explicitly set
+
+/**
+ * Get material type as numeric constant (fast, for mesh generation).
+ * @example
+ * if (getMaterialTypeNum(matId) === MAT_TYPE_TRANSPARENT) { ... }
+ */
+export function getMaterialTypeNum(id: number): MaterialTypeNum {
+  return MATERIAL_TYPE_LUT[id] as MaterialTypeNum;
+}
+
+// ============== Material Type Utilities (Set-based for flexibility) ==============
 
 // Note: pallet.json types use 1-based indices
 const liquidIds = new Set(pallet.types.liquid);
@@ -118,7 +155,7 @@ export function isSolid(id: number): boolean {
 }
 
 /**
- * Get the material type.
+ * Get the material type as a string.
  */
 export function getMaterialType(id: number): MaterialType {
   if (isLiquid(id)) return 'liquid';

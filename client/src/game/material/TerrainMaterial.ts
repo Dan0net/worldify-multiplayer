@@ -295,6 +295,12 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.blendOffset = { value: this.createBlendOffsetMatrix() };
       shader.uniforms.debugMode = { value: 0 };
       
+      // Add compile-time define for transparent materials
+      if (isTransparent) {
+        shader.defines = shader.defines || {};
+        shader.defines.USE_TEXTURE_ALPHA = '';
+      }
+      
       // Modify vertex shader
       shader.vertexShader = vertexShaderPrefix + shader.vertexShader;
       shader.vertexShader = shader.vertexShader.replace(
@@ -312,7 +318,11 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
           vec3 pos = vWorldPosition / 8.0;
           vec3 triBlend = getTriPlanarBlend(vWorldNormal);
           vec4 sampledAlbedo = sampleMaterialBlend(mapArray, pos, triBlend);
-          vec4 diffuseColor = vec4(sampledAlbedo.rgb, opacity);
+          #ifdef USE_TEXTURE_ALPHA
+            vec4 diffuseColor = vec4(sampledAlbedo.rgb, sampledAlbedo.a);
+          #else
+            vec4 diffuseColor = vec4(sampledAlbedo.rgb, 1.0);
+          #endif
         `
       );
       

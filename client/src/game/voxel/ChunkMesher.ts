@@ -5,9 +5,30 @@
  * from Chunks and their neighbors, then passing it to the pure SurfaceNet algorithm.
  */
 
-import { CHUNK_SIZE, voxelIndex, getWeight as getWeightFromPacked, chunkKey } from '@worldify/shared';
+import { 
+  CHUNK_SIZE, 
+  voxelIndex, 
+  getWeight as getWeightFromPacked, 
+  chunkKey,
+  MAT_TYPE_SOLID,
+  MAT_TYPE_TRANSPARENT,
+  MaterialTypeNum,
+} from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshVoxels, SurfaceNetInput, SurfaceNetOutput } from './SurfaceNet.js';
+
+// Re-export for convenience
+export { MAT_TYPE_SOLID, MAT_TYPE_TRANSPARENT };
+
+/**
+ * Output from meshing a chunk with material type separation.
+ */
+export interface ChunkMeshOutput {
+  /** Mesh for solid (opaque) materials */
+  solid: SurfaceNetOutput;
+  /** Mesh for transparent materials (leaves, etc.) */
+  transparent: SurfaceNetOutput;
+}
 
 /**
  * Create a SurfaceNetInput from a chunk and its neighbors.
@@ -15,12 +36,14 @@ import { meshVoxels, SurfaceNetInput, SurfaceNetOutput } from './SurfaceNet.js';
  * @param chunk The chunk to mesh
  * @param neighbors Map of neighbor chunks for boundary stitching
  * @param useTemp If true, use tempData for preview rendering
+ * @param materialTypeFilter Optional filter to only include specific material types
  * @returns Input object for the SurfaceNet algorithm
  */
 function createChunkInput(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
-  useTemp: boolean
+  useTemp: boolean,
+  materialTypeFilter?: MaterialTypeNum
 ): SurfaceNetInput {
   // Get the data array to use (temp for preview if available, otherwise main)
   const dataArray = (useTemp && chunk.tempData) ? chunk.tempData : chunk.data;
@@ -55,18 +78,47 @@ function createChunkInput(
     return chunk.getVoxelWithMargin(lx, ly, lz, neighbors, useTemp);
   };
 
-  return { dims, getWeight, getVoxel, skipHighBoundary };
+  return { dims, getWeight, getVoxel, skipHighBoundary, materialTypeFilter };
 }
 
 /**
- * Generate a mesh from chunk voxel data using SurfaceNets algorithm.
+ * Generate meshes for a chunk, separated by material type.
+ * 
+ * This generates two meshes:
+ * - solid: Opaque materials rendered with no alpha blending
+ * - transparent: Materials with alpha (leaves, etc.) rendered with transparency
  * 
  * @param chunk The chunk to mesh
  * @param neighbors Map of neighbor chunks for margin sampling
  * @param useTemp If true, use tempData for preview rendering (defaults to false)
- * @returns SurfaceNet mesh output
+ * @returns Separate mesh outputs for solid and transparent materials
  */
 export function meshChunk(
+  chunk: Chunk,
+  neighbors: Map<string, Chunk>,
+  useTemp: boolean = false
+): ChunkMeshOutput {
+  // Generate solid mesh (opaque materials)
+  const solidInput = createChunkInput(chunk, neighbors, useTemp, MAT_TYPE_SOLID);
+  const solid = meshVoxels(solidInput);
+  
+  // Generate transparent mesh (leaves, etc.)
+  const transparentInput = createChunkInput(chunk, neighbors, useTemp, MAT_TYPE_TRANSPARENT);
+  const transparent = meshVoxels(transparentInput);
+  
+  return { solid, transparent };
+}
+
+/**
+ * Generate a single mesh from chunk voxel data (all materials).
+ * Use this for cases where material type separation is not needed.
+ * 
+ * @param chunk The chunk to mesh
+ * @param neighbors Map of neighbor chunks for margin sampling
+ * @param useTemp If true, use tempData for preview rendering (defaults to false)
+ * @returns SurfaceNet mesh output (all materials combined)
+ */
+export function meshChunkSingle(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
   useTemp: boolean = false

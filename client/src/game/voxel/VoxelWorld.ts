@@ -358,11 +358,11 @@ export class VoxelWorld {
       this.meshes.set(key, chunkMesh);
     }
 
-    // Generate mesh with neighbor data
+    // Generate mesh with neighbor data (solid + transparent)
     const output = meshChunk(chunk, this.chunks);
 
-    // Update mesh
-    chunkMesh.updateMesh(output, this.scene);
+    // Update meshes
+    chunkMesh.updateMeshes(output, this.scene);
 
     // Clear dirty flag
     chunk.clearDirty();

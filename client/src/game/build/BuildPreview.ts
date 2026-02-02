@@ -118,11 +118,11 @@ export class BuildPreview {
       // Only update preview if this chunk was actually modified
       if (!modifiedKeys.includes(key)) continue;
 
-      // Generate mesh from tempData
+      // Generate mesh from tempData (solid + transparent)
       const output = meshChunk(chunk, this.world.chunks, true);
 
-      // Update preview mesh
-      chunkMesh.updatePreviewMesh(output, this.scene);
+      // Update preview meshes
+      chunkMesh.updatePreviewMeshes(output, this.scene);
       chunkMesh.setPreviewActive(true, this.scene);
     }
 

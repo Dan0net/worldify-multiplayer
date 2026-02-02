@@ -16,7 +16,7 @@
  * It has no knowledge of Chunks or any game-specific concepts.
  */
 
-import { getMaterial } from '@worldify/shared';
+import { getMaterial, MATERIAL_TYPE_LUT, MaterialTypeNum } from '@worldify/shared';
 
 // ============== Types ==============
 
@@ -51,6 +51,12 @@ export interface SurfaceNetInput {
    * When true, faces at dims[axis]-2 are skipped (no neighbor to stitch with).
    */
   skipHighBoundary?: [boolean, boolean, boolean];
+  /**
+   * Filter to only generate mesh for materials of a specific type.
+   * If undefined, all materials are included (legacy behavior).
+   * Use MAT_TYPE_SOLID, MAT_TYPE_TRANSPARENT, or MAT_TYPE_LIQUID.
+   */
+  materialTypeFilter?: MaterialTypeNum;
 }
 
 // ============== Pre-computed Tables ==============
@@ -148,7 +154,7 @@ function accumulateNormal(
  * @returns SurfaceNet mesh output
  */
 export function meshVoxels(input: SurfaceNetInput): SurfaceNetOutput {
-  const { dims, getWeight, getVoxel, skipHighBoundary = [false, false, false] } = input;
+  const { dims, getWeight, getVoxel, skipHighBoundary = [false, false, false], materialTypeFilter } = input;
   
   // High boundary positions where we skip faces if no neighbor exists
   // dims is CHUNK_SIZE+2, so dims[i]-2 = CHUNK_SIZE is the high boundary
@@ -197,7 +203,18 @@ export function meshVoxels(input: SurfaceNetInput): SurfaceNetOutput {
               const ly = x[1] + j;
               const lz = x[2] + k;
 
-              const p = getWeight(lx, ly, lz);
+              let p = getWeight(lx, ly, lz);
+              
+              // If filtering by material type, treat non-matching materials as air
+              // This allows us to generate separate meshes for solid/transparent/liquid
+              if (materialTypeFilter !== undefined && p > 0) {
+                const voxel = getVoxel(lx, ly, lz);
+                const material = getMaterial(voxel);
+                if (MATERIAL_TYPE_LUT[material] !== materialTypeFilter) {
+                  p = -0.00001; // Treat as just outside surface (air)
+                }
+              }
+              
               grid[g] = p;
               
               // Build mask: bit is set if weight < 0 (inside surface)

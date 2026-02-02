@@ -3,10 +3,15 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { meshChunk } from './ChunkMesher.js';
+import { meshChunk, ChunkMeshOutput } from './ChunkMesher.js';
 import { isEmptyMesh, SurfaceNetOutput } from './SurfaceNet.js';
 import { Chunk } from './Chunk.js';
 import { CHUNK_SIZE, packVoxel } from '@worldify/shared';
+
+// Helper to check if ChunkMeshOutput has any geometry
+function isEmptyChunkMesh(output: ChunkMeshOutput): boolean {
+  return isEmptyMesh(output.solid) && isEmptyMesh(output.transparent);
+}
 
 describe('Empty Geometry Tests', () => {
   test('Meshing a fully solid chunk (all weights > 0) produces no geometry', () => {
@@ -16,7 +21,7 @@ describe('Empty Geometry Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(isEmptyMesh(result)).toBe(true);
+    expect(isEmptyChunkMesh(result)).toBe(true);
   });
 
   test('Meshing a fully empty chunk (all weights < 0) produces no geometry', () => {
@@ -26,7 +31,7 @@ describe('Empty Geometry Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(isEmptyMesh(result)).toBe(true);
+    expect(isEmptyChunkMesh(result)).toBe(true);
   });
 });
 
@@ -38,8 +43,8 @@ describe('Flat Terrain Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.vertexCount).toBeGreaterThan(0);
-    expect(result.triangleCount).toBeGreaterThan(0);
+    expect(result.solid.vertexCount).toBeGreaterThan(0);
+    expect(result.solid.triangleCount).toBeGreaterThan(0);
   });
 
   test('Flat terrain produces roughly a grid of quads', () => {
@@ -49,7 +54,7 @@ describe('Flat Terrain Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.triangleCount).toBeGreaterThan(100);
+    expect(result.solid.triangleCount).toBeGreaterThan(100);
   });
 });
 
@@ -61,9 +66,9 @@ describe('Array Consistency Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.positions.length / 3).toBe(result.normals.length / 3);
-    expect(result.positions.length / 3).toBe(result.vertexCount);
-    expect(result.materials.length).toBe(result.vertexCount);
+    expect(result.solid.positions.length / 3).toBe(result.solid.normals.length / 3);
+    expect(result.solid.positions.length / 3).toBe(result.solid.vertexCount);
+    expect(result.solid.materials.length).toBe(result.solid.vertexCount);
   });
 
   test('Indices reference valid vertex indices', () => {
@@ -73,9 +78,9 @@ describe('Array Consistency Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    for (let i = 0; i < result.indices.length; i++) {
-      const idx = result.indices[i];
-      expect(idx).toBeLessThan(result.vertexCount);
+    for (let i = 0; i < result.solid.indices.length; i++) {
+      const idx = result.solid.indices[i];
+      expect(idx).toBeLessThan(result.solid.vertexCount);
     }
   });
 
@@ -86,7 +91,7 @@ describe('Array Consistency Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    expect(result.indices.length / 3).toBe(result.triangleCount);
+    expect(result.solid.indices.length / 3).toBe(result.solid.triangleCount);
   });
 });
 
@@ -98,10 +103,10 @@ describe('Normal Direction Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    for (let i = 0; i < result.vertexCount; i++) {
-      const nx = result.normals[i * 3];
-      const ny = result.normals[i * 3 + 1];
-      const nz = result.normals[i * 3 + 2];
+    for (let i = 0; i < result.solid.vertexCount; i++) {
+      const nx = result.solid.normals[i * 3];
+      const ny = result.solid.normals[i * 3 + 1];
+      const nz = result.solid.normals[i * 3 + 2];
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
       
       expect(Math.abs(len - 1.0)).toBeLessThanOrEqual(0.01);
@@ -122,14 +127,14 @@ describe('Normal Direction Tests', () => {
     const result = meshChunk(chunk, neighbors);
     
     let upwardCount = 0;
-    for (let i = 0; i < result.vertexCount; i++) {
-      const ny = result.normals[i * 3 + 1];
+    for (let i = 0; i < result.solid.vertexCount; i++) {
+      const ny = result.solid.normals[i * 3 + 1];
       if (ny > 0.5) {
         upwardCount++;
       }
     }
     
-    const upwardRatio = upwardCount / result.vertexCount;
+    const upwardRatio = upwardCount / result.solid.vertexCount;
     expect(upwardRatio).toBeGreaterThanOrEqual(0.8);
   });
 });
@@ -143,13 +148,13 @@ describe('Material Tests', () => {
     const result = meshChunk(chunk, neighbors);
     
     let correctMaterialCount = 0;
-    for (let i = 0; i < result.materials.length; i++) {
-      if (result.materials[i] === 5) {
+    for (let i = 0; i < result.solid.materials.length; i++) {
+      if (result.solid.materials[i] === 5) {
         correctMaterialCount++;
       }
     }
     
-    const ratio = correctMaterialCount / result.materials.length;
+    const ratio = correctMaterialCount / result.solid.materials.length;
     expect(ratio).toBeGreaterThanOrEqual(0.9);
   });
 });
@@ -162,10 +167,10 @@ describe('Vertex Position Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const result = meshChunk(chunk, neighbors);
     
-    for (let i = 0; i < result.vertexCount; i++) {
-      const x = result.positions[i * 3];
-      const y = result.positions[i * 3 + 1];
-      const z = result.positions[i * 3 + 2];
+    for (let i = 0; i < result.solid.vertexCount; i++) {
+      const x = result.solid.positions[i * 3];
+      const y = result.solid.positions[i * 3 + 1];
+      const z = result.solid.positions[i * 3 + 2];
       
       expect(x).toBeGreaterThanOrEqual(0);
       expect(x).toBeLessThanOrEqual(CHUNK_SIZE);
@@ -191,8 +196,8 @@ describe('Vertex Position Tests', () => {
     const result = meshChunk(chunk, neighbors);
     
     let nearSurfaceCount = 0;
-    for (let i = 0; i < result.vertexCount; i++) {
-      const y = result.positions[i * 3 + 1];
+    for (let i = 0; i < result.solid.vertexCount; i++) {
+      const y = result.solid.positions[i * 3 + 1];
       if (Math.abs(y - surfaceY) < 2) {
         nearSurfaceCount++;
       }
