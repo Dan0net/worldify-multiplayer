@@ -16,9 +16,9 @@ export type TextureResolution = 'low' | 'high';
 const ALPHA_CUTOFF = 0.5;
 
 // Wind animation parameters
-const WIND_STRENGTH = 0.25;   // Maximum displacement in meters
-const WIND_SPEED = 1.2;        // Animation speed multiplier
-const WIND_FREQUENCY = 0.5;    // Spatial frequency of wind waves
+const WIND_STRENGTH = 0.1;   // Maximum displacement in meters
+const WIND_SPEED = 0.7;       // Animation speed multiplier
+const WIND_FREQUENCY = 1.0;    // Spatial frequency of wind waves
 
 export interface LoadedTextures {
   albedo: THREE.DataArrayTexture;
@@ -215,8 +215,9 @@ const vertexShaderSuffix = /* glsl */ `
   // vWorldPosition stays at original for texture sampling
   float windPhase = uTime + vWorldPosition.x * uWindFrequency + vWorldPosition.z * uWindFrequency * 0.7;
   float windX = sin(windPhase) * sin(windPhase * 0.4 + 1.3);
+  float windY = sin(windPhase * 0.6 + 0.8) * sin(windPhase * 0.25) * 0.5;
   float windZ = sin(windPhase * 0.8 + 2.1) * sin(windPhase * 0.3);
-  vec3 windOffset = vec3(windX, 0.0, windZ) * uWindStrength;
+  vec3 windOffset = vec3(windX, windY, windZ) * uWindStrength;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position + windOffset, 1.0);
   #endif
 `;
@@ -599,8 +600,9 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
         // vWorldPosition stays at original for texture sampling
         float windPhase = uTime + vWorldPosition.x * uWindFrequency + vWorldPosition.z * uWindFrequency * 0.7;
         float windX = sin(windPhase) * sin(windPhase * 0.4 + 1.3);
+        float windY = sin(windPhase * 0.6 + 0.8) * sin(windPhase * 0.25) * 0.5;
         float windZ = sin(windPhase * 0.8 + 2.1) * sin(windPhase * 0.3);
-        vec3 windOffset = vec3(windX, 0.0, windZ) * uWindStrength;
+        vec3 windOffset = vec3(windX, windY, windZ) * uWindStrength;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position + windOffset, 1.0);
       `;
 
@@ -724,12 +726,69 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
   }
 }
 
+// ============== Wind Normal Material for SSAO ==============
+
+/**
+ * Custom MeshNormalMaterial with wind animation for SSAO pass.
+ * This ensures the depth/normal buffers used by SSAO match the displaced vertices.
+ */
+class WindNormalMaterial extends THREE.MeshNormalMaterial {
+  private _shader: ShaderWithUniforms | null = null;
+
+  constructor() {
+    super({
+      blending: THREE.NoBlending,
+    });
+
+    this.onBeforeCompile = (shader) => {
+      this._shader = shader;
+
+      // Add wind uniforms
+      shader.uniforms.uTime = { value: 0.0 };
+      shader.uniforms.uWindStrength = { value: WIND_STRENGTH };
+      shader.uniforms.uWindFrequency = { value: WIND_FREQUENCY };
+
+      // Inject wind uniforms into vertex shader
+      const windUniforms = /* glsl */ `
+        uniform float uTime;
+        uniform float uWindStrength;
+        uniform float uWindFrequency;
+      `;
+
+      shader.vertexShader = windUniforms + shader.vertexShader;
+
+      // Add wind displacement before project_vertex
+      const windDisplacement = /* glsl */ `
+        // Wind animation for SSAO normal/depth - matches TerrainMaterial
+        vec3 worldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        float windPhase = uTime + worldPos.x * uWindFrequency + worldPos.z * uWindFrequency * 0.7;
+        float windX = sin(windPhase) * sin(windPhase * 0.4 + 1.3);
+        float windY = sin(windPhase * 0.6 + 0.8) * sin(windPhase * 0.25) * 0.5;
+        float windZ = sin(windPhase * 0.8 + 2.1) * sin(windPhase * 0.3);
+        transformed += vec3(windX, windY, windZ) * uWindStrength;
+      `;
+
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <project_vertex>',
+        `${windDisplacement}\n#include <project_vertex>`
+      );
+    };
+  }
+
+  setWindTime(time: number): void {
+    if (this._shader?.uniforms.uTime) {
+      this._shader.uniforms.uTime.value = time * WIND_SPEED;
+    }
+  }
+}
+
 // ============== Singleton Instances ==============
 
 let solidMaterial: TerrainMaterial | null = null;
 let transparentMaterial: TerrainMaterial | null = null;
 let liquidMaterial: TerrainMaterial | null = null;
 let transparentDepthMaterial: TransparentDepthMaterial | null = null;
+let windNormalMaterial: WindNormalMaterial | null = null;
 
 /**
  * Get the shared solid terrain material instance.
@@ -761,6 +820,17 @@ export function getLiquidTerrainMaterial(): TerrainMaterial {
     liquidMaterial = new TerrainMaterial(true);
   }
   return liquidMaterial;
+}
+
+/**
+ * Get the shared wind normal material for SSAO.
+ * This material includes wind animation to match displaced vertices.
+ */
+export function getWindNormalMaterial(): WindNormalMaterial {
+  if (!windNormalMaterial) {
+    windNormalMaterial = new WindNormalMaterial();
+  }
+  return windNormalMaterial;
 }
 
 /**
@@ -845,6 +915,10 @@ export function updateWindTime(elapsedTime: number): void {
   // Keep depth material in sync for matching shadow positions
   if (transparentDepthMaterial) {
     transparentDepthMaterial.setWindTime(elapsedTime);
+  }
+  // Keep SSAO normal material in sync
+  if (windNormalMaterial) {
+    windNormalMaterial.setWindTime(elapsedTime);
   }
 }
 
