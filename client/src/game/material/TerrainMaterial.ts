@@ -496,6 +496,7 @@ export type TerrainDebugMode = typeof TERRAIN_DEBUG_MODES[keyof typeof TERRAIN_D
 
 let solidMaterial: TerrainMaterial | null = null;
 let transparentMaterial: TerrainMaterial | null = null;
+let liquidMaterial: TerrainMaterial | null = null;
 
 /**
  * Get the shared solid terrain material instance.
@@ -518,6 +519,18 @@ export function getTransparentTerrainMaterial(): TerrainMaterial {
 }
 
 /**
+ * Get the shared liquid terrain material instance.
+ * Currently uses the same shader as transparent materials.
+ * TODO: Add specialized water shader with refraction/caustics.
+ */
+export function getLiquidTerrainMaterial(): TerrainMaterial {
+  if (!liquidMaterial) {
+    liquidMaterial = new TerrainMaterial(true);
+  }
+  return liquidMaterial;
+}
+
+/**
  * Initialize the material system by loading textures.
  * Call this at app startup.
  */
@@ -529,6 +542,7 @@ export async function initializeMaterials(
   
   getTerrainMaterial().setTextures(textures);
   getTransparentTerrainMaterial().setTextures(textures);
+  getLiquidTerrainMaterial().setTextures(textures);
   
   console.log(`Material system initialized with ${resolution} resolution`);
 }
@@ -544,6 +558,7 @@ export async function upgradeToHighRes(
   
   getTerrainMaterial().setTextures(textures);
   getTransparentTerrainMaterial().setTextures(textures);
+  getLiquidTerrainMaterial().setTextures(textures);
   
   console.log('Upgraded to high resolution textures');
 }
@@ -562,6 +577,7 @@ export async function isHighResCached(): Promise<boolean> {
 export function setTerrainDebugMode(mode: TerrainDebugMode): void {
   getTerrainMaterial().setDebugMode(mode);
   getTransparentTerrainMaterial().setDebugMode(mode);
+  getLiquidTerrainMaterial().setDebugMode(mode);
   
   const modeNames = ['OFF', 'ALBEDO', 'NORMAL', 'AO', 'ROUGHNESS', 'TRI_BLEND', 'MATERIAL_IDS', 'MATERIAL_WEIGHTS', 'WORLD_NORMAL'];
   console.log(`Terrain debug mode: ${modeNames[mode] || mode}`);

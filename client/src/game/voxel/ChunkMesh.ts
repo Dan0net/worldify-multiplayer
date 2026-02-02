@@ -1,16 +1,17 @@
 /**
  * ChunkMesh - Manages Three.js mesh lifecycle for voxel chunks
  * 
- * Each chunk has two meshes:
+ * Each chunk has three meshes:
  * - solidMesh: Opaque materials rendered without alpha blending
  * - transparentMesh: Materials with alpha (leaves, etc.) rendered with transparency
+ * - liquidMesh: Water and other liquid materials with special rendering
  */
 
 import * as THREE from 'three';
 import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import { ChunkMeshOutput } from './ChunkMesher.js';
-import { getTerrainMaterial, getTransparentTerrainMaterial } from './VoxelMaterials.js';
+import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial } from './VoxelMaterials.js';
 import { createGeometryFromSurfaceNet } from './MeshGeometry.js';
 
 /**
@@ -39,10 +40,24 @@ function createTransparentMesh(geometry: THREE.BufferGeometry, chunkKey: string)
   return mesh;
 }
 
+/**
+ * Create a liquid mesh from geometry.
+ */
+function createLiquidMesh(geometry: THREE.BufferGeometry, chunkKey: string): THREE.Mesh {
+  const mesh = new THREE.Mesh(geometry, getLiquidTerrainMaterial());
+  mesh.userData.chunkKey = chunkKey;
+  mesh.userData.meshType = 'liquid';
+  mesh.castShadow = false;
+  mesh.receiveShadow = true;
+  // Liquid renders after transparent
+  mesh.renderOrder = 2;
+  return mesh;
+}
+
 // ============== ChunkMesh Class ==============
 
 /**
- * Container for a chunk's meshes (solid and transparent) and related data.
+ * Container for a chunk's meshes (solid, transparent, and liquid) and related data.
  */
 export class ChunkMesh {
   /** Solid (opaque) mesh - used for collision detection */
@@ -51,11 +66,17 @@ export class ChunkMesh {
   /** Transparent mesh - leaves and other alpha materials */
   transparentMesh: THREE.Mesh | null = null;
   
+  /** Liquid mesh - water and other liquid materials */
+  liquidMesh: THREE.Mesh | null = null;
+  
   /** Preview solid mesh for build preview (visual only, not for collision) */
   previewSolidMesh: THREE.Mesh | null = null;
   
   /** Preview transparent mesh for build preview */
   previewTransparentMesh: THREE.Mesh | null = null;
+  
+  /** Preview liquid mesh for build preview */
+  previewLiquidMesh: THREE.Mesh | null = null;
   
   /** Whether preview mode is active (hides main meshes, shows preview) */
   private previewActive: boolean = false;
@@ -74,8 +95,8 @@ export class ChunkMesh {
   }
 
   /**
-   * Create or update meshes from ChunkMeshOutput (solid + transparent).
-   * @param output Mesh data for solid and transparent materials
+   * Create or update meshes from ChunkMeshOutput (solid + transparent + liquid).
+   * @param output Mesh data for solid, transparent, and liquid materials
    * @param scene Optional scene to add meshes to
    */
   updateMeshes(output: ChunkMeshOutput, scene?: THREE.Scene): void {
@@ -109,6 +130,19 @@ export class ChunkMesh {
         scene.add(this.transparentMesh);
       }
       this.transparentMesh.updateMatrixWorld(true);
+    }
+
+    // Create liquid mesh
+    if (output.liquid.vertexCount > 0 && output.liquid.triangleCount > 0) {
+      const liquidGeometry = createGeometryFromSurfaceNet(output.liquid);
+      this.liquidMesh = createLiquidMesh(liquidGeometry, this.chunk.key);
+      this.liquidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+      this.liquidMesh.userData.chunkCoords = chunkCoords;
+      
+      if (scene) {
+        scene.add(this.liquidMesh);
+      }
+      this.liquidMesh.updateMatrixWorld(true);
     }
 
     this.disposed = false;
@@ -224,6 +258,11 @@ export class ChunkMesh {
       this.previewTransparentMesh.geometry.dispose();
       this.previewTransparentMesh = null;
     }
+    if (this.previewLiquidMesh) {
+      if (scene) scene.remove(this.previewLiquidMesh);
+      this.previewLiquidMesh.geometry.dispose();
+      this.previewLiquidMesh = null;
+    }
   }
 
   /**
@@ -248,6 +287,9 @@ export class ChunkMesh {
     }
     if (this.transparentMesh) {
       this.transparentMesh.visible = !active;
+    }
+    if (this.liquidMesh) {
+      this.liquidMesh.visible = !active;
     }
     
     // If deactivating, clean up preview meshes
@@ -284,6 +326,12 @@ export class ChunkMesh {
       this.transparentMesh = null;
     }
     
+    if (this.liquidMesh) {
+      if (scene) scene.remove(this.liquidMesh);
+      this.liquidMesh.geometry.dispose();
+      this.liquidMesh = null;
+    }
+    
     this.disposed = true;
   }
 
@@ -296,10 +344,10 @@ export class ChunkMesh {
   }
 
   /**
-   * Check if this chunk mesh has valid geometry (solid or transparent).
+   * Check if this chunk mesh has valid geometry (solid, transparent, or liquid).
    */
   hasGeometry(): boolean {
-    return (this.solidMesh !== null || this.transparentMesh !== null) && !this.disposed;
+    return (this.solidMesh !== null || this.transparentMesh !== null || this.liquidMesh !== null) && !this.disposed;
   }
 
   /**
@@ -311,13 +359,14 @@ export class ChunkMesh {
   }
 
   /**
-   * Get both meshes as an array.
-   * @returns Array of non-null meshes (solid and/or transparent)
+   * Get all meshes as an array.
+   * @returns Array of non-null meshes (solid, transparent, and/or liquid)
    */
   getAllMeshes(): THREE.Mesh[] {
     const meshes: THREE.Mesh[] = [];
     if (this.solidMesh) meshes.push(this.solidMesh);
     if (this.transparentMesh) meshes.push(this.transparentMesh);
+    if (this.liquidMesh) meshes.push(this.liquidMesh);
     return meshes;
   }
 
@@ -334,6 +383,10 @@ export class ChunkMesh {
       const posAttr = this.transparentMesh.geometry.getAttribute('position');
       if (posAttr) count += posAttr.count;
     }
+    if (this.liquidMesh) {
+      const posAttr = this.liquidMesh.geometry.getAttribute('position');
+      if (posAttr) count += posAttr.count;
+    }
     return count;
   }
 
@@ -348,6 +401,10 @@ export class ChunkMesh {
     }
     if (this.transparentMesh) {
       const index = this.transparentMesh.geometry.index;
+      if (index) count += index.count / 3;
+    }
+    if (this.liquidMesh) {
+      const index = this.liquidMesh.geometry.index;
       if (index) count += index.count / 3;
     }
     return count;

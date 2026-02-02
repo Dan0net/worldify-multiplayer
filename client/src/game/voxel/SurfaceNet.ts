@@ -19,7 +19,15 @@
  * Generates one vertex set, but separates faces into solid/transparent buckets.
  */
 
-import { getMaterial, getWeight as unpackWeight, MATERIAL_TYPE_LUT, MAT_TYPE_TRANSPARENT } from '@worldify/shared';
+import { getMaterial, getWeight as unpackWeight, MATERIAL_TYPE_LUT } from '@worldify/shared';
+
+// ============== Constants ==============
+
+/** Mesh type indices for array-based mesh slots */
+const MESH_SOLID = 0;
+const MESH_TRANS = 1;
+const MESH_LIQUID = 2;
+const MESH_COUNT = 3;
 
 // ============== Types ==============
 
@@ -39,7 +47,7 @@ export interface SurfaceNetOutput {
 }
 
 /**
- * Combined output with separate solid and transparent meshes.
+ * Combined output with separate solid, transparent, and liquid meshes.
  * Generated in a single pass for efficiency.
  */
 export interface SplitSurfaceNetOutput {
@@ -47,6 +55,8 @@ export interface SplitSurfaceNetOutput {
   solid: SurfaceNetOutput;
   /** Mesh for transparent materials */
   transparent: SurfaceNetOutput;
+  /** Mesh for liquid materials */
+  liquid: SurfaceNetOutput;
 }
 
 /**
@@ -184,19 +194,18 @@ const FILTER_WEIGHT = -0.00001;
 /**
  * Generate meshes from voxel data using SurfaceNets algorithm.
  * 
- * SINGLE-PASS with DUAL SURFACES: Traverses voxel grid once but generates
- * two separate meshes - one for solid materials, one for transparent.
+ * SINGLE-PASS with MULTI-SURFACE: Traverses voxel grid once but generates
+ * separate meshes for solid, transparent, and liquid materials.
  * 
- * Key insight: At solid↔transparent boundaries, we need surfaces on BOTH sides.
- * This is achieved by treating "other type" voxels as air when computing each mask:
- * - solidGrid: transparent voxels → air (weight = -0.00001)
- * - transGrid: solid voxels → air (weight = -0.00001)
+ * Key insight: At material type boundaries, we need surfaces on BOTH sides.
+ * This is achieved by treating "other type" voxels as air when computing each mask.
  * 
- * PERFORMANCE: Uses direct flat array access with index arithmetic.
- * All vertex/face computation is inlined to avoid function call overhead.
+ * PERFORMANCE: Uses array-based mesh slots to avoid code duplication while
+ * maintaining zero function call overhead. Direct flat array access with
+ * index arithmetic for cache-efficient voxel sampling.
  * 
  * @param input Flat voxel data array and dimensions
- * @returns Split mesh outputs for solid and transparent materials
+ * @returns Split mesh outputs for solid, transparent, and liquid materials
  */
 export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
   const { dims, data, skipHighBoundary = [false, false, false] } = input;
@@ -208,35 +217,45 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
   // High boundary positions where we skip faces if no neighbor exists
   const highBoundary = [dims[0] - 2, dims[1] - 2, dims[2] - 2];
 
-  // Separate vertex buffers for each mesh type
+  // Array-based mesh slots for each material type
   const bufferSize = (dims[0] + 1) * (dims[1] + 1) * 2;
-  const solidBuffer = new Int32Array(bufferSize);
-  const transBuffer = new Int32Array(bufferSize);
+  const buffers = [
+    new Int32Array(bufferSize),
+    new Int32Array(bufferSize),
+    new Int32Array(bufferSize),
+  ];
+  const vertices: [number, number, number][][] = [[], [], []];
+  const materials: number[][] = [[], [], []];
+  const normalAccum: [number, number, number][][] = [[], [], []];
+  const faces: [number, number, number][][] = [[], [], []];
+  const grids = [new Float32Array(8), new Float32Array(8), new Float32Array(8)];
   
-  // Separate vertex data for each mesh
-  const solidVertices: [number, number, number][] = [];
-  const solidMaterials: number[] = [];
-  const solidNormalAccum: [number, number, number][] = [];
-  const solidFaces: [number, number, number][] = [];
-  
-  const transVertices: [number, number, number][] = [];
-  const transMaterials: number[] = [];
-  const transNormalAccum: [number, number, number][] = [];
-  const transFaces: [number, number, number][] = [];
+  // Per-cell state for each mesh type (reused each cell)
+  const masks = new Uint8Array(MESH_COUNT);
+  const maxIdxs = new Int32Array(MESH_COUNT);
+  const maxWeights = new Float32Array(MESH_COUNT);
 
   // Grid traversal state
   let n = 0;
   const x = new Int32Array(3);
   const R = new Int32Array([1, dims[0] + 1, (dims[0] + 1) * (dims[1] + 1)]);
   
-  // Two grids with adjusted weights (reused each cell)
-  const solidGrid = new Float32Array(8);
-  const transGrid = new Float32Array(8);
-  
   // Reusable vertex position array (avoid allocation per cell)
   const v: [number, number, number] = [0, 0, 0];
   
   let bufNo = 1;
+
+  // Pre-compute 2x2x2 corner offsets for index arithmetic
+  const cornerOffsets = new Int32Array([
+    0,                      // (0,0,0)
+    1,                      // (1,0,0)
+    dimsX,                  // (0,1,0)
+    dimsX + 1,              // (1,1,0)
+    dimsXY,                 // (0,0,1)
+    dimsXY + 1,             // (1,0,1)
+    dimsXY + dimsX,         // (0,1,1)
+    dimsXY + dimsX + 1,     // (1,1,1)
+  ]);
 
   // March over the voxel grid
   for (x[2] = 0; x[2] < dims[2] - 1; ++x[2], n += dims[0], bufNo ^= 1, R[2] = -R[2]) {
@@ -244,147 +263,34 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
 
     for (x[1] = 0; x[1] < dims[1] - 1; ++x[1], ++n, m += 2) {
       for (x[0] = 0; x[0] < dims[0] - 1; ++x[0], ++n, ++m) {
-        // Sample 2x2x2 grid using direct index arithmetic
         // Base index in flat array for current cell position
         const baseIdx = x[2] * dimsXY + x[1] * dimsX + x[0];
         
-        let solidMask = 0;
-        let transMask = 0;
-        let g = 0;
-        
-        // Track max weight voxels for material assignment
-        let solidPMax = -Infinity;
-        let solidMaxIdx = baseIdx;
-        let transPMax = -Infinity;
-        let transMaxIdx = baseIdx;
+        // Reset per-mesh state
+        masks[0] = masks[1] = masks[2] = 0;
+        maxWeights[0] = maxWeights[1] = maxWeights[2] = -Infinity;
+        maxIdxs[0] = maxIdxs[1] = maxIdxs[2] = baseIdx;
 
-        // Sample 2x2x2 grid with inline index arithmetic
-        // k=0, j=0, i=0
-        let idx = baseIdx;
-        let voxel = data[idx];
-        let weight = unpackWeight(voxel);
-        let material = getMaterial(voxel);
-        let isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        let solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        let transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
-        ++g;
-
-        // k=0, j=0, i=1
-        idx = baseIdx + 1;
-        voxel = data[idx];
-        weight = unpackWeight(voxel);
-        material = getMaterial(voxel);
-        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
-        ++g;
-
-        // k=0, j=1, i=0
-        idx = baseIdx + dimsX;
-        voxel = data[idx];
-        weight = unpackWeight(voxel);
-        material = getMaterial(voxel);
-        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
-        ++g;
-
-        // k=0, j=1, i=1
-        idx = baseIdx + dimsX + 1;
-        voxel = data[idx];
-        weight = unpackWeight(voxel);
-        material = getMaterial(voxel);
-        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
-        ++g;
-
-        // k=1, j=0, i=0
-        idx = baseIdx + dimsXY;
-        voxel = data[idx];
-        weight = unpackWeight(voxel);
-        material = getMaterial(voxel);
-        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
-        ++g;
-
-        // k=1, j=0, i=1
-        idx = baseIdx + dimsXY + 1;
-        voxel = data[idx];
-        weight = unpackWeight(voxel);
-        material = getMaterial(voxel);
-        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
-        ++g;
-
-        // k=1, j=1, i=0
-        idx = baseIdx + dimsXY + dimsX;
-        voxel = data[idx];
-        weight = unpackWeight(voxel);
-        material = getMaterial(voxel);
-        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
-        ++g;
-
-        // k=1, j=1, i=1
-        idx = baseIdx + dimsXY + dimsX + 1;
-        voxel = data[idx];
-        weight = unpackWeight(voxel);
-        material = getMaterial(voxel);
-        isTransparent = MATERIAL_TYPE_LUT[material] === MAT_TYPE_TRANSPARENT;
-        solidWeight = (weight > 0 && isTransparent) ? FILTER_WEIGHT : weight;
-        transWeight = (weight > 0 && !isTransparent) ? FILTER_WEIGHT : weight;
-        solidGrid[g] = solidWeight;
-        transGrid[g] = transWeight;
-        solidMask |= solidWeight < 0 ? 1 << g : 0;
-        transMask |= transWeight < 0 ? 1 << g : 0;
-        if (solidWeight > solidPMax) { solidPMax = solidWeight; solidMaxIdx = idx; }
-        if (transWeight > transPMax) { transPMax = transWeight; transMaxIdx = idx; }
+        // Sample 2x2x2 grid corners using pre-computed offsets
+        for (let g = 0; g < 8; ++g) {
+          const idx = baseIdx + cornerOffsets[g];
+          const voxel = data[idx];
+          const weight = unpackWeight(voxel);
+          const material = getMaterial(voxel);
+          const matType = MATERIAL_TYPE_LUT[material]; // 0=solid, 1=trans, 2=liquid
+          
+          // For each mesh type, compute adjusted weight
+          // Own type keeps original weight, other types become air if solid
+          for (let mt = 0; mt < MESH_COUNT; ++mt) {
+            const adjustedWeight = (weight > 0 && matType !== mt) ? FILTER_WEIGHT : weight;
+            grids[mt][g] = adjustedWeight;
+            masks[mt] |= adjustedWeight < 0 ? 1 << g : 0;
+            if (adjustedWeight > maxWeights[mt]) {
+              maxWeights[mt] = adjustedWeight;
+              maxIdxs[mt] = idx;
+            }
+          }
+        }
 
         // Check boundary conditions
         const onLowBoundary = (x[0] === 0 || x[1] === 0 || x[2] === 0);
@@ -394,11 +300,21 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
           (skipHighBoundary[2] && x[2] >= highBoundary[2] - 1);
         const ignoreFace = onLowBoundary || onHighBoundaryNoNeighbor;
 
-        // ==================== SOLID MESH ====================
-        if (solidMask !== 0 && solidMask !== 0xff) {
-          const edgeMask = EDGE_TABLE[solidMask];
+        // Process each mesh type
+        for (let mt = 0; mt < MESH_COUNT; ++mt) {
+          const mask = masks[mt];
+          if (mask === 0 || mask === 0xff) continue;
           
-          // Compute vertex position inline
+          const grid = grids[mt];
+          const buffer = buffers[mt];
+          const verts = vertices[mt];
+          const norms = normalAccum[mt];
+          const mats = materials[mt];
+          const faceList = faces[mt];
+          
+          const edgeMask = EDGE_TABLE[mask];
+          
+          // Compute vertex position
           v[0] = 0; v[1] = 0; v[2] = 0;
           let eCount = 0;
           
@@ -408,8 +324,8 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
             
             const e0 = CUBE_EDGES[ei << 1];
             const e1 = CUBE_EDGES[(ei << 1) + 1];
-            const g0 = solidGrid[e0];
-            const g1 = solidGrid[e1];
+            const g0 = grid[e0];
+            const g1 = grid[e1];
             let t = g0 - g1;
             
             if (Math.abs(t) > 1e-6) {
@@ -436,14 +352,13 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
             const vz = x[2] + s * v[2];
             
             // Store vertex
-            const vertIdx = solidVertices.length;
-            solidBuffer[m] = vertIdx;
-            solidVertices.push([vx, vy, vz]);
-            solidNormalAccum.push([0, 0, 0]);
+            const vertIdx = verts.length;
+            buffer[m] = vertIdx;
+            verts.push([vx, vy, vz]);
+            norms.push([0, 0, 0]);
+            mats.push(getMaterial(data[maxIdxs[mt]]));
             
-            solidMaterials.push(getMaterial(data[solidMaxIdx]));
-            
-            // Generate faces inline
+            // Generate faces
             for (let fi = 0; fi < 3; ++fi) {
               if (!(edgeMask & (1 << fi))) continue;
               
@@ -455,22 +370,22 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
               const du = R[iu];
               const dv = R[iv];
               
-              const idx0 = solidBuffer[m];
-              const idx1 = solidBuffer[m - du];
-              const idx2 = solidBuffer[m - dv];
-              const idx3 = solidBuffer[m - du - dv];
+              const idx0 = buffer[m];
+              const idx1 = buffer[m - du];
+              const idx2 = buffer[m - dv];
+              const idx3 = buffer[m - du - dv];
               
-              const vert0 = solidVertices[idx0];
-              const vert1 = solidVertices[idx1];
-              const vert2 = solidVertices[idx2];
-              const vert3 = solidVertices[idx3];
+              const vert0 = verts[idx0];
+              const vert1 = verts[idx1];
+              const vert2 = verts[idx2];
+              const vert3 = verts[idx3];
               
               // Compute face normals inline
               let e0x: number, e0y: number, e0z: number;
               let e1x: number, e1y: number, e1z: number;
               let nX: number, nY: number, nZ: number, lenSq: number, len: number;
               
-              if (solidMask & 1) {
+              if (mask & 1) {
                 // Face 1: idx1, idx0, idx3
                 e0x = vert1[0] - vert0[0]; e0y = vert1[1] - vert0[1]; e0z = vert1[2] - vert0[2];
                 e1x = vert3[0] - vert1[0]; e1y = vert3[1] - vert1[1]; e1z = vert3[2] - vert1[2];
@@ -481,9 +396,9 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
                 if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
                 else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
                 
-                solidNormalAccum[idx1][0] += nX; solidNormalAccum[idx1][1] += nY; solidNormalAccum[idx1][2] += nZ;
-                solidNormalAccum[idx0][0] += nX; solidNormalAccum[idx0][1] += nY; solidNormalAccum[idx0][2] += nZ;
-                solidNormalAccum[idx3][0] += nX; solidNormalAccum[idx3][1] += nY; solidNormalAccum[idx3][2] += nZ;
+                norms[idx1][0] += nX; norms[idx1][1] += nY; norms[idx1][2] += nZ;
+                norms[idx0][0] += nX; norms[idx0][1] += nY; norms[idx0][2] += nZ;
+                norms[idx3][0] += nX; norms[idx3][1] += nY; norms[idx3][2] += nZ;
                 
                 // Face 2: idx2, idx3, idx0
                 e0x = vert2[0] - vert3[0]; e0y = vert2[1] - vert3[1]; e0z = vert2[2] - vert3[2];
@@ -495,13 +410,13 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
                 if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
                 else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
                 
-                solidNormalAccum[idx2][0] += nX; solidNormalAccum[idx2][1] += nY; solidNormalAccum[idx2][2] += nZ;
-                solidNormalAccum[idx3][0] += nX; solidNormalAccum[idx3][1] += nY; solidNormalAccum[idx3][2] += nZ;
-                solidNormalAccum[idx0][0] += nX; solidNormalAccum[idx0][1] += nY; solidNormalAccum[idx0][2] += nZ;
+                norms[idx2][0] += nX; norms[idx2][1] += nY; norms[idx2][2] += nZ;
+                norms[idx3][0] += nX; norms[idx3][1] += nY; norms[idx3][2] += nZ;
+                norms[idx0][0] += nX; norms[idx0][1] += nY; norms[idx0][2] += nZ;
                 
                 if (!ignoreFace) {
-                  solidFaces.push([idx1, idx0, idx3]);
-                  solidFaces.push([idx2, idx3, idx0]);
+                  faceList.push([idx1, idx0, idx3]);
+                  faceList.push([idx2, idx3, idx0]);
                 }
               } else {
                 // Face 1: idx2, idx0, idx3
@@ -514,9 +429,9 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
                 if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
                 else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
                 
-                solidNormalAccum[idx2][0] += nX; solidNormalAccum[idx2][1] += nY; solidNormalAccum[idx2][2] += nZ;
-                solidNormalAccum[idx0][0] += nX; solidNormalAccum[idx0][1] += nY; solidNormalAccum[idx0][2] += nZ;
-                solidNormalAccum[idx3][0] += nX; solidNormalAccum[idx3][1] += nY; solidNormalAccum[idx3][2] += nZ;
+                norms[idx2][0] += nX; norms[idx2][1] += nY; norms[idx2][2] += nZ;
+                norms[idx0][0] += nX; norms[idx0][1] += nY; norms[idx0][2] += nZ;
+                norms[idx3][0] += nX; norms[idx3][1] += nY; norms[idx3][2] += nZ;
                 
                 // Face 2: idx1, idx3, idx0
                 e0x = vert1[0] - vert3[0]; e0y = vert1[1] - vert3[1]; e0z = vert1[2] - vert3[2];
@@ -528,160 +443,13 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
                 if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
                 else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
                 
-                solidNormalAccum[idx1][0] += nX; solidNormalAccum[idx1][1] += nY; solidNormalAccum[idx1][2] += nZ;
-                solidNormalAccum[idx3][0] += nX; solidNormalAccum[idx3][1] += nY; solidNormalAccum[idx3][2] += nZ;
-                solidNormalAccum[idx0][0] += nX; solidNormalAccum[idx0][1] += nY; solidNormalAccum[idx0][2] += nZ;
+                norms[idx1][0] += nX; norms[idx1][1] += nY; norms[idx1][2] += nZ;
+                norms[idx3][0] += nX; norms[idx3][1] += nY; norms[idx3][2] += nZ;
+                norms[idx0][0] += nX; norms[idx0][1] += nY; norms[idx0][2] += nZ;
                 
                 if (!ignoreFace) {
-                  solidFaces.push([idx2, idx0, idx3]);
-                  solidFaces.push([idx1, idx3, idx0]);
-                }
-              }
-            }
-          }
-        }
-
-        // ==================== TRANSPARENT MESH ====================
-        if (transMask !== 0 && transMask !== 0xff) {
-          const edgeMask = EDGE_TABLE[transMask];
-          
-          // Compute vertex position inline
-          v[0] = 0; v[1] = 0; v[2] = 0;
-          let eCount = 0;
-          
-          for (let ei = 0; ei < 12; ++ei) {
-            if (!(edgeMask & (1 << ei))) continue;
-            ++eCount;
-            
-            const e0 = CUBE_EDGES[ei << 1];
-            const e1 = CUBE_EDGES[(ei << 1) + 1];
-            const g0 = transGrid[e0];
-            const g1 = transGrid[e1];
-            let t = g0 - g1;
-            
-            if (Math.abs(t) > 1e-6) {
-              t = g0 / t;
-            } else {
-              continue;
-            }
-            
-            for (let axis = 0, bit = 1; axis < 3; ++axis, bit <<= 1) {
-              const a = e0 & bit;
-              const b = e1 & bit;
-              if (a !== b) {
-                v[axis] += a ? 1.0 - t : t;
-              } else {
-                v[axis] += a ? 1.0 : 0;
-              }
-            }
-          }
-          
-          if (eCount > 0) {
-            const s = 1.0 / eCount;
-            const vx = x[0] + s * v[0];
-            const vy = x[1] + s * v[1];
-            const vz = x[2] + s * v[2];
-            
-            // Store vertex
-            const vertIdx = transVertices.length;
-            transBuffer[m] = vertIdx;
-            transVertices.push([vx, vy, vz]);
-            transNormalAccum.push([0, 0, 0]);
-            
-            transMaterials.push(getMaterial(data[transMaxIdx]));
-            
-            // Generate faces inline
-            for (let fi = 0; fi < 3; ++fi) {
-              if (!(edgeMask & (1 << fi))) continue;
-              
-              const iu = (fi + 1) % 3;
-              const iv = (fi + 2) % 3;
-              
-              if (x[iu] === 0 || x[iv] === 0) continue;
-              
-              const du = R[iu];
-              const dv = R[iv];
-              
-              const idx0 = transBuffer[m];
-              const idx1 = transBuffer[m - du];
-              const idx2 = transBuffer[m - dv];
-              const idx3 = transBuffer[m - du - dv];
-              
-              const vert0 = transVertices[idx0];
-              const vert1 = transVertices[idx1];
-              const vert2 = transVertices[idx2];
-              const vert3 = transVertices[idx3];
-              
-              // Compute face normals inline
-              let e0x: number, e0y: number, e0z: number;
-              let e1x: number, e1y: number, e1z: number;
-              let nX: number, nY: number, nZ: number, lenSq: number, len: number;
-              
-              if (transMask & 1) {
-                // Face 1: idx1, idx0, idx3
-                e0x = vert1[0] - vert0[0]; e0y = vert1[1] - vert0[1]; e0z = vert1[2] - vert0[2];
-                e1x = vert3[0] - vert1[0]; e1y = vert3[1] - vert1[1]; e1z = vert3[2] - vert1[2];
-                nX = e0y * e1z - e0z * e1y;
-                nY = e0z * e1x - e0x * e1z;
-                nZ = e0x * e1y - e0y * e1x;
-                lenSq = nX * nX + nY * nY + nZ * nZ;
-                if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
-                else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
-                
-                transNormalAccum[idx1][0] += nX; transNormalAccum[idx1][1] += nY; transNormalAccum[idx1][2] += nZ;
-                transNormalAccum[idx0][0] += nX; transNormalAccum[idx0][1] += nY; transNormalAccum[idx0][2] += nZ;
-                transNormalAccum[idx3][0] += nX; transNormalAccum[idx3][1] += nY; transNormalAccum[idx3][2] += nZ;
-                
-                // Face 2: idx2, idx3, idx0
-                e0x = vert2[0] - vert3[0]; e0y = vert2[1] - vert3[1]; e0z = vert2[2] - vert3[2];
-                e1x = vert0[0] - vert2[0]; e1y = vert0[1] - vert2[1]; e1z = vert0[2] - vert2[2];
-                nX = e0y * e1z - e0z * e1y;
-                nY = e0z * e1x - e0x * e1z;
-                nZ = e0x * e1y - e0y * e1x;
-                lenSq = nX * nX + nY * nY + nZ * nZ;
-                if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
-                else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
-                
-                transNormalAccum[idx2][0] += nX; transNormalAccum[idx2][1] += nY; transNormalAccum[idx2][2] += nZ;
-                transNormalAccum[idx3][0] += nX; transNormalAccum[idx3][1] += nY; transNormalAccum[idx3][2] += nZ;
-                transNormalAccum[idx0][0] += nX; transNormalAccum[idx0][1] += nY; transNormalAccum[idx0][2] += nZ;
-                
-                if (!ignoreFace) {
-                  transFaces.push([idx1, idx0, idx3]);
-                  transFaces.push([idx2, idx3, idx0]);
-                }
-              } else {
-                // Face 1: idx2, idx0, idx3
-                e0x = vert2[0] - vert0[0]; e0y = vert2[1] - vert0[1]; e0z = vert2[2] - vert0[2];
-                e1x = vert3[0] - vert2[0]; e1y = vert3[1] - vert2[1]; e1z = vert3[2] - vert2[2];
-                nX = e0y * e1z - e0z * e1y;
-                nY = e0z * e1x - e0x * e1z;
-                nZ = e0x * e1y - e0y * e1x;
-                lenSq = nX * nX + nY * nY + nZ * nZ;
-                if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
-                else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
-                
-                transNormalAccum[idx2][0] += nX; transNormalAccum[idx2][1] += nY; transNormalAccum[idx2][2] += nZ;
-                transNormalAccum[idx0][0] += nX; transNormalAccum[idx0][1] += nY; transNormalAccum[idx0][2] += nZ;
-                transNormalAccum[idx3][0] += nX; transNormalAccum[idx3][1] += nY; transNormalAccum[idx3][2] += nZ;
-                
-                // Face 2: idx1, idx3, idx0
-                e0x = vert1[0] - vert3[0]; e0y = vert1[1] - vert3[1]; e0z = vert1[2] - vert3[2];
-                e1x = vert0[0] - vert1[0]; e1y = vert0[1] - vert1[1]; e1z = vert0[2] - vert1[2];
-                nX = e0y * e1z - e0z * e1y;
-                nY = e0z * e1x - e0x * e1z;
-                nZ = e0x * e1y - e0y * e1x;
-                lenSq = nX * nX + nY * nY + nZ * nZ;
-                if (lenSq < 0.000001) { nX = 0; nY = 1; nZ = 0; }
-                else { len = 1.0 / Math.sqrt(lenSq); nX *= len; nY *= len; nZ *= len; }
-                
-                transNormalAccum[idx1][0] += nX; transNormalAccum[idx1][1] += nY; transNormalAccum[idx1][2] += nZ;
-                transNormalAccum[idx3][0] += nX; transNormalAccum[idx3][1] += nY; transNormalAccum[idx3][2] += nZ;
-                transNormalAccum[idx0][0] += nX; transNormalAccum[idx0][1] += nY; transNormalAccum[idx0][2] += nZ;
-                
-                if (!ignoreFace) {
-                  transFaces.push([idx2, idx0, idx3]);
-                  transFaces.push([idx1, idx3, idx0]);
+                  faceList.push([idx2, idx0, idx3]);
+                  faceList.push([idx1, idx3, idx0]);
                 }
               }
             }
@@ -691,16 +459,20 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
     }
   }
 
-  // Build outputs
-  const solid = solidFaces.length > 0 
-    ? buildOutput(solidVertices, solidNormalAccum, solidMaterials, solidFaces)
+  // Build outputs for each mesh type
+  const solid = faces[MESH_SOLID].length > 0 
+    ? buildOutput(vertices[MESH_SOLID], normalAccum[MESH_SOLID], materials[MESH_SOLID], faces[MESH_SOLID])
     : emptyOutput();
     
-  const transparent = transFaces.length > 0
-    ? buildOutput(transVertices, transNormalAccum, transMaterials, transFaces)
+  const transparent = faces[MESH_TRANS].length > 0
+    ? buildOutput(vertices[MESH_TRANS], normalAccum[MESH_TRANS], materials[MESH_TRANS], faces[MESH_TRANS])
+    : emptyOutput();
+    
+  const liquid = faces[MESH_LIQUID].length > 0
+    ? buildOutput(vertices[MESH_LIQUID], normalAccum[MESH_LIQUID], materials[MESH_LIQUID], faces[MESH_LIQUID])
     : emptyOutput();
 
-  return { solid, transparent };
+  return { solid, transparent, liquid };
 }
 
 /**

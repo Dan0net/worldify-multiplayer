@@ -17,6 +17,7 @@ export {
   TerrainMaterial,
   getTerrainMaterial,
   getTransparentTerrainMaterial,
+  getLiquidTerrainMaterial,
   initializeMaterials,
   upgradeToHighRes,
   isHighResCached,

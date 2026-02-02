@@ -3,10 +3,10 @@
  */
 
 import * as THREE from 'three';
-import { getTerrainMaterial, getTransparentTerrainMaterial } from '../material/TerrainMaterial.js';
+import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial } from '../material/TerrainMaterial.js';
 
 // Re-export terrain material getters for easy access
-export { getTerrainMaterial, getTransparentTerrainMaterial };
+export { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial };
 
 // ============== Material Color Palette ==============
 
@@ -93,4 +93,5 @@ export function setVoxelWireframe(enabled: boolean): void {
   voxelMaterial.wireframe = enabled;
   getTerrainMaterial().wireframe = enabled;
   getTransparentTerrainMaterial().wireframe = enabled;
+  getLiquidTerrainMaterial().wireframe = enabled;
 }

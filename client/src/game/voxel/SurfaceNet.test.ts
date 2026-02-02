@@ -10,7 +10,7 @@ import { CHUNK_SIZE, packVoxel } from '@worldify/shared';
 
 // Helper to check if ChunkMeshOutput has any geometry
 function isEmptyChunkMesh(output: ChunkMeshOutput): boolean {
-  return isEmptyMesh(output.solid) && isEmptyMesh(output.transparent);
+  return isEmptyMesh(output.solid) && isEmptyMesh(output.transparent) && isEmptyMesh(output.liquid);
 }
 
 describe('Empty Geometry Tests', () => {
