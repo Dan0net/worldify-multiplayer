@@ -14,6 +14,9 @@ export * from './util/movement.js';
 export * from './util/logger.js';
 export * from './util/roomOffset.js';
 
+// Materials
+export * from './materials/index.js';
+
 // Voxel terrain
 export * from './voxel/constants.js';
 export * from './voxel/voxelData.js';

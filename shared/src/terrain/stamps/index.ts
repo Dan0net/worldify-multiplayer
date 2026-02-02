@@ -10,14 +10,6 @@ export {
   getVariantCount,
   getAllStampTypes,
   isRotatableStamp,
-  // Material constants
-  MAT_BARK,
-  MAT_BARK_DARK,
-  MAT_LEAVES,
-  MAT_LEAVES2,
-  MAT_ROCK,
-  MAT_ROCK2,
-  MAT_ROCK_MOSS,
 } from './StampDefinitions.js';
 
 export {

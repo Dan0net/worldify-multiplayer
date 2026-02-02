@@ -4,37 +4,10 @@
  */
 
 import { sdfBox, sdfCylinder } from '../../voxel/shapes.js';
+import { mat } from '../../materials/index.js';
 
 // SDF threshold for voxel inclusion - sqrt(2)/2 handles 45° rotations
 const SDF_THRESHOLD = 0.71;
-
-// ============== Material IDs (from pallet.json indices) ==============
-
-export const MAT_BARK = 4;      // bark2 - tree trunks
-export const MAT_BARK_DARK = 5; // bark3 - variation
-export const MAT_LEAVES = 48;   // leaves_trans - tree canopy
-export const MAT_LEAVES2 = 49;  // leaves2_trans - variation
-export const MAT_ROCK = 1;      // rock - boulders
-export const MAT_ROCK2 = 3;     // rock2 - variation
-export const MAT_ROCK_MOSS = 23; // rock_moss - mossy rocks
-
-// Building materials
-export const MAT_BRICK = 6;     // brick2 - walls
-export const MAT_BRICK2 = 18;   // brick3 - variation
-export const MAT_BRICK7 = 29;   // brick7 - variation
-export const MAT_COBBLE = 7;    // cobble - foundations
-export const MAT_COBBLE2 = 8;    // cobble2 - foundations
-export const MAT_BRICK8 = 30;   // brick8 - floors
-export const MAT_TILE3 = 31;    // tile3 - floors
-export const MAT_STONE2 = 39;   // stone2 - foundations
-export const MAT_PLASTER = 12;  // plaster - walls
-export const MAT_PLASTER2 = 17; // plaster2 - variation
-export const MAT_ROOF = 13;     // roof - rooftops
-export const MAT_ROOF2 = 34;    // roof2 - variation
-export const MAT_METAL = 32;    // roof2 - variation
-export const MAT_WOOD = 2;      // wood - floors, beams
-export const MAT_WOOD2 = 44;    // wood3 - variation
-export const MAT_CONCRETE = 9;  // concrete - modern buildings
 
 // ============== Types ==============
 
@@ -206,8 +179,8 @@ function generatePineTree(variant: number): StampDefinition {
   // Variation parameters based on variant
   const trunkRadius = 1.2 + (variant % 2) * 0.2;  // 1.2-1.4 - consistent with oak
   const canopyLayers = 3 + (variant % 2);
-  const barkMaterial = variant % 2 === 0 ? MAT_BARK : MAT_BARK_DARK;
-  const leafMaterial = variant % 2 === 0 ? MAT_LEAVES : MAT_LEAVES2;
+  const barkMaterial = variant % 2 === 0 ? mat('bark2') : mat('bark3');
+  const leafMaterial = variant % 2 === 0 ? mat('leaves_trans') : mat('leaves2_trans');
   
   // Trunk - fixed height so canopies align
   voxels.push(...cylinder(0, 0, trunkRadius, 0, TREE_TRUNK_HEIGHT, barkMaterial));
@@ -248,8 +221,8 @@ function generateOakTree(variant: number): StampDefinition {
   // Variation parameters - 50% bigger canopy
   const trunkRadius = 1.3 + (variant % 2) * 0.2;  // 1.3-1.5 - consistent with pine
   const canopyRadius = (7.5 + (variant % 3) * 1.5);  // 7.5-12 (was 5-8, now 50% bigger)
-  const barkMaterial = variant % 2 === 0 ? MAT_BARK : MAT_BARK_DARK;
-  const leafMaterial = variant % 2 === 0 ? MAT_LEAVES : MAT_LEAVES2;
+  const barkMaterial = variant % 2 === 0 ? mat('bark2') : mat('bark3');
+  const leafMaterial = variant % 2 === 0 ? mat('leaves_trans') : mat('leaves2_trans');
   
   // Trunk - fixed height so canopies align with pine
   voxels.push(...cylinder(0, 0, trunkRadius, 0, TREE_TRUNK_HEIGHT, barkMaterial));
@@ -306,7 +279,7 @@ function generateRock(type: StampType, variant: number): StampDefinition {
   }
   
   // Material variation
-  const materials = [MAT_ROCK, MAT_ROCK2, MAT_ROCK_MOSS];
+  const materials = [mat('rock'), mat('rock2'), mat('rock_moss')];
   const material = materials[variant % materials.length];
   
   // Vertical scale factor (values > 1 make rocks taller)
@@ -376,13 +349,13 @@ function generateSmallBuildingSDF(variant: number, rotation: number): StampDefin
   const heightBase = 14 + (variant % 3) * 2;  // 14-18 voxels (3.5-4.5m)
   
   // Material selection
-  const wallMaterials = [MAT_BRICK, MAT_BRICK7, MAT_BRICK2];
-  const roofMaterials = [MAT_ROOF, MAT_ROOF2];
-  const floorMaterials = [MAT_BRICK8, MAT_TILE3];
+  const wallMaterials = [mat('brick2'), mat('brick7'), mat('brick3')];
+  const roofMaterials = [mat('roof'), mat('roof2')];
+  const floorMaterials = [mat('brick8'), mat('tile3')];
   const wallMaterial = wallMaterials[variant % wallMaterials.length];
   const roofMaterial = roofMaterials[variant % roofMaterials.length];
   const floorMaterial = floorMaterials[variant % floorMaterials.length];
-  const foundationMaterial = MAT_COBBLE;
+  const foundationMaterial = mat('cobble');
   
   const halfWidth = widthBase / 2;
   const halfDepth = depthBase / 2;
@@ -523,7 +496,7 @@ function evaluateSmallBuildingSDF(
       { x: halfWidth - 0.5, y: 0.5, z: halfDepth - 0.5 }
     );
     if (ceilingDist < SDF_THRESHOLD) {
-      return { material: MAT_CONCRETE, weight: 0.45 };
+      return { material: mat('concrete'), weight: 0.45 };
     }
   }
   
@@ -622,10 +595,10 @@ function generateHutSDF(variant: number, rotation: number): StampDefinition {
   const roofHeight = radius + 3;
   
   // Material selection
-  const wallMaterials = [MAT_WOOD, MAT_WOOD2];
-  const roofMaterials = [MAT_ROOF, MAT_ROOF2, MAT_METAL];
-  const floorMaterial = MAT_COBBLE2;
-  const foundationMaterial = MAT_STONE2;
+  const wallMaterials = [mat('wood'), mat('wood2')];
+  const roofMaterials = [mat('roof'), mat('roof2'), mat('metal')];
+  const floorMaterial = mat('cobble2');
+  const foundationMaterial = mat('stone2');
   const wallMaterial = wallMaterials[variant % wallMaterials.length];
   const roofMaterial = roofMaterials[variant % roofMaterials.length];
   
@@ -741,7 +714,7 @@ function evaluateHutSDF(
   if (y >= wallHeight - 2 && y < wallHeight) {
     const ceilingDist = sdfCylinder({ x, y: y - wallHeight + 1, z }, radius - wallThickness, 1);
     if (ceilingDist < SDF_THRESHOLD) {
-      return { material: MAT_CONCRETE, weight: 0.45 };
+      return { material: mat('concrete'), weight: 0.45 };
     }
   }
   

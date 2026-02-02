@@ -6,6 +6,7 @@
 import FastNoiseLite from 'fastnoise-lite';
 import { CHUNK_SIZE, VOXEL_SCALE } from '../voxel/constants.js';
 import { packVoxel } from '../voxel/voxelData.js';
+import { mat } from '../materials/index.js';
 import {
   StampPointGenerator,
   StampPlacer,
@@ -98,21 +99,13 @@ export interface TerrainConfig {
   pathwayConfig: PathwayConfig;
 }
 
-// ============== Material Constants ==============
-// Material IDs from pallet.json
-
-export const MATERIAL_MOSS2 = 0;   // Grass/moss surface
-export const MATERIAL_ROCK = 1;    // Rocky underlayer
-export const MATERIAL_ROCK2 = 3;   // Deep stone
-export const MATERIAL_BRICK2 = 6;  // Wall material for cobble paths
-export const MATERIAL_COBBLE = 7;  // Pathway material variant
-export const MATERIAL_COBBLE2 = 8; // Pathway material variant
-export const MATERIAL_PEBBLES = 11; // Pathway material variant
-export const MATERIAL_GRAVEL = 25; // Pathway material variant
-export const MATERIAL_DIRT2 = 39;  // Border material for paths
-
 // All pathway material options
-export const PATHWAY_MATERIALS = [MATERIAL_PEBBLES, MATERIAL_COBBLE, MATERIAL_COBBLE2, MATERIAL_GRAVEL];
+const PATHWAY_MATERIALS = [
+  mat('pebbles'),
+  mat('cobble'),
+  mat('cobble2'),
+  mat('gravel'),
+];
 
 // ============== Default Pathway Configuration ==============
 
@@ -126,11 +119,11 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   warpFrequency: 0.011,     // Low frequency for smooth curves
   warpAmplitude: 90,        // Strong warping for organic curves
   wallHeight: 5,            // Wall height in voxels
-  wallMaterial: MATERIAL_BRICK2,
-  wallMaterials: [MATERIAL_COBBLE, MATERIAL_COBBLE2], // Only cobble paths get walls
+  wallMaterial: mat('brick2'),
+  wallMaterials: [mat('cobble'), mat('cobble2')], // Only cobble paths get walls
   dipDepth: 2,              // Path dips 2 voxels in the middle
   borderWidth: 0.4,         // Dirt border width in meters
-  borderMaterial: MATERIAL_DIRT2,
+  borderMaterial: mat('dirt2'),
 };
 
 // ============== Default Configuration ==
@@ -163,11 +156,11 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
     octaves: 2,
   },
   materialLayers: [
-    { materialId: MATERIAL_MOSS2, maxDepth: 2 },   // Grass: 0-2 voxels deep
-    { materialId: MATERIAL_ROCK, maxDepth: 8 },    // Rock: 2-8 voxels deep
-    { materialId: MATERIAL_ROCK2, maxDepth: Infinity }, // Stone: 8+ voxels
+    { materialId: mat('moss2'), maxDepth: 2 },   // Grass: 0-2 voxels deep
+    { materialId: mat('rock'), maxDepth: 8 },    // Rock: 2-8 voxels deep
+    { materialId: mat('rock2'), maxDepth: Infinity }, // Stone: 8+ voxels
   ],
-  defaultMaterial: MATERIAL_ROCK2,
+  defaultMaterial: mat('rock2'),
   enableStamps: true,
   pathwayConfig: DEFAULT_PATHWAY_CONFIG,
 };
@@ -322,7 +315,7 @@ export class TerrainGenerator implements HeightSampler {
   getPathwayMaterial(worldX: number, worldZ: number): number {
     const materials = this.config.pathwayConfig.materials;
     if (materials.length === 0) {
-      return MATERIAL_PEBBLES; // Fallback
+      return mat('pebbles'); // Fallback
     }
     if (materials.length === 1) {
       return materials[0];
