@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { textureCache } from './TextureCache.js';
 import { getMaterialPallet } from './MaterialPallet.js';
-import { MATERIAL_BASE_URL, TERRAIN_MATERIAL_REPEAT_SCALE, TERRAIN_MATERIAL_BLEND_OFFSET_RAD } from './constants.js';
+import { TERRAIN_MATERIAL_REPEAT_SCALE, TERRAIN_MATERIAL_BLEND_OFFSET_RAD } from './constants.js';
 
 export type TextureResolution = 'low' | 'high';
 
@@ -21,19 +21,21 @@ export interface LoadedTextures {
 
 /**
  * Load texture binary data, using cache if available.
+ * Automatically checks for version updates and invalidates outdated cache.
  */
 async function loadTextureData(
   resolution: TextureResolution,
   mapType: string,
-  version: string
+  version: string,
+  baseUrl: string
 ): Promise<ArrayBuffer> {
-  // Try cache first
-  let arrayBuffer = await textureCache.getTexture(resolution, mapType);
+  // Try cache first, with version check
+  let arrayBuffer = await textureCache.getTexture(resolution, mapType, version);
   
   if (!arrayBuffer) {
     console.log(`Cache miss: Fetching ${resolution}/${mapType} from network`);
     
-    const response = await fetch(`${MATERIAL_BASE_URL}/${resolution}/${mapType}.bin`, {
+    const response = await fetch(`${baseUrl}/${resolution}/${mapType}.bin`, {
       headers: { 'Content-Type': 'application/octet-stream' },
     });
     
@@ -43,12 +45,12 @@ async function loadTextureData(
     
     arrayBuffer = await response.arrayBuffer();
     
-    // Save to cache
+    // Save to cache with version tag
     await textureCache.saveTexture(resolution, mapType, arrayBuffer, version);
     const sizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(2);
-    console.log(`Cached ${resolution}/${mapType} (${sizeMB} MB)`);
+    console.log(`Cached ${resolution}/${mapType} (${sizeMB} MB) [${version}]`);
   } else {
-    console.log(`Cache hit: Loaded ${resolution}/${mapType} from IndexedDB`);
+    console.log(`Cache hit: Loaded ${resolution}/${mapType} from IndexedDB [${version}]`);
   }
   
   return arrayBuffer;
@@ -109,7 +111,10 @@ export async function loadDataArrayTextures(
 ): Promise<LoadedTextures> {
   const mapTypes = ['albedo', 'normal', 'ao', 'roughness'] as const;
   const pallet = await getMaterialPallet();
-  const version = 'v1'; // TODO: Get from latest.json
+  
+  // Fetch latest version from R2 (cached for session)
+  const version = await textureCache.getLatestVersion();
+  const baseUrl = await textureCache.getLatestMaterialUrl();
   
   const textures: Partial<LoadedTextures> = {};
   let loaded = 0;
@@ -120,7 +125,7 @@ export async function loadDataArrayTextures(
       throw new Error(`Missing metadata for ${resolution}/${mapType}`);
     }
     
-    const arrayBuffer = await loadTextureData(resolution, mapType, version);
+    const arrayBuffer = await loadTextureData(resolution, mapType, version, baseUrl);
     const data = new Uint8Array(arrayBuffer);
     
     textures[mapType] = createDataArrayTexture(

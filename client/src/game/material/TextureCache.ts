@@ -4,6 +4,8 @@
  * Caches downloaded texture binaries to avoid re-downloading on subsequent visits.
  */
 
+import { MATERIAL_ROOT_URL } from './constants.js';
+
 const DB_NAME = 'worldify-texture-cache';
 const TEXTURE_STORE = 'textures';
 const META_STORE = 'metadata';
@@ -14,6 +16,15 @@ interface TextureMetadata {
   timestamp: number;
   version: string;
 }
+
+interface LatestManifest {
+  version: number;
+  path: string;
+}
+
+// Cache the latest version to avoid repeated fetches
+let cachedLatestVersion: string | null = null;
+let latestVersionFetchPromise: Promise<string> | null = null;
 
 class TextureCache {
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -41,10 +52,74 @@ class TextureCache {
     return this.dbPromise;
   }
 
-  async getTexture(resolution: string, mapType: string): Promise<ArrayBuffer | null> {
+  /**
+   * Fetch the latest material version from R2.
+   * Caches the result for the session to avoid repeated network requests.
+   */
+  async getLatestVersion(): Promise<string> {
+    // Return cached version if available
+    if (cachedLatestVersion) {
+      return cachedLatestVersion;
+    }
+
+    // Deduplicate concurrent requests
+    if (latestVersionFetchPromise) {
+      return latestVersionFetchPromise;
+    }
+
+    latestVersionFetchPromise = (async () => {
+      try {
+        const url = `${MATERIAL_ROOT_URL}/latest.json`;
+        console.log(`Fetching material version from: ${url}`);
+        
+        const response = await fetch(url, {
+          cache: 'no-cache', // Always check for updates
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch latest.json: ${response.status}`);
+        }
+
+        const manifest: LatestManifest = await response.json();
+        cachedLatestVersion = `v${manifest.version}`;
+        console.log(`Latest material version: ${cachedLatestVersion}`);
+        return cachedLatestVersion;
+      } catch (error) {
+        console.warn('Failed to fetch latest version, using fallback:', error);
+        // Fallback to cached version or default
+        const cached = await this.getCacheVersion();
+        cachedLatestVersion = cached || 'v3';
+        return cachedLatestVersion;
+      } finally {
+        latestVersionFetchPromise = null;
+      }
+    })();
+
+    return latestVersionFetchPromise;
+  }
+
+  /**
+   * Get the URL for material binaries at the latest version.
+   */
+  async getLatestMaterialUrl(): Promise<string> {
+    const version = await this.getLatestVersion();
+    return `${MATERIAL_ROOT_URL}/${version}`;
+  }
+
+  async getTexture(resolution: string, mapType: string, requiredVersion?: string): Promise<ArrayBuffer | null> {
     try {
       const db = await this.openDB();
       const key = `${resolution}/${mapType}`;
+      
+      // Check if cached version matches required version
+      if (requiredVersion) {
+        const meta = await this.getMetadata();
+        const entryMeta = meta?.[key];
+        if (entryMeta && entryMeta.version !== requiredVersion) {
+          console.log(`Cache version mismatch for ${key}: cached=${entryMeta.version}, required=${requiredVersion}`);
+          return null; // Force re-download
+        }
+      }
       
       return new Promise((resolve, reject) => {
         const transaction = db.transaction(TEXTURE_STORE, 'readonly');

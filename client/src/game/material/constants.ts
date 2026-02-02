@@ -3,9 +3,16 @@
  */
 
 /**
+ * Root URL for material binaries on R2 (without version path).
+ * Set via VITE_MATERIAL_ROOT_URL environment variable.
+ */
+export const MATERIAL_ROOT_URL = import.meta.env.VITE_MATERIAL_ROOT_URL || 'https://materials.wrldy.xyz/binaries';
+
+/**
  * Base URL for material binaries on R2.
  * Set via VITE_MATERIAL_URL environment variable.
  * Falls back to a placeholder if not set.
+ * @deprecated Use getLatestMaterialUrl() for dynamic version resolution
  */
 export const MATERIAL_BASE_URL = import.meta.env.VITE_MATERIAL_URL || '/materials';
 

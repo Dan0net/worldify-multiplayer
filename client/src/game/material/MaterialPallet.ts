@@ -4,7 +4,7 @@
  * Loads and caches the pallet.json manifest from R2.
  */
 
-import { MATERIAL_BASE_URL } from './constants.js';
+import { textureCache } from './TextureCache.js';
 
 export interface MapMetadata {
   width: number;
@@ -39,7 +39,8 @@ export async function getMaterialPallet(): Promise<MaterialPallet> {
     return cachedPallet;
   }
 
-  const response = await fetch(`${MATERIAL_BASE_URL}/pallet.json`);
+  const baseUrl = await textureCache.getLatestMaterialUrl();
+  const response = await fetch(`${baseUrl}/pallet.json`);
   if (!response.ok) {
     throw new Error(`Failed to fetch material pallet: ${response.status}`);
   }
