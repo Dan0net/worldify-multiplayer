@@ -61,6 +61,15 @@ export function getChunkProvider(): ChunkProvider {
 }
 
 /**
+ * Set the ChunkProvider for testing purposes.
+ * This allows tests to inject a mock or simple ChunkProvider without full storage initialization.
+ * @internal Only for use in tests
+ */
+export function setChunkProviderForTesting(provider: ChunkProvider | null): void {
+  globalChunkProvider = provider;
+}
+
+/**
  * Get the global PersistentChunkStore.
  * @throws Error if storage not initialized
  */

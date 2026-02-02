@@ -29,10 +29,20 @@ import { getChunkProvider } from '../storage/StorageManager.js';
 const buildRateLimiter = new RateLimiter(100);
 
 /** Build sequence tracking per chunk (in-memory, could be persisted later) */
-const chunkBuildSeq = new Map<string, number>();
+export const chunkBuildSeq = new Map<string, number>();
 
 /** Next build sequence number (global across all rooms) */
 let nextBuildSeq = 1;
+
+/**
+ * Reset build state for testing purposes.
+ * @internal Only for use in tests
+ */
+export function resetBuildStateForTesting(): void {
+  nextBuildSeq = 0;  // Reset to 0 so first successful build is 1
+  chunkBuildSeq.clear();
+  buildRateLimiter.clear();
+}
 
 // ============== Validation ==============
 

@@ -6,7 +6,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { 
   handleBuildIntent, 
   cleanupPlayer, 
-  cleanupRoom 
+  cleanupRoom,
+  resetBuildStateForTesting,
+  chunkBuildSeq,
 } from '../rooms/BuildHandler.js';
 import { Room, createRoom, createPlayerState } from '../rooms/room.js';
 import { 
@@ -16,6 +18,8 @@ import {
   BuildShape,
   MAX_BUILD_DISTANCE,
 } from '@worldify/shared';
+import { ChunkProvider, MapChunkStore } from '../voxel/ChunkProvider.js';
+import { setChunkProviderForTesting } from '../storage/StorageManager.js';
 
 // Counter to make each room unique to avoid shared state
 let roomCounter = 0;
@@ -52,12 +56,22 @@ describe('BuildHandler', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     testRoom = createTestRoom();
+    
+    // Reset build state between tests
+    resetBuildStateForTesting();
+    
+    // Set up a test ChunkProvider with an in-memory store
+    const testStore = new MapChunkStore();
+    const testProvider = new ChunkProvider(testStore, 12345);
+    setChunkProviderForTesting(testProvider);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     // Clean up the room to reset rate limiter state
     cleanupRoom(testRoom.id);
+    // Clear the test ChunkProvider
+    setChunkProviderForTesting(null);
   });
 
   describe('handleBuildIntent', () => {
@@ -198,34 +212,52 @@ describe('BuildHandler', () => {
     describe('build sequence', () => {
       it('should increment build sequence on success', () => {
         const room = testRoom;
-        expect(room.nextBuildSeq).toBe(0);
         
         const intent = createValidIntent();
         const result = handleBuildIntent(room, 1, intent);
         
+        expect(result.result).toBe(BuildResult.SUCCESS);
         expect(result.buildSeq).toBe(1);
-        expect(room.nextBuildSeq).toBe(1);
+        
+        // Advance time to bypass rate limiting
+        vi.advanceTimersByTime(200);
+        
+        // After first successful build, next sequence is 2
+        const result2 = handleBuildIntent(room, 1, createValidIntent({ x: 5, y: 2, z: 0 }));
+        expect(result2.result).toBe(BuildResult.SUCCESS);
+        expect(result2.buildSeq).toBe(2);
       });
 
       it('should not increment build sequence on failure', () => {
         const room = testRoom;
         const intent = createValidIntent({ x: 1000, y: 0, z: 0 }); // Too far
         
-        handleBuildIntent(room, 1, intent);
+        const result = handleBuildIntent(room, 1, intent);
         
-        expect(room.nextBuildSeq).toBe(0);
+        // Failed build should not increment sequence
+        expect(result.result).toBe(BuildResult.TOO_FAR);
+        
+        // Advance time to bypass rate limiting
+        vi.advanceTimersByTime(200);
+        
+        // Next successful build should be 1
+        const successIntent = createValidIntent();
+        const successResult = handleBuildIntent(room, 1, successIntent);
+        expect(successResult.result).toBe(BuildResult.SUCCESS);
+        expect(successResult.buildSeq).toBe(1);
       });
     });
 
     describe('chunk modification', () => {
       it('should create chunks for affected area', () => {
         const room = testRoom;
-        expect(room.voxelChunks.size).toBe(0);
+        expect(chunkBuildSeq.size).toBe(0);
         
         const intent = createValidIntent();
         handleBuildIntent(room, 1, intent);
         
-        expect(room.voxelChunks.size).toBeGreaterThan(0);
+        // Chunks should be tracked in the module-level chunkBuildSeq
+        expect(chunkBuildSeq.size).toBeGreaterThan(0);
       });
 
       it('should track build sequence per chunk', () => {
@@ -236,7 +268,7 @@ describe('BuildHandler', () => {
         
         // At least one chunk should have the build sequence
         let foundSeq = false;
-        for (const seq of room.chunkBuildSeq.values()) {
+        for (const seq of chunkBuildSeq.values()) {
           if (seq === result.buildSeq) {
             foundSeq = true;
             break;
