@@ -238,43 +238,46 @@ const fragmentShaderPrefix = /* glsl */ `
   varying vec3 vWorldPosition;
   varying vec3 vWorldNormal;
   
-  vec3 getTriPlanarBlend(vec3 normal) {
+  // Precomputed blend weights - set once in main(), reused everywhere
+  vec3 gTriBlend;
+  vec3 gMatBlend;
+  vec2 gTriUV_zy;
+  vec2 gTriUV_xz;
+  vec2 gTriUV_xy;
+  
+  vec3 calcTriPlanarBlend(vec3 normal) {
     vec3 blending = blendOffset * normal;
-    blending = pow(abs(blending), vec3(2.0));
-    blending = normalize(max(blending, 0.00001));
-    float b = blending.x + blending.y + blending.z;
-    return blending / b;
+    blending = blending * blending; // Faster than pow(abs(), 2.0)
+    blending = max(blending, 0.00001);
+    return blending / (blending.x + blending.y + blending.z);
   }
   
-  vec3 getWeightedBlend() {
-    vec3 w = vMaterialWeights;
-    w = pow(abs(w), vec3(2.0));
-    w = normalize(max(w, 0.00001));
+  vec3 calcMaterialBlend() {
+    vec3 w = vMaterialWeights * vMaterialWeights; // Faster than pow(abs(), 2.0)
+    w = max(w, 0.00001);
     return w / (w.x + w.y + w.z);
   }
   
-  vec4 sampleTriPlanar(sampler2DArray tex, vec3 pos, vec3 blend, float layer) {
-    vec4 xaxis = texture(tex, vec3(pos.zy * repeatScale, layer));
-    vec4 yaxis = texture(tex, vec3(pos.xz * repeatScale, layer));
-    vec4 zaxis = texture(tex, vec3(pos.xy * repeatScale, layer));
-    return xaxis * blend.x + yaxis * blend.y + zaxis * blend.z;
+  vec4 sampleTriPlanar(sampler2DArray tex, float layer) {
+    vec4 xaxis = texture(tex, vec3(gTriUV_zy, layer));
+    vec4 yaxis = texture(tex, vec3(gTriUV_xz, layer));
+    vec4 zaxis = texture(tex, vec3(gTriUV_xy, layer));
+    return xaxis * gTriBlend.x + yaxis * gTriBlend.y + zaxis * gTriBlend.z;
   }
   
-  vec4 sampleMaterialBlend(sampler2DArray tex, vec3 pos, vec3 triBlend) {
-    vec3 matBlend = getWeightedBlend();
-    vec4 m0 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.x);
-    vec4 m1 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.y);
-    vec4 m2 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.z);
-    return m0 * matBlend.x + m1 * matBlend.y + m2 * matBlend.z;
+  vec4 sampleMaterialBlend(sampler2DArray tex) {
+    vec4 m0 = sampleTriPlanar(tex, vMaterialIds.x);
+    vec4 m1 = sampleTriPlanar(tex, vMaterialIds.y);
+    vec4 m2 = sampleTriPlanar(tex, vMaterialIds.z);
+    return m0 * gMatBlend.x + m1 * gMatBlend.y + m2 * gMatBlend.z;
   }
   
-  // Sample a single axis with material blending
+  // Sample a single axis with material blending (for normal maps)
   vec4 sampleAxisMaterialBlend(sampler2DArray tex, vec2 uv) {
-    vec3 matBlend = getWeightedBlend();
-    vec4 m0 = texture(tex, vec3(uv * repeatScale, vMaterialIds.x));
-    vec4 m1 = texture(tex, vec3(uv * repeatScale, vMaterialIds.y));
-    vec4 m2 = texture(tex, vec3(uv * repeatScale, vMaterialIds.z));
-    return m0 * matBlend.x + m1 * matBlend.y + m2 * matBlend.z;
+    vec4 m0 = texture(tex, vec3(uv, vMaterialIds.x));
+    vec4 m1 = texture(tex, vec3(uv, vMaterialIds.y));
+    vec4 m2 = texture(tex, vec3(uv, vMaterialIds.z));
+    return m0 * gMatBlend.x + m1 * gMatBlend.y + m2 * gMatBlend.z;
   }
 `;
 
@@ -350,13 +353,19 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.fragmentShader = fragmentShaderPrefix + shader.fragmentShader;
       
       // Replace diffuse color calculation
-      // Compute triPos and triBlend ONCE here - reused by roughness, metalness, AO, normal, and debug
+      // Compute all blend weights ONCE here - stored in globals, reused everywhere
       shader.fragmentShader = shader.fragmentShader.replace(
         'vec4 diffuseColor = vec4( diffuse, opacity );',
         /* glsl */ `
+          // Precompute all blend weights and scaled UVs once
           vec3 triPos = vWorldPosition / 8.0;
-          vec3 triBlend = getTriPlanarBlend(vWorldNormal);
-          vec4 sampledAlbedo = sampleMaterialBlend(mapArray, triPos, triBlend);
+          gTriBlend = calcTriPlanarBlend(vWorldNormal);
+          gMatBlend = calcMaterialBlend();
+          gTriUV_zy = triPos.zy * repeatScale;
+          gTriUV_xz = triPos.xz * repeatScale;
+          gTriUV_xy = triPos.xy * repeatScale;
+          
+          vec4 sampledAlbedo = sampleMaterialBlend(mapArray);
           #ifdef USE_TEXTURE_ALPHA
             vec4 diffuseColor = vec4(sampledAlbedo.rgb, sampledAlbedo.a);
           #else
@@ -365,60 +374,61 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
         `
       );
       
-      // Replace roughness calculation (reuses triPos/triBlend from diffuseColor)
+      // Replace roughness calculation (uses precomputed globals)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <roughnessmap_fragment>',
         /* glsl */ `
-          float roughnessFactor = sampleMaterialBlend(roughnessArray, triPos, triBlend).r;
+          float roughnessFactor = sampleMaterialBlend(roughnessArray).r;
         `
       );
       
-      // Replace metalness calculation (reuses triPos/triBlend from diffuseColor)
+      // Replace metalness calculation (uses precomputed globals)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <metalnessmap_fragment>',
         /* glsl */ `
-          float metalnessFactor = sampleMaterialBlend(metalnessArray, triPos, triBlend).r;
+          float metalnessFactor = sampleMaterialBlend(metalnessArray).r;
         `
       );
       
-      // Replace AO calculation (reuses triPos/triBlend from diffuseColor)
+      // Replace AO calculation (uses precomputed globals)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <aomap_fragment>',
         /* glsl */ `
-          float ambientOcclusion = sampleMaterialBlend(aoArray, triPos, triBlend).r;
+          float ambientOcclusion = sampleMaterialBlend(aoArray).r;
           reflectedLight.indirectDiffuse *= ambientOcclusion;
         `
       );
       
-      // Replace normal map calculation with tri-planar tangent frame (reuses triPos/triBlend from diffuseColor)
+      // Replace normal map calculation with tri-planar tangent frame (uses precomputed globals)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <normal_fragment_maps>',
         /* glsl */ `
           #ifdef USE_NORMALMAP
-            // Sample normal maps for each axis with material blending
-            vec3 normalSampleX = sampleAxisMaterialBlend(normalArray, triPos.zy).xyz * 2.0 - 1.0;
+            // Sample normal maps for each axis with material blending (UVs already scaled)
+            vec3 normalSampleX = sampleAxisMaterialBlend(normalArray, gTriUV_zy).xyz * 2.0 - 1.0;
             normalSampleX.xy *= normalScale;
-            vec3 normalSampleY = sampleAxisMaterialBlend(normalArray, triPos.xz).xyz * 2.0 - 1.0;
+            vec3 normalSampleY = sampleAxisMaterialBlend(normalArray, gTriUV_xz).xyz * 2.0 - 1.0;
             normalSampleY.xy *= normalScale;
-            vec3 normalSampleZ = sampleAxisMaterialBlend(normalArray, triPos.xy).xyz * 2.0 - 1.0;
+            vec3 normalSampleZ = sampleAxisMaterialBlend(normalArray, gTriUV_xy).xyz * 2.0 - 1.0;
             normalSampleZ.xy *= normalScale;
             
-            // Compute tangent frames for each projection axis
-            mat3 tbnX = getTangentFrame(-vViewPosition, normalize(vNormal), triPos.zy);
-            mat3 tbnY = getTangentFrame(-vViewPosition, normalize(vNormal), triPos.xz);
-            mat3 tbnZ = getTangentFrame(-vViewPosition, normalize(vNormal), triPos.xy);
+            // Compute tangent frames for each projection axis (normalize vNormal once)
+            vec3 geomNormal = normalize(vNormal);
+            mat3 tbnX = getTangentFrame(-vViewPosition, geomNormal, gTriUV_zy);
+            mat3 tbnY = getTangentFrame(-vViewPosition, geomNormal, gTriUV_xz);
+            mat3 tbnZ = getTangentFrame(-vViewPosition, geomNormal, gTriUV_xy);
             
             // Transform normals to world space and blend
             vec3 normalX = normalize(tbnX * normalSampleX);
             vec3 normalY = normalize(tbnY * normalSampleY);
             vec3 normalZ = normalize(tbnZ * normalSampleZ);
             
-            normal = normalize(normalX * triBlend.x + normalY * triBlend.y + normalZ * triBlend.z);
+            normal = normalize(normalX * gTriBlend.x + normalY * gTriBlend.y + normalZ * gTriBlend.z);
           #endif
         `
       );
       
-      // Add debug output before final color output (reuses triPos/triBlend from diffuseColor)
+      // Add debug output before final color output (uses precomputed globals)
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <dithering_fragment>',
         /* glsl */ `
@@ -428,22 +438,22 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
           if (debugMode > 0) {
             if (debugMode == 1) {
               // Albedo only
-              gl_FragColor = vec4(sampleMaterialBlend(mapArray, triPos, triBlend).rgb, 1.0);
+              gl_FragColor = vec4(sampleMaterialBlend(mapArray).rgb, 1.0);
             } else if (debugMode == 2) {
               // Normal map (remap from -1,1 to 0,1 for visualization)
-              vec3 nSample = sampleMaterialBlend(normalArray, triPos, triBlend).xyz;
+              vec3 nSample = sampleMaterialBlend(normalArray).xyz;
               gl_FragColor = vec4(nSample, 1.0);
             } else if (debugMode == 3) {
               // AO
-              float ao = sampleMaterialBlend(aoArray, triPos, triBlend).r;
+              float ao = sampleMaterialBlend(aoArray).r;
               gl_FragColor = vec4(ao, ao, ao, 1.0);
             } else if (debugMode == 4) {
               // Roughness
-              float r = sampleMaterialBlend(roughnessArray, triPos, triBlend).r;
+              float r = sampleMaterialBlend(roughnessArray).r;
               gl_FragColor = vec4(r, r, r, 1.0);
             } else if (debugMode == 5) {
               // Tri-planar blend weights
-              gl_FragColor = vec4(triBlend, 1.0);
+              gl_FragColor = vec4(gTriBlend, 1.0);
             } else if (debugMode == 6) {
               // Material IDs - use modulo and color mapping for visibility
               // Each channel shows different material, with distinct colors
@@ -464,7 +474,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
               gl_FragColor = vec4(hue, 1.0);
             } else if (debugMode == 7) {
               // Material weights
-              gl_FragColor = vec4(getWeightedBlend(), 1.0);
+              gl_FragColor = vec4(gMatBlend, 1.0);
             } else if (debugMode == 8) {
               // World normal
               gl_FragColor = vec4(vWorldNormal * 0.5 + 0.5, 1.0);
