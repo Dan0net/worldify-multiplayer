@@ -44,6 +44,46 @@ export const windUniformsVertex = /* glsl */ `
   uniform float uWindFrequency;
 `;
 
+// ============== Shared Fragment Utilities ==============
+
+/** Common fragment varyings (must match vertex outputs) */
+const fragmentVaryings = /* glsl */ `
+  flat varying vec3 vMaterialIds;
+  varying vec3 vMaterialWeights;
+  varying vec3 vWorldPosition;
+  varying vec3 vWorldNormal;
+`;
+
+/** Tri-planar and material blending core functions */
+const blendingFunctions = /* glsl */ `
+  vec3 calcTriPlanarBlend(vec3 normal, mat3 offset) {
+    vec3 blending = offset * normal;
+    blending = blending * blending;
+    blending = max(blending, 0.00001);
+    return blending / (blending.x + blending.y + blending.z);
+  }
+  
+  vec3 calcMaterialBlend(vec3 weights) {
+    vec3 w = weights * weights;
+    w = max(w, 0.00001);
+    return w / (w.x + w.y + w.z);
+  }
+  
+  vec4 sampleTriPlanarAt(sampler2DArray tex, vec3 pos, vec3 blend, float scale, float layer) {
+    vec4 xaxis = texture(tex, vec3(pos.zy * scale, layer));
+    vec4 yaxis = texture(tex, vec3(pos.xz * scale, layer));
+    vec4 zaxis = texture(tex, vec3(pos.xy * scale, layer));
+    return xaxis * blend.x + yaxis * blend.y + zaxis * blend.z;
+  }
+  
+  vec4 sampleMaterialBlendAt(sampler2DArray tex, vec3 pos, vec3 triBlend, vec3 matBlend, vec3 matIds, float scale) {
+    vec4 m0 = sampleTriPlanarAt(tex, pos, triBlend, scale, matIds.x);
+    vec4 m1 = sampleTriPlanarAt(tex, pos, triBlend, scale, matIds.y);
+    vec4 m2 = sampleTriPlanarAt(tex, pos, triBlend, scale, matIds.z);
+    return m0 * matBlend.x + m1 * matBlend.y + m2 * matBlend.z;
+  }
+`;
+
 // ============== TerrainMaterial Shaders ==============
 
 export const terrainVertexPrefix = /* glsl */ `
@@ -73,10 +113,7 @@ export const terrainFragmentPrefix = /* glsl */ `
   uniform mat3 blendOffset;
   uniform int debugMode;
   
-  flat varying vec3 vMaterialIds;
-  varying vec3 vMaterialWeights;
-  varying vec3 vWorldPosition;
-  varying vec3 vWorldNormal;
+  ${fragmentVaryings}
   
   // Precomputed blend weights - set once in main(), reused everywhere
   vec3 gTriBlend;
@@ -85,19 +122,9 @@ export const terrainFragmentPrefix = /* glsl */ `
   vec2 gTriUV_xz;
   vec2 gTriUV_xy;
   
-  vec3 calcTriPlanarBlend(vec3 normal) {
-    vec3 blending = blendOffset * normal;
-    blending = blending * blending;
-    blending = max(blending, 0.00001);
-    return blending / (blending.x + blending.y + blending.z);
-  }
+  ${blendingFunctions}
   
-  vec3 calcMaterialBlend() {
-    vec3 w = vMaterialWeights * vMaterialWeights;
-    w = max(w, 0.00001);
-    return w / (w.x + w.y + w.z);
-  }
-  
+  // Convenience wrappers using precomputed globals
   vec4 sampleTriPlanar(sampler2DArray tex, float layer) {
     vec4 xaxis = texture(tex, vec3(gTriUV_zy, layer));
     vec4 yaxis = texture(tex, vec3(gTriUV_xz, layer));
@@ -123,8 +150,8 @@ export const terrainFragmentPrefix = /* glsl */ `
 export const terrainDiffuseFragment = /* glsl */ `
   // Precompute all blend weights and scaled UVs once
   vec3 triPos = vWorldPosition / 8.0;
-  gTriBlend = calcTriPlanarBlend(vWorldNormal);
-  gMatBlend = calcMaterialBlend();
+  gTriBlend = calcTriPlanarBlend(vWorldNormal, blendOffset);
+  gMatBlend = calcMaterialBlend(vMaterialWeights);
   gTriUV_zy = triPos.zy * repeatScale;
   gTriUV_xz = triPos.xz * repeatScale;
   gTriUV_xy = triPos.xy * repeatScale;
@@ -231,46 +258,16 @@ export const depthFragmentPrefix = /* glsl */ `
   uniform mat3 blendOffset;
   uniform float alphaCutoff;
   
-  flat varying vec3 vMaterialIds;
-  varying vec3 vMaterialWeights;
-  varying vec3 vWorldPosition;
-  varying vec3 vWorldNormal;
+  ${fragmentVaryings}
   
-  vec3 getTriPlanarBlend(vec3 normal) {
-    vec3 blending = blendOffset * normal;
-    blending = pow(abs(blending), vec3(2.0));
-    blending = normalize(max(blending, 0.00001));
-    float b = blending.x + blending.y + blending.z;
-    return blending / b;
-  }
-  
-  vec3 getWeightedBlend() {
-    vec3 w = vMaterialWeights;
-    w = pow(abs(w), vec3(2.0));
-    w = normalize(max(w, 0.00001));
-    return w / (w.x + w.y + w.z);
-  }
-  
-  vec4 sampleTriPlanar(sampler2DArray tex, vec3 pos, vec3 blend, float layer) {
-    vec4 xaxis = texture(tex, vec3(pos.zy * repeatScale, layer));
-    vec4 yaxis = texture(tex, vec3(pos.xz * repeatScale, layer));
-    vec4 zaxis = texture(tex, vec3(pos.xy * repeatScale, layer));
-    return xaxis * blend.x + yaxis * blend.y + zaxis * blend.z;
-  }
-  
-  vec4 sampleMaterialBlend(sampler2DArray tex, vec3 pos, vec3 triBlend) {
-    vec3 matBlend = getWeightedBlend();
-    vec4 m0 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.x);
-    vec4 m1 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.y);
-    vec4 m2 = sampleTriPlanar(tex, pos, triBlend, vMaterialIds.z);
-    return m0 * matBlend.x + m1 * matBlend.y + m2 * matBlend.z;
-  }
+  ${blendingFunctions}
 `;
 
 export const depthAlphaDiscard = /* glsl */ `
   vec3 pos = vWorldPosition / 8.0;
-  vec3 triBlend = getTriPlanarBlend(vWorldNormal);
-  float alpha = sampleMaterialBlend(mapArray, pos, triBlend).a;
+  vec3 triBlend = calcTriPlanarBlend(vWorldNormal, blendOffset);
+  vec3 matBlend = calcMaterialBlend(vMaterialWeights);
+  float alpha = sampleMaterialBlendAt(mapArray, pos, triBlend, matBlend, vMaterialIds, repeatScale).a;
   if (alpha < alphaCutoff) {
     discard;
   }
