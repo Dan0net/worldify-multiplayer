@@ -77,7 +77,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   scene.add(sunLight);
   scene.add(sunLight.target);
   
-  // Moon (secondary directional light, no shadows for now)
+  // Moon (secondary directional light, casts shadows at night)
   moonLight = new THREE.DirectionalLight(
     settings.moonColor ?? '#8899bb',
     settings.moonIntensity ?? 0.3
@@ -88,7 +88,8 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
     settings.sunDistance ?? 150
   );
   moonLight.position.copy(moonPos);
-  moonLight.castShadow = false; // No moon shadows for performance
+  moonLight.castShadow = true;
+  configureShadowCamera(moonLight, settings);
   scene.add(moonLight);
   scene.add(moonLight.target);
   
