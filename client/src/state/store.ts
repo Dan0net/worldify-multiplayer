@@ -67,7 +67,45 @@ export interface EnvironmentSettings {
   // Tone mapping
   toneMapping: THREE.ToneMapping;
   toneMappingExposure: number; // 0.1 to 3
+  
+  // Post-processing effects
+  ssaoKernelRadius: number;     // 0-32
+  ssaoMinDistance: number;      // 0.001-0.02
+  bloomIntensity: number;       // 0-3
+  bloomThreshold: number;       // 0-1
+  bloomRadius: number;          // 0-1
 }
+
+/** Material shader settings for debug/tweaking */
+export interface MaterialSettings {
+  // Texture multipliers (applied in shader)
+  roughnessMultiplier: number;    // 0-2, multiplied with texture value
+  metalnessMultiplier: number;    // 0-2, multiplied with texture value
+  aoIntensity: number;            // 0-2, AO effect strength
+  normalStrength: number;         // 0-2, normal map intensity
+  
+  // Tri-planar blending
+  blendSharpness: number;         // 1-8, higher = sharper blending
+  repeatScale: number;            // 0.5-4, texture repeat scale
+  
+  // Wind animation (transparent materials)
+  windStrength: number;           // 0-0.5
+  windSpeed: number;              // 0-2
+  windFrequency: number;          // 0.1-3
+}
+
+/** Default material settings */
+export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
+  roughnessMultiplier: 1.0,
+  metalnessMultiplier: 1.0,
+  aoIntensity: 1.0,
+  normalStrength: 1.0,
+  blendSharpness: 2.0,
+  repeatScale: 2.0,
+  windStrength: 0.1,
+  windSpeed: 0.7,
+  windFrequency: 1.0,
+};
 
 /** Default environment settings */
 export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
@@ -92,12 +130,19 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   
   toneMapping: THREE.ACESFilmicToneMapping,
   toneMappingExposure: 1.0,
+  
+  ssaoKernelRadius: 12,
+  ssaoMinDistance: 0.002,
+  bloomIntensity: 0.3,
+  bloomThreshold: 0.85,
+  bloomRadius: 0.4,
 };
 
 /** Debug panel section collapse state */
 export interface DebugPanelSections {
   stats: boolean;
   debug: boolean;
+  materials: boolean;
   environment: boolean;
 }
 
@@ -146,6 +191,9 @@ interface GameState {
   // Environment settings
   environment: EnvironmentSettings;
   
+  // Material shader settings
+  materialSettings: MaterialSettings;
+  
   // Debug panel section collapse state
   debugPanelSections: DebugPanelSections;
 
@@ -190,6 +238,10 @@ interface GameState {
   setEnvironment: (updates: Partial<EnvironmentSettings>) => void;
   setTimeOfDay: (time: number) => void;
   setTimeSpeed: (speed: number) => void;
+  
+  // Material settings actions
+  setMaterialSettings: (updates: Partial<MaterialSettings>) => void;
+  resetMaterialSettings: () => void;
   
   // Debug panel actions
   toggleDebugSection: (section: keyof DebugPanelSections) => void;
@@ -253,10 +305,14 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Environment initial state
   environment: { ...DEFAULT_ENVIRONMENT },
   
+  // Material settings initial state
+  materialSettings: { ...DEFAULT_MATERIAL_SETTINGS },
+  
   // Debug panel sections (all expanded by default)
   debugPanelSections: {
     stats: true,
     debug: false,
+    materials: false,
     environment: false,
   },
 
@@ -334,6 +390,14 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setTimeSpeed: (speed) => set((state) => ({
     environment: { ...state.environment, timeSpeed: Math.max(0, speed) },
   })),
+  
+  // Material settings actions
+  setMaterialSettings: (updates) => set((state) => ({
+    materialSettings: { ...state.materialSettings, ...updates },
+  })),
+  resetMaterialSettings: () => set({
+    materialSettings: { ...DEFAULT_MATERIAL_SETTINGS },
+  }),
   
   // Debug panel actions
   toggleDebugSection: (section) => set((state) => ({

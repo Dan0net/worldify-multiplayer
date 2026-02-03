@@ -58,7 +58,7 @@ const fragmentVaryings = /* glsl */ `
 const blendingFunctions = /* glsl */ `
   vec3 calcTriPlanarBlend(vec3 normal, mat3 offset) {
     vec3 blending = offset * normal;
-    blending = blending * blending;
+    blending = pow(abs(blending), vec3(blendSharpness));
     blending = max(blending, 0.00001);
     return blending / (blending.x + blending.y + blending.z);
   }
@@ -113,6 +113,13 @@ export const terrainFragmentPrefix = /* glsl */ `
   uniform mat3 blendOffset;
   uniform int debugMode;
   
+  // Material adjustment uniforms
+  uniform float roughnessMultiplier;
+  uniform float metalnessMultiplier;
+  uniform float aoIntensity;
+  uniform float normalStrength;
+  uniform float blendSharpness;
+  
   ${fragmentVaryings}
   
   // Precomputed blend weights - set once in main(), reused everywhere
@@ -165,26 +172,27 @@ export const terrainDiffuseFragment = /* glsl */ `
 `;
 
 export const terrainRoughnessFragment = /* glsl */ `
-  float roughnessFactor = sampleMaterialBlend(roughnessArray).r;
+  float roughnessFactor = sampleMaterialBlend(roughnessArray).r * roughnessMultiplier;
 `;
 
 export const terrainMetalnessFragment = /* glsl */ `
-  float metalnessFactor = sampleMaterialBlend(metalnessArray).r;
+  float metalnessFactor = sampleMaterialBlend(metalnessArray).r * metalnessMultiplier;
 `;
 
 export const terrainAoFragment = /* glsl */ `
-  float ambientOcclusion = sampleMaterialBlend(aoArray).r;
+  float aoSample = sampleMaterialBlend(aoArray).r;
+  float ambientOcclusion = mix(1.0, aoSample, aoIntensity);
   reflectedLight.indirectDiffuse *= ambientOcclusion;
 `;
 
 export const terrainNormalFragment = /* glsl */ `
   #ifdef USE_NORMALMAP
     vec3 normalSampleX = sampleAxisMaterialBlend(normalArray, gTriUV_zy).xyz * 2.0 - 1.0;
-    normalSampleX.xy *= normalScale;
+    normalSampleX.xy *= normalScale * normalStrength;
     vec3 normalSampleY = sampleAxisMaterialBlend(normalArray, gTriUV_xz).xyz * 2.0 - 1.0;
-    normalSampleY.xy *= normalScale;
+    normalSampleY.xy *= normalScale * normalStrength;
     vec3 normalSampleZ = sampleAxisMaterialBlend(normalArray, gTriUV_xy).xyz * 2.0 - 1.0;
-    normalSampleZ.xy *= normalScale;
+    normalSampleZ.xy *= normalScale * normalStrength;
     
     vec3 geomNormal = normalize(vNormal);
     mat3 tbnX = getTangentFrame(-vViewPosition, geomNormal, gTriUV_zy);
@@ -257,6 +265,7 @@ export const depthFragmentPrefix = /* glsl */ `
   uniform float repeatScale;
   uniform mat3 blendOffset;
   uniform float alphaCutoff;
+  uniform float blendSharpness;
   
   ${fragmentVaryings}
   

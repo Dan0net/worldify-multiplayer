@@ -1097,7 +1097,7 @@
         "path": "leaves_trans_3/leaves_trans_3_Color.png"
       },
       "normal": {
-        "path": "leaves_trans_3/leaves_trans_3_NormalDX.png"
+        "path": "leaves_trans_3/leaves_trans_3_NormalGL.png"
       },
       "roughness": {
         "path": "leaves_trans_3/leaves_trans_3_Roughness.png"

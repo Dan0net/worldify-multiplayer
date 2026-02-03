@@ -44,6 +44,13 @@ export interface EnvironmentSettings {
   // Tone mapping
   toneMapping: THREE.ToneMapping;
   toneMappingExposure: number; // 0.1 to 3
+  
+  // Post-processing
+  ssaoKernelRadius: number;    // 0 to 32
+  ssaoMinDistance: number;     // 0.001 to 0.02
+  bloomIntensity: number;      // 0 to 3
+  bloomThreshold: number;      // 0 to 1
+  bloomRadius: number;         // 0 to 1
 }
 
 export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
@@ -68,6 +75,12 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   
   toneMapping: THREE.ACESFilmicToneMapping,
   toneMappingExposure: 1.0,
+  
+  ssaoKernelRadius: 12,
+  ssaoMinDistance: 0.002,
+  bloomIntensity: 0.3,
+  bloomThreshold: 0.85,
+  bloomRadius: 0.4,
 };
 
 // ============== Internal State ==============

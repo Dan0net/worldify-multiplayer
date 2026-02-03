@@ -178,6 +178,7 @@ function createBlendOffsetMatrix(): THREE.Matrix3 {
 export class TerrainMaterial extends THREE.MeshStandardMaterial {
   private _shader: ShaderWithUniforms | null = null;
   private textures: LoadedTextures | null = null;
+  private _windSpeed: number = WIND_SPEED;
   
   constructor(isTransparent: boolean = false) {
     super({
@@ -203,6 +204,13 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
       shader.uniforms.blendOffset = { value: createBlendOffsetMatrix() };
       shader.uniforms.debugMode = { value: 0 };
+      
+      // Material adjustment uniforms
+      shader.uniforms.roughnessMultiplier = { value: 1.0 };
+      shader.uniforms.metalnessMultiplier = { value: 1.0 };
+      shader.uniforms.aoIntensity = { value: 1.0 };
+      shader.uniforms.normalStrength = { value: 1.0 };
+      shader.uniforms.blendSharpness = { value: 2.0 };
       
       if (isTransparent) {
         shader.defines = shader.defines || {};
@@ -276,8 +284,56 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
   
   setWindTime(time: number): void {
     if (this._shader?.uniforms.uTime) {
-      this._shader.uniforms.uTime.value = time * WIND_SPEED;
+      this._shader.uniforms.uTime.value = time * this._windSpeed;
     }
+  }
+  
+  // ============== Material Adjustment Setters ==============
+  
+  setRoughnessMultiplier(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.roughnessMultiplier.value = value;
+    }
+  }
+  
+  setMetalnessMultiplier(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.metalnessMultiplier.value = value;
+    }
+  }
+  
+  setAoIntensity(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.aoIntensity.value = value;
+    }
+  }
+  
+  setNormalStrength(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.normalStrength.value = value;
+    }
+  }
+  
+  setBlendSharpness(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.blendSharpness.value = value;
+    }
+  }
+  
+  setWindStrength(value: number): void {
+    if (this._shader?.uniforms.uWindStrength) {
+      this._shader.uniforms.uWindStrength.value = value;
+    }
+  }
+  
+  setWindFrequency(value: number): void {
+    if (this._shader?.uniforms.uWindFrequency) {
+      this._shader.uniforms.uWindFrequency.value = value;
+    }
+  }
+  
+  setWindSpeed(value: number): void {
+    this._windSpeed = value;
   }
 }
 
@@ -318,6 +374,7 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
       shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
       shader.uniforms.blendOffset = { value: createBlendOffsetMatrix() };
       shader.uniforms.alphaCutoff = { value: ALPHA_CUTOFF };
+      shader.uniforms.blendSharpness = { value: 2.0 };
       shader.uniforms.uTime = { value: 0.0 };
       shader.uniforms.uWindStrength = { value: WIND_STRENGTH };
       shader.uniforms.uWindFrequency = { value: WIND_FREQUENCY };
@@ -500,6 +557,70 @@ export function updateWindTime(elapsedTime: number): void {
   liquidMaterial?.setWindTime(elapsedTime);
   transparentDepthMaterial?.setWindTime(elapsedTime);
   windNormalMaterial?.setWindTime(elapsedTime);
+}
+
+// ============== Material Settings API ==============
+
+/** Material settings interface matching store */
+export interface MaterialSettingsUpdate {
+  roughnessMultiplier?: number;
+  metalnessMultiplier?: number;
+  aoIntensity?: number;
+  normalStrength?: number;
+  blendSharpness?: number;
+  repeatScale?: number;
+  windStrength?: number;
+  windSpeed?: number;
+  windFrequency?: number;
+}
+
+/**
+ * Apply material settings to all terrain materials.
+ * Called from the bridge when store state changes.
+ */
+export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
+  const materials = [solidMaterial, transparentMaterial, liquidMaterial];
+  
+  for (const mat of materials) {
+    if (!mat) continue;
+    
+    if (settings.roughnessMultiplier !== undefined) {
+      mat.setRoughnessMultiplier(settings.roughnessMultiplier);
+    }
+    if (settings.metalnessMultiplier !== undefined) {
+      mat.setMetalnessMultiplier(settings.metalnessMultiplier);
+    }
+    if (settings.aoIntensity !== undefined) {
+      mat.setAoIntensity(settings.aoIntensity);
+    }
+    if (settings.normalStrength !== undefined) {
+      mat.setNormalStrength(settings.normalStrength);
+    }
+    if (settings.blendSharpness !== undefined) {
+      mat.setBlendSharpness(settings.blendSharpness);
+    }
+    if (settings.repeatScale !== undefined) {
+      mat.setRepeatScale(settings.repeatScale);
+    }
+    if (settings.windStrength !== undefined) {
+      mat.setWindStrength(settings.windStrength);
+    }
+    if (settings.windSpeed !== undefined) {
+      mat.setWindSpeed(settings.windSpeed);
+    }
+    if (settings.windFrequency !== undefined) {
+      mat.setWindFrequency(settings.windFrequency);
+    }
+  }
+}
+
+/**
+ * Set repeat scale for all terrain materials.
+ */
+export function setTerrainRepeatScale(scale: number): void {
+  solidMaterial?.setRepeatScale(scale);
+  transparentMaterial?.setRepeatScale(scale);
+  liquidMaterial?.setRepeatScale(scale);
 }
 
 // ============== Debug Console Access ==============

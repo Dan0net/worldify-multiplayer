@@ -2,7 +2,7 @@ import { useEffect, useState, ReactNode } from 'react';
 import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
-import { togglePostProcessing as togglePostProcessingEffect } from '../game/scene/postprocessing';
+import { togglePostProcessing as togglePostProcessingEffect, updatePostProcessing } from '../game/scene/postprocessing';
 import { applyEnvironmentSettings, formatTimeOfDay, TONE_MAPPING_OPTIONS } from '../game/scene/TimeOfDay';
 import { storeBridge } from '../state/bridge';
 import * as THREE from 'three';
@@ -147,6 +147,7 @@ export function DebugPanel() {
     forceRegenerateChunks,
     environment,
     setEnvironment,
+    materialSettings,
     debugPanelSections,
     toggleDebugSection,
   } = useGameStore();
@@ -181,6 +182,22 @@ export function DebugPanel() {
   const handleEnvironmentChange = (updates: Partial<EnvironmentSettings>) => {
     setEnvironment(updates);
     applyEnvironmentSettings({ ...environment, ...updates });
+    
+    // Apply post-processing changes if any relevant settings changed
+    if ('ssaoKernelRadius' in updates || 'ssaoMinDistance' in updates ||
+        'bloomIntensity' in updates || 'bloomThreshold' in updates || 'bloomRadius' in updates) {
+      updatePostProcessing(updates);
+    }
+  };
+
+  // Apply material settings changes to shaders
+  const handleMaterialChange = (updates: Partial<typeof materialSettings>) => {
+    storeBridge.setMaterialSettings(updates);
+  };
+
+  // Reset material settings to defaults
+  const handleResetMaterialSettings = () => {
+    storeBridge.resetMaterialSettings();
   };
 
   // Keyboard shortcuts
@@ -376,6 +393,111 @@ export function DebugPanel() {
         </div>
       </Section>
 
+      {/* ============== MATERIALS SECTION ============== */}
+      <Section
+        title="🎨 Materials"
+        isOpen={debugPanelSections.materials}
+        onToggle={() => toggleDebugSection('materials')}
+        color="yellow"
+      >
+        {/* Texture Multipliers */}
+        <div className="mb-3">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">📐 Texture Adjustments</div>
+          <Slider
+            label="Roughness"
+            value={materialSettings.roughnessMultiplier}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleMaterialChange({ roughnessMultiplier: v })}
+          />
+          <Slider
+            label="Metalness"
+            value={materialSettings.metalnessMultiplier}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleMaterialChange({ metalnessMultiplier: v })}
+          />
+          <Slider
+            label="AO Intensity"
+            value={materialSettings.aoIntensity}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleMaterialChange({ aoIntensity: v })}
+          />
+          <Slider
+            label="Normal Strength"
+            value={materialSettings.normalStrength}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleMaterialChange({ normalStrength: v })}
+          />
+        </div>
+        
+        {/* Tri-planar Blending */}
+        <div className="mb-3 pt-2 border-t border-yellow-500/30">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">🔲 Tri-Planar Blending</div>
+          <Slider
+            label="Blend Sharpness"
+            value={materialSettings.blendSharpness}
+            min={1}
+            max={8}
+            step={0.1}
+            onChange={(v) => handleMaterialChange({ blendSharpness: v })}
+          />
+          <Slider
+            label="Repeat Scale"
+            value={materialSettings.repeatScale}
+            min={0.5}
+            max={4}
+            step={0.1}
+            onChange={(v) => handleMaterialChange({ repeatScale: v })}
+          />
+        </div>
+        
+        {/* Wind Animation */}
+        <div className="mb-3 pt-2 border-t border-yellow-500/30">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">🍃 Wind Animation</div>
+          <Slider
+            label="Strength"
+            value={materialSettings.windStrength}
+            min={0}
+            max={0.5}
+            step={0.01}
+            onChange={(v) => handleMaterialChange({ windStrength: v })}
+          />
+          <Slider
+            label="Speed"
+            value={materialSettings.windSpeed}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleMaterialChange({ windSpeed: v })}
+          />
+          <Slider
+            label="Frequency"
+            value={materialSettings.windFrequency}
+            min={0.1}
+            max={3}
+            step={0.1}
+            onChange={(v) => handleMaterialChange({ windFrequency: v })}
+          />
+        </div>
+        
+        {/* Reset Button */}
+        <div className="pt-2 border-t border-yellow-500/30">
+          <button
+            onClick={handleResetMaterialSettings}
+            className="w-full py-1 px-2 bg-yellow-900/50 hover:bg-yellow-800/50 text-yellow-400 rounded text-xs"
+          >
+            Reset to Defaults
+          </button>
+        </div>
+      </Section>
+
       {/* ============== ENVIRONMENT SECTION ============== */}
       <Section
         title="🌅 Environment"
@@ -529,6 +651,51 @@ export function DebugPanel() {
             max={3}
             step={0.05}
             onChange={(v) => handleEnvironmentChange({ toneMappingExposure: v })}
+          />
+        </div>
+        
+        {/* Post-Processing */}
+        <div className="mb-3">
+          <div className="text-green-400 text-xs mb-1">Post-Processing</div>
+          <Slider
+            label="SSAO Radius"
+            value={environment.ssaoKernelRadius}
+            min={0}
+            max={32}
+            step={1}
+            onChange={(v) => handleEnvironmentChange({ ssaoKernelRadius: v })}
+          />
+          <Slider
+            label="SSAO Min Dist"
+            value={environment.ssaoMinDistance}
+            min={0.001}
+            max={0.02}
+            step={0.001}
+            onChange={(v) => handleEnvironmentChange({ ssaoMinDistance: v })}
+          />
+          <Slider
+            label="Bloom Intensity"
+            value={environment.bloomIntensity}
+            min={0}
+            max={3}
+            step={0.05}
+            onChange={(v) => handleEnvironmentChange({ bloomIntensity: v })}
+          />
+          <Slider
+            label="Bloom Threshold"
+            value={environment.bloomThreshold}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(v) => handleEnvironmentChange({ bloomThreshold: v })}
+          />
+          <Slider
+            label="Bloom Radius"
+            value={environment.bloomRadius}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(v) => handleEnvironmentChange({ bloomRadius: v })}
           />
         </div>
       </Section>
