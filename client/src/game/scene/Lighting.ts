@@ -1,7 +1,7 @@
 /**
  * Lighting System
  * 
- * Manages sun, moon, and ambient lights with support for day-night cycle.
+ * Manages sun, moon, hemisphere lights, and procedural sky dome.
  * Uses store values for all settings to allow runtime adjustments.
  * 
  * Sun and moon positions can be set via azimuth/elevation angles,
@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { getScene } from './scene';
 import { setTerrainEnvMapIntensity } from '../material/TerrainMaterial';
 import { useGameStore, EnvironmentSettings } from '../../state/store';
+import { initSkyDome, updateSkyUniforms, disposeSkyDome } from './SkyDome';
 
 // ============== Internal State ==============
 
@@ -101,6 +102,9 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
     scene.add(hemisphereLight);
   }
   
+  // Initialize procedural sky dome (matches hemisphere/sun/moon colors)
+  initSkyDome();
+  
   // Apply environment intensity to scene
   applyEnvironmentIntensity(settings.environmentIntensity ?? 0.5);
   
@@ -110,7 +114,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
     renderer.toneMappingExposure = settings.toneMappingExposure ?? 1.0;
   }
   
-  console.log('[Lighting] Initialized with sun + moon + hemisphere lights (no ambient)');
+  console.log('[Lighting] Initialized with sun + moon + hemisphere + procedural sky');
 }
 
 function configureShadowCamera(light: THREE.DirectionalLight, settings: EnvironmentSettings): void {
@@ -248,6 +252,9 @@ export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>)
       renderer.toneMappingExposure = settings.toneMappingExposure;
     }
   }
+  
+  // Update procedural sky dome uniforms
+  updateSkyUniforms(settings);
 }
 
 /**
@@ -294,6 +301,9 @@ export function disposeLighting(): void {
     scene.remove(hemisphereLight);
     hemisphereLight = null;
   }
+  
+  // Dispose procedural sky dome
+  disposeSkyDome();
   
   renderer = null;
 }

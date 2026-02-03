@@ -18,6 +18,7 @@ import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
 import { initLighting, applyEnvironmentSettings } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
+import { updateSkyTime, updateSkyDomePosition } from './scene/SkyDome';
 import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
 import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
@@ -282,6 +283,12 @@ export class GameCore {
 
     // Update day-night cycle (calculates lighting based on time)
     updateDayNightCycle(deltaMs);
+    
+    // Update sky dome animation and position
+    updateSkyTime(elapsedTime);
+    if (camera) {
+      updateSkyDomePosition(camera.position);
+    }
     
     // Apply any environment changes to the lighting system
     const envState = storeBridge.environment;
