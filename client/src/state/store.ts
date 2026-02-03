@@ -160,8 +160,8 @@ export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
 
 /** Default environment settings - uses shared constants for consistency with pallet viewer */
 export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
-  // Day-Night Cycle - disabled by default for predictable lighting
-  dayNightEnabled: false,
+  // Day-Night Cycle - enabled by default for dynamic lighting
+  dayNightEnabled: true,
   timeOfDay: DEFAULT_TIME_OF_DAY,
   timeSpeed: DEFAULT_TIME_SPEED,
   
