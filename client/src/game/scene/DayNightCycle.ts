@@ -108,12 +108,8 @@ function getSunColor(time: number, _elevation: number): string {
     }
     
     case 'day':
-      // Slight variation through the day - warmest at edges
-      if (time < 0.4) {
-        return lerpColor(SUN_COLOR_GOLDEN, SUN_COLOR_NOON, (time - TIME_SUNRISE_END) / 0.1);
-      } else if (time > 0.6) {
-        return lerpColor(SUN_COLOR_NOON, SUN_COLOR_GOLDEN, (time - 0.6) / 0.1);
-      }
+      // Full day is mostly noon color, slight golden tint near edges
+      // Start at NOON (matching sunrise end) and stay NOON
       return SUN_COLOR_NOON;
       
     case 'sunset': {
@@ -147,13 +143,20 @@ function getSunIntensity(elevation: number): number {
 
 /**
  * Get moon intensity based on sun elevation (moon visible when sun is down)
+ * Moon starts rising earlier during twilight to prevent dark gaps
  */
 function getMoonIntensity(sunElevation: number): number {
-  if (sunElevation > 0) {
-    // Sun is up - moon fades
-    return Math.max(0, lerp(LIGHT_MOON_INTENSITY, 0, sunElevation / 20));
+  if (sunElevation > 10) {
+    // Sun is high - moon is invisible
+    return 0;
+  } else if (sunElevation > 0) {
+    // Sun is low (0-10°) - moon starts to appear
+    return lerp(0, LIGHT_MOON_INTENSITY * 0.3, (10 - sunElevation) / 10);
+  } else if (sunElevation > -10) {
+    // Twilight (-10 to 0°) - moon ramps up
+    return lerp(LIGHT_MOON_INTENSITY * 0.3, LIGHT_MOON_INTENSITY, -sunElevation / 10);
   }
-  // Night time - full moon intensity
+  // Full night - full moon intensity
   return LIGHT_MOON_INTENSITY;
 }
 
@@ -290,23 +293,29 @@ function getHemisphereGroundColor(time: number): string {
 
 /**
  * Get hemisphere light intensity based on time.
- * Lower at night to let moon/stars be more prominent.
+ * Never drops below night level - twilight maintains higher intensity.
  */
 function getHemisphereIntensity(time: number): number {
   const phase = getDayPhase(time);
+  
+  // Minimum intensity is night level - we never go darker
+  const minIntensity = HEMISPHERE_INTENSITY_NIGHT;
   
   switch (phase) {
     case 'night':
       return HEMISPHERE_INTENSITY_NIGHT;
     case 'sunrise': {
       const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
-      return lerp(HEMISPHERE_INTENSITY_NIGHT, HEMISPHERE_INTENSITY_DAY, t);
+      // Start at night intensity, ramp up to day
+      // Use max() to ensure we never dip below night level
+      return Math.max(minIntensity, lerp(HEMISPHERE_INTENSITY_NIGHT, HEMISPHERE_INTENSITY_DAY, t));
     }
     case 'day':
       return HEMISPHERE_INTENSITY_DAY;
     case 'sunset': {
       const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
-      return lerp(HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT, t);
+      // Ramp from day to night, never below night level
+      return Math.max(minIntensity, lerp(HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT, t));
     }
   }
 }

@@ -71,11 +71,11 @@ export const SUN_ELEVATION_MAX = 70;  // Max altitude at noon
 /** Sun distance from origin for light positioning */
 export const SUN_DISTANCE = 150;
 
-/** Moon light color - cool blue-white */
-export const LIGHT_MOON_COLOR = '#6891e3';
+/** Moon light color - soft cool blue */
+export const LIGHT_MOON_COLOR = '#aabbdd';
 
-/** Moon intensity at peak (when sun is fully down) */
-export const LIGHT_MOON_INTENSITY = 4.0;
+/** Moon intensity at peak - subtle directional, not main light source */
+export const LIGHT_MOON_INTENSITY = 0.8;
 
 /** Sun color at different times (interpolated) */
 export const SUN_COLOR_NOON = '#fffaf0';     // Warm white at noon
@@ -94,17 +94,17 @@ export const AMBIENT_INTENSITY_NIGHT = 5.0;
 
 /** Hemisphere light - sky color at different times */
 export const HEMISPHERE_SKY_DAY = '#87ceeb';      // Light sky blue
-export const HEMISPHERE_SKY_SUNSET = '#ff9966';   // Warm orange
-export const HEMISPHERE_SKY_NIGHT = '#1a1a2e';    // Dark blue
+export const HEMISPHERE_SKY_SUNSET = '#ddaa77';   // Warm golden
+export const HEMISPHERE_SKY_NIGHT = '#7799cc';    // Bright moonlit sky (main night fill)
 
 /** Hemisphere light - ground color at different times */
-export const HEMISPHERE_GROUND_DAY = '#3d5c3d';   // Dark green (earth)
-export const HEMISPHERE_GROUND_SUNSET = '#2d1f1f'; // Dark reddish brown
-export const HEMISPHERE_GROUND_NIGHT = '#0a0a0f'; // Near black
+export const HEMISPHERE_GROUND_DAY = '#4a6a4a';   // Green earth
+export const HEMISPHERE_GROUND_SUNSET = '#665544'; // Warm brown
+export const HEMISPHERE_GROUND_NIGHT = '#556688'; // Blue-gray ground (bright enough to see)
 
-/** Hemisphere light intensity range (replaces ambient light) */
-export const HEMISPHERE_INTENSITY_DAY = 1.0;
-export const HEMISPHERE_INTENSITY_NIGHT = 0.4;
+/** Hemisphere light intensity range (primary fill light) */
+export const HEMISPHERE_INTENSITY_DAY = 0.8;
+export const HEMISPHERE_INTENSITY_NIGHT = 1.5;    // Main light source at night
 
 /** Environment/IBL intensity range (lower at night since we don't change envmap) */
 export const ENVIRONMENT_INTENSITY_DAY = 0.5;
