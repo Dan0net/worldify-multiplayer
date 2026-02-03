@@ -248,6 +248,45 @@ class StoreBridge {
   applyCurrentMaterialSettings(): void {
     applyMaterialSettingsToShaders(this.materialSettings);
   }
+
+  // ============== Day-Night Cycle ==============
+
+  get dayNightEnabled(): boolean {
+    return getState().environment.dayNightEnabled;
+  }
+
+  get timeOfDay(): number {
+    return getState().environment.timeOfDay;
+  }
+
+  get timeSpeed(): number {
+    return getState().environment.timeSpeed;
+  }
+
+  get environment() {
+    return getState().environment;
+  }
+
+  /**
+   * Set time of day (0-1 normalized)
+   */
+  setTimeOfDay(time: number): void {
+    getState().setTimeOfDay(time);
+  }
+
+  /**
+   * Set time speed (game-minutes per real-second)
+   */
+  setTimeSpeed(speed: number): void {
+    getState().setTimeSpeed(speed);
+  }
+
+  /**
+   * Update environment settings
+   */
+  setEnvironment(updates: Partial<typeof getState extends () => { environment: infer E } ? E : never>): void {
+    getState().setEnvironment(updates);
+  }
 }
 
 export const storeBridge = new StoreBridge();

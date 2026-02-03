@@ -55,3 +55,45 @@ export const PLACEHOLDER_METALNESS = 0;
 
 /** Default normal map color (flat normal pointing up: RGB 128, 128, 255) */
 export const PLACEHOLDER_NORMAL = { r: 128, g: 128, b: 255 };
+
+// ============== Day-Night Cycle Defaults ==============
+
+/** Default time of day (0-1, 0.35 = ~8:30am morning light) */
+export const DEFAULT_TIME_OF_DAY = 0.35;
+
+/** Default time speed in game-minutes per real-second (0 = paused) */
+export const DEFAULT_TIME_SPEED = 0;
+
+/** Sun orbital elevation range (degrees) */
+export const SUN_ELEVATION_MIN = -20; // Below horizon at midnight
+export const SUN_ELEVATION_MAX = 70;  // Max altitude at noon
+
+/** Sun distance from origin for light positioning */
+export const SUN_DISTANCE = 150;
+
+/** Moon light color - cool blue-white */
+export const LIGHT_MOON_COLOR = '#8899bb';
+
+/** Moon intensity at peak (relative to sun) */
+export const LIGHT_MOON_INTENSITY = 0.3;
+
+/** Sun color at different times (interpolated) */
+export const SUN_COLOR_NOON = '#fffaf0';     // Warm white at noon
+export const SUN_COLOR_GOLDEN = '#ffcc44';   // Golden hour
+export const SUN_COLOR_SUNSET = '#ff6633';   // Sunset/sunrise red
+export const SUN_COLOR_TWILIGHT = '#334466'; // Twilight blue
+
+/** Ambient color at different times */
+export const AMBIENT_COLOR_DAY = '#ffffff';
+export const AMBIENT_COLOR_SUNSET = '#ffddcc';
+export const AMBIENT_COLOR_NIGHT = '#222244';
+
+/** Ambient intensity range */
+export const AMBIENT_INTENSITY_DAY = 0.5;
+export const AMBIENT_INTENSITY_NIGHT = 0.15;
+
+/** Time thresholds (0-1 normalized) for day phases */
+export const TIME_SUNRISE_START = 0.2;   // 4:48 AM
+export const TIME_SUNRISE_END = 0.3;     // 7:12 AM
+export const TIME_SUNSET_START = 0.7;    // 4:48 PM
+export const TIME_SUNSET_END = 0.8;      // 7:12 PM

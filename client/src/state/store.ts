@@ -11,6 +11,11 @@ import {
   LIGHT_AMBIENT_INTENSITY,
   LIGHT_SUN_COLOR,
   LIGHT_SUN_INTENSITY,
+  LIGHT_MOON_COLOR,
+  LIGHT_MOON_INTENSITY,
+  SUN_DISTANCE,
+  DEFAULT_TIME_OF_DAY,
+  DEFAULT_TIME_SPEED,
 } from '@worldify/shared';
 import * as THREE from 'three';
 
@@ -51,18 +56,32 @@ export interface BuildState {
 
 /** Environment/lighting settings */
 export interface EnvironmentSettings {
-  // Time of day
-  timeOfDay: number;        // 0-1 normalized time
-  timeSpeed: number;        // Multiplier for real-time progression (0 = paused)
+  // Day-Night Cycle
+  dayNightEnabled: boolean;       // Master toggle for automatic calculations
+  timeOfDay: number;              // 0-1 normalized time
+  timeSpeed: number;              // Game-minutes per real-second (0 = paused)
   
-  // Sun settings
+  // Auto-calculation overrides (when false, use manual values below)
+  autoSunPosition: boolean;       // Calculate sun position from time
+  autoSunColor: boolean;          // Calculate sun color from time
+  autoSunIntensity: boolean;      // Calculate sun intensity from time
+  autoMoonPosition: boolean;      // Calculate moon position from time
+  autoMoonIntensity: boolean;     // Calculate moon intensity from time
+  autoAmbientColor: boolean;      // Calculate ambient color from time
+  autoAmbientIntensity: boolean;  // Calculate ambient intensity from time
+  
+  // Sun settings (manual values, or calculated when auto is enabled)
   sunColor: string;         // Hex color
   sunIntensity: number;     // 0-10
-  sunDistance: number;      // Distance from player for shadow positioning
+  sunDistance: number;      // Distance from origin for light positioning
+  sunAzimuth: number;       // Horizontal angle in degrees (0-360)
+  sunElevation: number;     // Vertical angle in degrees (-90 to 90)
   
-  // Moon settings  
+  // Moon settings
   moonColor: string;        // Hex color
-  moonIntensity: number;    // 0-10
+  moonIntensity: number;    // 0-2
+  moonAzimuth: number;      // Horizontal angle in degrees
+  moonElevation: number;    // Vertical angle in degrees
   
   // Ambient light
   ambientColor: string;     // Hex color
@@ -125,15 +144,30 @@ export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
 
 /** Default environment settings - uses shared constants for consistency with pallet viewer */
 export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
-  timeOfDay: 0.35,          // ~8:30am - nice morning light
-  timeSpeed: 0,             // Paused by default
+  // Day-Night Cycle - disabled by default for predictable lighting
+  dayNightEnabled: false,
+  timeOfDay: DEFAULT_TIME_OF_DAY,
+  timeSpeed: DEFAULT_TIME_SPEED,
+  
+  // All auto-calculations enabled (when dayNightEnabled is true)
+  autoSunPosition: true,
+  autoSunColor: true,
+  autoSunIntensity: true,
+  autoMoonPosition: true,
+  autoMoonIntensity: true,
+  autoAmbientColor: true,
+  autoAmbientIntensity: true,
   
   sunColor: LIGHT_SUN_COLOR,
   sunIntensity: LIGHT_SUN_INTENSITY,
-  sunDistance: 150,
+  sunDistance: SUN_DISTANCE,
+  sunAzimuth: 135,          // Southeast (morning sun)
+  sunElevation: 45,         // 45 degrees up
   
-  moonColor: '#8899bb',
-  moonIntensity: 0.3,
+  moonColor: LIGHT_MOON_COLOR,
+  moonIntensity: LIGHT_MOON_INTENSITY,
+  moonAzimuth: 315,         // Opposite sun
+  moonElevation: -45,       // Below horizon during day
   
   ambientColor: LIGHT_AMBIENT_COLOR,
   ambientIntensity: LIGHT_AMBIENT_INTENSITY,
@@ -161,10 +195,11 @@ export interface DebugPanelSections {
   stats: boolean;
   debug: boolean;
   materials: boolean;
+  dayNightCycle: boolean;
   environment: boolean;
 }
 
-interface GameState {
+export interface GameState {
   // Connection
   connectionStatus: ConnectionStatus;
   roomId: string | null;
@@ -331,6 +366,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     stats: true,
     debug: false,
     materials: false,
+    dayNightCycle: false,
     environment: false,
   },
 

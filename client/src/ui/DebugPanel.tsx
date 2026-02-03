@@ -3,7 +3,8 @@ import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
 import { togglePostProcessing as togglePostProcessingEffect, updatePostProcessing } from '../game/scene/postprocessing';
-import { applyEnvironmentSettings, formatTimeOfDay, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
+import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
+import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
 import { SKYBOX_OPTIONS } from '../game/scene/Skybox';
 import { storeBridge } from '../state/bridge';
 import * as THREE from 'three';
@@ -123,6 +124,34 @@ function Select<T extends string | number>({ label, value, options, onChange }: 
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+// ============== Toggle Component ==============
+
+interface ToggleProps {
+  label: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
+}
+
+function Toggle({ label, value, onChange }: ToggleProps) {
+  return (
+    <div className="flex items-center justify-between mb-1">
+      <span className="text-xs">{label}</span>
+      <button
+        onClick={() => onChange(!value)}
+        className={`w-10 h-5 rounded-full relative transition-colors ${
+          value ? 'bg-green-600' : 'bg-gray-600'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+            value ? 'left-5' : 'left-0.5'
+          }`}
+        />
+      </button>
     </div>
   );
 }
@@ -500,21 +529,31 @@ export function DebugPanel() {
         </div>
       </Section>
 
-      {/* ============== ENVIRONMENT SECTION ============== */}
+      {/* ============== DAY-NIGHT CYCLE SECTION ============== */}
       <Section
-        title="🌅 Environment"
-        isOpen={debugPanelSections.environment}
-        onToggle={() => toggleDebugSection('environment')}
+        title="🌓 Day-Night Cycle"
+        isOpen={debugPanelSections.dayNightCycle ?? false}
+        onToggle={() => toggleDebugSection('dayNightCycle')}
         color="cyan"
       >
-        {/* Time of Day */}
+        {/* Master Toggle */}
         <div className="mb-3">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">Time of Day</div>
-          <div className="text-center text-yellow-400 text-lg mb-1">
-            {formatTimeOfDay(environment.timeOfDay)}
+          <Toggle
+            label="Enable Cycle"
+            value={environment.dayNightEnabled ?? false}
+            onChange={(v) => handleEnvironmentChange({ dayNightEnabled: v })}
+          />
+        </div>
+
+        {/* Time Display and Controls */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🕐 Time</div>
+          <div className="text-center mb-1">
+            <span className="text-yellow-400 text-lg">{formatTimeOfDay(environment.timeOfDay)}</span>
+            <span className="text-cyan-300 text-xs ml-2">{getDayPhaseLabel(environment.timeOfDay)}</span>
           </div>
           <Slider
-            label="Time"
+            label="Time of Day"
             value={environment.timeOfDay}
             min={0}
             max={1}
@@ -526,15 +565,113 @@ export function DebugPanel() {
             label="Speed (min/s)"
             value={environment.timeSpeed}
             min={0}
-            max={10}
-            step={0.1}
+            max={60}
+            step={1}
             onChange={(v) => handleEnvironmentChange({ timeSpeed: v })}
-            formatValue={(v) => v === 0 ? 'Paused' : v.toFixed(1)}
+            formatValue={(v) => v === 0 ? 'Paused' : `${(v ?? 0).toFixed(0)}`}
           />
         </div>
 
-        {/* Sun Settings */}
+        {/* Auto-Calculation Overrides */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🔄 Auto-Calculate</div>
+          <Toggle
+            label="Sun Position"
+            value={environment.autoSunPosition ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoSunPosition: v })}
+          />
+          <Toggle
+            label="Sun Color"
+            value={environment.autoSunColor ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoSunColor: v })}
+          />
+          <Toggle
+            label="Sun Intensity"
+            value={environment.autoSunIntensity ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoSunIntensity: v })}
+          />
+          <Toggle
+            label="Moon Position"
+            value={environment.autoMoonPosition ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoMoonPosition: v })}
+          />
+          <Toggle
+            label="Moon Intensity"
+            value={environment.autoMoonIntensity ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoMoonIntensity: v })}
+          />
+          <Toggle
+            label="Ambient Color"
+            value={environment.autoAmbientColor ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoAmbientColor: v })}
+          />
+          <Toggle
+            label="Ambient Intensity"
+            value={environment.autoAmbientIntensity ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoAmbientIntensity: v })}
+          />
+        </div>
+
+        {/* Manual Sun Position (when auto is off) */}
+        {(environment.autoSunPosition ?? true) === false && (
+          <div className="mb-3 pt-2 border-t border-cyan-500/30">
+            <div className="text-cyan-400 text-xs mb-1 font-bold">☀️ Sun Position (Manual)</div>
+            <Slider
+              label="Azimuth"
+              value={environment.sunAzimuth ?? 135}
+              min={0}
+              max={360}
+              step={1}
+              onChange={(v) => handleEnvironmentChange({ sunAzimuth: v })}
+              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
+            />
+            <Slider
+              label="Elevation"
+              value={environment.sunElevation ?? 45}
+              min={-90}
+              max={90}
+              step={1}
+              onChange={(v) => handleEnvironmentChange({ sunElevation: v })}
+              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
+            />
+          </div>
+        )}
+
+        {/* Manual Moon Position (when auto is off) */}
+        {(environment.autoMoonPosition ?? true) === false && (
+          <div className="mb-3 pt-2 border-t border-cyan-500/30">
+            <div className="text-cyan-400 text-xs mb-1 font-bold">🌙 Moon Position (Manual)</div>
+            <Slider
+              label="Azimuth"
+              value={environment.moonAzimuth ?? 315}
+              min={0}
+              max={360}
+              step={1}
+              onChange={(v) => handleEnvironmentChange({ moonAzimuth: v })}
+              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
+            />
+            <Slider
+              label="Elevation"
+              value={environment.moonElevation ?? -45}
+              min={-90}
+              max={90}
+              step={1}
+              onChange={(v) => handleEnvironmentChange({ moonElevation: v })}
+              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
+            />
+          </div>
+        )}
+      </Section>
+
+      {/* ============== ENVIRONMENT SECTION ============== */}
+      <Section
+        title="🌅 Environment"
+        isOpen={debugPanelSections.environment}
+        onToggle={() => toggleDebugSection('environment')}
+        color="cyan"
+      >
+        {/* Sun Settings */}
+        <div className="mb-3">
           <div className="text-cyan-400 text-xs mb-1 font-bold">☀️ Sun</div>
           <ColorPicker
             label="Color"

@@ -10,7 +10,6 @@
 import {
   CHUNK_SIZE,
   VOXELS_PER_CHUNK,
-  packVoxel,
   getWeight,
   voxelIndex,
   chunkKey,

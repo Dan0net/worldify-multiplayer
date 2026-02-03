@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
 import { initLighting, applyEnvironmentSettings } from './scene/Lighting';
+import { updateDayNightCycle } from './scene/DayNightCycle';
 import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
 import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
@@ -278,6 +279,13 @@ export class GameCore {
 
     // Update wind animation for foliage
     updateWindTime(elapsedTime);
+
+    // Update day-night cycle (calculates lighting based on time)
+    updateDayNightCycle(deltaMs);
+    
+    // Apply any environment changes to the lighting system
+    const envState = storeBridge.environment;
+    applyEnvironmentSettings(envState);
 
     // Render with post-processing (SSAO + bloom) or fallback to direct render
     const scene = getScene();

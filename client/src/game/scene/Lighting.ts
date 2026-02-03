@@ -1,10 +1,11 @@
 /**
  * Lighting System
  * 
- * Static lighting setup matching MaterialPreview/PreviewScene.
+ * Manages sun, moon, and ambient lights with support for day-night cycle.
  * Uses store values for all settings to allow runtime adjustments.
  * 
- * Replaces the old TimeOfDay system with a simpler, predictable setup.
+ * Sun and moon positions can be set via azimuth/elevation angles,
+ * calculated automatically by DayNightCycle.ts or set manually.
  */
 
 import * as THREE from 'three';
@@ -15,17 +16,36 @@ import { useGameStore, EnvironmentSettings } from '../../state/store';
 // ============== Internal State ==============
 
 let sunLight: THREE.DirectionalLight | null = null;
+let moonLight: THREE.DirectionalLight | null = null;
 let ambientLight: THREE.AmbientLight | null = null;
 let renderer: THREE.WebGLRenderer | null = null;
 
-// Static sun position matching MaterialPreview: [5, 5, 5] normalized and scaled
-const SUN_POSITION = new THREE.Vector3(5, 5, 5).normalize().multiplyScalar(150);
+// ============== Position Calculation ==============
+
+/**
+ * Convert azimuth/elevation angles to 3D position.
+ * @param azimuth - Horizontal angle in degrees (0 = North, 90 = East, 180 = South, 270 = West)
+ * @param elevation - Vertical angle in degrees (0 = horizon, 90 = zenith, -90 = nadir)
+ * @param distance - Distance from origin
+ */
+function anglesToPosition(azimuth: number, elevation: number, distance: number): THREE.Vector3 {
+  const azRad = (azimuth * Math.PI) / 180;
+  const elRad = (elevation * Math.PI) / 180;
+  
+  const cosEl = Math.cos(elRad);
+  
+  return new THREE.Vector3(
+    Math.sin(azRad) * cosEl * distance,
+    Math.sin(elRad) * distance,
+    Math.cos(azRad) * cosEl * distance
+  );
+}
 
 // ============== Initialization ==============
 
 /**
  * Initialize the lighting system.
- * Creates static ambient + directional lights matching MaterialPreview.
+ * Creates sun, moon, and ambient lights with initial values from store.
  */
 export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   const scene = getScene();
@@ -36,37 +56,57 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   
   renderer = webglRenderer;
   
-  // Get initial settings from store
+  // Get initial settings from store with fallback defaults
   const settings = useGameStore.getState().environment;
   
-  // Ambient light - static, matching PreviewScene
+  // Ambient light
   ambientLight = new THREE.AmbientLight(
-    settings.ambientColor,
-    settings.ambientIntensity
+    settings.ambientColor ?? '#ffffff',
+    settings.ambientIntensity ?? 0.4
   );
   scene.add(ambientLight);
   
-  // Sun (directional light) - static position matching PreviewScene [5, 5, 5]
+  // Sun (primary directional light)
   sunLight = new THREE.DirectionalLight(
-    settings.sunColor,
-    settings.sunIntensity
+    settings.sunColor ?? '#ffcc00',
+    settings.sunIntensity ?? 3.0
   );
-  sunLight.position.copy(SUN_POSITION);
+  const sunPos = anglesToPosition(
+    settings.sunAzimuth ?? 135,
+    settings.sunElevation ?? 45,
+    settings.sunDistance ?? 150
+  );
+  sunLight.position.copy(sunPos);
   sunLight.castShadow = true;
   configureShadowCamera(sunLight, settings);
   scene.add(sunLight);
   scene.add(sunLight.target);
   
+  // Moon (secondary directional light, no shadows for now)
+  moonLight = new THREE.DirectionalLight(
+    settings.moonColor ?? '#8899bb',
+    settings.moonIntensity ?? 0.3
+  );
+  const moonPos = anglesToPosition(
+    settings.moonAzimuth ?? 315,
+    settings.moonElevation ?? -45,
+    settings.sunDistance ?? 150
+  );
+  moonLight.position.copy(moonPos);
+  moonLight.castShadow = false; // No moon shadows for performance
+  scene.add(moonLight);
+  scene.add(moonLight.target);
+  
   // Apply environment intensity to scene
-  applyEnvironmentIntensity(settings.environmentIntensity);
+  applyEnvironmentIntensity(settings.environmentIntensity ?? 0.5);
   
   // Apply tone mapping settings
   if (renderer) {
-    renderer.toneMapping = settings.toneMapping;
-    renderer.toneMappingExposure = settings.toneMappingExposure;
+    renderer.toneMapping = settings.toneMapping ?? THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = settings.toneMappingExposure ?? 1.0;
   }
   
-  console.log('[Lighting] Initialized with static lighting');
+  console.log('[Lighting] Initialized with sun + moon lights');
 }
 
 function configureShadowCamera(light: THREE.DirectionalLight, settings: EnvironmentSettings): void {
@@ -100,9 +140,12 @@ function applyEnvironmentIntensity(intensity: number): void {
 
 /**
  * Apply environment settings from store.
- * Call when settings change from UI.
+ * Call when settings change from UI or DayNightCycle controller.
  */
 export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>): void {
+  // Get full current settings for position calculations
+  const currentSettings = useGameStore.getState().environment;
+  
   // Update sun light
   if (sunLight) {
     if (settings.sunColor !== undefined) {
@@ -111,6 +154,16 @@ export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>)
     if (settings.sunIntensity !== undefined) {
       sunLight.intensity = settings.sunIntensity;
     }
+    
+    // Update sun position if azimuth or elevation changed
+    if (settings.sunAzimuth !== undefined || settings.sunElevation !== undefined || settings.sunDistance !== undefined) {
+      const azimuth = settings.sunAzimuth ?? currentSettings.sunAzimuth ?? 135;
+      const elevation = settings.sunElevation ?? currentSettings.sunElevation ?? 45;
+      const distance = settings.sunDistance ?? currentSettings.sunDistance ?? 150;
+      const pos = anglesToPosition(azimuth, elevation, distance);
+      sunLight.position.copy(pos);
+    }
+    
     if (settings.shadowBias !== undefined) {
       sunLight.shadow.bias = settings.shadowBias;
     }
@@ -122,6 +175,25 @@ export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>)
       sunLight.shadow.mapSize.height = settings.shadowMapSize;
       sunLight.shadow.map?.dispose();
       sunLight.shadow.map = null;
+    }
+  }
+  
+  // Update moon light
+  if (moonLight) {
+    if (settings.moonColor !== undefined) {
+      moonLight.color.set(settings.moonColor);
+    }
+    if (settings.moonIntensity !== undefined) {
+      moonLight.intensity = settings.moonIntensity;
+    }
+    
+    // Update moon position if azimuth or elevation changed
+    if (settings.moonAzimuth !== undefined || settings.moonElevation !== undefined || settings.sunDistance !== undefined) {
+      const azimuth = settings.moonAzimuth ?? currentSettings.moonAzimuth ?? 315;
+      const elevation = settings.moonElevation ?? currentSettings.moonElevation ?? -45;
+      const distance = settings.sunDistance ?? currentSettings.sunDistance ?? 150; // Use sun distance for consistency
+      const pos = anglesToPosition(azimuth, elevation, distance);
+      moonLight.position.copy(pos);
     }
   }
   
@@ -159,6 +231,13 @@ export function getSunLight(): THREE.DirectionalLight | null {
 }
 
 /**
+ * Get the moon light for external use.
+ */
+export function getMoonLight(): THREE.DirectionalLight | null {
+  return moonLight;
+}
+
+/**
  * Dispose of lighting resources.
  */
 export function disposeLighting(): void {
@@ -174,6 +253,12 @@ export function disposeLighting(): void {
     scene.remove(sunLight.target);
     sunLight.shadow.map?.dispose();
     sunLight = null;
+  }
+  
+  if (moonLight && scene) {
+    scene.remove(moonLight);
+    scene.remove(moonLight.target);
+    moonLight = null;
   }
   
   renderer = null;
