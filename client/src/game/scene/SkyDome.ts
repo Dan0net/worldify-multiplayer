@@ -69,10 +69,20 @@ vec2 octEncode(vec3 n) {
   return n.xz * 0.5 + 0.5;
 }
 
+// Decode octahedron UV back to 3D direction
+vec3 octDecode(vec2 f) {
+  f = f * 2.0 - 1.0;
+  vec3 n = vec3(f.x, 1.0 - abs(f.x) - abs(f.y), f.y);
+  float t = max(-n.y, 0.0);
+  n.x += n.x >= 0.0 ? -t : t;
+  n.z += n.z >= 0.0 ? -t : t;
+  return normalize(n);
+}
+
 // ============== Star Field ==============
 
 float starsLayer(vec3 dir, float scale, float density, float time, float twinkleSpeed) {
-  // Use octahedron mapping for uniform distribution
+  // Use octahedron mapping for cell lookup only
   vec2 uv = octEncode(dir) * scale;
   vec2 cellId = floor(uv);
   vec2 cellUv = fract(uv);
@@ -87,16 +97,20 @@ float starsLayer(vec3 dir, float scale, float density, float time, float twinkle
       
       // Density check
       if (starHash.x > density) {
-        // Star position within cell
-        vec2 starPos = vec2(float(x), float(y)) + starHash - cellUv;
-        float dist = length(starPos);
+        // Get star position in UV space, then convert back to 3D direction
+        vec2 starUv = (neighbor + starHash) / scale;
+        vec3 starDir = octDecode(starUv);
         
-        // Very small, sharp stars (pixel-like)
+        // Compute angular distance in 3D (rotation invariant, perfect circles)
+        float angularDist = acos(clamp(dot(dir, starDir), -1.0, 1.0));
+        
+        // Very small, sharp stars
         float brightness = (starHash.x - density) / (1.0 - density);
         float twinkle = 0.5 + 0.5 * sin(time * twinkleSpeed + starHash.y * 628.0);
         
-        // Sharp falloff for tiny point stars
-        float star = exp(-dist * dist * 800.0) * brightness * twinkle;
+        // Sharp falloff based on angular distance (in radians)
+        // Multiply by scale to keep star size consistent across layers
+        float star = exp(-angularDist * angularDist * scale * scale * 50.0) * brightness * twinkle;
         result += star;
       }
     }
