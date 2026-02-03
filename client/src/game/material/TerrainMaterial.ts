@@ -204,11 +204,11 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.debugMode = { value: 0 };
       
       // Material adjustment uniforms
-      shader.uniforms.roughnessMultiplier = { value: 1.0 };
+      shader.uniforms.roughnessMultiplier = { value: 0.6 };
       shader.uniforms.metalnessMultiplier = { value: 1.0 };
       shader.uniforms.aoIntensity = { value: 1.0 };
-      shader.uniforms.normalStrength = { value: 1.0 };
-      shader.uniforms.blendSharpness = { value: 2.0 };
+      shader.uniforms.normalStrength = { value: 2.0 };
+      shader.uniforms.blendSharpness = { value: 8.0 };
       
       if (isTransparent) {
         shader.defines = shader.defines || {};
