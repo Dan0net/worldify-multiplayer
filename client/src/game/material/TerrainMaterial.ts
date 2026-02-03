@@ -367,6 +367,7 @@ export const TERRAIN_DEBUG_MODES = {
   WORLD_NORMAL: 8,
   METALNESS: 9,
   METALNESS_FINAL: 10,
+  MATERIAL_HUE: 11,
 } as const;
 
 export type TerrainDebugMode = typeof TERRAIN_DEBUG_MODES[keyof typeof TERRAIN_DEBUG_MODES];

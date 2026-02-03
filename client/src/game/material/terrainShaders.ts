@@ -68,6 +68,18 @@ const blendingFunctions = /* glsl */ `
     );
   }
   
+  // HSV to RGB conversion for material ID coloring
+  vec3 hsv2rgb(vec3 c) {
+    vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+  }
+  
+  // Get unique hue for material ID (using golden ratio for good distribution)
+  float materialIdToHue(float id) {
+    return fract(id * 0.618033988749895);
+  }
+  
   vec3 calcTriPlanarBlend(vec3 normal, mat3 offset) {
     vec3 blending = offset * normal;
     blending = pow(abs(blending), vec3(blendSharpness));
@@ -178,6 +190,22 @@ export const terrainDiffuseFragment = /* glsl */ `
   vec4 sampledAlbedo = sampleMaterialBlend(mapArray);
   // Convert albedo from sRGB to linear color space for correct PBR lighting
   vec3 linearAlbedo = sRGBToLinear(sampledAlbedo.rgb);
+  
+  // Debug mode 11: Material ID hue tinting (grayscale albedo + material hue)
+  if (debugMode == 11) {
+    // Convert to grayscale (luminance)
+    float luma = dot(linearAlbedo, vec3(0.299, 0.587, 0.114));
+    // Get dominant material ID (highest weight)
+    float dominantId = (gMatBlend.x >= gMatBlend.y && gMatBlend.x >= gMatBlend.z) ? vMaterialIds.x :
+                       (gMatBlend.y >= gMatBlend.z) ? vMaterialIds.y : vMaterialIds.z;
+    // Blend hues based on material weights for smooth transitions
+    float blendedHue = materialIdToHue(vMaterialIds.x) * gMatBlend.x +
+                       materialIdToHue(vMaterialIds.y) * gMatBlend.y +
+                       materialIdToHue(vMaterialIds.z) * gMatBlend.z;
+    // Apply hue tint: HSV with blended hue, medium saturation, albedo luminance as value
+    linearAlbedo = hsv2rgb(vec3(blendedHue, 0.6, luma));
+  }
+  
   #ifdef USE_TEXTURE_ALPHA
     vec4 diffuseColor = vec4(linearAlbedo, sampledAlbedo.a);
   #else

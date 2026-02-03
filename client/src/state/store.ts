@@ -28,8 +28,8 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 export type TextureLoadingState = 'none' | 'loading-low' | 'low' | 'loading-high' | 'high';
 
 /** Terrain shader debug modes */
-export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Albedo', 'Normal', 'AO', 'Roughness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'Metalness', 'MetalFinal'] as const;
-export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Albedo', 'Normal', 'AO', 'Roughness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'Metalness', 'MetalFinal', 'MatHue'] as const;
+export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
 
 /** Voxel debug visualization toggles */
 export interface VoxelDebugToggles {
@@ -433,7 +433,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Terrain debug actions
   setTerrainDebugMode: (mode) => set({ terrainDebugMode: mode }),
   cycleTerrainDebugMode: () => set((state) => ({
-    terrainDebugMode: ((state.terrainDebugMode + 1) % 11) as TerrainDebugMode,
+    terrainDebugMode: ((state.terrainDebugMode + 1) % 12) as TerrainDebugMode,
   })),
   
   // Post-processing actions
