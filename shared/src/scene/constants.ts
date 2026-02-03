@@ -83,9 +83,18 @@ export const SUN_COLOR_GOLDEN = '#ffcc44';   // Golden hour
 export const SUN_COLOR_SUNSET = '#ff6633';   // Sunset/sunrise red
 export const SUN_COLOR_TWILIGHT = '#334466'; // Twilight blue
 
+/** Sunrise-specific colors (pink/blue morning) */
+export const SUN_COLOR_SUNRISE_PINK = '#ffaacc';   // Soft pink dawn
+export const SUN_COLOR_SUNRISE_PEACH = '#ffbb88';  // Peach morning
+
+/** Sunset-specific colors (deep orange/purple evening) */
+export const SUN_COLOR_SUNSET_DEEP = '#ff4411';    // Deep orange sunset
+export const SUN_COLOR_SUNSET_PURPLE = '#993366';  // Purple dusk
+
 /** Ambient color at different times */
 export const AMBIENT_COLOR_DAY = '#ffffff';
-export const AMBIENT_COLOR_SUNSET = '#ffddcc';
+export const AMBIENT_COLOR_SUNRISE = '#ffeeff';   // Soft pink-tinted morning
+export const AMBIENT_COLOR_SUNSET = '#ffccaa';    // Warm orange evening
 export const AMBIENT_COLOR_NIGHT = '#334466';
 
 /** Ambient intensity range */
@@ -93,14 +102,18 @@ export const AMBIENT_INTENSITY_DAY = 0.5;
 export const AMBIENT_INTENSITY_NIGHT = 5.0;
 
 /** Hemisphere light - sky color at different times */
-export const HEMISPHERE_SKY_DAY = '#87ceeb';      // Light sky blue
-export const HEMISPHERE_SKY_SUNSET = '#ddaa77';   // Warm golden
-export const HEMISPHERE_SKY_NIGHT = '#7799cc';    // Bright moonlit sky (main night fill)
+export const HEMISPHERE_SKY_DAY = '#87ceeb';          // Light sky blue
+export const HEMISPHERE_SKY_SUNRISE = '#ffccdd';      // Light pink morning
+export const HEMISPHERE_SKY_SUNRISE_BLUE = '#aaddff'; // Soft blue morning
+export const HEMISPHERE_SKY_SUNSET = '#ff8844';       // Deep orange sunset
+export const HEMISPHERE_SKY_SUNSET_PURPLE = '#6644aa';// Purple dusk
+export const HEMISPHERE_SKY_NIGHT = '#7799cc';        // Bright moonlit sky (main night fill)
 
 /** Hemisphere light - ground color at different times */
-export const HEMISPHERE_GROUND_DAY = '#4a6a4a';   // Green earth
-export const HEMISPHERE_GROUND_SUNSET = '#665544'; // Warm brown
-export const HEMISPHERE_GROUND_NIGHT = '#556688'; // Blue-gray ground (bright enough to see)
+export const HEMISPHERE_GROUND_DAY = '#4a6a4a';       // Green earth
+export const HEMISPHERE_GROUND_SUNRISE = '#887766';   // Warm brown morning
+export const HEMISPHERE_GROUND_SUNSET = '#553322';    // Deep warm brown
+export const HEMISPHERE_GROUND_NIGHT = '#556688';     // Blue-gray ground (bright enough to see)
 
 /** Hemisphere light intensity range (primary fill light) */
 export const HEMISPHERE_INTENSITY_DAY = 0.8;
@@ -110,8 +123,8 @@ export const HEMISPHERE_INTENSITY_NIGHT = 1.5;    // Main light source at night
 export const ENVIRONMENT_INTENSITY_DAY = 0.5;
 export const ENVIRONMENT_INTENSITY_NIGHT = 0.05;
 
-/** Time thresholds (0-1 normalized) for day phases */
-export const TIME_SUNRISE_START = 0.2;   // 4:48 AM
-export const TIME_SUNRISE_END = 0.3;     // 7:12 AM
-export const TIME_SUNSET_START = 0.7;    // 4:48 PM
-export const TIME_SUNSET_END = 0.8;      // 7:12 PM
+/** Time thresholds (0-1 normalized) for day phases - longer sunrise/sunset */
+export const TIME_SUNRISE_START = 0.15;  // 3:36 AM - early dawn
+export const TIME_SUNRISE_END = 0.35;    // 8:24 AM - mid morning
+export const TIME_SUNSET_START = 0.65;   // 3:36 PM - afternoon
+export const TIME_SUNSET_END = 0.85;     // 8:24 PM - late dusk

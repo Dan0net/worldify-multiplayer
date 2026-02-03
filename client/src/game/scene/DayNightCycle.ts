@@ -18,9 +18,13 @@ import {
   SUN_ELEVATION_MAX,
   SUN_COLOR_NOON,
   SUN_COLOR_GOLDEN,
-  SUN_COLOR_SUNSET,
   SUN_COLOR_TWILIGHT,
+  SUN_COLOR_SUNRISE_PINK,
+  SUN_COLOR_SUNRISE_PEACH,
+  SUN_COLOR_SUNSET_DEEP,
+  SUN_COLOR_SUNSET_PURPLE,
   AMBIENT_COLOR_DAY,
+  AMBIENT_COLOR_SUNRISE,
   AMBIENT_COLOR_SUNSET,
   AMBIENT_COLOR_NIGHT,
   AMBIENT_INTENSITY_DAY,
@@ -28,9 +32,13 @@ import {
   ENVIRONMENT_INTENSITY_DAY,
   ENVIRONMENT_INTENSITY_NIGHT,
   HEMISPHERE_SKY_DAY,
+  HEMISPHERE_SKY_SUNRISE,
+  HEMISPHERE_SKY_SUNRISE_BLUE,
   HEMISPHERE_SKY_SUNSET,
+  HEMISPHERE_SKY_SUNSET_PURPLE,
   HEMISPHERE_SKY_NIGHT,
   HEMISPHERE_GROUND_DAY,
+  HEMISPHERE_GROUND_SUNRISE,
   HEMISPHERE_GROUND_SUNSET,
   HEMISPHERE_GROUND_NIGHT,
   HEMISPHERE_INTENSITY_DAY,
@@ -87,6 +95,8 @@ function getDayPhase(time: number): DayPhase {
 
 /**
  * Get sun color based on elevation/time
+ * Sunrise: pink → peach → golden → noon (soft morning)
+ * Sunset: noon → golden → deep orange → purple → twilight (dramatic evening)
  */
 function getSunColor(time: number, _elevation: number): string {
   const phase = getDayPhase(time);
@@ -96,31 +106,33 @@ function getSunColor(time: number, _elevation: number): string {
       return SUN_COLOR_TWILIGHT;
       
     case 'sunrise': {
-      // Transition: twilight → sunset → golden → noon
+      // Morning transition: twilight → pink → peach → golden → noon
       const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
-      if (t < 0.3) {
-        return lerpColor(SUN_COLOR_TWILIGHT, SUN_COLOR_SUNSET, t / 0.3);
+      if (t < 0.2) {
+        return lerpColor(SUN_COLOR_TWILIGHT, SUN_COLOR_SUNRISE_PINK, t / 0.2);
+      } else if (t < 0.4) {
+        return lerpColor(SUN_COLOR_SUNRISE_PINK, SUN_COLOR_SUNRISE_PEACH, (t - 0.2) / 0.2);
       } else if (t < 0.7) {
-        return lerpColor(SUN_COLOR_SUNSET, SUN_COLOR_GOLDEN, (t - 0.3) / 0.4);
+        return lerpColor(SUN_COLOR_SUNRISE_PEACH, SUN_COLOR_GOLDEN, (t - 0.4) / 0.3);
       } else {
         return lerpColor(SUN_COLOR_GOLDEN, SUN_COLOR_NOON, (t - 0.7) / 0.3);
       }
     }
     
     case 'day':
-      // Full day is mostly noon color, slight golden tint near edges
-      // Start at NOON (matching sunrise end) and stay NOON
       return SUN_COLOR_NOON;
       
     case 'sunset': {
-      // Transition: noon → golden → sunset → twilight
+      // Evening transition: noon → golden → deep orange → purple → twilight
       const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
-      if (t < 0.3) {
-        return lerpColor(SUN_COLOR_NOON, SUN_COLOR_GOLDEN, t / 0.3);
-      } else if (t < 0.7) {
-        return lerpColor(SUN_COLOR_GOLDEN, SUN_COLOR_SUNSET, (t - 0.3) / 0.4);
+      if (t < 0.25) {
+        return lerpColor(SUN_COLOR_NOON, SUN_COLOR_GOLDEN, t / 0.25);
+      } else if (t < 0.5) {
+        return lerpColor(SUN_COLOR_GOLDEN, SUN_COLOR_SUNSET_DEEP, (t - 0.25) / 0.25);
+      } else if (t < 0.75) {
+        return lerpColor(SUN_COLOR_SUNSET_DEEP, SUN_COLOR_SUNSET_PURPLE, (t - 0.5) / 0.25);
       } else {
-        return lerpColor(SUN_COLOR_SUNSET, SUN_COLOR_TWILIGHT, (t - 0.7) / 0.3);
+        return lerpColor(SUN_COLOR_SUNSET_PURPLE, SUN_COLOR_TWILIGHT, (t - 0.75) / 0.25);
       }
     }
   }
@@ -143,18 +155,23 @@ function getSunIntensity(elevation: number): number {
 
 /**
  * Get moon intensity based on sun elevation (moon visible when sun is down)
- * Moon starts rising earlier during twilight to prevent dark gaps
+ * Moon starts rising early and overlaps significantly with sun to ensure
+ * there's always directional light during transitions.
  */
 function getMoonIntensity(sunElevation: number): number {
-  if (sunElevation > 10) {
+  // Moon starts appearing when sun is below 45° - very early for smooth handoff
+  if (sunElevation > 45) {
     // Sun is high - moon is invisible
     return 0;
-  } else if (sunElevation > 0) {
-    // Sun is low (0-10°) - moon starts to appear
-    return lerp(0, LIGHT_MOON_INTENSITY * 0.3, (10 - sunElevation) / 10);
-  } else if (sunElevation > -10) {
-    // Twilight (-10 to 0°) - moon ramps up
-    return lerp(LIGHT_MOON_INTENSITY * 0.3, LIGHT_MOON_INTENSITY, -sunElevation / 10);
+  } else if (sunElevation > 25) {
+    // Sun is getting low (25-45°) - moon starts to appear faintly
+    return lerp(0, LIGHT_MOON_INTENSITY * 0.3, (45 - sunElevation) / 20);
+  } else if (sunElevation > 10) {
+    // Sun is low (10-25°) - moon ramps up more
+    return lerp(LIGHT_MOON_INTENSITY * 0.3, LIGHT_MOON_INTENSITY * 0.6, (25 - sunElevation) / 15);
+  } else if (sunElevation > -5) {
+    // Twilight (-5 to 10°) - moon continues ramping
+    return lerp(LIGHT_MOON_INTENSITY * 0.6, LIGHT_MOON_INTENSITY, (10 - sunElevation) / 15);
   }
   // Full night - full moon intensity
   return LIGHT_MOON_INTENSITY;
@@ -162,6 +179,7 @@ function getMoonIntensity(sunElevation: number): number {
 
 /**
  * Get ambient light color based on time
+ * Sunrise: soft pink tints, Sunset: warm orange tones
  */
 function getAmbientColor(time: number): string {
   const phase = getDayPhase(time);
@@ -170,15 +188,17 @@ function getAmbientColor(time: number): string {
     case 'night':
       return AMBIENT_COLOR_NIGHT;
     case 'sunrise': {
+      // Morning: night → pink-tinted sunrise → day
       const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
       if (t < 0.5) {
-        return lerpColor(AMBIENT_COLOR_NIGHT, AMBIENT_COLOR_SUNSET, t * 2);
+        return lerpColor(AMBIENT_COLOR_NIGHT, AMBIENT_COLOR_SUNRISE, t * 2);
       }
-      return lerpColor(AMBIENT_COLOR_SUNSET, AMBIENT_COLOR_DAY, (t - 0.5) * 2);
+      return lerpColor(AMBIENT_COLOR_SUNRISE, AMBIENT_COLOR_DAY, (t - 0.5) * 2);
     }
     case 'day':
       return AMBIENT_COLOR_DAY;
     case 'sunset': {
+      // Evening: day → warm orange sunset → night
       const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
       if (t < 0.5) {
         return lerpColor(AMBIENT_COLOR_DAY, AMBIENT_COLOR_SUNSET, t * 2);
@@ -235,7 +255,8 @@ function getEnvironmentIntensity(time: number): number {
 
 /**
  * Get hemisphere sky color based on time.
- * Transitions from dark blue at night to warm tones at sunset to light blue during day.
+ * Sunrise: night → pink → blue-pink blend → day blue (soft morning)
+ * Sunset: day → orange → purple → night (dramatic evening)
  */
 function getHemisphereSkyColor(time: number): string {
   const phase = getDayPhase(time);
@@ -244,27 +265,33 @@ function getHemisphereSkyColor(time: number): string {
     case 'night':
       return HEMISPHERE_SKY_NIGHT;
     case 'sunrise': {
+      // Morning: night → pink → blue-tinted → day
       const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
-      if (t < 0.5) {
-        return lerpColor(HEMISPHERE_SKY_NIGHT, HEMISPHERE_SKY_SUNSET, t * 2);
+      if (t < 0.3) {
+        return lerpColor(HEMISPHERE_SKY_NIGHT, HEMISPHERE_SKY_SUNRISE, t / 0.3);
+      } else if (t < 0.6) {
+        return lerpColor(HEMISPHERE_SKY_SUNRISE, HEMISPHERE_SKY_SUNRISE_BLUE, (t - 0.3) / 0.3);
       }
-      return lerpColor(HEMISPHERE_SKY_SUNSET, HEMISPHERE_SKY_DAY, (t - 0.5) * 2);
+      return lerpColor(HEMISPHERE_SKY_SUNRISE_BLUE, HEMISPHERE_SKY_DAY, (t - 0.6) / 0.4);
     }
     case 'day':
       return HEMISPHERE_SKY_DAY;
     case 'sunset': {
+      // Evening: day → deep orange → purple → night
       const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
-      if (t < 0.5) {
-        return lerpColor(HEMISPHERE_SKY_DAY, HEMISPHERE_SKY_SUNSET, t * 2);
+      if (t < 0.4) {
+        return lerpColor(HEMISPHERE_SKY_DAY, HEMISPHERE_SKY_SUNSET, t / 0.4);
+      } else if (t < 0.7) {
+        return lerpColor(HEMISPHERE_SKY_SUNSET, HEMISPHERE_SKY_SUNSET_PURPLE, (t - 0.4) / 0.3);
       }
-      return lerpColor(HEMISPHERE_SKY_SUNSET, HEMISPHERE_SKY_NIGHT, (t - 0.5) * 2);
+      return lerpColor(HEMISPHERE_SKY_SUNSET_PURPLE, HEMISPHERE_SKY_NIGHT, (t - 0.7) / 0.3);
     }
   }
 }
 
 /**
  * Get hemisphere ground color based on time.
- * Dark earth tones that shift slightly based on sky color.
+ * Sunrise: warmer brown tones, Sunset: deep warm brown
  */
 function getHemisphereGroundColor(time: number): string {
   const phase = getDayPhase(time);
@@ -273,15 +300,17 @@ function getHemisphereGroundColor(time: number): string {
     case 'night':
       return HEMISPHERE_GROUND_NIGHT;
     case 'sunrise': {
+      // Morning: night → warm brown → day green
       const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
       if (t < 0.5) {
-        return lerpColor(HEMISPHERE_GROUND_NIGHT, HEMISPHERE_GROUND_SUNSET, t * 2);
+        return lerpColor(HEMISPHERE_GROUND_NIGHT, HEMISPHERE_GROUND_SUNRISE, t * 2);
       }
-      return lerpColor(HEMISPHERE_GROUND_SUNSET, HEMISPHERE_GROUND_DAY, (t - 0.5) * 2);
+      return lerpColor(HEMISPHERE_GROUND_SUNRISE, HEMISPHERE_GROUND_DAY, (t - 0.5) * 2);
     }
     case 'day':
       return HEMISPHERE_GROUND_DAY;
     case 'sunset': {
+      // Evening: day → deep warm brown → night
       const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
       if (t < 0.5) {
         return lerpColor(HEMISPHERE_GROUND_DAY, HEMISPHERE_GROUND_SUNSET, t * 2);
@@ -293,29 +322,26 @@ function getHemisphereGroundColor(time: number): string {
 
 /**
  * Get hemisphere light intensity based on time.
- * Never drops below night level - twilight maintains higher intensity.
+ * Night intensity is higher (1.5) than day (0.8) to compensate for lack of sun.
+ * Smoothly interpolates through transitions.
  */
 function getHemisphereIntensity(time: number): number {
   const phase = getDayPhase(time);
-  
-  // Minimum intensity is night level - we never go darker
-  const minIntensity = HEMISPHERE_INTENSITY_NIGHT;
   
   switch (phase) {
     case 'night':
       return HEMISPHERE_INTENSITY_NIGHT;
     case 'sunrise': {
+      // Smoothly transition from night (high) to day (lower)
       const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
-      // Start at night intensity, ramp up to day
-      // Use max() to ensure we never dip below night level
-      return Math.max(minIntensity, lerp(HEMISPHERE_INTENSITY_NIGHT, HEMISPHERE_INTENSITY_DAY, t));
+      return lerp(HEMISPHERE_INTENSITY_NIGHT, HEMISPHERE_INTENSITY_DAY, t);
     }
     case 'day':
       return HEMISPHERE_INTENSITY_DAY;
     case 'sunset': {
+      // Smoothly transition from day (lower) back to night (high)
       const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
-      // Ramp from day to night, never below night level
-      return Math.max(minIntensity, lerp(HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT, t));
+      return lerp(HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT, t);
     }
   }
 }
