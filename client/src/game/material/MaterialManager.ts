@@ -53,6 +53,9 @@ class MaterialManager {
         storeBridge.setTextureState('high');
         storeBridge.setTextureProgress(1);
         this.initialized = true;
+        
+        // Apply material settings from store to shaders
+        storeBridge.applyCurrentMaterialSettings();
 
         console.log('Material system initialized with HD textures (user preference)');
         return;
@@ -73,6 +76,9 @@ class MaterialManager {
       storeBridge.setTextureState('low');
       storeBridge.setTextureProgress(1);
       this.initialized = true;
+      
+      // Apply material settings from store to shaders
+      storeBridge.applyCurrentMaterialSettings();
 
       console.log('Material system initialized with low-res textures');
     } catch (error) {
@@ -102,6 +108,9 @@ class MaterialManager {
 
       storeBridge.setTextureState('high');
       storeBridge.setTextureProgress(1);
+      
+      // Apply material settings from store to shaders
+      storeBridge.applyCurrentMaterialSettings();
       
       // Save user preference
       await textureCache.setUserPreference('high');
@@ -137,6 +146,9 @@ class MaterialManager {
 
       storeBridge.setTextureState('low');
       storeBridge.setTextureProgress(1);
+      
+      // Apply material settings from store to shaders
+      storeBridge.applyCurrentMaterialSettings();
       
       // Save user preference
       await textureCache.setUserPreference('low');

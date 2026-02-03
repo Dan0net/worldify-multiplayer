@@ -4,6 +4,7 @@ import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
 import { togglePostProcessing as togglePostProcessingEffect, updatePostProcessing } from '../game/scene/postprocessing';
 import { applyEnvironmentSettings, formatTimeOfDay, TONE_MAPPING_OPTIONS } from '../game/scene/TimeOfDay';
+import { SKYBOX_OPTIONS } from '../game/scene/Skybox';
 import { storeBridge } from '../state/bridge';
 import * as THREE from 'three';
 
@@ -596,6 +597,20 @@ export function DebugPanel() {
         {/* Environment/IBL */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
           <div className="text-cyan-400 text-xs mb-1 font-bold">🌐 Environment (IBL)</div>
+          <div className="flex items-center mb-2">
+            <span className="text-gray-300 text-xs w-16">Skybox</span>
+            <select
+              value={environment.skybox}
+              onChange={(e) => handleEnvironmentChange({ skybox: e.target.value })}
+              className="flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600"
+            >
+              {SKYBOX_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <Slider
             label="Intensity"
             value={environment.environmentIntensity}

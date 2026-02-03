@@ -57,6 +57,7 @@ export interface EnvironmentSettings {
   ambientIntensity: number; // 0-2
   
   // Environment (IBL)
+  skybox: string;                 // Skybox image filename
   environmentIntensity: number; // 0-2
   
   // Shadow settings
@@ -96,11 +97,11 @@ export interface MaterialSettings {
 
 /** Default material settings */
 export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
-  roughnessMultiplier: 1.0,
+  roughnessMultiplier: 0.6,
   metalnessMultiplier: 1.0,
   aoIntensity: 1.0,
-  normalStrength: 1.0,
-  blendSharpness: 2.0,
+  normalStrength: 2.0,
+  blendSharpness: 8.0,
   repeatScale: 2.0,
   windStrength: 0.1,
   windSpeed: 0.7,
@@ -122,6 +123,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   ambientColor: '#ffffff',
   ambientIntensity: 0.1,
   
+  skybox: 'sunset',
   environmentIntensity: 1.0,
   
   shadowBias: -0.0001,

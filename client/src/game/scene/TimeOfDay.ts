@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { getScene } from './scene';
+import { changeSkybox } from './Skybox';
 
 // ============== Types ==============
 
@@ -34,6 +35,7 @@ export interface EnvironmentSettings {
   ambientIntensity: number; // 0-2
   
   // Environment (IBL)
+  skybox: string;           // Skybox image filename
   environmentIntensity: number; // 0-2
   
   // Shadow settings
@@ -67,6 +69,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   ambientColor: '#ffffff',
   ambientIntensity: 0.1,
   
+  skybox: 'sunset',
   environmentIntensity: 1.0,
   
   shadowBias: -0.0001,
@@ -303,6 +306,11 @@ export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>)
   if (ambientLight) {
     ambientLight.color.set(currentSettings.ambientColor);
     // Note: intensity is adjusted by time of day in updateSunMoonPositions
+  }
+  
+  // Apply skybox change if specified
+  if (settings.skybox) {
+    changeSkybox(settings.skybox);
   }
   
   // Apply to scene - base values, will be modulated by time of day
