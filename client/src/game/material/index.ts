@@ -19,6 +19,7 @@ export {
   isHighResCached,
   loadDataArrayTextures,
   updateWindTime,
+  setTerrainEnvMapIntensity,
   type TextureResolution,
   type LoadedTextures,
 } from './TerrainMaterial.js';

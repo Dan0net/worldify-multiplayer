@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { getScene } from './scene';
 import { changeSkybox } from './Skybox';
+import { setTerrainEnvMapIntensity } from '../material/TerrainMaterial';
 
 // ============== Types ==============
 
@@ -259,6 +260,9 @@ function updateSunMoonPositions(playerPosition: THREE.Vector3): void {
     // Apply to both environment (IBL reflections) and background (visible sky)
     (scene as unknown as { environmentIntensity: number }).environmentIntensity = envIntensity;
     (scene as unknown as { backgroundIntensity: number }).backgroundIntensity = envIntensity;
+    
+    // Also update terrain material envMapIntensity for proper IBL on custom materials
+    setTerrainEnvMapIntensity(envIntensity);
   }
   
   // Renderer adjustments for night
@@ -320,6 +324,9 @@ export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>)
       currentSettings.environmentIntensity;
     (scene as unknown as { backgroundIntensity: number }).backgroundIntensity = 
       currentSettings.environmentIntensity;
+    
+    // Also update terrain material envMapIntensity for proper IBL on custom materials
+    setTerrainEnvMapIntensity(currentSettings.environmentIntensity);
   }
   
   // Apply to renderer

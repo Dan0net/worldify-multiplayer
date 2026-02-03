@@ -520,6 +520,25 @@ export function updateWindTime(elapsedTime: number): void {
   transparentDepthMaterial?.setWindTime(elapsedTime);
 }
 
+/**
+ * Update environment map intensity for all terrain materials.
+ * Called when scene.environmentIntensity changes.
+ */
+export function setTerrainEnvMapIntensity(intensity: number): void {
+  if (solidMaterial) {
+    solidMaterial.envMapIntensity = intensity;
+    solidMaterial.needsUpdate = true;
+  }
+  if (transparentMaterial) {
+    transparentMaterial.envMapIntensity = intensity;
+    transparentMaterial.needsUpdate = true;
+  }
+  if (liquidMaterial) {
+    liquidMaterial.envMapIntensity = intensity;
+    liquidMaterial.needsUpdate = true;
+  }
+}
+
 // ============== Material Settings API ==============
 
 /** Material settings interface matching store */
