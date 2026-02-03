@@ -27,6 +27,14 @@ import {
   AMBIENT_INTENSITY_NIGHT,
   ENVIRONMENT_INTENSITY_DAY,
   ENVIRONMENT_INTENSITY_NIGHT,
+  HEMISPHERE_SKY_DAY,
+  HEMISPHERE_SKY_SUNSET,
+  HEMISPHERE_SKY_NIGHT,
+  HEMISPHERE_GROUND_DAY,
+  HEMISPHERE_GROUND_SUNSET,
+  HEMISPHERE_GROUND_NIGHT,
+  HEMISPHERE_INTENSITY_DAY,
+  HEMISPHERE_INTENSITY_NIGHT,
   TIME_SUNRISE_START,
   TIME_SUNRISE_END,
   TIME_SUNSET_START,
@@ -222,6 +230,87 @@ function getEnvironmentIntensity(time: number): number {
   }
 }
 
+/**
+ * Get hemisphere sky color based on time.
+ * Transitions from dark blue at night to warm tones at sunset to light blue during day.
+ */
+function getHemisphereSkyColor(time: number): string {
+  const phase = getDayPhase(time);
+  
+  switch (phase) {
+    case 'night':
+      return HEMISPHERE_SKY_NIGHT;
+    case 'sunrise': {
+      const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
+      if (t < 0.5) {
+        return lerpColor(HEMISPHERE_SKY_NIGHT, HEMISPHERE_SKY_SUNSET, t * 2);
+      }
+      return lerpColor(HEMISPHERE_SKY_SUNSET, HEMISPHERE_SKY_DAY, (t - 0.5) * 2);
+    }
+    case 'day':
+      return HEMISPHERE_SKY_DAY;
+    case 'sunset': {
+      const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
+      if (t < 0.5) {
+        return lerpColor(HEMISPHERE_SKY_DAY, HEMISPHERE_SKY_SUNSET, t * 2);
+      }
+      return lerpColor(HEMISPHERE_SKY_SUNSET, HEMISPHERE_SKY_NIGHT, (t - 0.5) * 2);
+    }
+  }
+}
+
+/**
+ * Get hemisphere ground color based on time.
+ * Dark earth tones that shift slightly based on sky color.
+ */
+function getHemisphereGroundColor(time: number): string {
+  const phase = getDayPhase(time);
+  
+  switch (phase) {
+    case 'night':
+      return HEMISPHERE_GROUND_NIGHT;
+    case 'sunrise': {
+      const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
+      if (t < 0.5) {
+        return lerpColor(HEMISPHERE_GROUND_NIGHT, HEMISPHERE_GROUND_SUNSET, t * 2);
+      }
+      return lerpColor(HEMISPHERE_GROUND_SUNSET, HEMISPHERE_GROUND_DAY, (t - 0.5) * 2);
+    }
+    case 'day':
+      return HEMISPHERE_GROUND_DAY;
+    case 'sunset': {
+      const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
+      if (t < 0.5) {
+        return lerpColor(HEMISPHERE_GROUND_DAY, HEMISPHERE_GROUND_SUNSET, t * 2);
+      }
+      return lerpColor(HEMISPHERE_GROUND_SUNSET, HEMISPHERE_GROUND_NIGHT, (t - 0.5) * 2);
+    }
+  }
+}
+
+/**
+ * Get hemisphere light intensity based on time.
+ * Lower at night to let moon/stars be more prominent.
+ */
+function getHemisphereIntensity(time: number): number {
+  const phase = getDayPhase(time);
+  
+  switch (phase) {
+    case 'night':
+      return HEMISPHERE_INTENSITY_NIGHT;
+    case 'sunrise': {
+      const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
+      return lerp(HEMISPHERE_INTENSITY_NIGHT, HEMISPHERE_INTENSITY_DAY, t);
+    }
+    case 'day':
+      return HEMISPHERE_INTENSITY_DAY;
+    case 'sunset': {
+      const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
+      return lerp(HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT, t);
+    }
+  }
+}
+
 // ============== Main Update Function ==============
 
 /**
@@ -297,6 +386,18 @@ export function updateDayNightCycle(deltaMs: number): void {
   
   if (env.autoEnvironmentIntensity ?? true) {
     updates.environmentIntensity = getEnvironmentIntensity(time);
+  }
+  
+  // Hemisphere light (only if enabled)
+  if (env.hemisphereEnabled ?? true) {
+    if (env.autoHemisphereColors ?? true) {
+      updates.hemisphereSkyColor = getHemisphereSkyColor(time);
+      updates.hemisphereGroundColor = getHemisphereGroundColor(time);
+    }
+    
+    if (env.autoHemisphereIntensity ?? true) {
+      updates.hemisphereIntensity = getHemisphereIntensity(time);
+    }
   }
   
   // Apply updates to store if any

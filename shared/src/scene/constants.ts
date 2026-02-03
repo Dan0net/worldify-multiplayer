@@ -92,6 +92,20 @@ export const AMBIENT_COLOR_NIGHT = '#334466';
 export const AMBIENT_INTENSITY_DAY = 0.5;
 export const AMBIENT_INTENSITY_NIGHT = 5.0;
 
+/** Hemisphere light - sky color at different times */
+export const HEMISPHERE_SKY_DAY = '#87ceeb';      // Light sky blue
+export const HEMISPHERE_SKY_SUNSET = '#ff9966';   // Warm orange
+export const HEMISPHERE_SKY_NIGHT = '#1a1a2e';    // Dark blue
+
+/** Hemisphere light - ground color at different times */
+export const HEMISPHERE_GROUND_DAY = '#3d5c3d';   // Dark green (earth)
+export const HEMISPHERE_GROUND_SUNSET = '#2d1f1f'; // Dark reddish brown
+export const HEMISPHERE_GROUND_NIGHT = '#0a0a0f'; // Near black
+
+/** Hemisphere light intensity range (replaces ambient light) */
+export const HEMISPHERE_INTENSITY_DAY = 1.0;
+export const HEMISPHERE_INTENSITY_NIGHT = 0.4;
+
 /** Environment/IBL intensity range (lower at night since we don't change envmap) */
 export const ENVIRONMENT_INTENSITY_DAY = 0.5;
 export const ENVIRONMENT_INTENSITY_NIGHT = 0.05;

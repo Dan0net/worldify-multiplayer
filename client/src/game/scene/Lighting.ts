@@ -17,7 +17,7 @@ import { useGameStore, EnvironmentSettings } from '../../state/store';
 
 let sunLight: THREE.DirectionalLight | null = null;
 let moonLight: THREE.DirectionalLight | null = null;
-let ambientLight: THREE.AmbientLight | null = null;
+let hemisphereLight: THREE.HemisphereLight | null = null;
 let renderer: THREE.WebGLRenderer | null = null;
 
 // ============== Position Calculation ==============
@@ -45,7 +45,8 @@ function anglesToPosition(azimuth: number, elevation: number, distance: number):
 
 /**
  * Initialize the lighting system.
- * Creates sun, moon, and ambient lights with initial values from store.
+ * Creates sun, moon, and hemisphere lights with initial values from store.
+ * Hemisphere light replaces ambient for more natural outdoor lighting.
  */
 export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   const scene = getScene();
@@ -58,13 +59,6 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   
   // Get initial settings from store with fallback defaults
   const settings = useGameStore.getState().environment;
-  
-  // Ambient light
-  ambientLight = new THREE.AmbientLight(
-    settings.ambientColor ?? '#ffffff',
-    settings.ambientIntensity ?? 0.4
-  );
-  scene.add(ambientLight);
   
   // Sun (primary directional light)
   sunLight = new THREE.DirectionalLight(
@@ -97,6 +91,16 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   scene.add(moonLight);
   scene.add(moonLight.target);
   
+  // Hemisphere light (sky/ground gradient for natural outdoor lighting)
+  if (settings.hemisphereEnabled ?? true) {
+    hemisphereLight = new THREE.HemisphereLight(
+      settings.hemisphereSkyColor ?? '#87ceeb',
+      settings.hemisphereGroundColor ?? '#3d5c3d',
+      settings.hemisphereIntensity ?? 1.0
+    );
+    scene.add(hemisphereLight);
+  }
+  
   // Apply environment intensity to scene
   applyEnvironmentIntensity(settings.environmentIntensity ?? 0.5);
   
@@ -106,7 +110,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
     renderer.toneMappingExposure = settings.toneMappingExposure ?? 1.0;
   }
   
-  console.log('[Lighting] Initialized with sun + moon lights');
+  console.log('[Lighting] Initialized with sun + moon + hemisphere lights (no ambient)');
 }
 
 function configureShadowCamera(light: THREE.DirectionalLight, settings: EnvironmentSettings): void {
@@ -197,13 +201,36 @@ export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>)
     }
   }
   
-  // Update ambient light
-  if (ambientLight) {
-    if (settings.ambientColor !== undefined) {
-      ambientLight.color.set(settings.ambientColor);
+  // Update hemisphere light (replaces ambient for natural outdoor lighting)
+  if (hemisphereLight) {
+    if (settings.hemisphereSkyColor !== undefined) {
+      hemisphereLight.color.set(settings.hemisphereSkyColor);
     }
-    if (settings.ambientIntensity !== undefined) {
-      ambientLight.intensity = settings.ambientIntensity;
+    if (settings.hemisphereGroundColor !== undefined) {
+      hemisphereLight.groundColor.set(settings.hemisphereGroundColor);
+    }
+    if (settings.hemisphereIntensity !== undefined) {
+      hemisphereLight.intensity = settings.hemisphereIntensity;
+    }
+  }
+  
+  // Handle hemisphere light enable/disable
+  if (settings.hemisphereEnabled !== undefined) {
+    const scene = getScene();
+    if (scene) {
+      if (settings.hemisphereEnabled && !hemisphereLight) {
+        // Create hemisphere light if enabled and doesn't exist
+        hemisphereLight = new THREE.HemisphereLight(
+          currentSettings.hemisphereSkyColor ?? '#87ceeb',
+          currentSettings.hemisphereGroundColor ?? '#3d5c3d',
+          currentSettings.hemisphereIntensity ?? 0.4
+        );
+        scene.add(hemisphereLight);
+      } else if (!settings.hemisphereEnabled && hemisphereLight) {
+        // Remove hemisphere light if disabled
+        scene.remove(hemisphereLight);
+        hemisphereLight = null;
+      }
     }
   }
   
@@ -238,15 +265,17 @@ export function getMoonLight(): THREE.DirectionalLight | null {
 }
 
 /**
+ * Get the hemisphere light for external use.
+ */
+export function getHemisphereLight(): THREE.HemisphereLight | null {
+  return hemisphereLight;
+}
+
+/**
  * Dispose of lighting resources.
  */
 export function disposeLighting(): void {
   const scene = getScene();
-  
-  if (ambientLight && scene) {
-    scene.remove(ambientLight);
-    ambientLight = null;
-  }
   
   if (sunLight && scene) {
     scene.remove(sunLight);
@@ -259,6 +288,11 @@ export function disposeLighting(): void {
     scene.remove(moonLight);
     scene.remove(moonLight.target);
     moonLight = null;
+  }
+  
+  if (hemisphereLight && scene) {
+    scene.remove(hemisphereLight);
+    hemisphereLight = null;
   }
   
   renderer = null;

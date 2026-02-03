@@ -168,9 +168,5 @@ export function yRotationQuat(radians: number): Quat {
   };
 }
 
-/**
- * Clamp a number to a range.
- */
-export function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
+// Re-export clamp from math utilities for backwards compatibility
+export { clamp } from '../util/math.js';

@@ -7,6 +7,7 @@ import FastNoiseLite from 'fastnoise-lite';
 import { CHUNK_SIZE, VOXEL_SCALE } from '../voxel/constants.js';
 import { packVoxel } from '../voxel/voxelData.js';
 import { mat } from '../materials/index.js';
+import { smoothstep } from '../util/math.js';
 import {
   StampPointGenerator,
   StampPlacer,
@@ -430,8 +431,8 @@ export class TerrainGenerator implements HeightSampler {
     // minEdgeDist is SMALL at center (near cell boundary), LARGE at path edge
     // We want depth factor to be 1 at center, 0 at edge, so invert
     const t = 1 - Math.min(1, minEdgeDist / halfWidth);
-    // Smoothstep: 3t² - 2t³
-    return t * t * (3 - 2 * t);
+    // Smoothstep for nice easing
+    return smoothstep(0, 1, t);
   }
 
   /**

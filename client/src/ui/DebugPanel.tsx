@@ -601,14 +601,14 @@ export function DebugPanel() {
             onChange={(v) => handleEnvironmentChange({ autoMoonIntensity: v })}
           />
           <Toggle
-            label="Ambient Color"
-            value={environment.autoAmbientColor ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoAmbientColor: v })}
+            label="Hemisphere Colors"
+            value={environment.autoHemisphereColors ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoHemisphereColors: v })}
           />
           <Toggle
-            label="Ambient Intensity"
-            value={environment.autoAmbientIntensity ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoAmbientIntensity: v })}
+            label="Hemisphere Intensity"
+            value={environment.autoHemisphereIntensity ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoHemisphereIntensity: v })}
           />
           <Toggle
             label="Environment (IBL)"
@@ -719,22 +719,38 @@ export function DebugPanel() {
           />
         </div>
 
-        {/* Ambient Light */}
+        {/* Hemisphere Light (replaces ambient for natural outdoor lighting) */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">💡 Ambient</div>
-          <ColorPicker
-            label="Color"
-            value={environment.ambientColor}
-            onChange={(v) => handleEnvironmentChange({ ambientColor: v })}
-          />
-          <Slider
-            label="Intensity"
-            value={environment.ambientIntensity}
-            min={0}
-            max={5}
-            step={0.1}
-            onChange={(v) => handleEnvironmentChange({ ambientIntensity: v })}
-          />
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-cyan-400 text-xs font-bold">🌐 Hemisphere (Fill)</span>
+            <Toggle
+              label=""
+              value={environment.hemisphereEnabled ?? true}
+              onChange={(v) => handleEnvironmentChange({ hemisphereEnabled: v })}
+            />
+          </div>
+          {(environment.hemisphereEnabled ?? true) && (
+            <>
+              <ColorPicker
+                label="Sky"
+                value={environment.hemisphereSkyColor ?? '#87ceeb'}
+                onChange={(v) => handleEnvironmentChange({ hemisphereSkyColor: v })}
+              />
+              <ColorPicker
+                label="Ground"
+                value={environment.hemisphereGroundColor ?? '#3d5c3d'}
+                onChange={(v) => handleEnvironmentChange({ hemisphereGroundColor: v })}
+              />
+              <Slider
+                label="Intensity"
+                value={environment.hemisphereIntensity ?? 1.0}
+                min={0}
+                max={3}
+                step={0.1}
+                onChange={(v) => handleEnvironmentChange({ hemisphereIntensity: v })}
+              />
+            </>
+          )}
         </div>
 
         {/* Environment/IBL */}

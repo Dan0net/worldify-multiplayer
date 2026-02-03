@@ -1,5 +1,5 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
+import { BUILD_ROTATION_STEPS, GameMode, clamp } from '@worldify/shared';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
   MATERIAL_METALNESS_MULTIPLIER,
@@ -16,6 +16,9 @@ import {
   SUN_DISTANCE,
   DEFAULT_TIME_OF_DAY,
   DEFAULT_TIME_SPEED,
+  HEMISPHERE_SKY_DAY,
+  HEMISPHERE_GROUND_DAY,
+  HEMISPHERE_INTENSITY_DAY,
 } from '@worldify/shared';
 import * as THREE from 'three';
 
@@ -87,6 +90,14 @@ export interface EnvironmentSettings {
   // Ambient light
   ambientColor: string;     // Hex color
   ambientIntensity: number; // 0-2
+  
+  // Hemisphere light (sky/ground gradient)
+  hemisphereEnabled: boolean;     // Toggle hemisphere light
+  autoHemisphereColors: boolean;  // Calculate colors from time
+  autoHemisphereIntensity: boolean; // Calculate intensity from time
+  hemisphereSkyColor: string;     // Hex color (from above)
+  hemisphereGroundColor: string;  // Hex color (from below)
+  hemisphereIntensity: number;    // 0-2
   
   // Environment (IBL)
   skybox: string;                 // Skybox image filename
@@ -173,6 +184,14 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   
   ambientColor: LIGHT_AMBIENT_COLOR,
   ambientIntensity: LIGHT_AMBIENT_INTENSITY,
+  
+  // Hemisphere light - enabled by default for natural outdoor lighting
+  hemisphereEnabled: true,
+  autoHemisphereColors: true,
+  autoHemisphereIntensity: true,
+  hemisphereSkyColor: HEMISPHERE_SKY_DAY,
+  hemisphereGroundColor: HEMISPHERE_GROUND_DAY,
+  hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
   
   skybox: DEFAULT_SKYBOX,
   environmentIntensity: ENVIRONMENT_INTENSITY,
@@ -441,7 +460,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     environment: { ...state.environment, ...updates },
   })),
   setTimeOfDay: (time) => set((state) => ({
-    environment: { ...state.environment, timeOfDay: Math.max(0, Math.min(1, time)) },
+    environment: { ...state.environment, timeOfDay: clamp(time, 0, 1) },
   })),
   setTimeSpeed: (speed) => set((state) => ({
     environment: { ...state.environment, timeSpeed: Math.max(0, speed) },

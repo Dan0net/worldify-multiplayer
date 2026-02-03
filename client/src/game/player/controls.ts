@@ -11,6 +11,7 @@ import {
   INPUT_JUMP,
   INPUT_SPRINT,
   GameMode,
+  clamp,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
 import { textureCache } from '../material/TextureCache.js';
@@ -74,7 +75,7 @@ export class Controls {
     if (!this.isPointerLocked) return;
     this.yaw -= e.movementX * 0.002;
     this.pitch -= e.movementY * 0.002;
-    this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitch));
+    this.pitch = clamp(this.pitch, -Math.PI / 2, Math.PI / 2);
   };
 
   private onWheel = (e: WheelEvent): void => {
