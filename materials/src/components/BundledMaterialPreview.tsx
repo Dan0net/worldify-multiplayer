@@ -113,10 +113,12 @@ function BundledMaterialMesh({
   textures,
   geometry,
   envMapEnabled,
+  hasAlpha,
 }: {
   textures: LoadedTextures;
   geometry: GeometryType;
   envMapEnabled: boolean;
+  hasAlpha: boolean;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   
@@ -136,6 +138,9 @@ function BundledMaterialMesh({
         metalnessMap={textures.metalness as any}
         metalness={hasMetalnessMap ? 1 : 0}
         envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
+        transparent={hasAlpha}
+        alphaTest={hasAlpha ? 0.5 : 0}
+        side={hasAlpha ? THREE.DoubleSide : THREE.FrontSide}
       />
     </mesh>
   );
@@ -158,6 +163,7 @@ export function BundledMaterialPreview({
     roughness: null,
     metalness: null,
   });
+  const [hasAlpha, setHasAlpha] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Load textures when material or resolution changes
@@ -189,6 +195,11 @@ export function BundledMaterialPreview({
       
       if (!cancelled) {
         setTextures(loaded);
+        // Check if material needs transparency (not in solid types)
+        // Material indices in pallet.types are 1-indexed
+        const materialId = materialIndex + 1;
+        const isSolid = pallet.types.solid.includes(materialId);
+        setHasAlpha(!isSolid);
         setLoading(false);
       }
     }
@@ -232,6 +243,7 @@ export function BundledMaterialPreview({
                   textures={textures}
                   geometry={geometry}
                   envMapEnabled={envMapEnabled}
+                  hasAlpha={hasAlpha}
                 />
               </PreviewScene>
             </Suspense>

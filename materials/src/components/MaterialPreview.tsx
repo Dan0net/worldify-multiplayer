@@ -22,6 +22,7 @@ interface MaterialPreviewProps {
   materialName: string;
   /** Material config with paths to textures */
   config: {
+    type?: 'solid' | 'liquid' | 'transparent';
     albedo?: MapConfig;
     normal?: MapConfig;
     ao?: MapConfig;
@@ -88,9 +89,11 @@ function extractChannel(texture: THREE.Texture, channel: string): THREE.Texture 
 function LoadedMaterial({
   texturePaths,
   envMapEnabled,
+  hasAlpha = false,
 }: {
   texturePaths: TexturePaths;
   envMapEnabled: boolean;
+  hasAlpha?: boolean;
 }) {
   const materialRef = useRef<THREE.MeshStandardMaterial>(null);
   
@@ -172,6 +175,9 @@ function LoadedMaterial({
       metalnessMap={(processedTextures.metalness ?? null) as any}
       metalness={hasMetalnessMap ? 1 : 0}
       envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
+      transparent={hasAlpha}
+      alphaTest={hasAlpha ? 0.5 : 0}
+      side={hasAlpha ? THREE.DoubleSide : THREE.FrontSide}
     />
   );
 }
@@ -181,10 +187,12 @@ function MaterialMesh({
   texturePaths,
   geometry,
   envMapEnabled,
+  hasAlpha,
 }: {
   texturePaths: TexturePaths;
   geometry: GeometryType;
   envMapEnabled: boolean;
+  hasAlpha: boolean;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   
@@ -203,7 +211,7 @@ function MaterialMesh({
       <PreviewGeometry type={geometry} />
       {hasTextures ? (
         <Suspense fallback={<meshStandardMaterial color="#666" />}>
-          <LoadedMaterial texturePaths={texturePaths} envMapEnabled={envMapEnabled} />
+          <LoadedMaterial texturePaths={texturePaths} envMapEnabled={envMapEnabled} hasAlpha={hasAlpha} />
         </Suspense>
       ) : (
         <meshStandardMaterial color="#666" roughness={0.5} metalness={0} />
@@ -220,6 +228,9 @@ function TextureErrorBoundary({ children }: { children: React.ReactNode }) {
 export function MaterialPreview({ materialName, config, height = 300 }: MaterialPreviewProps) {
   const [geometry, setGeometry] = useState<GeometryType>('sphere');
   const [envMapEnabled, setEnvMapEnabled] = useState(true);
+
+  // Determine if material needs transparency (anything not solid)
+  const hasAlpha = config.type !== 'solid';
 
   // Build texture paths from config with channel info
   const texturePaths = useMemo<TexturePaths>(() => ({
@@ -269,6 +280,7 @@ export function MaterialPreview({ materialName, config, height = 300 }: Material
                 texturePaths={texturePaths}
                 geometry={geometry}
                 envMapEnabled={envMapEnabled}
+                hasAlpha={hasAlpha}
               />
             </PreviewScene>
           </TextureErrorBoundary>
