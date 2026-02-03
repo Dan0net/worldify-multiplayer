@@ -24,8 +24,6 @@ import {
   depthVertexSuffix,
   depthFragmentPrefix,
   depthAlphaDiscard,
-  windNormalVertexPrefix,
-  windNormalDisplacement,
 } from './terrainShaders.js';
 
 export type TextureResolution = 'low' | 'high';
@@ -424,43 +422,12 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
   }
 }
 
-// ============== WindNormalMaterial ==============
-
-class WindNormalMaterial extends THREE.MeshNormalMaterial {
-  private _shader: ShaderWithUniforms | null = null;
-
-  constructor() {
-    super({ blending: THREE.NoBlending });
-
-    this.onBeforeCompile = (shader) => {
-      this._shader = shader;
-
-      shader.uniforms.uTime = { value: 0.0 };
-      shader.uniforms.uWindStrength = { value: WIND_STRENGTH };
-      shader.uniforms.uWindFrequency = { value: WIND_FREQUENCY };
-
-      shader.vertexShader = windNormalVertexPrefix + shader.vertexShader;
-      shader.vertexShader = shader.vertexShader.replace(
-        '#include <project_vertex>',
-        `${windNormalDisplacement}\n#include <project_vertex>`
-      );
-    };
-  }
-
-  setWindTime(time: number): void {
-    if (this._shader?.uniforms.uTime) {
-      this._shader.uniforms.uTime.value = time * WIND_SPEED;
-    }
-  }
-}
-
 // ============== Singleton Instances ==============
 
 let solidMaterial: TerrainMaterial | null = null;
 let transparentMaterial: TerrainMaterial | null = null;
 let liquidMaterial: TerrainMaterial | null = null;
 let transparentDepthMaterial: TransparentDepthMaterial | null = null;
-let windNormalMaterial: WindNormalMaterial | null = null;
 
 export function getTerrainMaterial(): TerrainMaterial {
   if (!solidMaterial) solidMaterial = new TerrainMaterial(false);
@@ -475,11 +442,6 @@ export function getTransparentTerrainMaterial(): TerrainMaterial {
 export function getLiquidTerrainMaterial(): TerrainMaterial {
   if (!liquidMaterial) liquidMaterial = new TerrainMaterial(true);
   return liquidMaterial;
-}
-
-export function getWindNormalMaterial(): WindNormalMaterial {
-  if (!windNormalMaterial) windNormalMaterial = new WindNormalMaterial();
-  return windNormalMaterial;
 }
 
 export function getTransparentDepthMaterial(): TransparentDepthMaterial {
@@ -556,7 +518,6 @@ export function updateWindTime(elapsedTime: number): void {
   transparentMaterial?.setWindTime(elapsedTime);
   liquidMaterial?.setWindTime(elapsedTime);
   transparentDepthMaterial?.setWindTime(elapsedTime);
-  windNormalMaterial?.setWindTime(elapsedTime);
 }
 
 // ============== Material Settings API ==============

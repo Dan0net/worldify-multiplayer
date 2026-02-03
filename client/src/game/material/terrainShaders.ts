@@ -282,15 +282,3 @@ export const depthAlphaDiscard = /* glsl */ `
   }
 `;
 
-// ============== Wind Normal Material Shaders ==============
-
-export const windNormalVertexPrefix = windUniformsVertex;
-
-export const windNormalDisplacement = /* glsl */ `
-  vec3 worldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
-  float windPhase = uTime + worldPos.x * uWindFrequency + worldPos.z * uWindFrequency * 0.7;
-  float windX = sin(windPhase) * sin(windPhase * 0.4 + 1.3);
-  float windY = sin(windPhase * 0.6 + 0.8) * sin(windPhase * 0.25) * 0.5;
-  float windZ = sin(windPhase * 0.8 + 2.1) * sin(windPhase * 0.3);
-  transformed += vec3(windX, windY, windZ) * uWindStrength;
-`;

@@ -11,7 +11,6 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { getWindNormalMaterial } from '../material';
 
 let composer: EffectComposer | null = null;
 let ssaoPass: SSAOPass | null = null;
@@ -78,9 +77,10 @@ export function initPostProcessing(
   ssaoPass.minDistance = opts.ssaoMinDistance;
   ssaoPass.enabled = opts.enabled;
   
-  // Use wind-animated normal material so SSAO respects vertex displacement
-  // This replaces the default MeshNormalMaterial with one that includes wind animation
-  ssaoPass.normalMaterial = getWindNormalMaterial();
+  // Use standard MeshNormalMaterial for SSAO normal pass.
+  // Wind displacement only applies to transparent meshes (leaves, etc.) and is subtle enough
+  // that the SSAO mismatch is not noticeable. Applying wind to all meshes via the normal
+  // override caused solid terrain to incorrectly wobble in the SSAO calculation.
   
   composer.addPass(ssaoPass);
   
