@@ -72,10 +72,10 @@ export const SUN_ELEVATION_MAX = 70;  // Max altitude at noon
 export const SUN_DISTANCE = 150;
 
 /** Moon light color - cool blue-white */
-export const LIGHT_MOON_COLOR = '#8899bb';
+export const LIGHT_MOON_COLOR = '#6891e3';
 
-/** Moon intensity at peak (relative to sun) */
-export const LIGHT_MOON_INTENSITY = 0.3;
+/** Moon intensity at peak (when sun is fully down) */
+export const LIGHT_MOON_INTENSITY = 4.0;
 
 /** Sun color at different times (interpolated) */
 export const SUN_COLOR_NOON = '#fffaf0';     // Warm white at noon
@@ -86,11 +86,15 @@ export const SUN_COLOR_TWILIGHT = '#334466'; // Twilight blue
 /** Ambient color at different times */
 export const AMBIENT_COLOR_DAY = '#ffffff';
 export const AMBIENT_COLOR_SUNSET = '#ffddcc';
-export const AMBIENT_COLOR_NIGHT = '#222244';
+export const AMBIENT_COLOR_NIGHT = '#334466';
 
 /** Ambient intensity range */
 export const AMBIENT_INTENSITY_DAY = 0.5;
-export const AMBIENT_INTENSITY_NIGHT = 0.15;
+export const AMBIENT_INTENSITY_NIGHT = 5.0;
+
+/** Environment/IBL intensity range (lower at night since we don't change envmap) */
+export const ENVIRONMENT_INTENSITY_DAY = 0.5;
+export const ENVIRONMENT_INTENSITY_NIGHT = 0.05;
 
 /** Time thresholds (0-1 normalized) for day phases */
 export const TIME_SUNRISE_START = 0.2;   // 4:48 AM

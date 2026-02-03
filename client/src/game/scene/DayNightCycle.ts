@@ -25,64 +25,20 @@ import {
   AMBIENT_COLOR_NIGHT,
   AMBIENT_INTENSITY_DAY,
   AMBIENT_INTENSITY_NIGHT,
+  ENVIRONMENT_INTENSITY_DAY,
+  ENVIRONMENT_INTENSITY_NIGHT,
   TIME_SUNRISE_START,
   TIME_SUNRISE_END,
   TIME_SUNSET_START,
   TIME_SUNSET_END,
   LIGHT_SUN_INTENSITY,
   LIGHT_MOON_INTENSITY,
+  lerp,
+  smoothstep,
+  lerpColor,
 } from '@worldify/shared';
 
-// ============== Color Utilities ==============
 
-/**
- * Parse hex color to RGB components (0-1)
- */
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!result) return { r: 1, g: 1, b: 1 };
-  return {
-    r: parseInt(result[1], 16) / 255,
-    g: parseInt(result[2], 16) / 255,
-    b: parseInt(result[3], 16) / 255,
-  };
-}
-
-/**
- * Convert RGB (0-1) to hex color
- */
-function rgbToHex(r: number, g: number, b: number): string {
-  const toHex = (c: number) => Math.round(Math.max(0, Math.min(1, c)) * 255).toString(16).padStart(2, '0');
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-/**
- * Lerp between two hex colors
- */
-function lerpColor(colorA: string, colorB: string, t: number): string {
-  const a = hexToRgb(colorA);
-  const b = hexToRgb(colorB);
-  return rgbToHex(
-    a.r + (b.r - a.r) * t,
-    a.g + (b.g - a.g) * t,
-    a.b + (b.b - a.b) * t
-  );
-}
-
-/**
- * Lerp between numbers
- */
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-/**
- * Smooth step function for nicer transitions
- */
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
 
 // ============== Solar Calculations ==============
 
@@ -243,6 +199,29 @@ function getAmbientIntensity(time: number): number {
   }
 }
 
+/**
+ * Get environment/IBL intensity based on time.
+ * Lower at night since we don't change the environment map yet.
+ */
+function getEnvironmentIntensity(time: number): number {
+  const phase = getDayPhase(time);
+  
+  switch (phase) {
+    case 'night':
+      return ENVIRONMENT_INTENSITY_NIGHT;
+    case 'sunrise': {
+      const t = smoothstep(TIME_SUNRISE_START, TIME_SUNRISE_END, time);
+      return lerp(ENVIRONMENT_INTENSITY_NIGHT, ENVIRONMENT_INTENSITY_DAY, t);
+    }
+    case 'day':
+      return ENVIRONMENT_INTENSITY_DAY;
+    case 'sunset': {
+      const t = smoothstep(TIME_SUNSET_START, TIME_SUNSET_END, time);
+      return lerp(ENVIRONMENT_INTENSITY_DAY, ENVIRONMENT_INTENSITY_NIGHT, t);
+    }
+  }
+}
+
 // ============== Main Update Function ==============
 
 /**
@@ -314,6 +293,10 @@ export function updateDayNightCycle(deltaMs: number): void {
   
   if (env.autoAmbientIntensity ?? true) {
     updates.ambientIntensity = getAmbientIntensity(time);
+  }
+  
+  if (env.autoEnvironmentIntensity ?? true) {
+    updates.environmentIntensity = getEnvironmentIntensity(time);
   }
   
   // Apply updates to store if any

@@ -610,6 +610,11 @@ export function DebugPanel() {
             value={environment.autoAmbientIntensity ?? true}
             onChange={(v) => handleEnvironmentChange({ autoAmbientIntensity: v })}
           />
+          <Toggle
+            label="Environment (IBL)"
+            value={environment.autoEnvironmentIntensity ?? true}
+            onChange={(v) => handleEnvironmentChange({ autoEnvironmentIntensity: v })}
+          />
         </div>
 
         {/* Manual Sun Position (when auto is off) */}
@@ -708,8 +713,8 @@ export function DebugPanel() {
             label="Intensity"
             value={environment.moonIntensity}
             min={0}
-            max={2}
-            step={0.05}
+            max={5}
+            step={0.1}
             onChange={(v) => handleEnvironmentChange({ moonIntensity: v })}
           />
         </div>
@@ -726,8 +731,8 @@ export function DebugPanel() {
             label="Intensity"
             value={environment.ambientIntensity}
             min={0}
-            max={2}
-            step={0.05}
+            max={5}
+            step={0.1}
             onChange={(v) => handleEnvironmentChange({ ambientIntensity: v })}
           />
         </div>

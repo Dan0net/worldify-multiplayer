@@ -69,6 +69,7 @@ export interface EnvironmentSettings {
   autoMoonIntensity: boolean;     // Calculate moon intensity from time
   autoAmbientColor: boolean;      // Calculate ambient color from time
   autoAmbientIntensity: boolean;  // Calculate ambient intensity from time
+  autoEnvironmentIntensity: boolean; // Calculate IBL intensity from time
   
   // Sun settings (manual values, or calculated when auto is enabled)
   sunColor: string;         // Hex color
@@ -157,6 +158,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   autoMoonIntensity: true,
   autoAmbientColor: true,
   autoAmbientIntensity: true,
+  autoEnvironmentIntensity: true,
   
   sunColor: LIGHT_SUN_COLOR,
   sunIntensity: LIGHT_SUN_INTENSITY,
