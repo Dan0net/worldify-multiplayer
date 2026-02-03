@@ -54,6 +54,9 @@ export interface EnvironmentSettings {
   bloomIntensity: number;      // 0 to 3
   bloomThreshold: number;      // 0 to 1
   bloomRadius: number;         // 0 to 1
+  
+  // Color correction
+  saturation: number;          // 0-2, 1.0 = no change
 }
 
 export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
@@ -85,6 +88,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   bloomIntensity: 0.3,
   bloomThreshold: 0.85,
   bloomRadius: 0.4,
+  saturation: 1.2,  // Slightly boosted for more vivid colors
 };
 
 // ============== Internal State ==============

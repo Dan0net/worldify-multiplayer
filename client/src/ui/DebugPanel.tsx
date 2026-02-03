@@ -186,7 +186,8 @@ export function DebugPanel() {
     
     // Apply post-processing changes if any relevant settings changed
     if ('ssaoKernelRadius' in updates || 'ssaoMinDistance' in updates ||
-        'bloomIntensity' in updates || 'bloomThreshold' in updates || 'bloomRadius' in updates) {
+        'bloomIntensity' in updates || 'bloomThreshold' in updates || 'bloomRadius' in updates ||
+        'saturation' in updates) {
       updatePostProcessing(updates);
     }
   };
@@ -711,6 +712,14 @@ export function DebugPanel() {
             max={1}
             step={0.01}
             onChange={(v) => handleEnvironmentChange({ bloomRadius: v })}
+          />
+          <Slider
+            label="Saturation"
+            value={environment.saturation}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleEnvironmentChange({ saturation: v })}
           />
         </div>
       </Section>

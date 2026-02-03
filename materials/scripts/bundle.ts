@@ -239,8 +239,8 @@ async function buildTextures(resolution: 'low' | 'high') {
       const { width, height, channels } = info;
 
       // Determine which channel(s) to extract
-      let extractChannel = mapConfig?.channel || MAP_CHANNELS[mapType];
-      if (mapType === 'metalness') extractChannel = 'b';
+      // Use config channel if specified, otherwise use default for map type
+      const extractChannel = mapConfig?.channel || MAP_CHANNELS[mapType];
 
       // Calculate average color for albedo
       if (mapType === 'albedo') {

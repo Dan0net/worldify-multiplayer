@@ -1,7 +1,7 @@
 /**
  * Post-processing effects setup
  * 
- * Provides ambient occlusion, bloom, and other screen-space effects
+ * Provides ambient occlusion, bloom, color correction and other screen-space effects
  * using Three.js built-in post-processing (matches worldify-app approach).
  */
 
@@ -10,11 +10,56 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+
+// ============== Color Correction Shader ==============
+
+/**
+ * Custom color correction shader for saturation/vibrance control.
+ * Uses luminance-preserving saturation adjustment.
+ */
+const ColorCorrectionShader = {
+  name: 'ColorCorrectionShader',
+  
+  uniforms: {
+    tDiffuse: { value: null },
+    saturation: { value: 1.0 },
+  },
+  
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float saturation;
+    
+    varying vec2 vUv;
+    
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      
+      // Calculate luminance (perceptual weights)
+      float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+      
+      // Adjust saturation by lerping between grayscale and original color
+      vec3 gray = vec3(luma);
+      vec3 saturated = mix(gray, color.rgb, saturation);
+      
+      gl_FragColor = vec4(saturated, color.a);
+    }
+  `,
+};
 
 let composer: EffectComposer | null = null;
 let ssaoPass: SSAOPass | null = null;
 let bloomPass: UnrealBloomPass | null = null;
+let colorCorrectionPass: ShaderPass | null = null;
 let effectsEnabled = true;
 
 export interface PostProcessingOptions {
@@ -36,6 +81,10 @@ export interface PostProcessingOptions {
   bloomThreshold?: number;
   /** Bloom radius/smoothing (default: 0.4) - based on worldify-app */
   bloomRadius?: number;
+  
+  // Color correction options
+  /** Saturation (default: 1.2) - 0=grayscale, 1=normal, 2=highly saturated */
+  saturation?: number;
 }
 
 const defaultOptions: Required<PostProcessingOptions> = {
@@ -48,6 +97,8 @@ const defaultOptions: Required<PostProcessingOptions> = {
   bloomIntensity: 0.3,
   bloomThreshold: 0.85,
   bloomRadius: 0.4,
+  // Color correction defaults
+  saturation: 1.2,  // Slightly boosted for more vivid colors
 };
 
 /**
@@ -94,6 +145,12 @@ export function initPostProcessing(
   bloomPass.enabled = opts.enabled && opts.bloomEnabled;
   composer.addPass(bloomPass);
   
+  // Color correction pass - saturation control
+  colorCorrectionPass = new ShaderPass(ColorCorrectionShader);
+  colorCorrectionPass.uniforms.saturation.value = opts.saturation;
+  colorCorrectionPass.enabled = opts.enabled;
+  composer.addPass(colorCorrectionPass);
+  
   // Output pass - required for proper color output
   const outputPass = new OutputPass();
   composer.addPass(outputPass);
@@ -102,6 +159,8 @@ export function initPostProcessing(
   
   console.log('Post-processing initialized:', {
     ssao: ssaoPass.enabled,
+    bloom: bloomPass.enabled,
+    saturation: opts.saturation,
     bloom: bloomPass.enabled,
     passes: composer.passes.length,
   });
@@ -144,10 +203,23 @@ export function updatePostProcessing(options: PostProcessingOptions): void {
   if (options.bloomRadius !== undefined && bloomPass) {
     bloomPass.radius = options.bloomRadius;
   }
+  if (options.saturation !== undefined && colorCorrectionPass) {
+    colorCorrectionPass.uniforms.saturation.value = options.saturation;
+  }
   if (options.enabled !== undefined) {
     effectsEnabled = options.enabled;
     if (ssaoPass) ssaoPass.enabled = options.enabled;
     if (bloomPass) bloomPass.enabled = options.enabled;
+    if (colorCorrectionPass) colorCorrectionPass.enabled = options.enabled;
+  }
+}
+
+/**
+ * Set saturation directly (convenience function)
+ */
+export function setSaturation(value: number): void {
+  if (colorCorrectionPass) {
+    colorCorrectionPass.uniforms.saturation.value = value;
   }
 }
 
@@ -170,6 +242,7 @@ export function disposePostProcessing(): void {
   }
   ssaoPass = null;
   bloomPass = null;
+  colorCorrectionPass = null;
 }
 
 /**
@@ -187,6 +260,7 @@ export function togglePostProcessing(): boolean {
   
   if (ssaoPass) ssaoPass.enabled = effectsEnabled;
   if (bloomPass) bloomPass.enabled = effectsEnabled;
+  if (colorCorrectionPass) colorCorrectionPass.enabled = effectsEnabled;
   
   console.log(`Post-processing: ${effectsEnabled ? 'ON' : 'OFF'}`);
   return effectsEnabled;

@@ -8,8 +8,8 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 export type TextureLoadingState = 'none' | 'loading-low' | 'low' | 'loading-high' | 'high';
 
 /** Terrain shader debug modes */
-export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Albedo', 'Normal', 'AO', 'Roughness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal'] as const;
-export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Albedo', 'Normal', 'AO', 'Roughness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'Metalness', 'MetalFinal'] as const;
+export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 
 /** Voxel debug visualization toggles */
 export interface VoxelDebugToggles {
@@ -75,6 +75,9 @@ export interface EnvironmentSettings {
   bloomIntensity: number;       // 0-3
   bloomThreshold: number;       // 0-1
   bloomRadius: number;          // 0-1
+  
+  // Color correction
+  saturation: number;           // 0-2, 1.0 = no change
 }
 
 /** Material shader settings for debug/tweaking */
@@ -138,6 +141,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   bloomIntensity: 0.3,
   bloomThreshold: 0.85,
   bloomRadius: 0.4,
+  saturation: 1.2,  // Slightly boosted for more vivid colors
 };
 
 /** Debug panel section collapse state */
@@ -352,7 +356,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Terrain debug actions
   setTerrainDebugMode: (mode) => set({ terrainDebugMode: mode }),
   cycleTerrainDebugMode: () => set((state) => ({
-    terrainDebugMode: ((state.terrainDebugMode + 1) % 9) as TerrainDebugMode,
+    terrainDebugMode: ((state.terrainDebugMode + 1) % 11) as TerrainDebugMode,
   })),
   
   // Post-processing actions

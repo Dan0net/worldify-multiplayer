@@ -236,6 +236,14 @@ export const terrainDebugFragment = /* glsl */ `
       gl_FragColor = vec4(gMatBlend, 1.0);
     } else if (debugMode == 8) {
       gl_FragColor = vec4(vWorldNormal * 0.5 + 0.5, 1.0);
+    } else if (debugMode == 9) {
+      // Metalness debug - shows raw metalness texture value
+      float m = sampleMaterialBlend(metalnessArray).r;
+      gl_FragColor = vec4(m, m, m, 1.0);
+    } else if (debugMode == 10) {
+      // Metalness with multiplier applied (what's actually used)
+      float mFinal = sampleMaterialBlend(metalnessArray).r * metalnessMultiplier;
+      gl_FragColor = vec4(mFinal, mFinal, mFinal, 1.0);
     }
   }
 `;
