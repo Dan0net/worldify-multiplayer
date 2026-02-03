@@ -2,16 +2,18 @@
  * MaterialViewer - Lightweight texture inspector for all materials
  * 
  * Displays all materials with their texture layers (albedo, normal, ao, roughness, metalness)
- * at both low and high resolutions.
+ * at both low and high resolutions, plus a 3D preview using the bundled textures.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { MATERIAL_BASE_URL } from '../constants';
+import { BundledMaterialPreview } from '../components/BundledMaterialPreview';
 import type { MaterialPallet } from '../types';
 
 type MapType = 'albedo' | 'normal' | 'ao' | 'roughness' | 'metalness';
 type Resolution = 'low' | 'high';
+type ViewMode = '3d' | 'texture';
 
 interface TextureData {
   data: Uint8Array;
@@ -33,6 +35,7 @@ export function MaterialViewer() {
   const [loadingTexture, setLoadingTexture] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [viewMode, setViewMode] = useState<ViewMode>('3d');
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Load pallet on mount
@@ -171,8 +174,9 @@ export function MaterialViewer() {
 
       <div className="flex h-[calc(100vh-73px)]">
         {/* Sidebar - Material List */}
-        <aside className="w-64 bg-gray-800 border-r border-gray-700 overflow-y-auto">
-          <div className="p-4">
+        <aside className="w-80 bg-gray-800 border-r border-gray-700 flex flex-col">
+          {/* Material List */}
+          <div className="flex-1 overflow-y-auto p-4">
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
               Materials
             </h2>
@@ -203,6 +207,33 @@ export function MaterialViewer() {
         <main className="flex-1 flex flex-col overflow-hidden">
           {/* Controls Bar */}
           <div className="bg-gray-800 border-b border-gray-700 px-6 py-3 flex items-center gap-6">
+            {/* View Mode Toggle */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-400">View:</span>
+              <div className="flex rounded-lg overflow-hidden border border-gray-600">
+                <button
+                  onClick={() => setViewMode('3d')}
+                  className={`px-3 py-1 text-sm transition-colors ${
+                    viewMode === '3d'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  3D
+                </button>
+                <button
+                  onClick={() => setViewMode('texture')}
+                  className={`px-3 py-1 text-sm transition-colors ${
+                    viewMode === 'texture'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Texture
+                </button>
+              </div>
+            </div>
+
             {/* Resolution Toggle */}
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-400">Resolution:</span>
@@ -230,62 +261,81 @@ export function MaterialViewer() {
               </div>
             </div>
 
-            {/* Map Type Tabs */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-400">Layer:</span>
-              <div className="flex rounded-lg overflow-hidden border border-gray-600">
-                {MAP_TYPES.map((mapType) => (
-                  <button
-                    key={mapType}
-                    onClick={() => setSelectedMap(mapType)}
-                    className={`px-3 py-1 text-sm capitalize transition-colors ${
-                      selectedMap === mapType
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                    }`}
-                  >
-                    {mapType}
-                  </button>
-                ))}
+            {/* Map Type Tabs - only show in texture mode */}
+            {viewMode === 'texture' && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-400">Layer:</span>
+                <div className="flex rounded-lg overflow-hidden border border-gray-600">
+                  {MAP_TYPES.map((mapType) => (
+                    <button
+                      key={mapType}
+                      onClick={() => setSelectedMap(mapType)}
+                      className={`px-3 py-1 text-sm capitalize transition-colors ${
+                        selectedMap === mapType
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                      }`}
+                    >
+                      {mapType}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Zoom Controls */}
-            <div className="flex items-center gap-2 ml-auto">
-              <span className="text-sm text-gray-400">Zoom:</span>
-              <button
-                onClick={handleZoomOut}
-                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
-              >
-                −
-              </button>
-              <button
-                onClick={handleResetZoom}
-                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm min-w-[60px]"
-              >
-                {Math.round(zoom * 100)}%
-              </button>
-              <button
-                onClick={handleZoomIn}
-                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
-              >
-                +
-              </button>
-            </div>
+            {/* Zoom Controls - only show in texture mode */}
+            {viewMode === 'texture' && (
+              <div className="flex items-center gap-2 ml-auto">
+                <span className="text-sm text-gray-400">Zoom:</span>
+                <button
+                  onClick={handleZoomOut}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                >
+                  −
+                </button>
+                <button
+                  onClick={handleResetZoom}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm min-w-[60px]"
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  onClick={handleZoomIn}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                >
+                  +
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Texture Preview */}
+          {/* Main Preview Area */}
           <div className="flex-1 overflow-hidden bg-gray-950 flex items-center justify-center p-4">
-            {loadingTexture ? (
-              <div className="text-gray-400">Loading texture...</div>
+            {viewMode === '3d' ? (
+              /* 3D Preview */
+              <div className="w-full h-full">
+                <BundledMaterialPreview
+                  materialIndex={selectedMaterial}
+                  materialName={pallet.materials[selectedMaterial]}
+                  pallet={pallet}
+                  resolution={resolution}
+                  height={600}
+                  showControls={true}
+                />
+              </div>
             ) : (
-              <canvas
-                ref={canvasRef}
-                className="w-full h-full border border-gray-700 shadow-2xl object-contain"
-                style={{
-                  imageRendering: zoom >= 2 ? 'pixelated' : 'auto',
-                }}
-              />
+              /* Texture Preview */
+              loadingTexture ? (
+                <div className="text-gray-400">Loading texture...</div>
+              ) : (
+                <canvas
+                  ref={canvasRef}
+                  className="max-w-full max-h-full border border-gray-700 shadow-2xl object-contain"
+                  style={{
+                    imageRendering: zoom >= 2 ? 'pixelated' : 'auto',
+                  }}
+                />
+              )
             )}
           </div>
 

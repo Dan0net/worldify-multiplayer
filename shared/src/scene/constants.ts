@@ -21,14 +21,17 @@ export const MATERIAL_NORMAL_STRENGTH = 1.0;
 
 // ============== Lighting Defaults ==============
 
+/** Ambient light color (hex) */
+export const LIGHT_AMBIENT_COLOR = '#ffffff';
+
 /** Ambient light intensity */
 export const LIGHT_AMBIENT_INTENSITY = 0.4;
 
-/** Main directional light (sun) intensity */
-export const LIGHT_SUN_INTENSITY = 1.5;
+/** Sun light color - warm sunset yellow */
+export const LIGHT_SUN_COLOR = '#ffcc00';
 
-/** Fill directional light intensity */
-export const LIGHT_FILL_INTENSITY = 0.5;
+/** Main directional light (sun) intensity */
+export const LIGHT_SUN_INTENSITY = 3.0;
 
 // ============== Environment/IBL Defaults ==============
 

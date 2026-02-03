@@ -1,14 +1,16 @@
 import { useRef, useState, useMemo, useEffect, Suspense } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, Environment, useTexture } from '@react-three/drei';
+import { Canvas, useFrame } from '@react-three/fiber';
+import { useTexture } from '@react-three/drei';
 import * as THREE from 'three';
 import {
+  GeometryType,
+  PreviewScene,
+  PreviewGeometry,
+  GeometrySelector,
+  EnvMapToggle,
   ENVIRONMENT_INTENSITY,
   MATERIAL_AO_INTENSITY,
-  DEFAULT_SKYBOX,
-} from '@worldify/shared/scene';
-
-type GeometryType = 'sphere' | 'cube' | 'plane';
+} from './PreviewScene';
 
 interface MapConfig {
   path?: string;
@@ -82,32 +84,6 @@ function extractChannel(texture: THREE.Texture, channel: string): THREE.Texture 
   return newTexture;
 }
 
-// Geometry with UV2 for AO map
-function GeometryWithUV2({ type }: { type: GeometryType }) {
-  const geometryRef = useRef<THREE.SphereGeometry | THREE.BoxGeometry | THREE.PlaneGeometry>(null);
-  
-  useEffect(() => {
-    if (geometryRef.current) {
-      // Copy UV to UV2 for AO map support
-      const uv = geometryRef.current.getAttribute('uv');
-      if (uv) {
-        geometryRef.current.setAttribute('uv2', uv.clone());
-      }
-    }
-  }, [type]);
-  
-  switch (type) {
-    case 'sphere':
-      return <sphereGeometry ref={geometryRef as React.RefObject<THREE.SphereGeometry>} args={[1, 64, 64]} />;
-    case 'cube':
-      return <boxGeometry ref={geometryRef as React.RefObject<THREE.BoxGeometry>} args={[1.5, 1.5, 1.5]} />;
-    case 'plane':
-      return <planeGeometry ref={geometryRef as React.RefObject<THREE.PlaneGeometry>} args={[2.5, 2.5]} />;
-    default:
-      return <sphereGeometry ref={geometryRef as React.RefObject<THREE.SphereGeometry>} args={[1, 64, 64]} />;
-  }
-}
-
 // Material with loaded textures
 function LoadedMaterial({
   texturePaths,
@@ -136,7 +112,7 @@ function LoadedMaterial({
     uniquePaths.forEach((path, i) => {
       const tex = Array.isArray(loadedTextures) ? loadedTextures[i] : loadedTextures;
       if (tex) {
-        map[path] = tex;
+        map[path] = tex as unknown as THREE.Texture;
       }
     });
     return map;
@@ -186,14 +162,14 @@ function LoadedMaterial({
   
   return (
     <meshStandardMaterial
-      ref={materialRef}
-      map={processedTextures.albedo ?? null}
-      normalMap={processedTextures.normal ?? null}
-      aoMap={processedTextures.ao ?? null}
+      ref={materialRef as any}
+      map={(processedTextures.albedo ?? null) as any}
+      normalMap={(processedTextures.normal ?? null) as any}
+      aoMap={(processedTextures.ao ?? null) as any}
       aoMapIntensity={MATERIAL_AO_INTENSITY}
-      roughnessMap={processedTextures.roughness ?? null}
+      roughnessMap={(processedTextures.roughness ?? null) as any}
       roughness={hasRoughnessMap ? 1 : 0.5}
-      metalnessMap={processedTextures.metalness ?? null}
+      metalnessMap={(processedTextures.metalness ?? null) as any}
       metalness={hasMetalnessMap ? 1 : 0}
       envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
     />
@@ -223,8 +199,8 @@ function MaterialMesh({
   });
 
   return (
-    <mesh ref={meshRef} rotation={geometry === 'plane' ? [-Math.PI / 4, 0, 0] : [0, 0, 0]}>
-      <GeometryWithUV2 type={geometry} />
+    <mesh ref={meshRef as any} rotation={geometry === 'plane' ? [-Math.PI / 4, 0, 0] : [0, 0, 0]}>
+      <PreviewGeometry type={geometry} />
       {hasTextures ? (
         <Suspense fallback={<meshStandardMaterial color="#666" />}>
           <LoadedMaterial texturePaths={texturePaths} envMapEnabled={envMapEnabled} />
@@ -233,47 +209,6 @@ function MaterialMesh({
         <meshStandardMaterial color="#666" roughness={0.5} metalness={0} />
       )}
     </mesh>
-  );
-}
-
-// Scene with lighting
-function Scene({
-  texturePaths,
-  geometry,
-  envMapEnabled,
-}: {
-  texturePaths: TexturePaths;
-  geometry: GeometryType;
-  envMapEnabled: boolean;
-}) {
-  return (
-    <>
-      {/* Lighting */}
-      <ambientLight intensity={0.4} />
-      <directionalLight position={[5, 5, 5]} intensity={1.5} />
-      <directionalLight position={[-3, 2, -3]} intensity={0.5} />
-      <pointLight position={[0, 3, 2]} intensity={0.8} />
-
-      {/* Environment map */}
-      {envMapEnabled && (
-        <Environment preset={DEFAULT_SKYBOX as 'forest'} background={true} />
-      )}
-
-      {/* Material mesh */}
-      <MaterialMesh
-        texturePaths={texturePaths}
-        geometry={geometry}
-        envMapEnabled={envMapEnabled}
-      />
-
-      {/* Controls */}
-      <OrbitControls
-        enablePan={false}
-        minDistance={2}
-        maxDistance={6}
-        autoRotate={false}
-      />
-    </>
   );
 }
 
@@ -313,33 +248,10 @@ export function MaterialPreview({ materialName, config, height = 300 }: Material
     <div className="flex flex-col gap-2">
       {/* Controls */}
       <div className="flex items-center gap-2 flex-wrap">
-        {/* Geometry selector */}
-        <div className="flex gap-1">
-          {(['sphere', 'cube', 'plane'] as const).map((geo) => (
-            <button
-              key={geo}
-              onClick={() => setGeometry(geo)}
-              className={`px-2 py-1 text-xs rounded capitalize ${
-                geometry === geo
-                  ? 'bg-purple-600 text-white'
-                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-            >
-              {geo}
-            </button>
-          ))}
+        <GeometrySelector geometry={geometry} onSelect={setGeometry} />
+        <div className="ml-auto">
+          <EnvMapToggle enabled={envMapEnabled} onChange={setEnvMapEnabled} />
         </div>
-
-        {/* Env map toggle */}
-        <label className="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer ml-auto">
-          <input
-            type="checkbox"
-            checked={envMapEnabled}
-            onChange={(e) => setEnvMapEnabled(e.target.checked)}
-            className="w-3.5 h-3.5 rounded bg-gray-700 border-gray-600"
-          />
-          Env Map
-        </label>
       </div>
 
       {/* 3D Canvas */}
@@ -352,11 +264,13 @@ export function MaterialPreview({ materialName, config, height = 300 }: Material
           gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
         >
           <TextureErrorBoundary>
-            <Scene
-              texturePaths={texturePaths}
-              geometry={geometry}
-              envMapEnabled={envMapEnabled}
-            />
+            <PreviewScene envMapEnabled={envMapEnabled}>
+              <MaterialMesh
+                texturePaths={texturePaths}
+                geometry={geometry}
+                envMapEnabled={envMapEnabled}
+              />
+            </PreviewScene>
           </TextureErrorBoundary>
         </Canvas>
       </div>
