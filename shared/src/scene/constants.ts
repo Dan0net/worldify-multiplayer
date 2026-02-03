@@ -106,7 +106,7 @@ export const HEMISPHERE_SKY_DAY = '#87ceeb';          // Light sky blue
 export const HEMISPHERE_SKY_SUNRISE = '#ffccdd';      // Light pink morning
 export const HEMISPHERE_SKY_SUNRISE_BLUE = '#aaddff'; // Soft blue morning
 export const HEMISPHERE_SKY_SUNSET = '#ff8844';       // Deep orange sunset
-export const HEMISPHERE_SKY_SUNSET_PURPLE = '#6644aa';// Purple dusk
+export const HEMISPHERE_SKY_SUNSET_PURPLE = '#8877aa';// Purple dusk (brightness matched to night)
 export const HEMISPHERE_SKY_NIGHT = '#7799cc';        // Bright moonlit sky (main night fill)
 
 /** Hemisphere light - ground color at different times */
@@ -128,3 +128,43 @@ export const TIME_SUNRISE_START = 0.15;  // 3:36 AM - early dawn
 export const TIME_SUNRISE_END = 0.35;    // 8:24 AM - mid morning
 export const TIME_SUNSET_START = 0.65;   // 3:36 PM - afternoon
 export const TIME_SUNSET_END = 0.85;     // 8:24 PM - late dusk
+
+/** Moon visibility thresholds based on sun elevation (degrees) */
+export const MOON_THRESHOLD_INVISIBLE = 45;  // Sun above this = no moon
+export const MOON_THRESHOLD_FAINT = 25;      // Moon starts appearing
+export const MOON_THRESHOLD_RISING = 10;     // Moon ramping up
+export const MOON_THRESHOLD_FULL = -5;       // Moon at full intensity
+
+/** Color gradient stops for sun during sunrise [t, color][] */
+export const SUN_GRADIENT_SUNRISE: [number, string][] = [
+  [0.0, SUN_COLOR_TWILIGHT],
+  [0.2, SUN_COLOR_SUNRISE_PINK],
+  [0.4, SUN_COLOR_SUNRISE_PEACH],
+  [0.7, SUN_COLOR_GOLDEN],
+  [1.0, SUN_COLOR_NOON],
+];
+
+/** Color gradient stops for sun during sunset [t, color][] */
+export const SUN_GRADIENT_SUNSET: [number, string][] = [
+  [0.0, SUN_COLOR_NOON],
+  [0.25, SUN_COLOR_GOLDEN],
+  [0.5, SUN_COLOR_SUNSET_DEEP],
+  [0.75, SUN_COLOR_SUNSET_PURPLE],
+  [1.0, SUN_COLOR_TWILIGHT],
+];
+
+/** Color gradient stops for hemisphere sky during sunrise */
+export const HEMISPHERE_SKY_GRADIENT_SUNRISE: [number, string][] = [
+  [0.0, HEMISPHERE_SKY_NIGHT],
+  [0.3, HEMISPHERE_SKY_SUNRISE],
+  [0.6, HEMISPHERE_SKY_SUNRISE_BLUE],
+  [1.0, HEMISPHERE_SKY_DAY],
+];
+
+/** Color gradient stops for hemisphere sky during sunset */
+export const HEMISPHERE_SKY_GRADIENT_SUNSET: [number, string][] = [
+  [0.0, HEMISPHERE_SKY_DAY],
+  [0.3, HEMISPHERE_SKY_SUNSET],
+  [0.6, HEMISPHERE_SKY_SUNSET_PURPLE],
+  [1.0, HEMISPHERE_SKY_NIGHT],
+];
