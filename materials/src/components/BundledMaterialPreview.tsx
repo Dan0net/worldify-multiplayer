@@ -18,6 +18,7 @@ import {
   EnvMapToggle,
   ENVIRONMENT_INTENSITY,
   MATERIAL_AO_INTENSITY,
+  MATERIAL_NORMAL_STRENGTH,
 } from './PreviewScene';
 
 export type Resolution = 'low' | 'high';
@@ -92,6 +93,7 @@ async function loadLayerTexture(
     
     const texture = new THREE.DataTexture(textureData, width, height, format);
     texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.flipY = false; // Raw binary data is already in correct orientation
     texture.needsUpdate = true;
     
     // Set color space based on map type
@@ -131,6 +133,7 @@ function BundledMaterialMesh({
       <meshStandardMaterial
         map={textures.albedo as any}
         normalMap={textures.normal as any}
+        normalScale={[-MATERIAL_NORMAL_STRENGTH, -MATERIAL_NORMAL_STRENGTH] as any}
         aoMap={textures.ao as any}
         aoMapIntensity={MATERIAL_AO_INTENSITY}
         roughnessMap={textures.roughness as any}

@@ -10,6 +10,7 @@ import {
   EnvMapToggle,
   ENVIRONMENT_INTENSITY,
   MATERIAL_AO_INTENSITY,
+  MATERIAL_NORMAL_STRENGTH,
 } from './PreviewScene';
 
 interface MapConfig {
@@ -168,6 +169,7 @@ function LoadedMaterial({
       ref={materialRef as any}
       map={(processedTextures.albedo ?? null) as any}
       normalMap={(processedTextures.normal ?? null) as any}
+      normalScale={[-MATERIAL_NORMAL_STRENGTH, -MATERIAL_NORMAL_STRENGTH] as any}
       aoMap={(processedTextures.ao ?? null) as any}
       aoMapIntensity={MATERIAL_AO_INTENSITY}
       roughnessMap={(processedTextures.roughness ?? null) as any}
@@ -239,7 +241,19 @@ export function MaterialPreview({ materialName, config, height = 300 }: Material
     ao: config.ao?.path ? { path: config.ao.path, channel: config.ao.channel } : undefined,
     roughness: config.roughness?.path ? { path: config.roughness.path, channel: config.roughness.channel } : undefined,
     metalness: config.metalness?.path ? { path: config.metalness.path, channel: config.metalness.channel } : undefined,
-  }), [config]);
+  }), [config.albedo?.path, config.albedo?.channel, config.normal?.path, config.normal?.channel, config.ao?.path, config.ao?.channel, config.roughness?.path, config.roughness?.channel, config.metalness?.path, config.metalness?.channel]);
+
+  // Create a stable key for forcing Canvas remount when textures change
+  const canvasKey = useMemo(() => {
+    const paths = [
+      config.albedo?.path,
+      config.normal?.path,
+      config.ao?.path,
+      config.roughness?.path,
+      config.metalness?.path,
+    ].filter(Boolean).join('|');
+    return `${materialName}-${paths}`;
+  }, [materialName, config.albedo?.path, config.normal?.path, config.ao?.path, config.roughness?.path, config.metalness?.path]);
 
   // Check if we have any textures
   const hasTextures = Object.values(texturePaths).some((t) => t?.path);
@@ -271,6 +285,7 @@ export function MaterialPreview({ materialName, config, height = 300 }: Material
         style={{ height }}
       >
         <Canvas
+          key={canvasKey}
           camera={{ position: [0, 0, 3], fov: 45 }}
           gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
         >

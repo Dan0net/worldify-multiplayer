@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import {
   ENVIRONMENT_INTENSITY,
   MATERIAL_AO_INTENSITY,
+  MATERIAL_NORMAL_STRENGTH,
   DEFAULT_SKYBOX,
   LIGHT_AMBIENT_COLOR,
   LIGHT_AMBIENT_INTENSITY,
@@ -22,7 +23,7 @@ import {
 export type GeometryType = 'sphere' | 'cube' | 'plane';
 
 // Re-export shared constants for convenience
-export { ENVIRONMENT_INTENSITY, MATERIAL_AO_INTENSITY };
+export { ENVIRONMENT_INTENSITY, MATERIAL_AO_INTENSITY, MATERIAL_NORMAL_STRENGTH };
 
 /**
  * Sets scene.environmentIntensity for IBL control
