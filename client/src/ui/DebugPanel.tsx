@@ -3,7 +3,7 @@ import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
 import { togglePostProcessing as togglePostProcessingEffect, updatePostProcessing } from '../game/scene/postprocessing';
-import { applyEnvironmentSettings, formatTimeOfDay, TONE_MAPPING_OPTIONS } from '../game/scene/TimeOfDay';
+import { applyEnvironmentSettings, formatTimeOfDay, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { SKYBOX_OPTIONS } from '../game/scene/Skybox';
 import { storeBridge } from '../state/bridge';
 import * as THREE from 'three';

@@ -173,7 +173,6 @@ export function initPostProcessing(
     ssao: ssaoPass.enabled,
     bloom: bloomPass.enabled,
     saturation: opts.saturation,
-    bloom: bloomPass.enabled,
     passes: composer.passes.length,
   });
   

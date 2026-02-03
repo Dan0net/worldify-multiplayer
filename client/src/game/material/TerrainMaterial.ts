@@ -12,6 +12,7 @@ import {
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
 } from '@worldify/shared';
+import { useGameStore } from '../../state/store';
 import { textureCache } from './TextureCache.js';
 import { getMaterialPallet } from './MaterialPallet.js';
 import { TERRAIN_MATERIAL_REPEAT_SCALE, TERRAIN_MATERIAL_BLEND_OFFSET_RAD } from './constants.js';
@@ -95,7 +96,8 @@ function createDataArrayTexture(
   height: number,
   layers: number,
   channels: string,
-  resolution: TextureResolution
+  resolution: TextureResolution,
+  mapType: string
 ): THREE.DataArrayTexture {
   const channelCount = channels.length;
   const texture = new THREE.DataArrayTexture(data as unknown as BufferSource, width, height, layers);
@@ -103,6 +105,15 @@ function createDataArrayTexture(
   texture.format = channelCount === 4 ? THREE.RGBAFormat : THREE.RedFormat;
   texture.type = THREE.UnsignedByteType;
   texture.internalFormat = channelCount === 4 ? 'RGBA8' : 'R8';
+  
+  // Set colorSpace based on map type - critical for correct color rendering
+  // Albedo textures are in sRGB color space and need conversion to linear
+  // All other maps (normal, ao, roughness, metalness) are linear data
+  if (mapType === 'albedo') {
+    texture.colorSpace = THREE.SRGBColorSpace;
+  } else {
+    texture.colorSpace = THREE.LinearSRGBColorSpace;
+  }
   
   if (resolution === 'low') {
     texture.minFilter = THREE.NearestMipmapLinearFilter;
@@ -150,7 +161,8 @@ export async function loadDataArrayTextures(
       meta.height,
       meta.layers,
       meta.channels,
-      resolution
+      resolution,
+      mapType
     );
     
     loaded++;
@@ -438,17 +450,29 @@ let liquidMaterial: TerrainMaterial | null = null;
 let transparentDepthMaterial: TransparentDepthMaterial | null = null;
 
 export function getTerrainMaterial(): TerrainMaterial {
-  if (!solidMaterial) solidMaterial = new TerrainMaterial(false);
+  if (!solidMaterial) {
+    solidMaterial = new TerrainMaterial(false);
+    // Set envMapIntensity from store to match MaterialPreview
+    solidMaterial.envMapIntensity = useGameStore.getState().environment.environmentIntensity;
+  }
   return solidMaterial;
 }
 
 export function getTransparentTerrainMaterial(): TerrainMaterial {
-  if (!transparentMaterial) transparentMaterial = new TerrainMaterial(true);
+  if (!transparentMaterial) {
+    transparentMaterial = new TerrainMaterial(true);
+    // Set envMapIntensity from store to match MaterialPreview
+    transparentMaterial.envMapIntensity = useGameStore.getState().environment.environmentIntensity;
+  }
   return transparentMaterial;
 }
 
 export function getLiquidTerrainMaterial(): TerrainMaterial {
-  if (!liquidMaterial) liquidMaterial = new TerrainMaterial(true);
+  if (!liquidMaterial) {
+    liquidMaterial = new TerrainMaterial(true);
+    // Set envMapIntensity from store to match MaterialPreview
+    liquidMaterial.envMapIntensity = useGameStore.getState().environment.environmentIntensity;
+  }
   return liquidMaterial;
 }
 

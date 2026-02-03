@@ -4,6 +4,7 @@ import {
   Texture,
   LinearSRGBColorSpace,
 } from 'three';
+import { ENVIRONMENT_INTENSITY } from '@worldify/shared';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 
 let skyboxTexture: Texture | null = null;
@@ -99,7 +100,8 @@ export function setupSkybox(scene: Scene, skyboxName?: string, onLoaded?: () => 
       scene.background = texture;
       scene.environment = texture;
       // environmentIntensity is available in Three.js r155+ but types may lag
-      (scene as unknown as { environmentIntensity: number }).environmentIntensity = 1.0;
+      // Use shared constant for consistency with MaterialPreview
+      (scene as unknown as { environmentIntensity: number }).environmentIntensity = ENVIRONMENT_INTENSITY;
 
       skyboxTexture = texture;
       currentSkyboxName = preset;

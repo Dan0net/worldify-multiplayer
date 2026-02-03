@@ -7,6 +7,10 @@ import {
   MATERIAL_NORMAL_STRENGTH,
   ENVIRONMENT_INTENSITY,
   DEFAULT_SKYBOX,
+  LIGHT_AMBIENT_COLOR,
+  LIGHT_AMBIENT_INTENSITY,
+  LIGHT_SUN_COLOR,
+  LIGHT_SUN_INTENSITY,
 } from '@worldify/shared';
 import * as THREE from 'three';
 
@@ -124,15 +128,15 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   timeOfDay: 0.35,          // ~8:30am - nice morning light
   timeSpeed: 0,             // Paused by default
   
-  sunColor: '#ffcc00',
-  sunIntensity: 3.0,
+  sunColor: LIGHT_SUN_COLOR,
+  sunIntensity: LIGHT_SUN_INTENSITY,
   sunDistance: 150,
   
   moonColor: '#8899bb',
   moonIntensity: 0.3,
   
-  ambientColor: '#ffffff',
-  ambientIntensity: 0.4,    // Matches pallet viewer
+  ambientColor: LIGHT_AMBIENT_COLOR,
+  ambientIntensity: LIGHT_AMBIENT_INTENSITY,
   
   skybox: DEFAULT_SKYBOX,
   environmentIntensity: ENVIRONMENT_INTENSITY,

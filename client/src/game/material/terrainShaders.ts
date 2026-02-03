@@ -56,6 +56,18 @@ const fragmentVaryings = /* glsl */ `
 
 /** Tri-planar and material blending core functions */
 const blendingFunctions = /* glsl */ `
+  // sRGB to linear conversion - required for correct albedo color handling
+  // GPU hardware sRGB decode may not work correctly with sampler2DArray
+  vec3 sRGBToLinear(vec3 srgb) {
+    // Approximation: pow(srgb, 2.2) is close but not exact
+    // Exact formula handles the linear segment below 0.04045
+    return mix(
+      srgb / 12.92,
+      pow((srgb + 0.055) / 1.055, vec3(2.4)),
+      step(0.04045, srgb)
+    );
+  }
+  
   vec3 calcTriPlanarBlend(vec3 normal, mat3 offset) {
     vec3 blending = offset * normal;
     blending = pow(abs(blending), vec3(blendSharpness));
@@ -164,10 +176,12 @@ export const terrainDiffuseFragment = /* glsl */ `
   gTriUV_xy = triPos.xy * repeatScale;
   
   vec4 sampledAlbedo = sampleMaterialBlend(mapArray);
+  // Convert albedo from sRGB to linear color space for correct PBR lighting
+  vec3 linearAlbedo = sRGBToLinear(sampledAlbedo.rgb);
   #ifdef USE_TEXTURE_ALPHA
-    vec4 diffuseColor = vec4(sampledAlbedo.rgb, sampledAlbedo.a);
+    vec4 diffuseColor = vec4(linearAlbedo, sampledAlbedo.a);
   #else
-    vec4 diffuseColor = vec4(sampledAlbedo.rgb, 1.0);
+    vec4 diffuseColor = vec4(linearAlbedo, 1.0);
   #endif
 `;
 

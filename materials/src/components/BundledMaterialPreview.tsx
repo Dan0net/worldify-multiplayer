@@ -19,6 +19,8 @@ import {
   ENVIRONMENT_INTENSITY,
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
+  MATERIAL_ROUGHNESS_MULTIPLIER,
+  MATERIAL_METALNESS_MULTIPLIER,
 } from './PreviewScene';
 
 export type Resolution = 'low' | 'high';
@@ -123,9 +125,6 @@ function BundledMaterialMesh({
   hasAlpha: boolean;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
-  
-  const hasRoughnessMap = !!textures.roughness;
-  const hasMetalnessMap = !!textures.metalness;
 
   return (
     <mesh ref={meshRef as any} rotation={geometry === 'plane' ? [-Math.PI / 4, 0, 0] : [0, 0, 0]}>
@@ -137,9 +136,9 @@ function BundledMaterialMesh({
         aoMap={textures.ao as any}
         aoMapIntensity={MATERIAL_AO_INTENSITY}
         roughnessMap={textures.roughness as any}
-        roughness={hasRoughnessMap ? 1 : 0.5}
+        roughness={MATERIAL_ROUGHNESS_MULTIPLIER}
         metalnessMap={textures.metalness as any}
-        metalness={hasMetalnessMap ? 1 : 0}
+        metalness={MATERIAL_METALNESS_MULTIPLIER}
         envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
         transparent={hasAlpha}
         alphaTest={hasAlpha ? 0.5 : 0}

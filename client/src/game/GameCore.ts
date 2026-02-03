@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
-import { initTimeOfDay, updateTimeOfDay, applyEnvironmentSettings } from './scene/TimeOfDay';
+import { initLighting, applyEnvironmentSettings } from './scene/Lighting';
 import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
 import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
@@ -90,8 +90,8 @@ export class GameCore {
     createScene();
     createCamera();
     
-    // Initialize time of day lighting system (replaces setupLighting)
-    initTimeOfDay(this.renderer);
+    // Initialize static lighting system (matches MaterialPreview)
+    initLighting(this.renderer);
     
     // Apply initial environment settings from store
     const initialEnv = useGameStore.getState().environment;
@@ -391,9 +391,6 @@ export class GameCore {
     if (this.voxelIntegration) {
       this.voxelIntegration.update(localPlayer.position);
     }
-
-    // Update time of day lighting system (sun/moon positions, colors)
-    updateTimeOfDay(deltaMs / 1000, localPlayer.position);
 
     // Update camera and build system
     if (camera) {

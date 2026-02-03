@@ -11,6 +11,8 @@ import {
   ENVIRONMENT_INTENSITY,
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
+  MATERIAL_ROUGHNESS_MULTIPLIER,
+  MATERIAL_METALNESS_MULTIPLIER,
 } from './PreviewScene';
 
 interface MapConfig {
@@ -160,10 +162,6 @@ function LoadedMaterial({
     return result;
   }, [texturePaths, textureMap]);
   
-  // Determine base values based on whether maps exist
-  const hasRoughnessMap = !!processedTextures.roughness;
-  const hasMetalnessMap = !!processedTextures.metalness;
-  
   return (
     <meshStandardMaterial
       ref={materialRef as any}
@@ -173,9 +171,9 @@ function LoadedMaterial({
       aoMap={(processedTextures.ao ?? null) as any}
       aoMapIntensity={MATERIAL_AO_INTENSITY}
       roughnessMap={(processedTextures.roughness ?? null) as any}
-      roughness={hasRoughnessMap ? 1 : 0.5}
+      roughness={MATERIAL_ROUGHNESS_MULTIPLIER}
       metalnessMap={(processedTextures.metalness ?? null) as any}
-      metalness={hasMetalnessMap ? 1 : 0}
+      metalness={MATERIAL_METALNESS_MULTIPLIER}
       envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
       transparent={hasAlpha}
       alphaTest={hasAlpha ? 0.5 : 0}
