@@ -62,6 +62,12 @@ let bloomPass: UnrealBloomPass | null = null;
 let colorCorrectionPass: ShaderPass | null = null;
 let effectsEnabled = true;
 
+// Store renderer reference and original settings for F8 toggle
+let rendererRef: THREE.WebGLRenderer | null = null;
+let originalToneMapping: THREE.ToneMapping = THREE.ACESFilmicToneMapping;
+let originalToneMappingExposure = 1.0;
+let originalSaturation = 1.2;
+
 export interface PostProcessingOptions {
   /** Enable/disable all effects (default: true) */
   enabled?: boolean;
@@ -114,6 +120,12 @@ export function initPostProcessing(
   const opts = { ...defaultOptions, ...options };
   const width = window.innerWidth;
   const height = window.innerHeight;
+  
+  // Store renderer reference and original settings for F8 toggle
+  rendererRef = renderer;
+  originalToneMapping = renderer.toneMapping;
+  originalToneMappingExposure = renderer.toneMappingExposure;
+  originalSaturation = opts.saturation;
   
   // Create composer
   composer = new EffectComposer(renderer);
@@ -205,6 +217,7 @@ export function updatePostProcessing(options: PostProcessingOptions): void {
   }
   if (options.saturation !== undefined && colorCorrectionPass) {
     colorCorrectionPass.uniforms.saturation.value = options.saturation;
+    originalSaturation = options.saturation;
   }
   if (options.enabled !== undefined) {
     effectsEnabled = options.enabled;
@@ -220,6 +233,8 @@ export function updatePostProcessing(options: PostProcessingOptions): void {
 export function setSaturation(value: number): void {
   if (colorCorrectionPass) {
     colorCorrectionPass.uniforms.saturation.value = value;
+    // Update the original value so F8 toggle restores correctly
+    originalSaturation = value;
   }
 }
 
@@ -254,14 +269,33 @@ export function getComposer(): EffectComposer | null {
 
 /**
  * Toggle post-processing on/off. Returns new enabled state.
+ * When off: disables SSAO, bloom, color correction, AND tone mapping
+ * This provides a "raw" view for debugging material/lighting issues.
  */
 export function togglePostProcessing(): boolean {
   effectsEnabled = !effectsEnabled;
   
   if (ssaoPass) ssaoPass.enabled = effectsEnabled;
   if (bloomPass) bloomPass.enabled = effectsEnabled;
-  if (colorCorrectionPass) colorCorrectionPass.enabled = effectsEnabled;
+  if (colorCorrectionPass) {
+    colorCorrectionPass.enabled = effectsEnabled;
+    // Restore saturation when re-enabled
+    if (effectsEnabled) {
+      colorCorrectionPass.uniforms.saturation.value = originalSaturation;
+    }
+  }
   
-  console.log(`Post-processing: ${effectsEnabled ? 'ON' : 'OFF'}`);
+  // Toggle tone mapping on the renderer
+  if (rendererRef) {
+    if (effectsEnabled) {
+      rendererRef.toneMapping = originalToneMapping;
+      rendererRef.toneMappingExposure = originalToneMappingExposure;
+    } else {
+      rendererRef.toneMapping = THREE.NoToneMapping;
+      rendererRef.toneMappingExposure = 1.0;
+    }
+  }
+  
+  console.log(`Post-processing: ${effectsEnabled ? 'ON' : 'OFF'} (tone mapping: ${effectsEnabled ? 'ACES' : 'None'})`);
   return effectsEnabled;
 }

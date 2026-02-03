@@ -6,6 +6,12 @@
  */
 
 import * as THREE from 'three';
+import {
+  MATERIAL_ROUGHNESS_MULTIPLIER,
+  MATERIAL_METALNESS_MULTIPLIER,
+  MATERIAL_AO_INTENSITY,
+  MATERIAL_NORMAL_STRENGTH,
+} from '@worldify/shared';
 import { textureCache } from './TextureCache.js';
 import { getMaterialPallet } from './MaterialPallet.js';
 import { TERRAIN_MATERIAL_REPEAT_SCALE, TERRAIN_MATERIAL_BLEND_OFFSET_RAD } from './constants.js';
@@ -203,11 +209,11 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.blendOffset = { value: createBlendOffsetMatrix() };
       shader.uniforms.debugMode = { value: 0 };
       
-      // Material adjustment uniforms
-      shader.uniforms.roughnessMultiplier = { value: 0.6 };
-      shader.uniforms.metalnessMultiplier = { value: 1.0 };
-      shader.uniforms.aoIntensity = { value: 1.0 };
-      shader.uniforms.normalStrength = { value: 2.0 };
+      // Material adjustment uniforms - use shared constants for pallet viewer consistency
+      shader.uniforms.roughnessMultiplier = { value: MATERIAL_ROUGHNESS_MULTIPLIER };
+      shader.uniforms.metalnessMultiplier = { value: MATERIAL_METALNESS_MULTIPLIER };
+      shader.uniforms.aoIntensity = { value: MATERIAL_AO_INTENSITY };
+      shader.uniforms.normalStrength = { value: MATERIAL_NORMAL_STRENGTH };
       shader.uniforms.blendSharpness = { value: 8.0 };
       
       if (isTransparent) {

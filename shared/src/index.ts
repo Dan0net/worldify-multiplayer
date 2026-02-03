@@ -29,6 +29,9 @@ export * from './voxel/drawing.js';
 // Terrain generation
 export * from './terrain/index.js';
 
+// Scene constants (shared between game and pallet viewer)
+export * from './scene/index.js';
+
 // Re-export commonly used types for convenience
 export type { MovementInput, PlayerPosition } from './protocol/movement.js';
 export type { PlayerSnapshot, RoomSnapshot } from './protocol/snapshot.js';

@@ -1,5 +1,13 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
+import {
+  MATERIAL_ROUGHNESS_MULTIPLIER,
+  MATERIAL_METALNESS_MULTIPLIER,
+  MATERIAL_AO_INTENSITY,
+  MATERIAL_NORMAL_STRENGTH,
+  ENVIRONMENT_INTENSITY,
+  DEFAULT_SKYBOX,
+} from '@worldify/shared';
 import * as THREE from 'three';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
@@ -98,12 +106,12 @@ export interface MaterialSettings {
   windFrequency: number;          // 0.1-3
 }
 
-/** Default material settings */
+/** Default material settings - uses shared constants for consistency with pallet viewer */
 export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
-  roughnessMultiplier: 0.6,
-  metalnessMultiplier: 1.0,
-  aoIntensity: 1.0,
-  normalStrength: 2.0,
+  roughnessMultiplier: MATERIAL_ROUGHNESS_MULTIPLIER,
+  metalnessMultiplier: MATERIAL_METALNESS_MULTIPLIER,
+  aoIntensity: MATERIAL_AO_INTENSITY,
+  normalStrength: MATERIAL_NORMAL_STRENGTH,
   blendSharpness: 8.0,
   repeatScale: 2.0,
   windStrength: 0.1,
@@ -111,7 +119,7 @@ export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
   windFrequency: 1.0,
 };
 
-/** Default environment settings */
+/** Default environment settings - uses shared constants for consistency with pallet viewer */
 export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   timeOfDay: 0.35,          // ~8:30am - nice morning light
   timeSpeed: 0,             // Paused by default
@@ -124,10 +132,10 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   moonIntensity: 0.3,
   
   ambientColor: '#ffffff',
-  ambientIntensity: 0.1,
+  ambientIntensity: 0.4,    // Matches pallet viewer
   
-  skybox: 'sunset',
-  environmentIntensity: 1.0,
+  skybox: DEFAULT_SKYBOX,
+  environmentIntensity: ENVIRONMENT_INTENSITY,
   
   shadowBias: -0.0001,
   shadowNormalBias: 0.02,

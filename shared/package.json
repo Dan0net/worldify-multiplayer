@@ -17,6 +17,10 @@
     "./util/*": {
       "types": "./dist/util/*.d.ts",
       "import": "./dist/util/*.js"
+    },
+    "./scene": {
+      "types": "./dist/scene/index.d.ts",
+      "import": "./dist/scene/index.js"
     }
   },
   "scripts": {

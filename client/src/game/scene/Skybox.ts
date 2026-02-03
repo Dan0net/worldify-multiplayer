@@ -15,6 +15,7 @@ const HDRI_CDN = 'https://raw.githack.com/pmndrs/drei-assets/456060a26bbeb8fdf79
 
 /** Available skybox presets (from drei) */
 export const SKYBOX_OPTIONS = [
+  { value: 'none', label: 'None' },
   { value: 'sunset', label: 'Sunset' },
   { value: 'dawn', label: 'Dawn' },
   { value: 'night', label: 'Night' },
@@ -46,10 +47,27 @@ export type SkyboxName = typeof SKYBOX_OPTIONS[number]['value'];
 /**
  * Loads and applies an equirectangular HDR skybox texture to the scene.
  * Sets both scene.background (visible sky) and scene.environment (IBL reflections).
+ * Pass 'none' to disable skybox and environment map.
  */
 export function setupSkybox(scene: Scene, skyboxName?: string, onLoaded?: () => void): void {
   const preset = skyboxName || 'sunset';
   cachedScene = scene;
+  
+  // Handle "none" - disable skybox and environment
+  if (preset === 'none') {
+    // Dispose previous texture
+    if (skyboxTexture) {
+      skyboxTexture.dispose();
+      skyboxTexture = null;
+    }
+    
+    scene.background = null;
+    scene.environment = null;
+    currentSkyboxName = 'none';
+    console.log('Skybox disabled (none)');
+    onLoaded?.();
+    return;
+  }
   
   // Skip if already loaded
   if (currentSkyboxName === preset && skyboxTexture) {

@@ -2,6 +2,11 @@ import { useRef, useState, useMemo, useEffect, Suspense } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Environment, useTexture } from '@react-three/drei';
 import * as THREE from 'three';
+import {
+  ENVIRONMENT_INTENSITY,
+  MATERIAL_AO_INTENSITY,
+  DEFAULT_SKYBOX,
+} from '@worldify/shared/scene';
 
 type GeometryType = 'sphere' | 'cube' | 'plane';
 
@@ -185,12 +190,12 @@ function LoadedMaterial({
       map={processedTextures.albedo ?? null}
       normalMap={processedTextures.normal ?? null}
       aoMap={processedTextures.ao ?? null}
-      aoMapIntensity={1}
+      aoMapIntensity={MATERIAL_AO_INTENSITY}
       roughnessMap={processedTextures.roughness ?? null}
       roughness={hasRoughnessMap ? 1 : 0.5}
       metalnessMap={processedTextures.metalness ?? null}
       metalness={hasMetalnessMap ? 1 : 0}
-      envMapIntensity={envMapEnabled ? 1 : 0}
+      envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
     />
   );
 }
@@ -251,7 +256,7 @@ function Scene({
 
       {/* Environment map */}
       {envMapEnabled && (
-        <Environment preset="forest" background={true} />
+        <Environment preset={DEFAULT_SKYBOX as 'forest'} background={true} />
       )}
 
       {/* Material mesh */}
