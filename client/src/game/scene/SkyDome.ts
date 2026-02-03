@@ -33,6 +33,8 @@ precision highp float;
 uniform vec3 uSkyColor;
 uniform vec3 uHorizonColor;
 uniform vec3 uGroundColor;
+uniform vec3 uSunsetHorizonColor;
+uniform vec3 uSunsetZenithColor;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
 uniform float uSunIntensity;
@@ -43,14 +45,7 @@ uniform float uTime;
 
 varying vec3 vWorldDirection;
 
-// ============== Noise Functions ==============
-
-// Simple 2D hash
-float hash2(vec2 p) {
-  p = fract(p * vec2(443.897, 441.423));
-  p += dot(p, p.yx + 19.19);
-  return fract(p.x * p.y);
-}
+// ============== Hash Function ==============
 
 vec2 hash22(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * vec3(443.897, 441.423, 437.195));
@@ -85,7 +80,6 @@ float starsLayer(vec3 dir, float scale, float density, float time, float twinkle
   // Use octahedron mapping for cell lookup only
   vec2 uv = octEncode(dir) * scale;
   vec2 cellId = floor(uv);
-  vec2 cellUv = fract(uv);
   
   float result = 0.0;
   
@@ -101,16 +95,16 @@ float starsLayer(vec3 dir, float scale, float density, float time, float twinkle
         vec2 starUv = (neighbor + starHash) / scale;
         vec3 starDir = octDecode(starUv);
         
-        // Compute angular distance in 3D (rotation invariant, perfect circles)
-        float angularDist = acos(clamp(dot(dir, starDir), -1.0, 1.0));
+        // Angular distance approximation: 1 - dot² ≈ sin²(angle) (faster than acos)
+        float d = dot(dir, starDir);
+        float angularDistSq = 1.0 - d * d;
         
-        // Very small, sharp stars
+        // Star brightness with twinkle
         float brightness = (starHash.x - density) / (1.0 - density);
         float twinkle = 0.5 + 0.5 * sin(time * twinkleSpeed + starHash.y * 628.0);
         
-        // Sharp falloff based on angular distance (in radians)
-        // Multiply by scale to keep star size consistent across layers
-        float star = exp(-angularDist * angularDist * scale * scale * 50.0) * brightness * twinkle;
+        // Sharp falloff based on angular distance squared
+        float star = exp(-angularDistSq * scale * scale * 50.0) * brightness * twinkle;
         result += star;
       }
     }
@@ -140,82 +134,72 @@ float stars(vec3 dir, float time) {
   return result;
 }
 
+// ============== Celestial Body Helper ==============
+
+// Renders a disc with glow (reused for sun and moon)
+vec3 celestialBody(vec3 viewDir, vec3 bodyDir, vec3 color, float intensity, 
+                   float discInner, float discOuter, float glowPower, float glowStrength) {
+  float angle = dot(viewDir, bodyDir);
+  float disc = smoothstep(discInner, discOuter, angle);
+  float glow = pow(max(0.0, angle), glowPower) * glowStrength;
+  return color * intensity * (disc + glow);
+}
+
 // ============== Main ==============
 
 void main() {
   vec3 worldDir = normalize(vWorldDirection);
   float altitude = worldDir.y;
-  
-  // Get sun altitude for atmospheric calculations
   float sunAltitude = uSunDirection.y;
   
-  // === Sky Gradient with atmospheric scattering ===
-  vec3 sky;
-  
-  // Calculate how much to darken the sky (night = darker, day = normal)
+  // === Sky Gradient ===
+  // Night darkening factor
   float nightFactor = smoothstep(0.1, -0.2, sunAltitude);
   float skyDarkening = mix(1.0, 0.08, nightFactor);
   
-  // Dawn/dusk atmospheric colors
-  float dawnDusk = 1.0 - abs(sunAltitude) / 0.3;
-  dawnDusk = max(0.0, dawnDusk);
-  dawnDusk = pow(dawnDusk, 0.7);
+  // Dawn/dusk blend factor (peaks at sunset/sunrise)
+  float dawnDusk = pow(max(0.0, 1.0 - abs(sunAltitude) / 0.3), 0.7);
   
-  // Warm sunset colors
-  vec3 sunsetHorizon = vec3(1.0, 0.4, 0.15);
-  vec3 sunsetZenith = vec3(0.3, 0.2, 0.5);
-  
-  // Smooth blend across horizon
+  // Horizon blend (smooth transition above/below horizon)
   float horizonBlend = smoothstep(-0.1, 0.1, altitude);
   
-  // Sky above
+  // Sky colors
   float tSky = pow(max(0.0, altitude), 0.5);
   vec3 skyAbove = mix(uHorizonColor, uSkyColor, tSky);
-  vec3 sunsetGradient = mix(sunsetHorizon, sunsetZenith, pow(max(0.0, altitude), 0.4));
+  vec3 sunsetGradient = mix(uSunsetHorizonColor, uSunsetZenithColor, pow(max(0.0, altitude), 0.4));
   skyAbove = mix(skyAbove, sunsetGradient, dawnDusk * 0.7);
   
-  // Ground below
+  // Ground colors
   float tGround = pow(max(0.0, -altitude), 0.4);
   vec3 skyBelow = mix(uHorizonColor, uGroundColor, tGround);
   
-  // Blend
-  sky = mix(skyBelow, skyAbove, horizonBlend);
-  sky *= skyDarkening;
+  // Final sky gradient
+  vec3 sky = mix(skyBelow, skyAbove, horizonBlend) * skyDarkening;
   
   // === Sun ===
-  float sunAngle = dot(worldDir, uSunDirection);
-  float sunDisc = smoothstep(0.996, 0.9985, sunAngle);
-  float sunGlow = pow(max(0.0, sunAngle), 4.0) * 0.4;
+  sky += celestialBody(worldDir, uSunDirection, uSunColor, uSunIntensity, 0.996, 0.9985, 4.0, 0.4);
   
-  float horizonGlow = 0.0;
+  // Sun horizon glow (only near sunset/sunrise)
   if (sunAltitude > -0.2 && sunAltitude < 0.3) {
-    float glowStrength = 1.0 - abs(sunAltitude - 0.05) / 0.25;
-    glowStrength = pow(max(0.0, glowStrength), 0.6);
-    horizonGlow = pow(max(0.0, 1.0 - abs(altitude) * 2.0), 2.0) * glowStrength * 0.5;
-    float towardSun = pow(max(0.0, dot(normalize(vec3(worldDir.x, 0.0, worldDir.z)), 
-                                        normalize(vec3(uSunDirection.x, 0.0, uSunDirection.z)))), 1.5);
-    horizonGlow *= towardSun;
+    float glowStrength = pow(max(0.0, 1.0 - abs(sunAltitude - 0.05) / 0.25), 0.6);
+    float horizonGlow = pow(max(0.0, 1.0 - abs(altitude) * 2.0), 2.0) * glowStrength * 0.5;
+    vec3 sunXZ = normalize(vec3(uSunDirection.x, 0.0, uSunDirection.z));
+    vec3 dirXZ = normalize(vec3(worldDir.x, 0.0, worldDir.z));
+    horizonGlow *= pow(max(0.0, dot(dirXZ, sunXZ)), 1.5);
+    sky += uSunColor * uSunIntensity * horizonGlow;
   }
   
-  vec3 sunContrib = uSunColor * uSunIntensity * (sunDisc * 2.0 + sunGlow + horizonGlow);
-  sky += sunContrib;
-  
   // === Moon ===
-  float moonAngle = dot(worldDir, uMoonDirection);
-  float moonDisc = smoothstep(0.994, 0.998, moonAngle);
-  float moonGlow = pow(max(0.0, moonAngle), 8.0) * 0.4;
-  float moonRim = smoothstep(0.99, 0.994, moonAngle) * (1.0 - moonDisc) * 0.3;
-  
   float moonVisible = smoothstep(-0.1, 0.1, uMoonDirection.y) * uMoonIntensity;
-  vec3 moonContrib = uMoonColor * (moonDisc * 1.0 + moonGlow + moonRim) * moonVisible;
-  sky += moonContrib;
+  sky += celestialBody(worldDir, uMoonDirection, uMoonColor, moonVisible, 0.994, 0.998, 8.0, 0.4);
+  // Moon rim glow
+  float moonAngle = dot(worldDir, uMoonDirection);
+  sky += uMoonColor * smoothstep(0.99, 0.994, moonAngle) * (1.0 - smoothstep(0.994, 0.998, moonAngle)) * 0.3 * moonVisible;
   
   // === Stars ===
   float starsVisible = smoothstep(0.0, -0.15, sunAltitude);
-  
   if (starsVisible > 0.0) {
-    float starField = stars(worldDir, uTime);
-    sky += vec3(1.0, 0.97, 0.92) * starField * starsVisible * 1.2;
+    sky += vec3(1.0, 0.97, 0.92) * stars(worldDir, uTime) * starsVisible * 1.2;
   }
   
   gl_FragColor = vec4(sky, 1.0);
@@ -249,10 +233,10 @@ export function initSkyDome(): void {
     fragmentShader,
     uniforms: {
       uSkyColor: { value: new THREE.Color(settings.hemisphereSkyColor ?? '#87ceeb') },
-      uHorizonColor: { value: new THREE.Color(settings.hemisphereSkyColor ?? '#87ceeb').lerp(
-        new THREE.Color(settings.hemisphereGroundColor ?? '#3d5c3d'), 0.3
-      )},
+      uHorizonColor: { value: new THREE.Color('#87ceeb') },
       uGroundColor: { value: new THREE.Color(settings.hemisphereGroundColor ?? '#3d5c3d') },
+      uSunsetHorizonColor: { value: new THREE.Color(settings.sunsetHorizonColor ?? '#ff6622') },
+      uSunsetZenithColor: { value: new THREE.Color(settings.sunsetZenithColor ?? '#4d3380') },
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uSunColor: { value: new THREE.Color(settings.sunColor ?? '#ffcc00') },
       uSunIntensity: { value: 1.0 },
@@ -261,16 +245,18 @@ export function initSkyDome(): void {
       uMoonIntensity: { value: 0.0 },
       uTime: { value: 0.0 },
     },
-    side: THREE.BackSide,  // Render inside of sphere
+    side: THREE.BackSide,
     depthWrite: false,
   });
   
+  // Compute initial horizon color
+  updateHorizonColor();
+  
   skyMesh = new THREE.Mesh(geometry, skyMaterial);
-  skyMesh.renderOrder = -1000; // Render first (behind everything)
+  skyMesh.renderOrder = -1000;
   scene.add(skyMesh);
   
   scene.background = null;
-  
   updateSkyUniforms(settings);
   
   console.log('[SkyDome] Initialized procedural sky dome');
@@ -294,12 +280,24 @@ function anglesToDirection(azimuth: number, elevation: number): THREE.Vector3 {
 }
 
 /**
+ * Recompute horizon color from sky and ground colors (DRY helper).
+ */
+function updateHorizonColor(): void {
+  if (!skyMaterial) return;
+  const uniforms = skyMaterial.uniforms;
+  uniforms.uHorizonColor.value
+    .copy(uniforms.uSkyColor.value)
+    .lerp(uniforms.uGroundColor.value, 0.3);
+}
+
+/**
  * Update sky dome uniforms from environment settings.
- * Call when lighting settings change.
  */
 export function updateSkyUniforms(settings: Partial<{
   hemisphereSkyColor: string;
   hemisphereGroundColor: string;
+  sunsetHorizonColor: string;
+  sunsetZenithColor: string;
   sunColor: string;
   sunIntensity: number;
   sunAzimuth: number;
@@ -312,29 +310,38 @@ export function updateSkyUniforms(settings: Partial<{
   if (!skyMaterial) return;
   
   const uniforms = skyMaterial.uniforms;
+  let needsHorizonUpdate = false;
   
-  // Update sky colors
+  // Sky colors
   if (settings.hemisphereSkyColor !== undefined) {
     uniforms.uSkyColor.value.set(settings.hemisphereSkyColor);
-    // Horizon is blend of sky and ground
-    uniforms.uHorizonColor.value.copy(uniforms.uSkyColor.value)
-      .lerp(uniforms.uGroundColor.value, 0.3);
+    needsHorizonUpdate = true;
   }
   
   if (settings.hemisphereGroundColor !== undefined) {
     uniforms.uGroundColor.value.set(settings.hemisphereGroundColor);
-    // Update horizon blend
-    uniforms.uHorizonColor.value.copy(uniforms.uSkyColor.value)
-      .lerp(uniforms.uGroundColor.value, 0.3);
+    needsHorizonUpdate = true;
   }
   
-  // Update sun
+  if (needsHorizonUpdate) {
+    updateHorizonColor();
+  }
+  
+  // Sunset colors
+  if (settings.sunsetHorizonColor !== undefined) {
+    uniforms.uSunsetHorizonColor.value.set(settings.sunsetHorizonColor);
+  }
+  
+  if (settings.sunsetZenithColor !== undefined) {
+    uniforms.uSunsetZenithColor.value.set(settings.sunsetZenithColor);
+  }
+  
+  // Sun
   if (settings.sunColor !== undefined) {
     uniforms.uSunColor.value.set(settings.sunColor);
   }
   
   if (settings.sunIntensity !== undefined) {
-    // Normalize intensity for shader (0-1 range for glow)
     uniforms.uSunIntensity.value = Math.min(1.0, settings.sunIntensity / 3.0);
   }
   
@@ -345,7 +352,7 @@ export function updateSkyUniforms(settings: Partial<{
     uniforms.uSunDirection.value.copy(anglesToDirection(azimuth, elevation));
   }
   
-  // Update moon
+  // Moon
   if (settings.moonColor !== undefined) {
     uniforms.uMoonColor.value.set(settings.moonColor);
   }
@@ -364,7 +371,6 @@ export function updateSkyUniforms(settings: Partial<{
 
 /**
  * Update time uniform for star animation.
- * Call each frame.
  */
 export function updateSkyTime(time: number): void {
   if (skyMaterial) {
@@ -374,21 +380,10 @@ export function updateSkyTime(time: number): void {
 
 /**
  * Update sky dome position to follow camera.
- * Call each frame after camera updates.
  */
 export function updateSkyCamera(camera: THREE.Camera): void {
   if (skyMesh) {
-    // Keep sky dome centered on camera
     skyMesh.position.copy(camera.position);
-  }
-}
-
-/**
- * @deprecated Use updateSkyCamera instead. Kept for backwards compatibility.
- */
-export function updateSkyDomePosition(cameraPosition: THREE.Vector3): void {
-  if (skyMesh) {
-    skyMesh.position.copy(cameraPosition);
   }
 }
 

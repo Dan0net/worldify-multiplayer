@@ -99,6 +99,10 @@ export interface EnvironmentSettings {
   hemisphereGroundColor: string;  // Hex color (from below)
   hemisphereIntensity: number;    // 0-2
   
+  // Sunset/sunrise colors for sky shader
+  sunsetHorizonColor: string;     // Warm orange-red at horizon
+  sunsetZenithColor: string;      // Cool purple at zenith
+  
   // Environment (IBL)
   skybox: string;                 // Skybox image filename
   environmentIntensity: number; // 0-2
@@ -192,6 +196,10 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   hemisphereSkyColor: HEMISPHERE_SKY_DAY,
   hemisphereGroundColor: HEMISPHERE_GROUND_DAY,
   hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
+  
+  // Sunset/sunrise colors
+  sunsetHorizonColor: '#ff6622',  // Warm orange-red
+  sunsetZenithColor: '#4d3380',   // Cool purple
   
   skybox: DEFAULT_SKYBOX,
   environmentIntensity: ENVIRONMENT_INTENSITY,
