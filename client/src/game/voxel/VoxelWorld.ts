@@ -318,10 +318,6 @@ export class VoxelWorld implements ChunkProvider {
     }
   }
 
-
-
-
-
   /**
    * Request a chunk from the server.
    */
@@ -341,29 +337,26 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Receive chunk data from the server.
-   * Called by the network layer when chunk data arrives.
+   * Internal helper to ingest chunk data (shared by receiveChunkData and receiveSurfaceColumnData).
+   * @returns The chunk that was created/updated
    */
-  receiveChunkData(chunkData: VoxelChunkData): void {
-    const { chunkX, chunkY, chunkZ, voxelData } = chunkData;
-    const key = chunkKey(chunkX, chunkY, chunkZ);
+  private ingestChunkData(cx: number, cy: number, cz: number, voxelData: Uint16Array, lastBuildSeq: number = 0): Chunk {
+    const key = chunkKey(cx, cy, cz);
     
     // Remove from pending
     this.pendingChunks.delete(key);
     
-    // Check if still in range (might have moved away while waiting)
-    // For now, always accept the data - unload logic will handle it
-    
     // Create or update chunk
     let chunk = this.chunks.get(key);
     if (!chunk) {
-      chunk = new Chunk(chunkX, chunkY, chunkZ);
+      chunk = new Chunk(cx, cy, cz);
       this.chunks.set(key, chunk);
     }
     
     // Copy voxel data
     chunk.data.set(voxelData);
     chunk.dirty = true;
+    chunk.lastBuildSeq = lastBuildSeq;
     
     // Compute visibility graph for this chunk
     chunk.visibilityBits = computeVisibility(voxelData);
@@ -371,10 +364,19 @@ export class VoxelWorld implements ChunkProvider {
     // Queue for remeshing
     this.remeshQueue.add(key);
     
-    // Also queue neighbors for seamless boundaries
-    this.queueNeighborRemesh(chunkX, chunkY, chunkZ);
+    return chunk;
+  }
+
+  /**
+   * Receive chunk data from the server.
+   * Called by the network layer when chunk data arrives.
+   */
+  receiveChunkData(chunkData: VoxelChunkData): void {
+    const { chunkX, chunkY, chunkZ, voxelData } = chunkData;
+    this.ingestChunkData(chunkX, chunkY, chunkZ, voxelData);
     
-    // console.log(`[VoxelWorld] Received chunk (${chunkX}, ${chunkY}, ${chunkZ}) seq=${lastBuildSeq}, ${voxelData.length} voxels`);
+    // Queue neighbors for seamless boundaries
+    this.queueNeighborRemesh(chunkX, chunkY, chunkZ);
   }
 
   /**
@@ -402,28 +404,7 @@ export class VoxelWorld implements ChunkProvider {
     // Process each chunk in the column
     for (const chunkInfo of chunks) {
       const { chunkY, lastBuildSeq, voxelData } = chunkInfo;
-      const key = chunkKey(tx, chunkY, tz);
-      
-      // Remove from pending chunks if it was there
-      this.pendingChunks.delete(key);
-      
-      // Create or update chunk
-      let chunk = this.chunks.get(key);
-      if (!chunk) {
-        chunk = new Chunk(tx, chunkY, tz);
-        this.chunks.set(key, chunk);
-      }
-      
-      // Copy voxel data
-      chunk.data.set(voxelData);
-      chunk.dirty = true;
-      chunk.lastBuildSeq = lastBuildSeq;
-      
-      // Compute visibility graph for this chunk
-      chunk.visibilityBits = computeVisibility(voxelData);
-      
-      // Queue for remeshing
-      this.remeshQueue.add(key);
+      this.ingestChunkData(tx, chunkY, tz, voxelData, lastBuildSeq);
     }
     
     // Queue neighbor remesh for all chunks in the column
@@ -476,26 +457,20 @@ export class VoxelWorld implements ChunkProvider {
     return chunk;
   }
 
+  /** Neighbor offsets for 6 face-adjacent chunks */
+  private static readonly NEIGHBOR_OFFSETS = [
+    [-1, 0, 0], [1, 0, 0],
+    [0, -1, 0], [0, 1, 0],
+    [0, 0, -1], [0, 0, 1],
+  ] as const;
+
   /**
    * Queue neighbor chunks for remeshing (for seamless boundaries).
    * Public so build system can trigger neighbor remesh after commits.
    */
   queueNeighborRemesh(cx: number, cy: number, cz: number): void {
-    const offsets = [-1, 1];
-    for (const dx of offsets) {
-      const key = chunkKey(cx + dx, cy, cz);
-      if (this.chunks.has(key)) {
-        this.remeshQueue.add(key);
-      }
-    }
-    for (const dy of offsets) {
-      const key = chunkKey(cx, cy + dy, cz);
-      if (this.chunks.has(key)) {
-        this.remeshQueue.add(key);
-      }
-    }
-    for (const dz of offsets) {
-      const key = chunkKey(cx, cy, cz + dz);
+    for (const [dx, dy, dz] of VoxelWorld.NEIGHBOR_OFFSETS) {
+      const key = chunkKey(cx + dx, cy + dy, cz + dz);
       if (this.chunks.has(key)) {
         this.remeshQueue.add(key);
       }
@@ -542,14 +517,12 @@ export class VoxelWorld implements ChunkProvider {
    * If so, we should delay meshing to avoid stitching artifacts.
    */
   private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
-    return (
-      this.pendingChunks.has(chunkKey(cx - 1, cy, cz)) ||
-      this.pendingChunks.has(chunkKey(cx + 1, cy, cz)) ||
-      this.pendingChunks.has(chunkKey(cx, cy - 1, cz)) ||
-      this.pendingChunks.has(chunkKey(cx, cy + 1, cz)) ||
-      this.pendingChunks.has(chunkKey(cx, cy, cz - 1)) ||
-      this.pendingChunks.has(chunkKey(cx, cy, cz + 1))
-    );
+    for (const [dx, dy, dz] of VoxelWorld.NEIGHBOR_OFFSETS) {
+      if (this.pendingChunks.has(chunkKey(cx + dx, cy + dy, cz + dz))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
