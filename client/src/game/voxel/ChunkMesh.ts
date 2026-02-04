@@ -220,6 +220,15 @@ export class ChunkMesh {
       this.previewTransparentMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
       scene.add(this.previewTransparentMesh);
     }
+
+    // Create preview liquid mesh
+    if (output.liquid.vertexCount > 0 && output.liquid.triangleCount > 0) {
+      const liquidGeometry = createGeometryFromSurfaceNet(output.liquid);
+      this.previewLiquidMesh = createLiquidMesh(liquidGeometry, this.chunk.key);
+      this.previewLiquidMesh.userData.isPreview = true;
+      this.previewLiquidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+      scene.add(this.previewLiquidMesh);
+    }
   }
 
   /**
