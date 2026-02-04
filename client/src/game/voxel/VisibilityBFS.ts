@@ -16,7 +16,11 @@
 import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
+  VISIBILITY_ALL,
   chunkKey,
+  ChunkFace,
+  canSeeThrough,
+  getOppositeFace,
 } from '@worldify/shared';
 import type { Chunk } from './Chunk.js';
 
@@ -47,6 +51,9 @@ const GRID_SIZE = GRID_DIAMETER * GRID_DIAMETER * GRID_DIAMETER;
 /** Queue for BFS - stores flat grid indices */
 const bfsQueue = new Int32Array(GRID_SIZE);
 
+/** Entry face for each queued item (-1 for start chunk = camera) */
+const bfsEntryFace = new Int8Array(GRID_SIZE);
+
 /** Visited markers */
 const bfsVisited = new Uint8Array(GRID_SIZE);
 
@@ -63,14 +70,14 @@ let bfsGeneration = 0;
 const STRIDE_Y = GRID_DIAMETER;
 const STRIDE_Z = GRID_DIAMETER * GRID_DIAMETER;
 
-/** Neighbor offsets in grid coords: [+X, -X, +Y, -Y, +Z, -Z] */
+/** Neighbor offsets in grid coords: [+X, -X, +Y, -Y, +Z, -Z] (matches ChunkFace order) */
 const NEIGHBOR_OFFSETS = [
-  { dx: 1, dy: 0, dz: 0 },
-  { dx: -1, dy: 0, dz: 0 },
-  { dx: 0, dy: 1, dz: 0 },
-  { dx: 0, dy: -1, dz: 0 },
-  { dx: 0, dy: 0, dz: 1 },
-  { dx: 0, dy: 0, dz: -1 },
+  { dx: 1, dy: 0, dz: 0 },   // POS_X = 0
+  { dx: -1, dy: 0, dz: 0 },  // NEG_X = 1
+  { dx: 0, dy: 1, dz: 0 },   // POS_Y = 2
+  { dx: 0, dy: -1, dz: 0 },  // NEG_Y = 3
+  { dx: 0, dy: 0, dz: 1 },   // POS_Z = 4
+  { dx: 0, dy: 0, dz: -1 },  // NEG_Z = 5
 ];
 
 // ============== Helper Functions ==============
@@ -126,16 +133,20 @@ export function getVisibleChunks(
   let visibleCount = 0;
   let toRequestCount = 0;
   
-  // Start BFS from center
+  // Start BFS from center (camera chunk has no entry face = -1, sees all)
   let queueHead = 0;
   let queueTail = 0;
   
   const startIdx = gridToIndex(centerOffset, centerOffset, centerOffset);
-  bfsQueue[queueTail++] = startIdx;
+  bfsQueue[queueTail] = startIdx;
+  bfsEntryFace[queueTail] = -1; // Camera chunk: no entry face
+  queueTail++;
   bfsVisited[startIdx] = gen;
   
   while (queueHead < queueTail) {
-    const idx = bfsQueue[queueHead++];
+    const idx = bfsQueue[queueHead];
+    const entryFace = bfsEntryFace[queueHead];
+    queueHead++;
     
     // Convert grid index back to grid coords
     const gz = Math.floor(idx / STRIDE_Z);
@@ -147,19 +158,26 @@ export function getVisibleChunks(
     const cy = baseCy + (gy - centerOffset);
     const cz = baseCz + (gz - centerOffset);
     
+    // Get chunk data for visibility check
+    const key = chunkKey(cx, cy, cz);
+    const chunk = chunkProvider.getChunkByKey(key);
+    
+    // Get visibility bits (if chunk loaded, else assume all visible to allow request)
+    // -1 means "not computed yet", treat as all visible
+    const visBits = chunk?.visibilityBits ?? VISIBILITY_ALL;
+    const effectiveVisBits = visBits === -1 ? VISIBILITY_ALL : visBits;
+    
     // Add to visible list
     visibleIndices[visibleCount++] = idx;
     
     // Check if chunk needs to be requested
-    const key = chunkKey(cx, cy, cz);
-    const chunk = chunkProvider.getChunkByKey(key);
     if (!chunk && !chunkProvider.isPending(key)) {
       toRequestIndices[toRequestCount++] = idx;
     }
     
     // Explore neighbors
-    for (let d = 0; d < 6; d++) {
-      const offset = NEIGHBOR_OFFSETS[d];
+    for (let exitFace = 0; exitFace < 6; exitFace++) {
+      const offset = NEIGHBOR_OFFSETS[exitFace];
       const ngx = gx + offset.dx;
       const ngy = gy + offset.dy;
       const ngz = gz + offset.dz;
@@ -176,9 +194,20 @@ export function getVisibleChunks(
       const newDist = Math.abs(ngx - centerOffset) + Math.abs(ngy - centerOffset) + Math.abs(ngz - centerOffset);
       if (newDist > maxRadius) continue;
       
+      // Visibility check: can we see through from entry face to this exit face?
+      // Camera chunk (entryFace = -1) can see all directions
+      if (entryFace !== -1 && !canSeeThrough(effectiveVisBits, entryFace as ChunkFace, exitFace as ChunkFace)) {
+        continue;
+      }
+      
+      // Calculate entry face for neighbor (opposite of exit face)
+      const neighborEntryFace = getOppositeFace(exitFace as ChunkFace);
+      
       // Mark visited and queue
       bfsVisited[neighborIdx] = gen;
-      bfsQueue[queueTail++] = neighborIdx;
+      bfsQueue[queueTail] = neighborIdx;
+      bfsEntryFace[queueTail] = neighborEntryFace;
+      queueTail++;
     }
   }
   
