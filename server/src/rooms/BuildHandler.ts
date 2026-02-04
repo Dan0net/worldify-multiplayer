@@ -21,7 +21,7 @@ import {
 } from '@worldify/shared';
 import { Room } from './room.js';
 import { RateLimiter } from '../util/RateLimiter.js';
-import { getChunkProvider } from '../storage/StorageManager.js';
+import { getChunkProvider, getMapTileProvider } from '../storage/StorageManager.js';
 
 // ============== Module-level instances ==============
 
@@ -142,6 +142,8 @@ export function handleBuildIntent(
       modifiedKeys.push(key);
       // Mark chunk as dirty for persistence
       chunkProvider.markDirty(cx, cy, cz);
+      // Update map tile with new surface data
+      getMapTileProvider().updateFromChunk(chunk);
     }
   }
 
@@ -181,6 +183,9 @@ export async function handleChunkRequest(
   // Use async method to properly load from disk, passing forceRegen flag
   const chunk = await chunkProvider.getOrCreateAsync(request.chunkX, request.chunkY, request.chunkZ, request.forceRegen);
   const lastBuildSeq = chunkBuildSeq.get(chunk.key) ?? 0;
+
+  // Update map tile with chunk surface data (trees, buildings, etc.)
+  getMapTileProvider().updateFromChunk(chunk);
 
   const chunkData = {
     chunkX: chunk.cx,

@@ -24,7 +24,7 @@ import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse } from '@worldify/shared';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, updateTileFromChunk, createMapTile } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -245,8 +245,56 @@ export class GameCore {
     // Rebuild collision for modified chunks
     if (modifiedChunks.length > 0) {
       this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
+      
+      // Update map tiles for modified chunks
+      this.updateMapTilesFromChunks(modifiedChunks);
     }
   };
+
+  /**
+   * Update map tiles from modified chunks.
+   * Uses the shared updateTileFromChunk function.
+   */
+  private updateMapTilesFromChunks(chunkKeys: string[]): void {
+    const cache = getMapTileCache();
+    const world = this.voxelIntegration.world;
+
+    // Group chunks by tile (tx, tz) since multiple Y-level chunks affect same tile
+    const tileUpdates = new Map<string, string[]>();
+    
+    for (const key of chunkKeys) {
+      const chunk = world.chunks.get(key);
+      if (!chunk) continue;
+      
+      const tileKey = `${chunk.cx},${chunk.cz}`;
+      if (!tileUpdates.has(tileKey)) {
+        tileUpdates.set(tileKey, []);
+      }
+      tileUpdates.get(tileKey)!.push(key);
+    }
+
+    // Update each affected tile
+    for (const [tileKey, chunkKeysForTile] of tileUpdates) {
+      const [txStr, tzStr] = tileKey.split(',');
+      const tx = parseInt(txStr, 10);
+      const tz = parseInt(tzStr, 10);
+      
+      // Get or create tile in cache
+      let tile = cache.get(tx, tz);
+      if (!tile) {
+        tile = createMapTile(tx, tz);
+        cache.set(tx, tz, tile);
+      }
+      
+      // Update tile from each chunk in this column
+      for (const chunkKey of chunkKeysForTile) {
+        const chunk = world.chunks.get(chunkKey);
+        if (chunk) {
+          updateTileFromChunk(tile, chunk);
+        }
+      }
+    }
+  }
 
   /**
    * Handle chunk data from server - apply to voxel world

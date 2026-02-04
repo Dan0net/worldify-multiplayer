@@ -15,9 +15,8 @@ import {
   ChunkData,
   CHUNK_SIZE,
   VOXEL_SCALE,
-  getWeight,
-  getMaterial,
   MAP_TILE_SIZE,
+  updateTileFromChunk,
 } from '@worldify/shared';
 import { MapTileStore } from '../storage/MapTileStore.js';
 
@@ -66,7 +65,7 @@ export class MapTileProvider {
 
   /**
    * Update tile when a chunk is modified (after build).
-   * Scans the chunk to update affected pixels.
+   * Uses shared updateTileFromChunk function.
    */
   updateFromChunk(chunk: ChunkData): void {
     const tx = chunk.cx;
@@ -78,49 +77,10 @@ export class MapTileProvider {
       tile = this.generateFromTerrain(tx, tz);
     }
 
-    // Scan each XZ column in the chunk
-    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-        const pixelIndex = tilePixelIndex(lx, lz);
-        const currentHeight = tile.heights[pixelIndex];
-        
-        // Scan this chunk's Y range for this column
-        let maxHeight = currentHeight;
-        let surfaceMaterial = tile.materials[pixelIndex];
-        
-        // Check if this chunk could contain a higher surface
-        const chunkMinY = chunk.cy * CHUNK_SIZE;
-        const chunkMaxY = chunkMinY + CHUNK_SIZE - 1;
-        
-        // Scan from top to bottom of this chunk
-        for (let ly = CHUNK_SIZE - 1; ly >= 0; ly--) {
-          const voxelY = chunkMinY + ly;
-          const index = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
-          const voxel = chunk.data[index];
-          const weight = getWeight(voxel);
-          
-          // Surface is where weight crosses 0 (we look for solid voxels)
-          if (weight > 0) {
-            if (voxelY > maxHeight) {
-              maxHeight = voxelY;
-              surfaceMaterial = getMaterial(voxel);
-            }
-            break; // Found surface for this column in this chunk
-          }
-        }
-        
-        // Also check if the current recorded height was in this chunk and is now air
-        if (currentHeight >= chunkMinY && currentHeight <= chunkMaxY) {
-          // Need to rescan to find actual surface
-          const { height, material } = this.scanColumnForSurface(tx, tz, lx, lz);
-          maxHeight = height;
-          surfaceMaterial = material;
-        }
-        
-        tile.heights[pixelIndex] = maxHeight;
-        tile.materials[pixelIndex] = surfaceMaterial;
-      }
-    }
+    // Use shared function with fallback for dig rescanning
+    updateTileFromChunk(tile, chunk, (lx, lz) => 
+      this.scanColumnForSurface(tx, tz, lx, lz)
+    );
 
     this.store.set(tx, tz, tile);
   }
