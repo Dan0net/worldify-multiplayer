@@ -1006,9 +1006,12 @@
           "g": 174,
           "b": 255,
           "alpha": 0.6
-        }
+        },
+        "path": "water/water.png"
       },
-      "normal": {},
+      "normal": {
+        "path": "water/waternormals.jpg"
+      },
       "ao": {},
       "roughness": {
         "color": {
