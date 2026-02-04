@@ -230,24 +230,13 @@ export class MapRenderer {
     const playerTileX = this.playerX / tileWorldSize;
     const playerTileZ = this.playerZ / tileWorldSize;
     
-    // Center tile
-    const centerTx = Math.floor(playerTileX);
-    const centerTz = Math.floor(playerTileZ);
+    // Player's position in screen coordinates (relative to tiles container origin)
+    const playerScreenX = playerTileX * tileScreenSize;
+    const playerScreenZ = playerTileZ * tileScreenSize;
     
-    // Fractional offset within tile (0 to 1)
-    const fracX = playerTileX - centerTx;
-    const fracZ = playerTileZ - centerTz;
-    
-    // Calculate transform offset:
-    // - Center the (0,0) tile at viewport center
-    // - Then offset by fractional position for smooth scrolling
-    const baseOffsetX = this.viewportWidth / 2 - tileScreenSize / 2;
-    const baseOffsetZ = this.viewportHeight / 2 - tileScreenSize / 2;
-    
-    // Shift by center tile position (tiles are positioned relative to 0,0)
-    // and subtract fractional offset for smooth scrolling
-    const translateX = baseOffsetX - (centerTx + fracX) * tileScreenSize;
-    const translateZ = baseOffsetZ - (centerTz + fracZ) * tileScreenSize;
+    // Translate so player position appears at viewport center
+    const translateX = this.viewportWidth / 2 - playerScreenX;
+    const translateZ = this.viewportHeight / 2 - playerScreenZ;
     
     this.tilesContainer.style.transform = `translate(${translateX}px, ${translateZ}px)`;
   }
