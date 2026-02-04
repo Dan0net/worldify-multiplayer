@@ -30,6 +30,45 @@ import { getMapTileCache } from '../../ui/MapOverlay.js';
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
 /**
+ * Generate coordinates in concentric squares outward from center.
+ * Yields (dx, dz) offsets from center, starting at (0,0) then spiraling out.
+ */
+function* concentricOffsets(radius: number): Generator<[number, number]> {
+  // Center first
+  yield [0, 0];
+  
+  // Each ring from 1 to radius
+  for (let r = 1; r <= radius; r++) {
+    // Top edge: z = -r, x from -r to r
+    for (let x = -r; x <= r; x++) yield [x, -r];
+    // Right edge: x = r, z from -r+1 to r
+    for (let z = -r + 1; z <= r; z++) yield [r, z];
+    // Bottom edge: z = r, x from r-1 to -r
+    for (let x = r - 1; x >= -r; x--) yield [x, r];
+    // Left edge: x = -r, z from r-1 to -r+1
+    for (let z = r - 1; z > -r; z--) yield [-r, z];
+  }
+}
+
+/**
+ * Parse chunk key back to coordinates.
+ */
+function parseChunkKey(key: string): { cx: number; cy: number; cz: number } {
+  const [cx, cy, cz] = key.split(',').map(Number);
+  return { cx, cy, cz };
+}
+
+/**
+ * Compute squared distance from a chunk to a reference point.
+ * Uses XZ distance (horizontal) since that's more important for view.
+ */
+function chunkDistanceSq(cx: number, cz: number, refCx: number, refCz: number): number {
+  const dx = cx - refCx;
+  const dz = cz - refCz;
+  return dx * dx + dz * dz;
+}
+
+/**
  * Manages the voxel world - chunk loading, unloading, and streaming.
  */
 export class VoxelWorld {
@@ -123,14 +162,21 @@ export class VoxelWorld {
     const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
 
     // Check if player moved to a new chunk (or first update)
-    if (
-      this.lastPlayerChunk === null ||
+    const chunkChanged = this.lastPlayerChunk === null ||
       playerChunk.cx !== this.lastPlayerChunk.cx ||
       playerChunk.cy !== this.lastPlayerChunk.cy ||
-      playerChunk.cz !== this.lastPlayerChunk.cz
-    ) {
+      playerChunk.cz !== this.lastPlayerChunk.cz;
+    
+    if (chunkChanged) {
       this.lastPlayerChunk = { ...playerChunk };
-      this.updateLoadedChunks(playerChunk.cx, playerChunk.cy, playerChunk.cz);
+      // Unload distant chunks only on chunk change
+      this.unloadDistantChunks(playerChunk.cx, playerChunk.cy, playerChunk.cz);
+    }
+
+    // Request missing chunks every frame (one column at a time for smooth loading)
+    if (storeBridge.useServerChunks) {
+      this.requestMissingColumns(playerChunk.cx, playerChunk.cz, SURFACE_COLUMN_RADIUS);
+      this.requestMissing3DChunks(playerChunk.cx, playerChunk.cy, playerChunk.cz);
     }
 
     // Process some remesh queue items per frame
@@ -138,28 +184,10 @@ export class VoxelWorld {
   }
 
   /**
-   * Update which chunks are loaded based on new player position.
-   * 
-   * Two-phase loading:
-   * 1. Surface columns (large XZ radius) - gets terrain + structures
-   * 2. 3D chunks (small radius around player) - for caves/digging below surface
+   * Unload chunks that are too far from the player.
    */
-  private updateLoadedChunks(pcx: number, pcy: number, pcz: number): void {
-    // Surface column bounds (XZ only, larger radius)
-    const surfaceMinCx = pcx - SURFACE_COLUMN_RADIUS;
-    const surfaceMaxCx = pcx + SURFACE_COLUMN_RADIUS - 1;
-    const surfaceMinCz = pcz - SURFACE_COLUMN_RADIUS;
-    const surfaceMaxCz = pcz + SURFACE_COLUMN_RADIUS - 1;
-    
-    // 3D chunk bounds (smaller radius)
-    const chunkMinCx = pcx - PLAYER_CHUNK_RADIUS;
-    const chunkMaxCx = pcx + PLAYER_CHUNK_RADIUS - 1;
-    const chunkMinCy = pcy - PLAYER_CHUNK_RADIUS;
-    const chunkMaxCy = pcy + PLAYER_CHUNK_RADIUS - 1;
-    const chunkMinCz = pcz - PLAYER_CHUNK_RADIUS;
-    const chunkMaxCz = pcz + PLAYER_CHUNK_RADIUS - 1;
-    
-    // Unload bounds: use larger of surface XZ or chunk XZ, plus margin
+  private unloadDistantChunks(pcx: number, pcy: number, pcz: number): void {
+    // Unload bounds: use larger of surface XZ, plus margin for hysteresis
     const unloadMarginXZ = SURFACE_COLUMN_RADIUS + STREAM_UNLOAD_MARGIN;
     const unloadMarginY = PLAYER_CHUNK_RADIUS + STREAM_UNLOAD_MARGIN;
     
@@ -185,73 +213,58 @@ export class VoxelWorld {
       this.unloadChunk(key);
     }
 
-    // Load new chunks/columns based on mode
-    if (storeBridge.useServerChunks) {
-      // Server mode: request surface columns + 3D chunks
-      this.requestMissingColumns(surfaceMinCx, surfaceMaxCx, surfaceMinCz, surfaceMaxCz);
-      this.requestMissing3DChunks(chunkMinCx, chunkMaxCx, chunkMinCy, chunkMaxCy, chunkMinCz, chunkMaxCz);
-    } else {
-      // Local mode: generate all chunks in 3D volume (smaller radius)
-      for (let cz = chunkMinCz; cz <= chunkMaxCz; cz++) {
-        for (let cy = chunkMinCy; cy <= chunkMaxCy; cy++) {
-          for (let cx = chunkMinCx; cx <= chunkMaxCx; cx++) {
-            const key = chunkKey(cx, cy, cz);
-            if (!this.chunks.has(key) && !this.pendingChunks.has(key)) {
-              const chunk = this.loadChunk(cx, cy, cz);
-              
-              if (chunk) {
-                this.remeshQueue.add(key);
-                this.queueNeighborRemesh(cx, cy, cz);
-              }
-            }
-          }
-        }
-      }
-    }
-
+    // Update bounds for reference
     this.loadedBounds = {
-      minCx: surfaceMinCx, maxCx: surfaceMaxCx,
-      minCy: chunkMinCy, maxCy: chunkMaxCy,
-      minCz: surfaceMinCz, maxCz: surfaceMaxCz,
+      minCx: pcx - SURFACE_COLUMN_RADIUS, maxCx: pcx + SURFACE_COLUMN_RADIUS - 1,
+      minCy: pcy - PLAYER_CHUNK_RADIUS, maxCy: pcy + PLAYER_CHUNK_RADIUS - 1,
+      minCz: pcz - SURFACE_COLUMN_RADIUS, maxCz: pcz + SURFACE_COLUMN_RADIUS - 1,
     };
   }
 
   /**
    * Request missing surface columns from server.
    * Only requests XZ columns, server determines which Y chunks to send.
+   * Requests concentrically outward from player for better perceived loading.
+   * Only requests one column at a time to ensure uniform loading.
    */
   private requestMissingColumns(
-    minCx: number, maxCx: number,
-    minCz: number, maxCz: number
+    centerCx: number, centerCz: number,
+    radius: number
   ): void {
-    for (let cz = minCz; cz <= maxCz; cz++) {
-      for (let cx = minCx; cx <= maxCx; cx++) {
-        const columnKey = `${cx},${cz}`;
-        
-        // Skip if column already pending or we have any chunks in this column
-        if (this.pendingColumns.has(columnKey)) continue;
-        if (this.hasAnyChunkInColumn(cx, cz)) continue;
-        
-        // Request surface column
-        this.pendingColumns.add(columnKey);
-        const request = encodeSurfaceColumnRequest({ tx: cx, tz: cz });
-        sendBinary(request);
-        console.log(`[VoxelWorld] Requested surface column (${cx}, ${cz})`);
-      }
+    // Wait for any pending column to return before requesting more
+    if (this.pendingColumns.size > 0) return;
+    
+    for (const [dx, dz] of concentricOffsets(radius)) {
+      const cx = centerCx + dx;
+      const cz = centerCz + dz;
+      const columnKey = `${cx},${cz}`;
+      
+      // Skip if we already have any chunks in this column
+      if (this.hasAnyChunkInColumn(cx, cz)) continue;
+      
+      // Request this surface column and return (one at a time)
+      this.pendingColumns.add(columnKey);
+      const request = encodeSurfaceColumnRequest({ tx: cx, tz: cz });
+      sendBinary(request);
+      console.log(`[VoxelWorld] Requested surface column (${cx}, ${cz})`);
+      return;
     }
   }
 
   /**
    * Request missing 3D chunks around the player.
    * Only requests chunks below surface height to avoid waste.
-   * Skips columns with pending surface requests (wait for those first).
+   * Skips columns without tile data (wait for surface column first).
    */
-  private requestMissing3DChunks(
-    minCx: number, maxCx: number,
-    minCy: number, maxCy: number,
-    minCz: number, maxCz: number
-  ): void {
+  private requestMissing3DChunks(pcx: number, pcy: number, pcz: number): void {
     const tileCache = getMapTileCache();
+    
+    const minCx = pcx - PLAYER_CHUNK_RADIUS;
+    const maxCx = pcx + PLAYER_CHUNK_RADIUS - 1;
+    const minCy = pcy - PLAYER_CHUNK_RADIUS;
+    const maxCy = pcy + PLAYER_CHUNK_RADIUS - 1;
+    const minCz = pcz - PLAYER_CHUNK_RADIUS;
+    const maxCz = pcz + PLAYER_CHUNK_RADIUS - 1;
     
     for (let cz = minCz; cz <= maxCz; cz++) {
       for (let cx = minCx; cx <= maxCx; cx++) {
@@ -261,12 +274,15 @@ export class VoxelWorld {
         if (this.pendingColumns.has(columnKey)) continue;
         
         // Get surface height for this column to avoid requesting above surface
+        // If no tile data yet, skip this column entirely (wait for surface column)
         const yRange = tileCache.getYRange(cx, cz);
-        const surfaceCy = yRange ? Math.floor(yRange.maxY / CHUNK_SIZE) : null;
+        if (!yRange) continue;
+        
+        const surfaceCy = Math.floor(yRange.maxY / CHUNK_SIZE);
         
         for (let cy = minCy; cy <= maxCy; cy++) {
           // Skip chunks above surface (already covered by surface columns)
-          if (surfaceCy !== null && cy > surfaceCy) continue;
+          if (cy > surfaceCy) continue;
           
           const key = chunkKey(cx, cy, cz);
           
@@ -547,13 +563,27 @@ export class VoxelWorld {
 
   /**
    * Process some items from the remesh queue.
+   * Prioritizes chunks closest to player for better perceived loading.
    * @param maxCount Maximum number of chunks to remesh this call
    */
   private processRemeshQueue(maxCount: number): void {
+    if (this.remeshQueue.size === 0) return;
+    
+    // Get player chunk for distance sorting
+    const playerChunk = this.lastPlayerChunk ?? { cx: 0, cy: 0, cz: 0 };
+    
+    // Sort queue by distance from player (closest first)
+    const sorted = [...this.remeshQueue].sort((a, b) => {
+      const chunkA = parseChunkKey(a);
+      const chunkB = parseChunkKey(b);
+      return chunkDistanceSq(chunkA.cx, chunkA.cz, playerChunk.cx, playerChunk.cz) -
+             chunkDistanceSq(chunkB.cx, chunkB.cz, playerChunk.cx, playerChunk.cz);
+    });
+    
     let count = 0;
     const deferred: string[] = [];
     
-    for (const key of this.remeshQueue) {
+    for (const key of sorted) {
       if (count >= maxCount) break;
 
       const chunk = this.chunks.get(key);
@@ -571,10 +601,12 @@ export class VoxelWorld {
       this.remeshQueue.delete(key);
     }
     
-    // Re-add deferred chunks to be processed next frame
+    // Re-add deferred chunks (they'll be re-sorted next frame)
     for (const key of deferred) {
-      this.remeshQueue.delete(key); // Remove from current iteration position
-      this.remeshQueue.add(key);    // Add back to end of Set
+      this.remeshQueue.delete(key);
+    }
+    for (const key of deferred) {
+      this.remeshQueue.add(key);
     }
   }
 
