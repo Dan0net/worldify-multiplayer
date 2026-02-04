@@ -673,6 +673,9 @@ export class VoxelWorld implements ChunkProvider {
         chunk.dirty = true;
         this.remeshQueue.add(key);
         
+        // Recompute visibility for modified chunk
+        chunk.visibilityBits = computeVisibility(chunk.data);
+        
         // Also queue neighbors for seamless boundary updates
         this.queueNeighborRemesh(chunk.cx, chunk.cy, chunk.cz);
       }

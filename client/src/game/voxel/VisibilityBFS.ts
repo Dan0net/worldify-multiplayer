@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
   VISIBILITY_ALL,
+  CHUNK_WORLD_SIZE,
   chunkKey,
   ChunkFace,
   canSeeThrough,
@@ -80,6 +81,9 @@ const NEIGHBOR_OFFSETS = [
   { dx: 0, dy: 0, dz: -1 },  // NEG_Z = 5
 ];
 
+/** Reusable Box3 for frustum intersection tests */
+const tempBox = new THREE.Box3();
+
 // ============== Helper Functions ==============
 
 /** Convert grid-relative coordinates to flat index */
@@ -104,16 +108,16 @@ function inBounds(gx: number, gy: number, gz: number): boolean {
  * - Only allocates when building final Sets for compatibility
  * 
  * @param cameraChunk - The chunk the camera is in
- * @param cameraDir - Normalized camera forward direction
- * @param frustum - Three.js frustum for culling
+ * @param cameraDir - Normalized camera forward direction (unused, reserved for future)
+ * @param frustum - Three.js frustum for culling visible set
  * @param chunkProvider - Access to loaded chunks
  * @param maxRadius - Maximum BFS distance (default: VISIBILITY_RADIUS)
  * @returns Set of visible chunk keys and chunks to request
  */
 export function getVisibleChunks(
   cameraChunk: { cx: number; cy: number; cz: number },
-  _cameraDir: THREE.Vector3,  // Temporarily unused for debugging
-  _frustum: THREE.Frustum,    // Temporarily unused for debugging
+  _cameraDir: THREE.Vector3,  // Reserved for future direction-based culling
+  frustum: THREE.Frustum,
   chunkProvider: ChunkProvider,
   maxRadius: number = VISIBILITY_RADIUS
 ): VisibilityResult {
@@ -212,6 +216,7 @@ export function getVisibleChunks(
   }
   
   // Build output Sets (required for compatibility with callers)
+  // Visible set is frustum-culled, toRequest is not (preload nearby chunks)
   const visible = new Set<string>();
   const toRequest = new Set<string>();
   
@@ -223,7 +228,17 @@ export function getVisibleChunks(
     const cx = baseCx + (gx - centerOffset);
     const cy = baseCy + (gy - centerOffset);
     const cz = baseCz + (gz - centerOffset);
-    visible.add(chunkKey(cx, cy, cz));
+    
+    // Frustum cull: only add to visible if in frustum
+    const worldX = cx * CHUNK_WORLD_SIZE;
+    const worldY = cy * CHUNK_WORLD_SIZE;
+    const worldZ = cz * CHUNK_WORLD_SIZE;
+    tempBox.min.set(worldX, worldY, worldZ);
+    tempBox.max.set(worldX + CHUNK_WORLD_SIZE, worldY + CHUNK_WORLD_SIZE, worldZ + CHUNK_WORLD_SIZE);
+    
+    if (frustum.intersectsBox(tempBox)) {
+      visible.add(chunkKey(cx, cy, cz));
+    }
   }
   
   for (let i = 0; i < toRequestCount; i++) {
