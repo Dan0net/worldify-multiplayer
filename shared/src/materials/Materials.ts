@@ -73,6 +73,18 @@ export const Materials = {
   },
 
   /**
+   * Get RGB values (0-255) for a material ID.
+   * More efficient than parsing hex strings repeatedly.
+   */
+  getColorRGB(id: number): [number, number, number] {
+    const hex = MATERIAL_COLORS[id] ?? '#ffffff';
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return [r, g, b];
+  },
+
+  /**
    * Get total number of materials.
    */
   get count(): number {

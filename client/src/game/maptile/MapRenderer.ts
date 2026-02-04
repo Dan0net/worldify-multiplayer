@@ -1,8 +1,11 @@
 /**
- * MapRenderer - Renders map tiles to a canvas
+ * MapRenderer - Renders map tiles to a canvas using ImageData for performance
  * 
- * Debug visualization for map tile data.
- * Shows terrain height and materials as a colored overhead view.
+ * Optimizations:
+ * - Pre-computed RGB color lookup table
+ * - ImageData buffer for batch pixel writes (1 putImageData vs 1000+ fillRect)
+ * - Cached tile images that only update when tile data changes
+ * - Dirty tracking to skip unchanged tiles
  */
 
 import {
@@ -23,13 +26,34 @@ export interface MapRendererConfig {
 }
 
 const DEFAULT_CONFIG: MapRendererConfig = {
-  scale: 4,
+  scale: 1,
   showHeightShading: true,
   heightRange: { min: -32, max: 64 },
 };
 
+/** Pre-computed RGB colors for all materials */
+const MATERIAL_RGB_CACHE: [number, number, number][] = [];
+
+// Initialize RGB cache on module load
+function initColorCache(): void {
+  if (MATERIAL_RGB_CACHE.length > 0) return;
+  for (let i = 0; i < Materials.count; i++) {
+    MATERIAL_RGB_CACHE[i] = Materials.getColorRGB(i);
+  }
+  // Default fallback
+  MATERIAL_RGB_CACHE[255] = [255, 255, 255];
+}
+
+/** Cached rendered tile data */
+interface CachedTile {
+  /** The ImageData for this tile at scale 1 */
+  imageData: ImageData;
+  /** Hash of tile data for dirty checking */
+  dataHash: number;
+}
+
 /**
- * Renders map tiles to a 2D canvas.
+ * Renders map tiles to a 2D canvas using ImageData for performance.
  */
 export class MapRenderer {
   private canvas: HTMLCanvasElement;
@@ -40,12 +64,30 @@ export class MapRenderer {
   private playerX = 0;
   private playerZ = 0;
 
+  // Tile image cache (keyed by "tx,tz")
+  private tileCache = new Map<string, CachedTile>();
+
+  // Offscreen canvas for scaling
+  private offscreenCanvas: HTMLCanvasElement;
+  private offscreenCtx: CanvasRenderingContext2D;
+
   constructor(canvas: HTMLCanvasElement, config: Partial<MapRendererConfig> = {}) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Failed to get 2D context');
     this.ctx = ctx;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    
+    // Initialize color cache
+    initColorCache();
+    
+    // Create offscreen canvas for tile rendering
+    this.offscreenCanvas = document.createElement('canvas');
+    this.offscreenCanvas.width = MAP_TILE_SIZE;
+    this.offscreenCanvas.height = MAP_TILE_SIZE;
+    const offCtx = this.offscreenCanvas.getContext('2d');
+    if (!offCtx) throw new Error('Failed to get offscreen 2D context');
+    this.offscreenCtx = offCtx;
   }
 
   /**
@@ -61,6 +103,10 @@ export class MapRenderer {
    */
   setConfig(config: Partial<MapRendererConfig>): void {
     this.config = { ...this.config, ...config };
+    // Clear cache if height shading settings changed
+    if ('showHeightShading' in config || 'heightRange' in config) {
+      this.tileCache.clear();
+    }
   }
 
   /**
@@ -68,11 +114,11 @@ export class MapRenderer {
    */
   render(tiles: Map<string, MapTileData>, centerTx: number, centerTz: number): void {
     const { scale } = this.config;
-    const tilePixelSize = MAP_TILE_SIZE * scale;
+    const tileScreenSize = MAP_TILE_SIZE * scale;
     
     // Calculate how many tiles fit on screen
-    const tilesX = Math.ceil(this.canvas.width / tilePixelSize) + 1;
-    const tilesZ = Math.ceil(this.canvas.height / tilePixelSize) + 1;
+    const tilesX = Math.ceil(this.canvas.width / tileScreenSize) + 1;
+    const tilesZ = Math.ceil(this.canvas.height / tileScreenSize) + 1;
     
     // Center offset
     const halfTilesX = Math.floor(tilesX / 2);
@@ -81,6 +127,9 @@ export class MapRenderer {
     // Clear canvas
     this.ctx.fillStyle = '#1a1a2e';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+    // Disable image smoothing for crisp pixels when scaled
+    this.ctx.imageSmoothingEnabled = false;
 
     // Render visible tiles
     for (let dz = -halfTilesZ; dz <= halfTilesZ; dz++) {
@@ -91,58 +140,115 @@ export class MapRenderer {
         const tile = tiles.get(key);
         
         // Screen position for this tile
-        const screenX = this.canvas.width / 2 + dx * tilePixelSize;
-        const screenZ = this.canvas.height / 2 + dz * tilePixelSize;
+        const screenX = Math.floor(this.canvas.width / 2 + dx * tileScreenSize);
+        const screenZ = Math.floor(this.canvas.height / 2 + dz * tileScreenSize);
         
         if (tile) {
-          this.renderTile(tile, screenX, screenZ);
+          this.renderTile(tile, key, screenX, screenZ);
         } else {
           // Render placeholder for missing tiles
           this.ctx.fillStyle = '#2a2a3e';
-          this.ctx.fillRect(screenX, screenZ, tilePixelSize, tilePixelSize);
+          this.ctx.fillRect(screenX, screenZ, tileScreenSize, tileScreenSize);
         }
       }
     }
 
     // Render player marker
     this.renderPlayerMarker(centerTx, centerTz);
-    
-    // Render grid lines (debug)
-    this.renderGrid(centerTx, centerTz, halfTilesX, halfTilesZ);
   }
 
   /**
-   * Render a single tile.
+   * Render a single tile using cached ImageData.
    */
-  private renderTile(tile: MapTileData, screenX: number, screenZ: number): void {
-    const { scale, showHeightShading, heightRange } = this.config;
+  private renderTile(tile: MapTileData, key: string, screenX: number, screenZ: number): void {
+    const { scale } = this.config;
+    
+    // Get or create cached tile image
+    const cached = this.getCachedTile(tile, key);
+    
+    // Draw cached image to offscreen canvas
+    this.offscreenCtx.putImageData(cached.imageData, 0, 0);
+    
+    // Draw scaled to main canvas
+    this.ctx.drawImage(
+      this.offscreenCanvas,
+      0, 0, MAP_TILE_SIZE, MAP_TILE_SIZE,
+      screenX, screenZ, MAP_TILE_SIZE * scale, MAP_TILE_SIZE * scale
+    );
+  }
+
+  /**
+   * Get or create cached tile image.
+   */
+  private getCachedTile(tile: MapTileData, key: string): CachedTile {
+    const dataHash = this.computeTileHash(tile);
+    
+    let cached = this.tileCache.get(key);
+    if (cached && cached.dataHash === dataHash) {
+      return cached;
+    }
+    
+    // Create new ImageData for this tile
+    const imageData = this.renderTileToImageData(tile);
+    cached = { imageData, dataHash };
+    this.tileCache.set(key, cached);
+    
+    return cached;
+  }
+
+  /**
+   * Compute a simple hash of tile data for dirty checking.
+   * Uses all pixels for accurate change detection.
+   */
+  private computeTileHash(tile: MapTileData): number {
+    // Hash all pixels for accurate dirty detection
+    let hash = 0;
+    for (let i = 0; i < tile.heights.length; i++) {
+      hash = ((hash << 5) - hash + tile.heights[i]) | 0;
+      hash = ((hash << 5) - hash + tile.materials[i]) | 0;
+    }
+    return hash;
+  }
+
+  /**
+   * Render tile to ImageData buffer.
+   */
+  private renderTileToImageData(tile: MapTileData): ImageData {
+    const { showHeightShading, heightRange } = this.config;
+    const imageData = new ImageData(MAP_TILE_SIZE, MAP_TILE_SIZE);
+    const data = imageData.data;
     
     for (let lz = 0; lz < MAP_TILE_SIZE; lz++) {
       for (let lx = 0; lx < MAP_TILE_SIZE; lx++) {
-        const index = tilePixelIndex(lx, lz);
-        const height = tile.heights[index];
-        const material = tile.materials[index];
+        const tileIndex = tilePixelIndex(lx, lz);
+        const height = tile.heights[tileIndex];
+        const material = tile.materials[tileIndex];
         
-        // Get base color from material
-        const baseColor = Materials.getColor(material);
+        // Get base RGB color from cache
+        const rgb = MATERIAL_RGB_CACHE[material] ?? MATERIAL_RGB_CACHE[255];
+        let r = rgb[0];
+        let g = rgb[1];
+        let b = rgb[2];
         
         // Apply height shading if enabled
-        let finalColor = baseColor;
         if (showHeightShading) {
           const heightNorm = (height - heightRange.min) / (heightRange.max - heightRange.min);
           const brightness = Math.max(0.3, Math.min(1.0, 0.5 + heightNorm * 0.5));
-          finalColor = this.adjustBrightness(baseColor, brightness);
+          r = Math.round(r * brightness);
+          g = Math.round(g * brightness);
+          b = Math.round(b * brightness);
         }
         
-        this.ctx.fillStyle = finalColor;
-        this.ctx.fillRect(
-          screenX + lx * scale,
-          screenZ + lz * scale,
-          scale,
-          scale
-        );
+        // Write to ImageData (RGBA)
+        const pixelIndex = (lz * MAP_TILE_SIZE + lx) * 4;
+        data[pixelIndex] = r;
+        data[pixelIndex + 1] = g;
+        data[pixelIndex + 2] = b;
+        data[pixelIndex + 3] = 255; // Alpha
       }
     }
+    
+    return imageData;
   }
 
   /**
@@ -177,49 +283,17 @@ export class MapRenderer {
   }
 
   /**
-   * Render tile grid lines.
+   * Invalidate cached tile (call when tile data changes).
    */
-  private renderGrid(_centerTx: number, _centerTz: number, halfX: number, halfZ: number): void {
-    const { scale } = this.config;
-    const tilePixelSize = MAP_TILE_SIZE * scale;
-    
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    this.ctx.lineWidth = 1;
-    
-    // Vertical lines
-    for (let dx = -halfX; dx <= halfX + 1; dx++) {
-      const x = this.canvas.width / 2 + dx * tilePixelSize;
-      this.ctx.beginPath();
-      this.ctx.moveTo(x, 0);
-      this.ctx.lineTo(x, this.canvas.height);
-      this.ctx.stroke();
-    }
-    
-    // Horizontal lines
-    for (let dz = -halfZ; dz <= halfZ + 1; dz++) {
-      const z = this.canvas.height / 2 + dz * tilePixelSize;
-      this.ctx.beginPath();
-      this.ctx.moveTo(0, z);
-      this.ctx.lineTo(this.canvas.width, z);
-      this.ctx.stroke();
-    }
+  invalidateTile(tx: number, tz: number): void {
+    this.tileCache.delete(`${tx},${tz}`);
   }
 
   /**
-   * Adjust hex color brightness.
+   * Clear all cached tiles.
    */
-  private adjustBrightness(hex: string, factor: number): string {
-    // Parse hex color
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    
-    // Apply brightness
-    const nr = Math.round(Math.min(255, r * factor));
-    const ng = Math.round(Math.min(255, g * factor));
-    const nb = Math.round(Math.min(255, b * factor));
-    
-    return `rgb(${nr}, ${ng}, ${nb})`;
+  clearCache(): void {
+    this.tileCache.clear();
   }
 
   /**
