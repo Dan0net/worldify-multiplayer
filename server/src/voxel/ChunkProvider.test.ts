@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ChunkProvider, ChunkStore } from './ChunkProvider.js';
-import { ChunkData, getWeight } from '@worldify/shared';
+import { ChunkData, isVoxelSolid } from '@worldify/shared';
 
 /**
  * Simple Map-based chunk store for testing.
@@ -85,7 +85,7 @@ describe('ChunkProvider', () => {
       for (let z = 0; z < 32; z++) {
         for (let x = 0; x < 32; x++) {
           const voxel = chunk.getVoxel(x, 31, z); // Top of chunk
-          if (getWeight(voxel) > 0) {
+          if (isVoxelSolid(voxel)) {
             hasSolid = true;
             break;
           }

@@ -6,7 +6,7 @@
  */
 
 import { CHUNK_SIZE } from '../voxel/constants.js';
-import { getWeight, getMaterial, voxelIndex } from '../voxel/voxelData.js';
+import { isVoxelSolid, getMaterial, voxelIndex } from '../voxel/voxelData.js';
 import { MapTileData, tilePixelIndex } from './MapTileData.js';
 
 /**
@@ -59,10 +59,8 @@ export function updateTileFromChunk(
         const voxelY = chunkMinY + ly;
         const index = voxelIndex(lx, ly, lz);
         const voxel = chunk.data[index];
-        const weight = getWeight(voxel);
         
-        // Surface is where weight > 0 (solid voxel)
-        if (weight > 0) {
+        if (isVoxelSolid(voxel)) {
           if (voxelY > maxHeight) {
             maxHeight = voxelY;
             surfaceMaterial = getMaterial(voxel);
@@ -79,9 +77,8 @@ export function updateTileFromChunk(
         if (ly >= 0 && ly < CHUNK_SIZE) {
           const index = voxelIndex(lx, ly, lz);
           const voxel = chunk.data[index];
-          const weight = getWeight(voxel);
           
-          if (weight <= 0) {
+          if (!isVoxelSolid(voxel)) {
             // Surface was removed, need to rescan
             if (fallbackRescan) {
               const { height, material } = fallbackRescan(lx, lz);
@@ -93,7 +90,7 @@ export function updateTileFromChunk(
               for (let scanLy = CHUNK_SIZE - 1; scanLy >= 0; scanLy--) {
                 const scanIndex = voxelIndex(lx, scanLy, lz);
                 const scanVoxel = chunk.data[scanIndex];
-                if (getWeight(scanVoxel) > 0) {
+                if (isVoxelSolid(scanVoxel)) {
                   maxHeight = chunkMinY + scanLy;
                   surfaceMaterial = getMaterial(scanVoxel);
                   break;

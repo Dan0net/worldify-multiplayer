@@ -104,6 +104,37 @@ export function getLight(packed: number): number {
 }
 
 /**
+ * Check if a packed voxel is solid (weight > 0).
+ * Solid voxels are inside terrain/objects.
+ */
+export function isVoxelSolid(packed: number): boolean {
+  // Weight bits > 7 means weight > 0 (solid)
+  // This avoids floating point conversion for performance
+  const packedWeight = (packed >> WEIGHT_SHIFT) & WEIGHT_MASK;
+  return packedWeight > (WEIGHT_MAX_PACKED >> 1);
+}
+
+/**
+ * Check if a packed voxel is empty (weight < 0).
+ * Empty voxels are air/outside terrain.
+ */
+export function isVoxelEmpty(packed: number): boolean {
+  const packedWeight = (packed >> WEIGHT_SHIFT) & WEIGHT_MASK;
+  return packedWeight < (WEIGHT_MAX_PACKED >> 1);
+}
+
+/**
+ * Check if a packed voxel is near the surface (weight close to 0).
+ * Surface voxels are at the boundary between solid and empty.
+ */
+export function isVoxelSurface(packed: number): boolean {
+  const packedWeight = (packed >> WEIGHT_SHIFT) & WEIGHT_MASK;
+  const mid = WEIGHT_MAX_PACKED >> 1;
+  // Consider surface if within 1 unit of midpoint
+  return packedWeight >= mid - 1 && packedWeight <= mid + 1;
+}
+
+/**
  * Create a new packed voxel with updated weight, preserving material and light.
  */
 export function setWeight(packed: number, weight: number): number {

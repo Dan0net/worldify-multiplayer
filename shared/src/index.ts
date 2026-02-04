@@ -24,6 +24,7 @@ export * from './materials/index.js';
 export * from './voxel/constants.js';
 export * from './voxel/voxelData.js';
 export * from './voxel/ChunkData.js';
+export * from './voxel/chunkUtils.js';
 export * from './voxel/buildTypes.js';
 export * from './voxel/buildPresets.js';
 export * from './voxel/shapes.js';
