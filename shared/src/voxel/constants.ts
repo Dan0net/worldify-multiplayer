@@ -74,3 +74,35 @@ export const STREAM_UNLOAD_MARGIN = 1;
 
 /** Initial terrain height in voxel units (-16 voxels = -4m surface) */
 export const INITIAL_TERRAIN_HEIGHT = -16;
+
+// ============== Visibility Culling ==============
+/** Maximum BFS traversal distance in chunks */
+export const VISIBILITY_RADIUS = 8;
+
+/** Buffer distance beyond visible before unloading */
+export const VISIBILITY_UNLOAD_BUFFER = 2;
+
+/**
+ * Face indices for visibility graph.
+ * Used to encode which faces can see each other through a chunk.
+ */
+export const enum ChunkFace {
+  POS_X = 0,  // +X
+  NEG_X = 1,  // -X
+  POS_Y = 2,  // +Y
+  NEG_Y = 3,  // -Y
+  POS_Z = 4,  // +Z
+  NEG_Z = 5,  // -Z
+}
+
+/** Number of chunk faces */
+export const CHUNK_FACE_COUNT = 6;
+
+/** Number of face pairs for visibility (C(6,2) = 15) */
+export const VISIBILITY_PAIR_COUNT = 15;
+
+/** All face pairs visible (empty chunk) */
+export const VISIBILITY_ALL = 0x7FFF;
+
+/** No face pairs visible (solid chunk) */
+export const VISIBILITY_NONE = 0x0000;

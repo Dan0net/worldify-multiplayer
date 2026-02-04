@@ -124,6 +124,11 @@ export class GameCore {
         collisionEnabled: true,
       });
       
+      // Set camera for visibility-based loading
+      if (camera) {
+        this.voxelIntegration.setCamera(camera);
+      }
+      
       // Note: useServerChunks is read from store by VoxelWorld
       this.voxelIntegration.init();
       

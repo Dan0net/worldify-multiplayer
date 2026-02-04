@@ -93,6 +93,14 @@ export class VoxelIntegration implements TerrainRaycaster {
   }
 
   /**
+   * Set the camera for visibility-based chunk loading.
+   * Must be called before chunks will load in server mode.
+   */
+  setCamera(camera: THREE.Camera): void {
+    this.world.setCamera(camera);
+  }
+
+  /**
    * Update the voxel system based on player position.
    * Should be called every frame.
    * 

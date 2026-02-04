@@ -353,6 +353,16 @@ export class ChunkMesh {
   }
 
   /**
+   * Set visibility of all meshes (for culling).
+   * Does not affect preview meshes.
+   */
+  setVisible(visible: boolean): void {
+    if (this.solidMesh) this.solidMesh.visible = visible;
+    if (this.transparentMesh) this.transparentMesh.visible = visible;
+    if (this.liquidMesh) this.liquidMesh.visible = visible;
+  }
+
+  /**
    * Get the solid mesh (for collision, etc).
    * @returns The solid mesh or null if not created/disposed
    */

@@ -81,6 +81,14 @@ export class ChunkData {
   /** Last build sequence number (for versioning) */
   lastBuildSeq: number = 0;
 
+  /**
+   * Visibility graph for face-to-face connectivity.
+   * 15 bits, one per face pair. Bit set = can see through from face A to face B.
+   * 0x7FFF = all visible (empty), 0x0000 = none visible (solid).
+   * -1 = not yet computed.
+   */
+  visibilityBits: number = -1;
+
   constructor(cx: number, cy: number, cz: number) {
     this.cx = cx;
     this.cy = cy;

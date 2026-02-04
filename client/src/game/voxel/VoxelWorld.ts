@@ -4,10 +4,8 @@
 
 import * as THREE from 'three';
 import {
-  SURFACE_COLUMN_RADIUS,
-  PLAYER_CHUNK_RADIUS,
-  STREAM_UNLOAD_MARGIN,
-  CHUNK_SIZE,
+  VISIBILITY_RADIUS,
+  VISIBILITY_UNLOAD_BUFFER,
   worldToChunk,
   chunkKey,
   TerrainGenerator,
@@ -18,13 +16,20 @@ import {
   encodeVoxelChunkRequest,
   encodeSurfaceColumnRequest,
   SurfaceColumnResponse,
+  // computeVisibility,  // Temporarily disabled for debugging
+  VISIBILITY_ALL,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
 import { sendBinary } from '../../net/netClient.js';
 import { storeBridge } from '../../state/bridge.js';
-import { getMapTileCache } from '../../ui/MapOverlay.js';
+import {
+  getVisibleChunks,
+  getFrustumFromCamera,
+  getCameraDirection,
+  type ChunkProvider,
+} from './VisibilityBFS.js';
 
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
@@ -32,7 +37,7 @@ export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 /**
  * Manages the voxel world - chunk loading, unloading, and streaming.
  */
-export class VoxelWorld {
+export class VoxelWorld implements ChunkProvider {
   /** All loaded chunks, keyed by "cx,cy,cz" */
   readonly chunks: Map<string, Chunk> = new Map();
 
@@ -48,7 +53,13 @@ export class VoxelWorld {
   /** Reference to the Three.js scene */
   readonly scene: THREE.Scene;
 
-  /** Currently loaded chunk coordinate bounds */
+  /** Camera reference for frustum culling */
+  private camera: THREE.Camera | null = null;
+
+  /** Whether initial surface column has been requested */
+  private initialColumnRequested = false;
+
+  /** Loaded bounds for stats */
   private loadedBounds = {
     minCx: 0, maxCx: 0,
     minCy: 0, maxCy: 0,
@@ -88,22 +99,20 @@ export class VoxelWorld {
     }
 
     // Local mode: Generate initial chunks centered at origin
-    const halfRadius = Math.floor(PLAYER_CHUNK_RADIUS / 2);
+    const halfRadius = Math.floor(VISIBILITY_RADIUS / 2);
 
     for (let cz = -halfRadius; cz < halfRadius; cz++) {
       for (let cy = -halfRadius; cy < halfRadius; cy++) {
         for (let cx = -halfRadius; cx < halfRadius; cx++) {
-          this.loadChunk(cx, cy, cz);
+          const key = chunkKey(cx, cy, cz);
+          if (!this.chunks.has(key)) {
+            const chunk = this.generateChunk(cx, cy, cz);
+            this.chunks.set(key, chunk);
+            this.remeshQueue.add(key);
+          }
         }
       }
     }
-
-    // Update bounds
-    this.loadedBounds = {
-      minCx: -halfRadius, maxCx: halfRadius - 1,
-      minCy: -halfRadius, maxCy: halfRadius - 1,
-      minCz: -halfRadius, maxCz: halfRadius - 1,
-    };
 
     // Mesh all chunks (after all are loaded for neighbor access)
     this.remeshAllDirty();
@@ -112,8 +121,29 @@ export class VoxelWorld {
   }
 
   /**
+   * Set the camera for frustum culling.
+   */
+  setCamera(camera: THREE.Camera): void {
+    this.camera = camera;
+  }
+
+  /**
+   * ChunkProvider interface - get a chunk by key.
+   */
+  getChunkByKey(key: string): Chunk | undefined {
+    return this.chunks.get(key);
+  }
+
+  /**
+   * ChunkProvider interface - check if a chunk is pending.
+   */
+  isPending(key: string): boolean {
+    return this.pendingChunks.has(key);
+  }
+
+  /**
    * Update the world based on player position.
-   * Load/unload chunks as player moves.
+   * Uses visibility BFS for loading and rendering.
    * @param playerPos Player world position
    */
   update(playerPos: THREE.Vector3): void {
@@ -121,16 +151,14 @@ export class VoxelWorld {
 
     // Get player's current chunk
     const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
+    this.lastPlayerChunk = { ...playerChunk };
 
-    // Check if player moved to a new chunk (or first update)
-    if (
-      this.lastPlayerChunk === null ||
-      playerChunk.cx !== this.lastPlayerChunk.cx ||
-      playerChunk.cy !== this.lastPlayerChunk.cy ||
-      playerChunk.cz !== this.lastPlayerChunk.cz
-    ) {
-      this.lastPlayerChunk = { ...playerChunk };
-      this.updateLoadedChunks(playerChunk.cx, playerChunk.cy, playerChunk.cz);
+    if (storeBridge.useServerChunks) {
+      // Server mode: use visibility-based loading
+      this.updateWithVisibility(playerChunk);
+    } else {
+      // Local mode: simple distance-based loading (for offline/testing)
+      this.updateLocalMode(playerChunk);
     }
 
     // Process some remesh queue items per frame
@@ -138,188 +166,162 @@ export class VoxelWorld {
   }
 
   /**
-   * Update which chunks are loaded based on new player position.
-   * 
-   * Two-phase loading:
-   * 1. Surface columns (large XZ radius) - gets terrain + structures
-   * 2. 3D chunks (small radius around player) - for caves/digging below surface
+   * Update using visibility BFS (server mode).
+   * Handles initial bootstrap + ongoing visibility-based loading.
    */
-  private updateLoadedChunks(pcx: number, pcy: number, pcz: number): void {
-    // Surface column bounds (XZ only, larger radius)
-    const surfaceMinCx = pcx - SURFACE_COLUMN_RADIUS;
-    const surfaceMaxCx = pcx + SURFACE_COLUMN_RADIUS - 1;
-    const surfaceMinCz = pcz - SURFACE_COLUMN_RADIUS;
-    const surfaceMaxCz = pcz + SURFACE_COLUMN_RADIUS - 1;
-    
-    // 3D chunk bounds (smaller radius)
-    const chunkMinCx = pcx - PLAYER_CHUNK_RADIUS;
-    const chunkMaxCx = pcx + PLAYER_CHUNK_RADIUS - 1;
-    const chunkMinCy = pcy - PLAYER_CHUNK_RADIUS;
-    const chunkMaxCy = pcy + PLAYER_CHUNK_RADIUS - 1;
-    const chunkMinCz = pcz - PLAYER_CHUNK_RADIUS;
-    const chunkMaxCz = pcz + PLAYER_CHUNK_RADIUS - 1;
-    
-    // Unload bounds: use larger of surface XZ or chunk XZ, plus margin
-    const unloadMarginXZ = SURFACE_COLUMN_RADIUS + STREAM_UNLOAD_MARGIN;
-    const unloadMarginY = PLAYER_CHUNK_RADIUS + STREAM_UNLOAD_MARGIN;
-    
-    const unloadMinCx = pcx - unloadMarginXZ;
-    const unloadMaxCx = pcx + unloadMarginXZ - 1;
-    const unloadMinCy = pcy - unloadMarginY;
-    const unloadMaxCy = pcy + unloadMarginY - 1;
-    const unloadMinCz = pcz - unloadMarginXZ;
-    const unloadMaxCz = pcz + unloadMarginXZ - 1;
+  private updateWithVisibility(playerChunk: { cx: number; cy: number; cz: number }): void {
+    // Bootstrap: request initial surface column if not yet done
+    if (!this.initialColumnRequested) {
+      this.requestInitialSurfaceColumn(playerChunk.cx, playerChunk.cz);
+      return; // Wait for initial data before starting visibility BFS
+    }
 
-    // Unload chunks outside unload bounds
+    // Need camera for frustum culling
+    if (!this.camera) {
+      console.warn('[VoxelWorld] No camera set, skipping visibility update');
+      return;
+    }
+
+    // Get visible chunks via BFS
+    const frustum = getFrustumFromCamera(this.camera);
+    const cameraDir = getCameraDirection(this.camera);
+    
+    const { visible, toRequest } = getVisibleChunks(
+      playerChunk,
+      cameraDir,
+      frustum,
+      this,
+      VISIBILITY_RADIUS
+    );
+
+    // Request missing visible chunks (one at a time for smooth loading)
+    this.requestVisibleChunks(toRequest);
+
+    // Update mesh visibility
+    this.updateMeshVisibility(visible);
+
+    // Unload chunks far outside visible set
+    this.unloadDistantChunks(visible);
+  }
+
+  /**
+   * Request initial surface column to bootstrap the world.
+   */
+  private requestInitialSurfaceColumn(tx: number, tz: number): void {
+    const columnKey = `${tx},${tz}`;
+    if (this.pendingColumns.has(columnKey)) return;
+    
+    this.pendingColumns.add(columnKey);
+    this.initialColumnRequested = true;
+    
+    const request = encodeSurfaceColumnRequest({ tx, tz });
+    sendBinary(request);
+    console.log(`[VoxelWorld] Requested initial surface column (${tx}, ${tz})`);
+  }
+
+  /**
+   * Request visible chunks that aren't loaded yet.
+   * Requests one chunk at a time for smooth loading.
+   */
+  private requestVisibleChunks(toRequest: Set<string>): void {
+    // Limit concurrent requests
+    const MAX_PENDING = 4;
+    if (this.pendingChunks.size >= MAX_PENDING) return;
+    
+    for (const key of toRequest) {
+      if (this.pendingChunks.size >= MAX_PENDING) break;
+      if (this.pendingChunks.has(key)) continue;
+      
+      // Parse key back to coordinates
+      const [cx, cy, cz] = key.split(',').map(Number);
+      this.requestChunkFromServer(cx, cy, cz);
+    }
+  }
+
+  /**
+   * Update mesh visibility based on visible chunk set.
+   */
+  private updateMeshVisibility(visible: Set<string>): void {
+    for (const [key, chunkMesh] of this.meshes) {
+      const shouldBeVisible = visible.has(key);
+      chunkMesh.setVisible(shouldBeVisible);
+    }
+  }
+
+  /**
+   * Unload chunks that are far outside the visible set.
+   */
+  private unloadDistantChunks(visible: Set<string>): void {
+    if (!this.lastPlayerChunk) return;
+    
+    const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
+    const unloadRadius = VISIBILITY_RADIUS + VISIBILITY_UNLOAD_BUFFER;
+    
     const chunksToUnload: string[] = [];
     for (const [key, chunk] of this.chunks) {
-      const outOfXZ = chunk.cx < unloadMinCx || chunk.cx > unloadMaxCx ||
-                      chunk.cz < unloadMinCz || chunk.cz > unloadMaxCz;
-      const outOfY = chunk.cy < unloadMinCy || chunk.cy > unloadMaxCy;
+      // Keep if visible
+      if (visible.has(key)) continue;
       
-      if (outOfXZ || outOfY) {
+      // Unload if outside unload radius
+      const dx = Math.abs(chunk.cx - pcx);
+      const dy = Math.abs(chunk.cy - pcy);
+      const dz = Math.abs(chunk.cz - pcz);
+      
+      if (dx > unloadRadius || dy > unloadRadius || dz > unloadRadius) {
+        chunksToUnload.push(key);
+      }
+    }
+    
+    for (const key of chunksToUnload) {
+      this.unloadChunk(key);
+    }
+  }
+
+  /**
+   * Update in local/offline mode (simple distance-based).
+   */
+  private updateLocalMode(playerChunk: { cx: number; cy: number; cz: number }): void {
+    const { cx: pcx, cy: pcy, cz: pcz } = playerChunk;
+    const radius = Math.floor(VISIBILITY_RADIUS / 2);
+    
+    // Generate chunks within radius
+    for (let dz = -radius; dz <= radius; dz++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const cx = pcx + dx;
+          const cy = pcy + dy;
+          const cz = pcz + dz;
+          const key = chunkKey(cx, cy, cz);
+          
+          if (!this.chunks.has(key)) {
+            const chunk = this.generateChunk(cx, cy, cz);
+            this.chunks.set(key, chunk);
+            this.remeshQueue.add(key);
+          }
+        }
+      }
+    }
+    
+    // Unload distant chunks
+    const unloadRadius = radius + VISIBILITY_UNLOAD_BUFFER;
+    const chunksToUnload: string[] = [];
+    for (const [key, chunk] of this.chunks) {
+      const dx = Math.abs(chunk.cx - pcx);
+      const dy = Math.abs(chunk.cy - pcy);
+      const dz = Math.abs(chunk.cz - pcz);
+      
+      if (dx > unloadRadius || dy > unloadRadius || dz > unloadRadius) {
         chunksToUnload.push(key);
       }
     }
     for (const key of chunksToUnload) {
       this.unloadChunk(key);
     }
-
-    // Load new chunks/columns based on mode
-    if (storeBridge.useServerChunks) {
-      // Server mode: request surface columns + 3D chunks
-      this.requestMissingColumns(surfaceMinCx, surfaceMaxCx, surfaceMinCz, surfaceMaxCz);
-      this.requestMissing3DChunks(chunkMinCx, chunkMaxCx, chunkMinCy, chunkMaxCy, chunkMinCz, chunkMaxCz);
-    } else {
-      // Local mode: generate all chunks in 3D volume (smaller radius)
-      for (let cz = chunkMinCz; cz <= chunkMaxCz; cz++) {
-        for (let cy = chunkMinCy; cy <= chunkMaxCy; cy++) {
-          for (let cx = chunkMinCx; cx <= chunkMaxCx; cx++) {
-            const key = chunkKey(cx, cy, cz);
-            if (!this.chunks.has(key) && !this.pendingChunks.has(key)) {
-              const chunk = this.loadChunk(cx, cy, cz);
-              
-              if (chunk) {
-                this.remeshQueue.add(key);
-                this.queueNeighborRemesh(cx, cy, cz);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    this.loadedBounds = {
-      minCx: surfaceMinCx, maxCx: surfaceMaxCx,
-      minCy: chunkMinCy, maxCy: chunkMaxCy,
-      minCz: surfaceMinCz, maxCz: surfaceMaxCz,
-    };
   }
 
-  /**
-   * Request missing surface columns from server.
-   * Only requests XZ columns, server determines which Y chunks to send.
-   */
-  private requestMissingColumns(
-    minCx: number, maxCx: number,
-    minCz: number, maxCz: number
-  ): void {
-    for (let cz = minCz; cz <= maxCz; cz++) {
-      for (let cx = minCx; cx <= maxCx; cx++) {
-        const columnKey = `${cx},${cz}`;
-        
-        // Skip if column already pending or we have any chunks in this column
-        if (this.pendingColumns.has(columnKey)) continue;
-        if (this.hasAnyChunkInColumn(cx, cz)) continue;
-        
-        // Request surface column
-        this.pendingColumns.add(columnKey);
-        const request = encodeSurfaceColumnRequest({ tx: cx, tz: cz });
-        sendBinary(request);
-        console.log(`[VoxelWorld] Requested surface column (${cx}, ${cz})`);
-      }
-    }
-  }
 
-  /**
-   * Request missing 3D chunks around the player.
-   * Only requests chunks below surface height to avoid waste.
-   * Skips columns with pending surface requests (wait for those first).
-   */
-  private requestMissing3DChunks(
-    minCx: number, maxCx: number,
-    minCy: number, maxCy: number,
-    minCz: number, maxCz: number
-  ): void {
-    const tileCache = getMapTileCache();
-    
-    for (let cz = minCz; cz <= maxCz; cz++) {
-      for (let cx = minCx; cx <= maxCx; cx++) {
-        const columnKey = `${cx},${cz}`;
-        
-        // Skip if surface column is pending - wait for it to return first
-        if (this.pendingColumns.has(columnKey)) continue;
-        
-        // Get surface height for this column to avoid requesting above surface
-        const yRange = tileCache.getYRange(cx, cz);
-        const surfaceCy = yRange ? Math.floor(yRange.maxY / CHUNK_SIZE) : null;
-        
-        for (let cy = minCy; cy <= maxCy; cy++) {
-          // Skip chunks above surface (already covered by surface columns)
-          if (surfaceCy !== null && cy > surfaceCy) continue;
-          
-          const key = chunkKey(cx, cy, cz);
-          
-          // Skip if already loaded or pending
-          if (this.chunks.has(key)) continue;
-          if (this.pendingChunks.has(key)) continue;
-          
-          // Request individual chunk
-          this.requestChunkFromServer(cx, cy, cz);
-        }
-      }
-    }
-  }
 
-  /**
-   * Check if we have any chunks loaded in a column.
-   */
-  private hasAnyChunkInColumn(cx: number, cz: number): boolean {
-    for (const chunk of this.chunks.values()) {
-      if (chunk.cx === cx && chunk.cz === cz) {
-        return true;
-      }
-    }
-    return false;
-  }
 
-  /**
-   * Load a chunk at the given coordinates.
-   * If server chunks are enabled (via store), sends a request instead of generating locally.
-   */
-  private loadChunk(cx: number, cy: number, cz: number): Chunk | null {
-    const key = chunkKey(cx, cy, cz);
-    
-    // Check if already loaded
-    const existing = this.chunks.get(key);
-    if (existing) return existing;
-
-    // Check if already pending from server
-    if (this.pendingChunks.has(key)) {
-      return null;
-    }
-
-    if (storeBridge.useServerChunks) {
-      // Request from server
-      this.requestChunkFromServer(cx, cy, cz);
-      return null;
-    } else {
-      // Generate locally (offline/fallback mode)
-      const chunk = this.generateChunk(cx, cy, cz);
-      this.chunks.set(key, chunk);
-      return chunk;
-    }
-  }
 
   /**
    * Request a chunk from the server.
@@ -363,6 +365,11 @@ export class VoxelWorld {
     // Copy voxel data
     chunk.data.set(voxelData);
     chunk.dirty = true;
+    
+    // Compute visibility graph for this chunk
+    // TEMPORARILY DISABLED for debugging
+    // chunk.visibilityBits = computeVisibility(voxelData);
+    chunk.visibilityBits = VISIBILITY_ALL;  // Assume all visible
     
     // Queue for remeshing
     this.remeshQueue.add(key);
@@ -414,6 +421,11 @@ export class VoxelWorld {
       chunk.data.set(voxelData);
       chunk.dirty = true;
       chunk.lastBuildSeq = lastBuildSeq;
+      
+      // Compute visibility graph for this chunk
+      // TEMPORARILY DISABLED for debugging
+      // chunk.visibilityBits = computeVisibility(voxelData);
+      chunk.visibilityBits = VISIBILITY_ALL;  // Assume all visible
       
       // Queue for remeshing
       this.remeshQueue.add(key);
