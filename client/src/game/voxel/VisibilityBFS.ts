@@ -72,17 +72,23 @@ const STRIDE_Y = GRID_DIAMETER;
 const STRIDE_Z = GRID_DIAMETER * GRID_DIAMETER;
 
 /** Neighbor offsets in grid coords: [+X, -X, +Y, -Y, +Z, -Z] (matches ChunkFace order) */
-const NEIGHBOR_OFFSETS = [
-  { dx: 1, dy: 0, dz: 0 },   // POS_X = 0
-  { dx: -1, dy: 0, dz: 0 },  // NEG_X = 1
-  { dx: 0, dy: 1, dz: 0 },   // POS_Y = 2
-  { dx: 0, dy: -1, dz: 0 },  // NEG_Y = 3
-  { dx: 0, dy: 0, dz: 1 },   // POS_Z = 4
-  { dx: 0, dy: 0, dz: -1 },  // NEG_Z = 5
-];
+// Flat array: [dx0, dy0, dz0, dx1, dy1, dz1, ...]
+const NEIGHBOR_OFFSETS = new Int8Array([
+  1, 0, 0,   // POS_X = 0
+  -1, 0, 0,  // NEG_X = 1
+  0, 1, 0,   // POS_Y = 2
+  0, -1, 0,  // NEG_Y = 3
+  0, 0, 1,   // POS_Z = 4
+  0, 0, -1,  // NEG_Z = 5
+]);
 
 /** Reusable Box3 for frustum intersection tests */
 const tempBox = new THREE.Box3();
+
+/** Reusable frustum (avoid allocation per frame) */
+const reusableFrustum = new THREE.Frustum();
+const reusableMatrix = new THREE.Matrix4();
+const reusableDir = new THREE.Vector3();
 
 // ============== Helper Functions ==============
 
@@ -96,6 +102,24 @@ function inBounds(gx: number, gy: number, gz: number): boolean {
   return gx >= 0 && gx < GRID_DIAMETER &&
          gy >= 0 && gy < GRID_DIAMETER &&
          gz >= 0 && gz < GRID_DIAMETER;
+}
+
+/** Convert grid index to world chunk coords (writes to out param to avoid allocation) */
+function indexToWorldChunk(
+  idx: number,
+  baseCx: number,
+  baseCy: number,
+  baseCz: number,
+  centerOffset: number
+): { cx: number; cy: number; cz: number } {
+  const gz = Math.floor(idx / STRIDE_Z);
+  const gy = Math.floor((idx % STRIDE_Z) / STRIDE_Y);
+  const gx = idx % STRIDE_Y;
+  return {
+    cx: baseCx + (gx - centerOffset),
+    cy: baseCy + (gy - centerOffset),
+    cz: baseCz + (gz - centerOffset),
+  };
 }
 
 // ============== Main BFS Function ==============
@@ -166,12 +190,7 @@ export function getVisibleChunks(
     const key = chunkKey(cx, cy, cz);
     const chunk = chunkProvider.getChunkByKey(key);
     
-    // Get visibility bits (if chunk loaded, else assume all visible to allow request)
-    // -1 means "not computed yet", treat as all visible
-    const visBits = chunk?.visibilityBits ?? VISIBILITY_ALL;
-    const effectiveVisBits = visBits === -1 ? VISIBILITY_ALL : visBits;
-    
-    // Add to visible list
+    // Add to visible list (BFS reached it, so it's potentially visible)
     visibleIndices[visibleCount++] = idx;
     
     // Check if chunk needs to be requested
@@ -179,12 +198,20 @@ export function getVisibleChunks(
       toRequestIndices[toRequestCount++] = idx;
     }
     
+    // IMPORTANT: Don't traverse through unloaded chunks
+    // We request them, but can't know their visibility until loaded
+    if (!chunk) continue;
+    
+    // Get visibility bits (-1 means "not computed yet", treat as all visible)
+    const visBits = chunk.visibilityBits;
+    const effectiveVisBits = visBits === -1 ? VISIBILITY_ALL : visBits;
+    
     // Explore neighbors
     for (let exitFace = 0; exitFace < 6; exitFace++) {
-      const offset = NEIGHBOR_OFFSETS[exitFace];
-      const ngx = gx + offset.dx;
-      const ngy = gy + offset.dy;
-      const ngz = gz + offset.dz;
+      const offsetBase = exitFace * 3;
+      const ngx = gx + NEIGHBOR_OFFSETS[offsetBase];
+      const ngy = gy + NEIGHBOR_OFFSETS[offsetBase + 1];
+      const ngz = gz + NEIGHBOR_OFFSETS[offsetBase + 2];
       
       // Bounds check
       if (!inBounds(ngx, ngy, ngz)) continue;
@@ -215,21 +242,16 @@ export function getVisibleChunks(
     }
   }
   
-  // Build output Sets (required for compatibility with callers)
-  // Visible set is frustum-culled, toRequest is not (preload nearby chunks)
+  // Build output Sets
+  // Visible: frustum-culled for rendering. toRequest: also frustum-culled (no point loading behind camera)
   const visible = new Set<string>();
   const toRequest = new Set<string>();
   
   for (let i = 0; i < visibleCount; i++) {
     const idx = visibleIndices[i];
-    const gz = Math.floor(idx / STRIDE_Z);
-    const gy = Math.floor((idx % STRIDE_Z) / STRIDE_Y);
-    const gx = idx % STRIDE_Y;
-    const cx = baseCx + (gx - centerOffset);
-    const cy = baseCy + (gy - centerOffset);
-    const cz = baseCz + (gz - centerOffset);
+    const { cx, cy, cz } = indexToWorldChunk(idx, baseCx, baseCy, baseCz, centerOffset);
     
-    // Frustum cull: only add to visible if in frustum
+    // Frustum cull
     const worldX = cx * CHUNK_WORLD_SIZE;
     const worldY = cy * CHUNK_WORLD_SIZE;
     const worldZ = cz * CHUNK_WORLD_SIZE;
@@ -243,13 +265,18 @@ export function getVisibleChunks(
   
   for (let i = 0; i < toRequestCount; i++) {
     const idx = toRequestIndices[i];
-    const gz = Math.floor(idx / STRIDE_Z);
-    const gy = Math.floor((idx % STRIDE_Z) / STRIDE_Y);
-    const gx = idx % STRIDE_Y;
-    const cx = baseCx + (gx - centerOffset);
-    const cy = baseCy + (gy - centerOffset);
-    const cz = baseCz + (gz - centerOffset);
-    toRequest.add(chunkKey(cx, cy, cz));
+    const { cx, cy, cz } = indexToWorldChunk(idx, baseCx, baseCy, baseCz, centerOffset);
+    
+    // Also frustum cull requests - no point loading chunks behind camera
+    const worldX = cx * CHUNK_WORLD_SIZE;
+    const worldY = cy * CHUNK_WORLD_SIZE;
+    const worldZ = cz * CHUNK_WORLD_SIZE;
+    tempBox.min.set(worldX, worldY, worldZ);
+    tempBox.max.set(worldX + CHUNK_WORLD_SIZE, worldY + CHUNK_WORLD_SIZE, worldZ + CHUNK_WORLD_SIZE);
+    
+    if (frustum.intersectsBox(tempBox)) {
+      toRequest.add(chunkKey(cx, cy, cz));
+    }
   }
   
   return { visible, toRequest };
@@ -257,27 +284,19 @@ export function getVisibleChunks(
 
 // ============== Helpers ==============
 
-// NOTE: getChunkBoundingBox temporarily disabled for debugging
-// Will be re-enabled when frustum culling is turned back on
-
 /**
- * Create a frustum from a camera.
+ * Create a frustum from a camera (reuses pre-allocated objects).
  */
 export function getFrustumFromCamera(camera: THREE.Camera): THREE.Frustum {
-  const frustum = new THREE.Frustum();
-  const projScreenMatrix = new THREE.Matrix4();
-  
-  projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  frustum.setFromProjectionMatrix(projScreenMatrix);
-  
-  return frustum;
+  reusableMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  reusableFrustum.setFromProjectionMatrix(reusableMatrix);
+  return reusableFrustum;
 }
 
 /**
- * Get normalized camera direction.
+ * Get normalized camera direction (reuses pre-allocated vector).
  */
 export function getCameraDirection(camera: THREE.Camera): THREE.Vector3 {
-  const dir = new THREE.Vector3();
-  camera.getWorldDirection(dir);
-  return dir;
+  camera.getWorldDirection(reusableDir);
+  return reusableDir;
 }
