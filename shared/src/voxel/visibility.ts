@@ -19,7 +19,18 @@ import {
   VISIBILITY_ALL,
   VISIBILITY_NONE,
 } from './constants.js';
-import { isVoxelSolid } from './voxelData.js';
+import { isVoxelSolid, getMaterial } from './voxelData.js';
+import { isVoxelOpaque as isVoxelOpaqueMat } from '../materials/index.js';
+
+// ============== Visibility Helpers ==============
+
+/**
+ * Check if a packed voxel blocks visibility.
+ * Wraps the material module function with voxelData helpers.
+ */
+function isVoxelOpaque(packed: number): boolean {
+  return isVoxelOpaqueMat(packed, isVoxelSolid, getMaterial);
+}
 
 // ============== Pre-allocated Buffers ==============
 // All computation uses these module-level arrays - zero allocations per call
@@ -228,21 +239,21 @@ export function getOppositeFace(face: ChunkFace): ChunkFace {
  * @returns 15-bit visibility mask
  */
 export function computeVisibility(voxelData: Uint16Array): number {
-  // Quick check: if all solid or all empty, return early
-  let hasSolid = false;
-  let hasEmpty = false;
+  // Quick check: if all opaque or all see-through, return early
+  let hasOpaque = false;
+  let hasSeeThrough = false;
   
   for (let i = 0; i < voxelData.length; i++) {
-    if (isVoxelSolid(voxelData[i])) {
-      hasSolid = true;
+    if (isVoxelOpaque(voxelData[i])) {
+      hasOpaque = true;
     } else {
-      hasEmpty = true;
+      hasSeeThrough = true;
     }
-    if (hasSolid && hasEmpty) break;
+    if (hasOpaque && hasSeeThrough) break;
   }
   
-  if (!hasEmpty) return VISIBILITY_NONE; // All solid
-  if (!hasSolid) return VISIBILITY_ALL;  // All empty (all faces connect)
+  if (!hasSeeThrough) return VISIBILITY_NONE; // All opaque
+  if (!hasOpaque) return VISIBILITY_ALL;  // All see-through (all faces connect)
   
   // Single generation for this entire computation
   // Reset if would overflow
@@ -263,8 +274,8 @@ export function computeVisibility(voxelData: Uint16Array): number {
     for (let i = 0; i < faceSize; i++) {
       const startIdx = boundaryIndices[i];
       
-      // Skip if solid or already visited in THIS computation
-      if (isVoxelSolid(voxelData[startIdx])) continue;
+      // Skip if opaque or already visited in THIS computation
+      if (isVoxelOpaque(voxelData[startIdx])) continue;
       if (visited[startIdx] === gen) continue;
       
       // Flood fill using pre-allocated queue
@@ -290,9 +301,9 @@ export function computeVisibility(voxelData: Uint16Array): number {
           
           const neighborIdx = idx + NEIGHBOR_DELTAS[d];
           
-          // Skip if already visited or solid
+          // Skip if already visited or opaque (liquid/transparent allow visibility)
           if (visited[neighborIdx] === gen) continue;
-          if (isVoxelSolid(voxelData[neighborIdx])) continue;
+          if (isVoxelOpaque(voxelData[neighborIdx])) continue;
           
           visited[neighborIdx] = gen;
           queue[queueTail++] = neighborIdx;

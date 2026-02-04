@@ -173,6 +173,30 @@ export function isSolid(id: number): boolean {
 }
 
 /**
+ * Check if a packed voxel blocks visibility.
+ * A voxel is opaque if it's solid AND its material is not liquid/transparent.
+ * Liquid and transparent materials allow visibility through even when "solid" by weight.
+ * 
+ * @param packed - The packed 16-bit voxel value
+ * @param isVoxelSolid - Function to check if voxel weight is solid
+ * @param getMaterial - Function to extract material ID from packed voxel
+ */
+export function isVoxelOpaque(
+  packed: number,
+  isVoxelSolid: (packed: number) => boolean,
+  getMaterial: (packed: number) => number
+): boolean {
+  // If weight says it's empty, it doesn't block visibility
+  if (!isVoxelSolid(packed)) return false;
+  
+  // Check material type - liquid and transparent don't block visibility
+  const material = getMaterial(packed);
+  if (isLiquid(material) || isTransparent(material)) return false;
+  
+  return true;
+}
+
+/**
  * Get the material type as a string.
  */
 export function getMaterialType(id: number): MaterialType {

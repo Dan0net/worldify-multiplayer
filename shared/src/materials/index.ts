@@ -25,6 +25,7 @@ export {
   isLiquid,
   isTransparent,
   isSolid,
+  isVoxelOpaque,
   getMaterialType,
   getMaterialTypeNum,
 } from './Materials.js';
