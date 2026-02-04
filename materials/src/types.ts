@@ -22,4 +22,5 @@ export interface MaterialPallet {
     transparent: number[];
   };
   colors: string[];
+  repeatScales: number[];
 }

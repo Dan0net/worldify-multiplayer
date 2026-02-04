@@ -12,6 +12,7 @@ interface MaterialConfig {
   type: 'solid' | 'liquid' | 'transparent';
   enabled?: boolean;
   index?: number;
+  repeatScale?: number;
   albedo?: MapConfig;
   normal?: MapConfig;
   ao?: MapConfig;
@@ -643,6 +644,21 @@ function MaterialConfigPanel({
             <option value="liquid">Liquid</option>
             <option value="transparent">Transparent</option>
           </select>
+        </div>
+
+        {/* Repeat Scale */}
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-400 w-12">Scale</label>
+          <input
+            type="number"
+            min="0.5"
+            max="10"
+            step="0.5"
+            value={config.repeatScale ?? 2}
+            onChange={(e) => onUpdateConfig({ repeatScale: parseFloat(e.target.value) || 2 })}
+            className="flex-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm text-white"
+          />
+          <span className="text-xs text-gray-500">UV repeat</span>
         </div>
 
         {/* Layer Tabs */}

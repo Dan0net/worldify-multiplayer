@@ -44,6 +44,7 @@ interface MaterialConfig {
   type: 'solid' | 'liquid' | 'transparent';
   enabled?: boolean;
   index?: number;
+  repeatScale?: number;
   albedo?: MapConfig;
   normal?: MapConfig;
   ao?: MapConfig;
@@ -210,6 +211,7 @@ async function buildTextures(resolution: 'low' | 'high') {
     transparent: [],
   };
   const materialColors: string[] = [];
+  const repeatScales: number[] = [];
   let materialIndex = 0;
 
   // Get enabled materials sorted by index
@@ -225,6 +227,7 @@ async function buildTextures(resolution: 'low' | 'high') {
     const idx = materialIndex++;
     materialIndices[materialName] = idx;
     materialTypes[material.type].push(idx);
+    repeatScales.push(material.repeatScale ?? 2);
 
     for (const mapType of Object.keys(MAP_CHANNELS)) {
       const mapConfig = material[mapType as keyof MaterialConfig] as MapConfig | undefined;
@@ -275,6 +278,7 @@ async function buildTextures(resolution: 'low' | 'high') {
     pallet.indicies = materialIndices;
     pallet.types = materialTypes;
     pallet.colors = materialColors;
+    pallet.repeatScales = repeatScales;
   } catch {
     pallet = {
       materials: materialNames,
@@ -282,6 +286,7 @@ async function buildTextures(resolution: 'low' | 'high') {
       indicies: materialIndices,
       types: materialTypes,
       colors: materialColors,
+      repeatScales: repeatScales,
     };
   }
 

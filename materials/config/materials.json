@@ -19,7 +19,8 @@
         "path": "moss2/Moss002_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 0
+      "index": 0,
+      "repeatScale": 1.5
     },
     "rock": {
       "type": "solid",
@@ -36,7 +37,8 @@
         "path": "rock/Rock028_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 1
+      "index": 1,
+      "repeatScale": 3
     },
     "wood": {
       "type": "solid",
@@ -59,7 +61,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 2
+      "index": 2,
+      "repeatScale": 3
     },
     "rock2": {
       "type": "solid",
@@ -82,7 +85,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 3
+      "index": 3,
+      "repeatScale": 3
     },
     "bark2": {
       "type": "solid",
@@ -97,7 +101,8 @@
         "path": "bark2/TH_Old_Bark_Brown_roughness.png"
       },
       "enabled": true,
-      "index": 4
+      "index": 4,
+      "repeatScale": 2
     },
     "bark3": {
       "type": "solid",
@@ -114,7 +119,8 @@
         "path": "bark3/wood_0064_roughness_1k.jpg"
       },
       "enabled": true,
-      "index": 5
+      "index": 5,
+      "repeatScale": 2
     },
     "brick2": {
       "type": "solid",
@@ -129,7 +135,8 @@
         "path": "brick2/TH_Castle_Brick_Broken_roughness.png"
       },
       "enabled": true,
-      "index": 6
+      "index": 6,
+      "repeatScale": 2
     },
     "cobble": {
       "type": "solid",
@@ -152,7 +159,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 7
+      "index": 7,
+      "repeatScale": 3
     },
     "cobble2": {
       "type": "solid",
@@ -175,7 +183,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 8
+      "index": 8,
+      "repeatScale": 3
     },
     "concrete": {
       "type": "solid",
@@ -198,7 +207,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 9
+      "index": 9,
+      "repeatScale": 2
     },
     "dirt": {
       "type": "solid",
@@ -215,7 +225,8 @@
         "path": "dirt/Ground051_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 10
+      "index": 10,
+      "repeatScale": 2
     },
     "pebbles": {
       "type": "solid",
@@ -238,7 +249,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 11
+      "index": 11,
+      "repeatScale": 2
     },
     "plaster": {
       "type": "solid",
@@ -261,7 +273,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 12
+      "index": 12,
+      "repeatScale": 2
     },
     "roof": {
       "type": "solid",
@@ -284,7 +297,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 13
+      "index": 13,
+      "repeatScale": 2
     },
     "sand": {
       "type": "solid",
@@ -301,7 +315,8 @@
         "path": "sand/Ground080_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 14
+      "index": 14,
+      "repeatScale": 2
     },
     "snow": {
       "type": "solid",
@@ -324,7 +339,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 15
+      "index": 15,
+      "repeatScale": 2
     },
     "tile": {
       "type": "solid",
@@ -347,7 +363,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 16
+      "index": 16,
+      "repeatScale": 3
     },
     "plaster2": {
       "type": "solid",
@@ -370,7 +387,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 17
+      "index": 17,
+      "repeatScale": 2
     },
     "brick3": {
       "type": "solid",
@@ -393,7 +411,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 18
+      "index": 18,
+      "repeatScale": 2
     },
     "stone2": {
       "type": "solid",
@@ -416,7 +435,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 19
+      "index": 19,
+      "repeatScale": 2
     },
     "brick5": {
       "type": "solid",
@@ -439,7 +459,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 20
+      "index": 20,
+      "repeatScale": 2
     },
     "rock3": {
       "type": "solid",
@@ -462,7 +483,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 21
+      "index": 21,
+      "repeatScale": 3
     },
     "stone": {
       "type": "solid",
@@ -485,7 +507,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 22
+      "index": 22,
+      "repeatScale": 2
     },
     "rock_moss": {
       "type": "solid",
@@ -508,7 +531,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 23
+      "index": 23,
+      "repeatScale": 3
     },
     "stone_moss": {
       "type": "solid",
@@ -531,7 +555,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 24
+      "index": 24,
+      "repeatScale": 2
     },
     "gravel": {
       "type": "solid",
@@ -554,7 +579,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 25
+      "index": 25,
+      "repeatScale": 2
     },
     "asphalt": {
       "type": "solid",
@@ -577,7 +603,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 26
+      "index": 26,
+      "repeatScale": 2
     },
     "brick4": {
       "type": "solid",
@@ -600,7 +627,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 27
+      "index": 27,
+      "repeatScale": 2
     },
     "brick6": {
       "type": "solid",
@@ -623,7 +651,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 28
+      "index": 28,
+      "repeatScale": 2
     },
     "brick7": {
       "type": "solid",
@@ -646,7 +675,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 29
+      "index": 29,
+      "repeatScale": 2
     },
     "brick8": {
       "type": "solid",
@@ -662,7 +692,8 @@
       },
       "metalness": {},
       "enabled": true,
-      "index": 30
+      "index": 30,
+      "repeatScale": 2
     },
     "tile3": {
       "type": "solid",
@@ -685,7 +716,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 31
+      "index": 31,
+      "repeatScale": 3
     },
     "metal": {
       "type": "solid",
@@ -708,7 +740,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 32
+      "index": 32,
+      "repeatScale": 2
     },
     "metal2": {
       "type": "solid",
@@ -731,7 +764,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 33
+      "index": 33,
+      "repeatScale": 2
     },
     "roof2": {
       "type": "solid",
@@ -754,7 +788,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 34
+      "index": 34,
+      "repeatScale": 2
     },
     "tile4": {
       "type": "solid",
@@ -769,7 +804,8 @@
         "path": "tile4/Tiles074_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 35
+      "index": 35,
+      "repeatScale": 3
     },
     "tile5": {
       "type": "solid",
@@ -784,7 +820,8 @@
         "path": "tile5/Tiles022_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 36
+      "index": 36,
+      "repeatScale": 3
     },
     "snow2": {
       "type": "solid",
@@ -807,7 +844,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 37
+      "index": 37,
+      "repeatScale": 2
     },
     "moss": {
       "type": "solid",
@@ -830,7 +868,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 38
+      "index": 38,
+      "repeatScale": 2
     },
     "dirt2": {
       "type": "solid",
@@ -853,7 +892,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 39
+      "index": 39,
+      "repeatScale": 2
     },
     "leaves": {
       "type": "solid",
@@ -876,7 +916,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 40
+      "index": 40,
+      "repeatScale": 2
     },
     "leaves2": {
       "type": "solid",
@@ -899,7 +940,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 41
+      "index": 41,
+      "repeatScale": 2
     },
     "grass2": {
       "type": "solid",
@@ -922,7 +964,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 42
+      "index": 42,
+      "repeatScale": 2
     },
     "wood2": {
       "type": "solid",
@@ -939,7 +982,8 @@
       "roughness": {},
       "metalness": {},
       "enabled": true,
-      "index": 43
+      "index": 43,
+      "repeatScale": 6
     },
     "wood3": {
       "type": "solid",
@@ -962,7 +1006,8 @@
         "channel": "b"
       },
       "enabled": true,
-      "index": 44
+      "index": 44,
+      "repeatScale": 3
     },
     "grass3": {
       "type": "solid",
@@ -979,7 +1024,8 @@
         "path": "grass3/ground_0032_roughness_1k.jpg"
       },
       "enabled": true,
-      "index": 45
+      "index": 45,
+      "repeatScale": 2
     },
     "grass4": {
       "type": "solid",
@@ -996,7 +1042,8 @@
         "path": "grass4/Grass001_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 46
+      "index": 46,
+      "repeatScale": 2
     },
     "water": {
       "type": "liquid",
@@ -1030,7 +1077,8 @@
         }
       },
       "enabled": true,
-      "index": 47
+      "index": 47,
+      "repeatScale": 2
     },
     "leaves_trans": {
       "type": "transparent",
@@ -1045,7 +1093,8 @@
         "path": "leaves_trans/ScatteredLeaves007_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 48
+      "index": 48,
+      "repeatScale": 2
     },
     "leaves2_trans": {
       "type": "transparent",
@@ -1060,7 +1109,8 @@
         "path": "leaves2_trans/ScatteredLeaves001_1K-PNG_Roughness.png"
       },
       "enabled": true,
-      "index": 49
+      "index": 49,
+      "repeatScale": 2
     },
     "lava": {
       "type": "liquid",
@@ -1091,7 +1141,8 @@
         }
       },
       "enabled": true,
-      "index": 50
+      "index": 50,
+      "repeatScale": 2
     },
     "leaves_trans_3": {
       "type": "transparent",
@@ -1105,7 +1156,8 @@
       "roughness": {
         "path": "leaves_trans_3/leaves_trans_3_Roughness.png"
       },
-      "index": 51
+      "index": 51,
+      "repeatScale": 4
     }
   }
 }
