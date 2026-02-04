@@ -309,7 +309,8 @@ export const terrainDebugFragment = /* glsl */ `
   
   if (debugMode > 0) {
     if (debugMode == 1) {
-      gl_FragColor = vec4(sampleMaterialBlend(mapArray).rgb, 1.0);
+      // Apply sRGB to linear conversion like normal rendering mode
+      gl_FragColor = vec4(sRGBToLinear(sampleMaterialBlend(mapArray).rgb), 1.0);
     } else if (debugMode == 2) {
       vec3 nSample = sampleMaterialBlend(normalArray).xyz;
       gl_FragColor = vec4(nSample, 1.0);
