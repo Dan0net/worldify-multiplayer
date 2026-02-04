@@ -206,7 +206,9 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
           vec3 baseWaterColor = texColor.rgb * uWaterTint;
           
           // Calculate view direction and animated normal
-          vec3 viewDir = normalize(vWaterViewDir);
+          // Safety: ensure view direction is valid (avoid NaN if camera is at water surface)
+          float viewLen = length(vWaterViewDir);
+          vec3 viewDir = viewLen > 0.001 ? vWaterViewDir / viewLen : vec3(0.0, 1.0, 0.0);
           vec3 animatedNormal = getWaterNormal(vWorldPosition, uWaveTime, normalize(vWorldNormal), normalArray, vMaterialIds.x);
           
           // Apply scatter effect - makes normal variations visible in diffuse color

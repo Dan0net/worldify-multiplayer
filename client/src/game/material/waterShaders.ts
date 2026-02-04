@@ -68,40 +68,62 @@ export const waterNormalPerturbation = /* glsl */ `
     return n.xyz * 2.0 - 1.0;
   }
   
-  // Get animated water normal from 4 scrolling texture layers
-  // Opposing directions cancel out to prevent flow appearance
+  // Get animated water normal from texture layers
+  // Uses paired counter-scrolling layers to create standing waves (no net flow)
   vec3 getWaterNormal(vec3 worldPos, float time, vec3 baseNormal, sampler2DArray normalTex, float layer) {
+    // Safety check: ensure baseNormal is valid (avoid NaN from zero-length normalize)
+    float baseLen = length(baseNormal);
+    if (baseLen < 0.001) {
+      return vec3(0.0, 1.0, 0.0); // Fallback to up
+    }
+    vec3 safeBaseNormal = baseNormal / baseLen;
+    
     // Base UV from world position (XZ plane)
     vec2 baseUV = worldPos.xz;
     float scale = uNormalScale;
     
-    // Layer 0: Fine detail, moving +X +Z
-    vec2 uv0 = baseUV * scale * 0.1 + vec2(time * 0.06, time * 0.035);
-    vec3 n0 = sampleWaterNormal(normalTex, layer, uv0);
+    // ===== PAIRED COUNTER-SCROLLING LAYERS =====
+    // Each pair uses the SAME scale but OPPOSITE scroll directions
+    // This creates standing wave interference patterns with no net flow
     
-    // Layer 1: Fine detail (similar scale), moving +X -Z (opposing Z!)
-    vec2 uv1 = baseUV * scale * 0.095 - vec2(time * -0.05, time * 0.03);
-    vec3 n1 = sampleWaterNormal(normalTex, layer, uv1);
+    // Pair A: Fine ripples (fast, small scale)
+    float fineScale = scale * 0.08;
+    vec2 fineSpeed = vec2(0.045, 0.03);
+    vec2 uvA0 = baseUV * fineScale + fineSpeed * time;      // +X +Z
+    vec2 uvA1 = baseUV * fineScale - fineSpeed * time;      // -X -Z (exact opposite)
+    vec3 nA0 = sampleWaterNormal(normalTex, layer, uvA0);
+    vec3 nA1 = sampleWaterNormal(normalTex, layer, uvA1);
     
-    // Layer 2: Medium detail, moving -X +Z
-    vec2 uv2 = baseUV * scale * 0.01 + vec2(time * 0.01, time * 0.01);
-    vec3 n2 = sampleWaterNormal(normalTex, layer, uv2);
+    // Pair B: Medium waves (slower, larger scale)
+    float medScale = scale * 0.02;
+    vec2 medSpeed = vec2(0.02, 0.015);
+    vec2 uvB0 = baseUV * medScale + medSpeed * time;        // +X +Z
+    vec2 uvB1 = baseUV * medScale - medSpeed * time;        // -X -Z (exact opposite)
+    vec3 nB0 = sampleWaterNormal(normalTex, layer, uvB0);
+    vec3 nB1 = sampleWaterNormal(normalTex, layer, uvB1);
     
-    // Layer 3: Coarse slow-moving, moving -X -Z (fully opposing)
-    vec2 uv3 = baseUV * scale * 0.001 - vec2(time * 0.009, time * -0.008);
-    vec3 n3 = sampleWaterNormal(normalTex, layer, uv3);
+    // Pair C: Cross-pattern (perpendicular to break up regularity)
+    float crossScale = scale * 0.05;
+    vec2 crossSpeed = vec2(0.025, -0.02); // Different X/Z ratio
+    vec2 uvC0 = baseUV * crossScale + crossSpeed * time;    // +X -Z
+    vec2 uvC1 = baseUV * crossScale - crossSpeed * time;    // -X +Z (exact opposite)
+    vec3 nC0 = sampleWaterNormal(normalTex, layer, uvC0);
+    vec3 nC1 = sampleWaterNormal(normalTex, layer, uvC1);
     
-    // Sum and normalize (like Three.js: noise * 0.5 - 1.0 then sum)
-    vec3 blendedNormal = n0 + n1 + n2 + n3;
-    blendedNormal = blendedNormal * 0.5; // Average down
+    // Blend all 6 samples (3 pairs × 2 each)
+    vec3 blendedNormal = (nA0 + nA1 + nB0 + nB1 + nC0 + nC1) / 6.0;
     
     // Apply strength and perturb base normal
-    // Three.js uses: surfaceNormal = normalize(noise.xzy * vec3(1.5, 1.0, 1.5))
-    vec3 perturbedNormal = baseNormal;
+    vec3 perturbedNormal = safeBaseNormal;
     perturbedNormal.x += blendedNormal.x * uNormalStrength;
-    perturbedNormal.z += blendedNormal.y * uNormalStrength; // Swizzle like Three.js
+    perturbedNormal.z += blendedNormal.y * uNormalStrength; // Swizzle XY->XZ
     
-    return normalize(perturbedNormal);
+    // Safety: ensure we don't return a zero-length normal
+    float perturbedLen = length(perturbedNormal);
+    if (perturbedLen < 0.001) {
+      return vec3(0.0, 1.0, 0.0); // Fallback to up
+    }
+    return perturbedNormal / perturbedLen;
   }
 `;
 
@@ -110,7 +132,8 @@ export const waterFresnelEffect = /* glsl */ `
   // Calculate fresnel factor for water
   // Higher values at glancing angles (edges more reflective/opaque)
   float getFresnelFactor(vec3 viewDir, vec3 normal) {
-    float cosTheta = max(dot(viewDir, normal), 0.0);
+    // Clamp to 0-1 range to prevent pow() with negative base (causes NaN)
+    float cosTheta = clamp(dot(viewDir, normal), 0.0, 1.0);
     // Schlick's approximation
     float f0 = 0.02; // Water's reflectivity at normal incidence
     return f0 + (1.0 - f0) * pow(1.0 - cosTheta, uFresnelPower);
@@ -120,7 +143,7 @@ export const waterFresnelEffect = /* glsl */ `
   // Direct approach like Three.js: scatter = dot(normal, viewDir) * waterColor
   vec3 getScatterColor(vec3 viewDir, vec3 normal, vec3 baseColor) {
     // Scatter intensity based on how much surface faces viewer
-    float scatter = max(0.0, dot(normal, viewDir));
+    float scatter = clamp(dot(normal, viewDir), 0.0, 1.0);
     
     // Three.js style: scatter directly multiplies color
     // Higher scatter = brighter, creates visible surface variation
