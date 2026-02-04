@@ -77,6 +77,12 @@ export interface PathwayConfig {
   borderWidth: number;
   /** Border material ID */
   borderMaterial: number;
+  /** Enable water in pathway dips */
+  waterEnabled: boolean;
+  /** Water material ID */
+  waterMaterial: number;
+  /** Water depth in voxels (how deep the water fills the dip, 0 = full dip) */
+  waterDepth: number;
 }
 
 export interface TerrainConfig {
@@ -125,6 +131,9 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   dipDepth: 2,              // Path dips 2 voxels in the middle
   borderWidth: 0.4,         // Dirt border width in meters
   borderMaterial: mat('dirt2'),
+  waterEnabled: true,       // Fill path dips with water
+  waterMaterial: mat('water'),
+  waterDepth: -1,           // Water fills 1 voxel above original terrain (negative = above)
 };
 
 // ============== Default Configuration ==
@@ -615,18 +624,29 @@ export class TerrainGenerator implements HeightSampler {
    * @returns Surface height (voxels) and material ID
    */
   sampleSurface(worldX: number, worldZ: number): { height: number; material: number } {
-    let height = this.sampleHeight(worldX, worldZ);
+    const originalHeight = this.sampleHeight(worldX, worldZ);
+    let height = originalHeight;
     
     // Apply pathway dip
     const isPath = this.isOnPathway(worldX, worldZ);
+    let pathDipAmount = 0;
     if (isPath && this.config.pathwayConfig.dipDepth > 0) {
       const depthFactor = this.getPathwayDepthFactor(worldX, worldZ);
-      height -= this.config.pathwayConfig.dipDepth * depthFactor;
+      pathDipAmount = this.config.pathwayConfig.dipDepth * depthFactor;
+      height -= pathDipAmount;
     }
     
     // Determine surface material
     let material: number;
-    if (isPath) {
+    
+    // Check for water on path first
+    const waterConfig = this.config.pathwayConfig;
+    if (waterConfig.waterEnabled && isPath && pathDipAmount > 0) {
+      // Water fills the dip, so the visible surface is water
+      material = waterConfig.waterMaterial;
+      // Return the water surface height (original height minus water depth)
+      height = originalHeight - waterConfig.waterDepth;
+    } else if (isPath) {
       material = this.getPathwayMaterial(worldX, worldZ);
     } else if (this.isOnPathwayBorder(worldX, worldZ)) {
       material = this.config.pathwayConfig.borderMaterial;
@@ -700,11 +720,23 @@ export class TerrainGenerator implements HeightSampler {
         let isWallColumn = -1; // -1 = not checked, 0 = no, 1 = yes
         let isBorderColumn = -1;
         
+        // Store original terrain height before dip (for water level calculation)
+        const originalTerrainHeight = terrainHeight;
+        
         // Apply gradual dip to terrain height on pathways (deeper in center)
+        let pathDipAmount = 0;
         if (isPathColumn && this.config.pathwayConfig.dipDepth > 0) {
           const depthFactor = this.getPathwayDepthFactor(worldX, worldZ);
-          terrainHeight -= this.config.pathwayConfig.dipDepth * depthFactor;
+          pathDipAmount = this.config.pathwayConfig.dipDepth * depthFactor;
+          terrainHeight -= pathDipAmount;
         }
+        
+        // Calculate water level for this column (if water is enabled)
+        // Water surface is at original terrain height minus waterDepth
+        const waterConfig = this.config.pathwayConfig;
+        const waterLevel = waterConfig.waterEnabled && isPathColumn && pathDipAmount > 0
+          ? originalTerrainHeight - waterConfig.waterDepth
+          : -Infinity;
 
         for (let ly = 0; ly < CHUNK_SIZE; ly++) {
           // Calculate voxel's Y position in world voxel space
@@ -758,6 +790,21 @@ export class TerrainGenerator implements HeightSampler {
               // Make this voxel solid with wall material
               finalWeight = 0.5;
               material = this.config.pathwayConfig.wallMaterial;
+            }
+          }
+          
+          // Fill pathway dips with water
+          // Water fills the space between dipped terrain and water level
+          if (waterLevel > -Infinity && finalWeight < 0.5) {
+            // Only fill voxels that are:
+            // 1. Above the dipped terrain (not already solid ground)
+            // 2. Below or at the water level
+            if (voxelY <= waterLevel && voxelY > terrainHeight) {
+              // Calculate water weight based on distance from water surface
+              const distanceFromWaterSurface = waterLevel - voxelY;
+              const waterWeight = Math.max(-0.5, Math.min(0.5, distanceFromWaterSurface * 0.5));
+              finalWeight = waterWeight;
+              material = waterConfig.waterMaterial;
             }
           }
           
