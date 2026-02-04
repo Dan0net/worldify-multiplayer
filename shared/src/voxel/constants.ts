@@ -80,7 +80,7 @@ export const INITIAL_TERRAIN_HEIGHT = -16;
 export const VISIBILITY_RADIUS = 8;
 
 /** Buffer distance beyond visible before unloading */
-export const VISIBILITY_UNLOAD_BUFFER = 2;
+export const VISIBILITY_UNLOAD_BUFFER = 1;
 
 /**
  * Face indices for visibility graph.

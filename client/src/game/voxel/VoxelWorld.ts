@@ -218,24 +218,36 @@ export class VoxelWorld implements ChunkProvider {
 
   /**
    * Update mesh visibility based on reachable chunks + frustum culling.
-   * This runs every frame to handle camera rotation.
+   * Uses hysteresis: show if reachable OR (loaded AND within extended radius).
+   * This prevents popping when player crosses chunk boundaries.
    */
   private updateMeshVisibilityWithFrustum(reachable: Set<string>, frustum: THREE.Frustum): void {
+    if (!this.lastPlayerChunk) return;
+    
     const box = VoxelWorld.tempBox;
+    const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
+    const visibilityRadius = VISIBILITY_RADIUS + VISIBILITY_UNLOAD_BUFFER;
 
     for (const [key, chunkMesh] of this.meshes) {
-      if (!reachable.has(key)) {
-        chunkMesh.setVisible(false);
-        continue;
-      }
-
-      // Frustum cull reachable chunks
       const chunk = this.chunks.get(key);
       if (!chunk) {
         chunkMesh.setVisible(false);
         continue;
       }
 
+      // Hysteresis: show if reachable OR within extended radius
+      const inReachable = reachable.has(key);
+      const dx = Math.abs(chunk.cx - pcx);
+      const dy = Math.abs(chunk.cy - pcy);
+      const dz = Math.abs(chunk.cz - pcz);
+      const inExtendedRadius = dx <= visibilityRadius && dy <= visibilityRadius && dz <= visibilityRadius;
+
+      if (!inReachable && !inExtendedRadius) {
+        chunkMesh.setVisible(false);
+        continue;
+      }
+
+      // Frustum cull
       const worldX = chunk.cx * CHUNK_WORLD_SIZE;
       const worldY = chunk.cy * CHUNK_WORLD_SIZE;
       const worldZ = chunk.cz * CHUNK_WORLD_SIZE;
