@@ -12,17 +12,20 @@ import {
   MSG_VOXEL_BUILD_COMMIT,
   MSG_VOXEL_CHUNK_DATA,
   MSG_MAP_TILE_DATA,
+  MSG_SURFACE_COLUMN_DATA,
   ByteReader,
   decodeSnapshot,
   decodeVoxelBuildCommit,
   decodeVoxelChunkData,
   decodeMapTileData,
+  decodeSurfaceColumnData,
   RoomSnapshot,
   VoxelBuildCommit,
   VoxelChunkData,
   BuildResult,
   buildResultToString,
   MapTileResponse,
+  SurfaceColumnResponse,
 } from '@worldify/shared';
 import { storeBridge } from '../state/bridge';
 import { registerHandler, dispatch } from './MessageRegistry';
@@ -35,6 +38,7 @@ interface GameEvents {
   buildCommit: VoxelBuildCommit;
   chunkData: VoxelChunkData;
   mapTileData: MapTileResponse;
+  surfaceColumnData: SurfaceColumnResponse;
 }
 
 type EventCallback<T> = (data: T) => void;
@@ -127,6 +131,11 @@ function handleMapTileData(reader: ByteReader): void {
   emit('mapTileData', tileData);
 }
 
+function handleSurfaceColumnData(reader: ByteReader): void {
+  const columnData = decodeSurfaceColumnData(reader);
+  emit('surfaceColumnData', columnData);
+}
+
 // Register all message handlers
 registerHandler(MSG_WELCOME, handleWelcome);
 registerHandler(MSG_ROOM_INFO, handleRoomInfo);
@@ -136,3 +145,4 @@ registerHandler(MSG_PONG, handlePong);
 registerHandler(MSG_VOXEL_BUILD_COMMIT, handleBuildCommit);
 registerHandler(MSG_VOXEL_CHUNK_DATA, handleChunkData);
 registerHandler(MSG_MAP_TILE_DATA, handleMapTileData);
+registerHandler(MSG_SURFACE_COLUMN_DATA, handleSurfaceColumnData);

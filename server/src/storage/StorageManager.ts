@@ -10,6 +10,7 @@ import { MapTileStore } from './MapTileStore.js';
 import { WorldStorage } from './WorldStorage.js';
 import { ChunkProvider } from '../voxel/ChunkProvider.js';
 import { MapTileProvider } from '../voxel/MapTileProvider.js';
+import { SurfaceColumnProvider } from '../voxel/SurfaceColumnProvider.js';
 import { TerrainGenerator } from '@worldify/shared';
 
 /** Global persistent chunk store (shared across all rooms) */
@@ -23,6 +24,9 @@ let globalMapTileStore: MapTileStore | null = null;
 
 /** Global map tile provider */
 let globalMapTileProvider: MapTileProvider | null = null;
+
+/** Global surface column provider */
+let globalSurfaceColumnProvider: SurfaceColumnProvider | null = null;
 
 /** Global terrain generator (shared for map tile generation) */
 let globalTerrainGenerator: TerrainGenerator | null = null;
@@ -43,6 +47,12 @@ export async function initChunkStorage(): Promise<void> {
   globalMapTileProvider = new MapTileProvider(
     globalMapTileStore,
     globalTerrainGenerator
+  );
+  
+  // Initialize surface column provider
+  globalSurfaceColumnProvider = new SurfaceColumnProvider(
+    globalChunkProvider,
+    globalMapTileProvider
   );
   
   console.log('[storage] Chunk and map tile storage initialized');
@@ -98,10 +108,14 @@ export async function clearChunkStorage(): Promise<void> {
   if (globalChunkStore) {
     globalChunkProvider = new ChunkProvider(globalChunkStore, storage.seed);
   }
-  if (globalMapTileStore && globalTerrainGenerator) {
+  if (globalMapTileStore && globalTerrainGenerator && globalChunkProvider && globalMapTileProvider) {
     globalMapTileProvider = new MapTileProvider(
       globalMapTileStore,
       globalTerrainGenerator
+    );
+    globalSurfaceColumnProvider = new SurfaceColumnProvider(
+      globalChunkProvider,
+      globalMapTileProvider
     );
   }
   
@@ -128,6 +142,17 @@ export function getMapTileProvider(): MapTileProvider {
     throw new Error('Chunk storage not initialized. Call initChunkStorage() first.');
   }
   return globalMapTileProvider;
+}
+
+/**
+ * Get the global SurfaceColumnProvider.
+ * @throws Error if storage not initialized
+ */
+export function getSurfaceColumnProvider(): SurfaceColumnProvider {
+  if (!globalSurfaceColumnProvider) {
+    throw new Error('Chunk storage not initialized. Call initChunkStorage() first.');
+  }
+  return globalSurfaceColumnProvider;
 }
 
 /**

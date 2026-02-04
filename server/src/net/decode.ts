@@ -10,12 +10,15 @@ import {
   MSG_VOXEL_BUILD_INTENT,
   MSG_VOXEL_CHUNK_REQUEST,
   MSG_MAP_TILE_REQUEST,
+  MSG_SURFACE_COLUMN_REQUEST,
   ByteReader,
   decodeInput,
   decodeVoxelBuildIntent,
   decodeVoxelChunkRequest,
   decodeMapTileRequest,
+  decodeSurfaceColumnRequest,
   encodeMapTileData,
+  encodeSurfaceColumnData,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
 import { encodePong } from '@worldify/shared';
@@ -25,7 +28,7 @@ import {
   handleChunkRequest, 
   broadcastBuildCommit 
 } from '../rooms/BuildHandler.js';
-import { getMapTileProvider } from '../storage/StorageManager.js';
+import { getMapTileProvider, getSurfaceColumnProvider } from '../storage/StorageManager.js';
 
 /**
  * Decode and dispatch an incoming binary message.
@@ -146,6 +149,28 @@ function handleMapTileRequest(roomId: string, playerId: number, reader: ByteRead
     });
 }
 
+function handleSurfaceColumnRequest(roomId: string, playerId: number, reader: ByteReader): void {
+  const room = roomManager.getRoom(roomId);
+  if (!room) return;
+  
+  const ws = room.connections.get(playerId);
+  if (!ws) return;
+  
+  const request = decodeSurfaceColumnRequest(reader);
+  console.log(`[decode] Surface column request from player ${playerId}: (${request.tx}, ${request.tz})`);
+  
+  // Get surface column (tile + chunks) async
+  getSurfaceColumnProvider().getColumn(request.tx, request.tz)
+    .then(({ tile, chunks }) => {
+      const data = encodeSurfaceColumnData(tile, chunks);
+      ws.send(data);
+      console.log(`[decode] Sent surface column (${request.tx}, ${request.tz}) with ${chunks.length} chunks to player ${playerId}`);
+    })
+    .catch((err) => {
+      console.error('[decode] Error handling surface column request:', err);
+    });
+}
+
 // Register all message handlers
 registerHandler(MSG_JOIN, handleJoin);
 registerHandler(MSG_INPUT, handleInput);
@@ -153,3 +178,4 @@ registerHandler(MSG_PING, handlePing);
 registerHandler(MSG_VOXEL_BUILD_INTENT, handleVoxelBuildIntent);
 registerHandler(MSG_VOXEL_CHUNK_REQUEST, handleVoxelChunkRequest);
 registerHandler(MSG_MAP_TILE_REQUEST, handleMapTileRequest);
+registerHandler(MSG_SURFACE_COLUMN_REQUEST, handleSurfaceColumnRequest);

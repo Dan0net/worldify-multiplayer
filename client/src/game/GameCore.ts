@@ -24,7 +24,7 @@ import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, updateTileFromChunk, createMapTile } from '@worldify/shared';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, updateTileFromChunk, createMapTile } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -171,6 +171,7 @@ export class GameCore {
     on('buildCommit', this.handleBuildCommit);
     on('chunkData', this.handleChunkData);
     on('mapTileData', this.handleMapTileData);
+    on('surfaceColumnData', this.handleSurfaceColumnData);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
@@ -305,6 +306,20 @@ export class GameCore {
   private handleMapTileData = (tileData: MapTileResponse): void => {
     const cache = getMapTileCache();
     cache.receiveTileData(tileData.tx, tileData.tz, tileData.heights, tileData.materials);
+  };
+
+  /**
+   * Handle surface column data from server - contains tile + chunks
+   */
+  private handleSurfaceColumnData = (columnData: SurfaceColumnResponse): void => {
+    // Pass to VoxelWorld with callback to update map tile cache
+    this.voxelIntegration.world.receiveSurfaceColumnData(
+      columnData,
+      (tx, tz, heights, materials) => {
+        const cache = getMapTileCache();
+        cache.receiveTileData(tx, tz, heights, materials);
+      }
+    );
   };
 
   /**

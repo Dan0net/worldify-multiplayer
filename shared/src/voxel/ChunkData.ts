@@ -78,6 +78,9 @@ export class ChunkData {
   /** Unique key for this chunk's coordinates */
   readonly key: string;
 
+  /** Last build sequence number (for versioning) */
+  lastBuildSeq: number = 0;
+
   constructor(cx: number, cy: number, cz: number) {
     this.cx = cx;
     this.cy = cy;

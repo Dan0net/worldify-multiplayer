@@ -14,6 +14,8 @@ import {
   drawToChunk,
   VoxelChunkData,
   encodeVoxelChunkRequest,
+  encodeSurfaceColumnRequest,
+  SurfaceColumnResponse,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk } from './ChunkMesher.js';
@@ -36,6 +38,9 @@ export class VoxelWorld {
 
   /** Chunks pending data from server, keyed by "cx,cy,cz" */
   private pendingChunks: Set<string> = new Set();
+
+  /** Columns pending data from server, keyed by "tx,tz" */
+  private pendingColumns: Set<string> = new Set();
 
   /** Reference to the Three.js scene */
   readonly scene: THREE.Scene;
@@ -169,19 +174,25 @@ export class VoxelWorld {
       this.unloadChunk(key);
     }
 
-    // Load new chunks that are now in range
-    for (let cz = newMinCz; cz <= newMaxCz; cz++) {
-      for (let cy = newMinCy; cy <= newMaxCy; cy++) {
-        for (let cx = newMinCx; cx <= newMaxCx; cx++) {
-          const key = chunkKey(cx, cy, cz);
-          if (!this.chunks.has(key) && !this.pendingChunks.has(key)) {
-            const chunk = this.loadChunk(cx, cy, cz);
-            
-            // Only queue for remesh if chunk was generated locally (not server mode)
-            if (chunk) {
-              this.remeshQueue.add(key);
-              // Also queue neighbors for remesh (for seamless boundaries)
-              this.queueNeighborRemesh(cx, cy, cz);
+    // Load new chunks/columns based on mode
+    if (storeBridge.useServerChunks) {
+      // Server mode: request surface columns (XZ only)
+      this.requestMissingColumns(newMinCx, newMaxCx, newMinCz, newMaxCz, pcy);
+    } else {
+      // Local mode: generate all chunks in 3D volume
+      for (let cz = newMinCz; cz <= newMaxCz; cz++) {
+        for (let cy = newMinCy; cy <= newMaxCy; cy++) {
+          for (let cx = newMinCx; cx <= newMaxCx; cx++) {
+            const key = chunkKey(cx, cy, cz);
+            if (!this.chunks.has(key) && !this.pendingChunks.has(key)) {
+              const chunk = this.loadChunk(cx, cy, cz);
+              
+              // Only queue for remesh if chunk was generated locally (not server mode)
+              if (chunk) {
+                this.remeshQueue.add(key);
+                // Also queue neighbors for remesh (for seamless boundaries)
+                this.queueNeighborRemesh(cx, cy, cz);
+              }
             }
           }
         }
@@ -193,6 +204,51 @@ export class VoxelWorld {
       minCy: newMinCy, maxCy: newMaxCy,
       minCz: newMinCz, maxCz: newMaxCz,
     };
+  }
+
+  /**
+   * Request missing surface columns from server.
+   * Only requests XZ columns, server determines which Y chunks to send.
+   */
+  private requestMissingColumns(
+    minCx: number, maxCx: number,
+    minCz: number, maxCz: number,
+    playerCy: number
+  ): void {
+    for (let cz = minCz; cz <= maxCz; cz++) {
+      for (let cx = minCx; cx <= maxCx; cx++) {
+        const columnKey = `${cx},${cz}`;
+        
+        // Skip if column already pending
+        if (this.pendingColumns.has(columnKey)) continue;
+        
+        // Check if we already have chunks for this column
+        // We need to request if there are any missing chunks near player Y
+        const hasNearbyChunks = this.hasColumnChunksNear(cx, cz, playerCy);
+        if (hasNearbyChunks) continue;
+        
+        // Request surface column
+        this.pendingColumns.add(columnKey);
+        const request = encodeSurfaceColumnRequest({ tx: cx, tz: cz });
+        sendBinary(request);
+        console.log(`[VoxelWorld] Requested surface column (${cx}, ${cz})`);
+      }
+    }
+  }
+
+  /**
+   * Check if we have chunks for a column near the player's Y position.
+   */
+  private hasColumnChunksNear(cx: number, cz: number, playerCy: number): boolean {
+    // Check for chunks in a Y range around player
+    for (let dy = -2; dy <= 2; dy++) {
+      const cy = playerCy + dy;
+      const key = chunkKey(cx, cy, cz);
+      if (this.chunks.has(key)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -273,6 +329,58 @@ export class VoxelWorld {
     this.queueNeighborRemesh(chunkX, chunkY, chunkZ);
     
     // console.log(`[VoxelWorld] Received chunk (${chunkX}, ${chunkY}, ${chunkZ}) seq=${lastBuildSeq}, ${voxelData.length} voxels`);
+  }
+
+  /**
+   * Receive surface column data from the server.
+   * Called by the network layer when surface column data arrives.
+   * Contains a tile + multiple chunks for the column.
+   */
+  receiveSurfaceColumnData(
+    columnData: SurfaceColumnResponse,
+    onTileReceived?: (tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void
+  ): void {
+    const { tx, tz, heights, materials, chunks } = columnData;
+    const columnKey = `${tx},${tz}`;
+    
+    console.log(`[VoxelWorld] Received surface column (${tx}, ${tz}) with ${chunks.length} chunks`);
+    
+    // Remove from pending columns
+    this.pendingColumns.delete(columnKey);
+    
+    // Process tile data (pass to callback for map overlay)
+    if (onTileReceived) {
+      onTileReceived(tx, tz, heights, materials);
+    }
+    
+    // Process each chunk in the column
+    for (const chunkInfo of chunks) {
+      const { chunkY, lastBuildSeq, voxelData } = chunkInfo;
+      const key = chunkKey(tx, chunkY, tz);
+      
+      // Remove from pending chunks if it was there
+      this.pendingChunks.delete(key);
+      
+      // Create or update chunk
+      let chunk = this.chunks.get(key);
+      if (!chunk) {
+        chunk = new Chunk(tx, chunkY, tz);
+        this.chunks.set(key, chunk);
+      }
+      
+      // Copy voxel data
+      chunk.data.set(voxelData);
+      chunk.dirty = true;
+      chunk.lastBuildSeq = lastBuildSeq;
+      
+      // Queue for remeshing
+      this.remeshQueue.add(key);
+    }
+    
+    // Queue neighbor remesh for all chunks in the column
+    for (const chunkInfo of chunks) {
+      this.queueNeighborRemesh(tx, chunkInfo.chunkY, tz);
+    }
   }
 
   /**

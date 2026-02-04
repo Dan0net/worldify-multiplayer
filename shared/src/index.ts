@@ -8,6 +8,7 @@ export * from './protocol/movement.js';
 export * from './protocol/snapshot.js';
 export * from './protocol/buildMessages.js';
 export * from './protocol/mapTileMessages.js';
+export * from './protocol/surfaceColumnMessages.js';
 export * from './protocol/messages.js';
 export * from './util/bytes.js';
 export * from './util/quantize.js';
