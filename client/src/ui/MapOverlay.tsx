@@ -3,10 +3,14 @@
  * 
  * Shows an overhead view of map tiles using the MapRenderer.
  * Can be toggled with 'M' key. Z/X to zoom in/out.
+ * 
+ * Player marker is an SVG element for smooth rotation updates
+ * without canvas re-rendering.
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useGameStore } from '../state/store';
+import { storeBridge } from '../state/bridge';
 import { MapRenderer } from '../game/maptile/MapRenderer';
 import { MapTileCache } from '../game/maptile/MapTileCache';
 import { CHUNK_SIZE, VOXEL_SCALE, STREAM_RADIUS, encodeMapTileRequest } from '@worldify/shared';
@@ -56,14 +60,46 @@ function requestTilesAround(worldX: number, worldZ: number, radius: number): voi
   }
 }
 
+/**
+ * Player marker SVG component.
+ * Uses a ref for rotation updates to avoid React re-renders.
+ */
+function PlayerMarker({ markerRef }: { markerRef: React.RefObject<SVGSVGElement> }) {
+  return (
+    <svg
+      ref={markerRef as React.LegacyRef<SVGSVGElement>}
+      className="absolute pointer-events-none"
+      style={{
+        top: '50%',
+        left: '50%',
+        width: 24,
+        height: 24,
+        marginLeft: -12,
+        marginTop: -12,
+        filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))',
+      }}
+      viewBox="0 0 24 24"
+    >
+      {/* Arrow pointing up (will be rotated) */}
+      <path
+        d="M12 2 L5 18 L12 14 L19 18 Z"
+        fill="#ff4444"
+        stroke="#ffffff"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function MapOverlay() {
   const showMapOverlay = useGameStore((s) => s.showMapOverlay);
   const toggleMapOverlay = useGameStore((s) => s.toggleMapOverlay);
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const markerRef = useRef<SVGSVGElement>(null);
   const animationRef = useRef<number>(0);
-  const playerPosRef = useRef({ x: 0, z: 0, rotation: 0 });
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
 
   // Handle keyboard toggle and zoom
@@ -111,12 +147,14 @@ export function MapOverlay() {
     };
   }, [showMapOverlay, zoomIndex]);
 
-  // Render loop
+  // Render loop - reads from storeBridge, updates canvas and marker rotation
   const render = useCallback(() => {
     if (!showMapOverlay || !mapRenderer) return;
     
     const cache = getMapTileCache();
-    const { x, z, rotation } = playerPosRef.current;
+    
+    // Read player position from storeBridge (updated by GameCore)
+    const { x, z, rotation } = storeBridge.mapPlayerPosition;
     
     // Calculate center tile
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
@@ -127,10 +165,17 @@ export function MapOverlay() {
       requestTilesAround(x, z, STREAM_RADIUS);
     }
     
-    // Update renderer
+    // Update renderer and render tiles
     mapRenderer.setPlayerPosition(x, z);
-    mapRenderer.setPlayerRotation(rotation);
     mapRenderer.render(cache.getAll(), centerTx, centerTz);
+    
+    // Update marker rotation imperatively (no React re-render)
+    if (markerRef.current) {
+      // Convert from game rotation (radians, 0 = +Z) to SVG rotation (degrees, 0 = up)
+      // Negate because game yaw increases counter-clockwise, CSS rotates clockwise
+      const rotationDeg = (-rotation * 180) / Math.PI;
+      markerRef.current.style.transform = `rotate(${rotationDeg}deg)`;
+    }
     
     animationRef.current = requestAnimationFrame(render);
   }, [showMapOverlay, connectionStatus]);
@@ -143,29 +188,18 @@ export function MapOverlay() {
     return () => cancelAnimationFrame(animationRef.current);
   }, [showMapOverlay, render]);
 
-  // Update player position from window (set by game)
-  useEffect(() => {
-    const updatePos = () => {
-      // Read from global if available (set by GameCore)
-      const pos = (window as unknown as { __playerPos?: { x: number; z: number; rotation: number } }).__playerPos;
-      if (pos) {
-        playerPosRef.current = pos;
-      }
-    };
-    
-    const interval = setInterval(updatePos, 100);
-    return () => clearInterval(interval);
-  }, []);
-
   if (!showMapOverlay) return null;
 
   return (
-    <div className="fixed top-5 right-5 z-40">
-      <canvas
-        ref={canvasRef}
-        className="rounded border border-green-500/30 bg-black/80"
-        style={{ imageRendering: 'pixelated' }}
-      />
+    <div className="fixed top-5 right-5 z-40" style={{ position: 'fixed' }}>
+      <div className="relative">
+        <canvas
+          ref={canvasRef}
+          className="rounded border border-green-500/30 bg-black/80"
+          style={{ imageRendering: 'pixelated' }}
+        />
+        <PlayerMarker markerRef={markerRef} />
+      </div>
     </div>
   );
 }

@@ -24,7 +24,18 @@ class StoreBridge {
   // Callback for clearing chunks (set by GameCore)
   private clearChunksCallback: (() => void) | null = null;
 
+  // Map player position (high-frequency, not in Zustand to avoid re-renders)
+  private _mapPlayerPosition = { x: 0, z: 0, rotation: 0 };
+
   // ============== READS (game code reads state here) ==============
+
+  /**
+   * Get current player position for map overlay.
+   * Updated every frame by GameCore, read by MapOverlay.
+   */
+  get mapPlayerPosition(): { x: number; z: number; rotation: number } {
+    return this._mapPlayerPosition;
+  }
 
   get connectionStatus(): ConnectionStatus {
     return getState().connectionStatus;
@@ -80,6 +91,16 @@ class StoreBridge {
   }
 
   // ============== WRITES ==============
+
+  /**
+   * Update player position for map overlay.
+   * Called every frame by GameCore. Does not trigger React re-renders.
+   */
+  updateMapPlayerPosition(x: number, z: number, rotation: number): void {
+    this._mapPlayerPosition.x = x;
+    this._mapPlayerPosition.z = z;
+    this._mapPlayerPosition.rotation = rotation;
+  }
 
   updateConnectionStatus(status: ConnectionStatus): void {
     getState().setConnectionStatus(status);

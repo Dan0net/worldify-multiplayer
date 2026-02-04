@@ -60,10 +60,9 @@ export class MapRenderer {
   private ctx: CanvasRenderingContext2D;
   private config: MapRendererConfig;
   
-  // Player marker
+  // Player position for calculating map scroll offset
   private playerX = 0;
   private playerZ = 0;
-  private playerRotation = 0; // Radians, 0 = north (+Z), clockwise
 
   // Tile image cache (keyed by "tx,tz")
   private tileCache = new Map<string, CachedTile>();
@@ -92,19 +91,11 @@ export class MapRenderer {
   }
 
   /**
-   * Set the player position (for marker rendering).
+   * Set the player position (for map scrolling).
    */
   setPlayerPosition(worldX: number, worldZ: number): void {
     this.playerX = worldX;
     this.playerZ = worldZ;
-  }
-
-  /**
-   * Set the player rotation (for marker direction).
-   * @param rotation - Rotation in radians, 0 = north (+Z), clockwise
-   */
-  setPlayerRotation(rotation: number): void {
-    this.playerRotation = rotation;
   }
 
   /**
@@ -176,9 +167,7 @@ export class MapRenderer {
         }
       }
     }
-
-    // Render player marker (always at center)
-    this.renderPlayerMarker();
+    // Player marker is rendered as SVG overlay by MapOverlay component
   }
 
   /**
@@ -273,49 +262,6 @@ export class MapRenderer {
     }
     
     return imageData;
-  }
-
-  /**
-   * Render player position marker at center with rotation.
-   */
-  private renderPlayerMarker(): void {
-    const centerX = this.canvas.width / 2;
-    const centerZ = this.canvas.height / 2;
-    
-    // Save context state for rotation
-    this.ctx.save();
-    this.ctx.translate(centerX, centerZ);
-    this.ctx.rotate(this.playerRotation);
-    
-    // Draw player marker (larger triangle pointing in rotation direction)
-    const size = 12;
-    
-    // Outer glow/shadow for visibility
-    this.ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-    this.ctx.shadowBlur = 4;
-    this.ctx.shadowOffsetX = 0;
-    this.ctx.shadowOffsetY = 0;
-    
-    // Fill triangle
-    this.ctx.fillStyle = '#ff4444';
-    this.ctx.beginPath();
-    this.ctx.moveTo(0, -size);           // Tip (forward)
-    this.ctx.lineTo(-size * 0.7, size * 0.7);  // Bottom left
-    this.ctx.lineTo(0, size * 0.3);      // Notch
-    this.ctx.lineTo(size * 0.7, size * 0.7);   // Bottom right
-    this.ctx.closePath();
-    this.ctx.fill();
-    
-    // Reset shadow for outline
-    this.ctx.shadowBlur = 0;
-    
-    // White outline for contrast
-    this.ctx.strokeStyle = '#ffffff';
-    this.ctx.lineWidth = 2;
-    this.ctx.stroke();
-    
-    // Restore context
-    this.ctx.restore();
   }
 
   /**

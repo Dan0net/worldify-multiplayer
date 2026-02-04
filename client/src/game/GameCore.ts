@@ -34,13 +34,6 @@ import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime } from './material';
 import { getMapTileCache } from '../ui/MapOverlay';
 
-// Expose player position for map overlay
-declare global {
-  interface Window {
-    __playerPos?: { x: number; z: number; rotation: number };
-  }
-}
-
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
 
@@ -478,8 +471,8 @@ export class GameCore {
       this.builder.update(camera);
     }
 
-    // Expose player position for map overlay
-    window.__playerPos = { x: localPlayer.position.x, z: localPlayer.position.z, rotation: localPlayer.yaw };
+    // Update player position for map overlay (via storeBridge, not window global)
+    storeBridge.updateMapPlayerPosition(localPlayer.position.x, localPlayer.position.z, localPlayer.yaw);
   }
 
   private onResize = (): void => {
