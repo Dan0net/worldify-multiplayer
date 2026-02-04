@@ -8,7 +8,6 @@ import {
   VISIBILITY_UNLOAD_BUFFER,
   worldToChunk,
   chunkKey,
-  TerrainGenerator,
   BuildOperation,
   getAffectedChunks,
   drawToChunk,
@@ -58,13 +57,6 @@ export class VoxelWorld implements ChunkProvider {
   /** Whether initial surface column has been requested */
   private initialColumnRequested = false;
 
-  /** Loaded bounds for stats */
-  private loadedBounds = {
-    minCx: 0, maxCx: 0,
-    minCy: 0, maxCy: 0,
-    minCz: 0, maxCz: 0,
-  };
-
   /** Last player chunk position (for detecting chunk changes) */
   private lastPlayerChunk: { cx: number; cy: number; cz: number } | null = null;
 
@@ -74,48 +66,16 @@ export class VoxelWorld implements ChunkProvider {
   /** Whether the world has been initialized */
   private initialized = false;
 
-  /** Terrain generator for procedural chunk generation (fallback for offline mode) */
-  private readonly terrainGenerator: TerrainGenerator;
-
-  constructor(scene: THREE.Scene, seed: number = 12345) {
+  constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.terrainGenerator = new TerrainGenerator({ seed });
   }
 
   /**
    * Initialize the world.
-   * If server chunks are enabled (via store), just marks as initialized (chunks come from server).
-   * Otherwise, generates initial chunks locally around origin.
+   * Marks as initialized - chunks come from server.
    */
   init(): void {
     if (this.initialized) return;
-
-    // If using server chunks, don't generate locally - wait for server data
-    if (storeBridge.useServerChunks) {
-      // console.log('[VoxelWorld] Waiting for server chunks...');
-      this.initialized = true;
-      return;
-    }
-
-    // Local mode: Generate initial chunks centered at origin
-    const halfRadius = Math.floor(VISIBILITY_RADIUS / 2);
-
-    for (let cz = -halfRadius; cz < halfRadius; cz++) {
-      for (let cy = -halfRadius; cy < halfRadius; cy++) {
-        for (let cx = -halfRadius; cx < halfRadius; cx++) {
-          const key = chunkKey(cx, cy, cz);
-          if (!this.chunks.has(key)) {
-            const chunk = this.generateChunk(cx, cy, cz);
-            this.chunks.set(key, chunk);
-            this.remeshQueue.add(key);
-          }
-        }
-      }
-    }
-
-    // Mesh all chunks (after all are loaded for neighbor access)
-    this.remeshAllDirty();
-
     this.initialized = true;
   }
 
@@ -152,13 +112,8 @@ export class VoxelWorld implements ChunkProvider {
     const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
     this.lastPlayerChunk = { ...playerChunk };
 
-    if (storeBridge.useServerChunks) {
-      // Server mode: use visibility-based loading
-      this.updateWithVisibility(playerChunk);
-    } else {
-      // Local mode: simple distance-based loading (for offline/testing)
-      this.updateLocalMode(playerChunk);
-    }
+    // Use visibility-based loading
+    this.updateWithVisibility(playerChunk);
 
     // Process some remesh queue items per frame
     this.processRemeshQueue(4); // Limit to 4 remeshes per frame
@@ -271,48 +226,6 @@ export class VoxelWorld implements ChunkProvider {
       }
     }
     
-    for (const key of chunksToUnload) {
-      this.unloadChunk(key);
-    }
-  }
-
-  /**
-   * Update in local/offline mode (simple distance-based).
-   */
-  private updateLocalMode(playerChunk: { cx: number; cy: number; cz: number }): void {
-    const { cx: pcx, cy: pcy, cz: pcz } = playerChunk;
-    const radius = Math.floor(VISIBILITY_RADIUS / 2);
-    
-    // Generate chunks within radius
-    for (let dz = -radius; dz <= radius; dz++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-          const cx = pcx + dx;
-          const cy = pcy + dy;
-          const cz = pcz + dz;
-          const key = chunkKey(cx, cy, cz);
-          
-          if (!this.chunks.has(key)) {
-            const chunk = this.generateChunk(cx, cy, cz);
-            this.chunks.set(key, chunk);
-            this.remeshQueue.add(key);
-          }
-        }
-      }
-    }
-    
-    // Unload distant chunks
-    const unloadRadius = radius + VISIBILITY_UNLOAD_BUFFER;
-    const chunksToUnload: string[] = [];
-    for (const [key, chunk] of this.chunks) {
-      const dx = Math.abs(chunk.cx - pcx);
-      const dy = Math.abs(chunk.cy - pcy);
-      const dz = Math.abs(chunk.cz - pcz);
-      
-      if (dx > unloadRadius || dy > unloadRadius || dz > unloadRadius) {
-        chunksToUnload.push(key);
-      }
-    }
     for (const key of chunksToUnload) {
       this.unloadChunk(key);
     }
@@ -432,29 +345,6 @@ export class VoxelWorld implements ChunkProvider {
 
     // Remove chunk
     this.chunks.delete(key);
-  }
-
-  /**
-   * Generate a new chunk with terrain data using procedural generation.
-   */
-  generateChunk(cx: number, cy: number, cz: number): Chunk {
-    const chunk = new Chunk(cx, cy, cz);
-    // Generate terrain using the terrain generator
-    const generatedData = this.terrainGenerator.generateChunk(cx, cy, cz);
-    chunk.data.set(generatedData);
-    chunk.dirty = true;
-
-    // Debug: count solid voxels (material > 0)
-    let solidCount = 0;
-    for (let i = 0; i < generatedData.length; i++) {
-      // Material is bits 5-11 (see shared/src/voxel/constants.ts)
-      const material = (generatedData[i] >> 5) & 0x7F;
-      if (material > 0) solidCount++;
-    }
-    // eslint-disable-next-line no-console
-    // console.log(`Chunk [${cx},${cy},${cz}] solid voxels: ${solidCount}`);
-
-    return chunk;
   }
 
   /** Neighbor offsets for 6 face-adjacent chunks */
@@ -602,13 +492,11 @@ export class VoxelWorld implements ChunkProvider {
     chunksLoaded: number;
     meshesVisible: number;
     remeshQueueSize: number;
-    bounds: { minCx: number; maxCx: number; minCy: number; maxCy: number; minCz: number; maxCz: number };
   } {
     return {
       chunksLoaded: this.chunks.size,
       meshesVisible: this.getMeshCount(),
       remeshQueueSize: this.remeshQueue.size,
-      bounds: { ...this.loadedBounds },
     };
   }
 
