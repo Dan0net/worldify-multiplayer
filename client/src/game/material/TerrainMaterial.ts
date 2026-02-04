@@ -11,6 +11,7 @@ import {
   MATERIAL_METALNESS_MULTIPLIER,
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
+  MATERIAL_REPEAT_SCALES,
 } from '@worldify/shared';
 import { useGameStore } from '../../state/store';
 import { textureCache } from './TextureCache.js';
@@ -218,6 +219,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.roughnessArray = { value: this.textures?.roughness };
       shader.uniforms.metalnessArray = { value: this.textures?.metalness };
       shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
+      shader.uniforms.repeatScales = { value: MATERIAL_REPEAT_SCALES };
       shader.uniforms.blendOffset = { value: createBlendOffsetMatrix() };
       shader.uniforms.debugMode = { value: 0 };
       
@@ -391,6 +393,7 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
 
       shader.uniforms.mapArray = { value: this.textures?.albedo };
       shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
+      shader.uniforms.repeatScales = { value: MATERIAL_REPEAT_SCALES };
       shader.uniforms.blendOffset = { value: createBlendOffsetMatrix() };
       shader.uniforms.alphaCutoff = { value: ALPHA_CUTOFF };
       shader.uniforms.blendSharpness = { value: 2.0 };

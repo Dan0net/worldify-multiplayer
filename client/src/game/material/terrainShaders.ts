@@ -134,6 +134,7 @@ export const terrainFragmentPrefix = /* glsl */ `
   uniform sampler2DArray roughnessArray;
   uniform sampler2DArray metalnessArray;
   uniform float repeatScale;
+  uniform float repeatScales[64];
   uniform mat3 blendOffset;
   uniform int debugMode;
   
@@ -152,10 +153,22 @@ export const terrainFragmentPrefix = /* glsl */ `
   vec2 gTriUV_zy;
   vec2 gTriUV_xz;
   vec2 gTriUV_xy;
+  // Per-material UVs for tri-planar sampling
+  vec2 gTriUV_zy_m0, gTriUV_zy_m1, gTriUV_zy_m2;
+  vec2 gTriUV_xz_m0, gTriUV_xz_m1, gTriUV_xz_m2;
+  vec2 gTriUV_xy_m0, gTriUV_xy_m1, gTriUV_xy_m2;
   
   ${blendingFunctions}
   
-  // Convenience wrappers using precomputed globals
+  // Sample tri-planar with per-material repeat scale
+  vec4 sampleTriPlanarMat(sampler2DArray tex, float layer, vec2 uv_zy, vec2 uv_xz, vec2 uv_xy) {
+    vec4 xaxis = texture(tex, vec3(uv_zy, layer));
+    vec4 yaxis = texture(tex, vec3(uv_xz, layer));
+    vec4 zaxis = texture(tex, vec3(uv_xy, layer));
+    return xaxis * gTriBlend.x + yaxis * gTriBlend.y + zaxis * gTriBlend.z;
+  }
+  
+  // Convenience wrappers using precomputed globals (for backward compatibility)
   vec4 sampleTriPlanar(sampler2DArray tex, float layer) {
     vec4 xaxis = texture(tex, vec3(gTriUV_zy, layer));
     vec4 yaxis = texture(tex, vec3(gTriUV_xz, layer));
@@ -164,9 +177,9 @@ export const terrainFragmentPrefix = /* glsl */ `
   }
   
   vec4 sampleMaterialBlend(sampler2DArray tex) {
-    vec4 m0 = sampleTriPlanar(tex, vMaterialIds.x);
-    vec4 m1 = sampleTriPlanar(tex, vMaterialIds.y);
-    vec4 m2 = sampleTriPlanar(tex, vMaterialIds.z);
+    vec4 m0 = sampleTriPlanarMat(tex, vMaterialIds.x, gTriUV_zy_m0, gTriUV_xz_m0, gTriUV_xy_m0);
+    vec4 m1 = sampleTriPlanarMat(tex, vMaterialIds.y, gTriUV_zy_m1, gTriUV_xz_m1, gTriUV_xy_m1);
+    vec4 m2 = sampleTriPlanarMat(tex, vMaterialIds.z, gTriUV_zy_m2, gTriUV_xz_m2, gTriUV_xy_m2);
     return m0 * gMatBlend.x + m1 * gMatBlend.y + m2 * gMatBlend.z;
   }
   
@@ -183,9 +196,29 @@ export const terrainDiffuseFragment = /* glsl */ `
   vec3 triPos = vWorldPosition / 8.0;
   gTriBlend = calcTriPlanarBlend(vWorldNormal, blendOffset);
   gMatBlend = calcMaterialBlend(vMaterialWeights);
+  
+  // Global UVs with default repeat scale (for backward compatibility)
   gTriUV_zy = triPos.zy * repeatScale;
   gTriUV_xz = triPos.xz * repeatScale;
   gTriUV_xy = triPos.xy * repeatScale;
+  
+  // Per-material UVs with individual repeat scales
+  int m0 = int(vMaterialIds.x);
+  int m1 = int(vMaterialIds.y);
+  int m2 = int(vMaterialIds.z);
+  float scale0 = repeatScales[m0];
+  float scale1 = repeatScales[m1];
+  float scale2 = repeatScales[m2];
+  
+  gTriUV_zy_m0 = triPos.zy * scale0;
+  gTriUV_xz_m0 = triPos.xz * scale0;
+  gTriUV_xy_m0 = triPos.xy * scale0;
+  gTriUV_zy_m1 = triPos.zy * scale1;
+  gTriUV_xz_m1 = triPos.xz * scale1;
+  gTriUV_xy_m1 = triPos.xy * scale1;
+  gTriUV_zy_m2 = triPos.zy * scale2;
+  gTriUV_xz_m2 = triPos.xz * scale2;
+  gTriUV_xy_m2 = triPos.xy * scale2;
   
   vec4 sampledAlbedo = sampleMaterialBlend(mapArray);
   // Convert albedo from sRGB to linear color space for correct PBR lighting
@@ -229,17 +262,39 @@ export const terrainAoFragment = /* glsl */ `
 
 export const terrainNormalFragment = /* glsl */ `
   #ifdef USE_NORMALMAP
-    vec3 normalSampleX = sampleAxisMaterialBlend(normalArray, gTriUV_zy).xyz * 2.0 - 1.0;
+    // Sample normals per-axis, per-material with individual repeat scales
+    // Material 0
+    vec3 normalSampleX_m0 = texture(normalArray, vec3(gTriUV_zy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+    vec3 normalSampleY_m0 = texture(normalArray, vec3(gTriUV_xz_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+    vec3 normalSampleZ_m0 = texture(normalArray, vec3(gTriUV_xy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+    // Material 1
+    vec3 normalSampleX_m1 = texture(normalArray, vec3(gTriUV_zy_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
+    vec3 normalSampleY_m1 = texture(normalArray, vec3(gTriUV_xz_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
+    vec3 normalSampleZ_m1 = texture(normalArray, vec3(gTriUV_xy_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
+    // Material 2
+    vec3 normalSampleX_m2 = texture(normalArray, vec3(gTriUV_zy_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
+    vec3 normalSampleY_m2 = texture(normalArray, vec3(gTriUV_xz_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
+    vec3 normalSampleZ_m2 = texture(normalArray, vec3(gTriUV_xy_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
+    
+    // Blend materials per-axis
+    vec3 normalSampleX = normalSampleX_m0 * gMatBlend.x + normalSampleX_m1 * gMatBlend.y + normalSampleX_m2 * gMatBlend.z;
+    vec3 normalSampleY = normalSampleY_m0 * gMatBlend.x + normalSampleY_m1 * gMatBlend.y + normalSampleY_m2 * gMatBlend.z;
+    vec3 normalSampleZ = normalSampleZ_m0 * gMatBlend.x + normalSampleZ_m1 * gMatBlend.y + normalSampleZ_m2 * gMatBlend.z;
+    
     normalSampleX.xy *= normalScale * normalStrength;
-    vec3 normalSampleY = sampleAxisMaterialBlend(normalArray, gTriUV_xz).xyz * 2.0 - 1.0;
     normalSampleY.xy *= normalScale * normalStrength;
-    vec3 normalSampleZ = sampleAxisMaterialBlend(normalArray, gTriUV_xy).xyz * 2.0 - 1.0;
     normalSampleZ.xy *= normalScale * normalStrength;
     
     vec3 geomNormal = normalize(vNormal);
-    mat3 tbnX = getTangentFrame(-vViewPosition, geomNormal, gTriUV_zy);
-    mat3 tbnY = getTangentFrame(-vViewPosition, geomNormal, gTriUV_xz);
-    mat3 tbnZ = getTangentFrame(-vViewPosition, geomNormal, gTriUV_xy);
+    
+    // Use blended UVs for TBN (average of per-material UVs weighted by material blend)
+    vec2 blendedUV_zy = gTriUV_zy_m0 * gMatBlend.x + gTriUV_zy_m1 * gMatBlend.y + gTriUV_zy_m2 * gMatBlend.z;
+    vec2 blendedUV_xz = gTriUV_xz_m0 * gMatBlend.x + gTriUV_xz_m1 * gMatBlend.y + gTriUV_xz_m2 * gMatBlend.z;
+    vec2 blendedUV_xy = gTriUV_xy_m0 * gMatBlend.x + gTriUV_xy_m1 * gMatBlend.y + gTriUV_xy_m2 * gMatBlend.z;
+    
+    mat3 tbnX = getTangentFrame(-vViewPosition, geomNormal, blendedUV_zy);
+    mat3 tbnY = getTangentFrame(-vViewPosition, geomNormal, blendedUV_xz);
+    mat3 tbnZ = getTangentFrame(-vViewPosition, geomNormal, blendedUV_xy);
     
     vec3 normalX = normalize(tbnX * normalSampleX);
     vec3 normalY = normalize(tbnY * normalSampleY);
@@ -313,6 +368,7 @@ export const depthVertexSuffix = /* glsl */ `
 export const depthFragmentPrefix = /* glsl */ `
   uniform sampler2DArray mapArray;
   uniform float repeatScale;
+  uniform float repeatScales[64];
   uniform mat3 blendOffset;
   uniform float alphaCutoff;
   uniform float blendSharpness;
@@ -326,7 +382,20 @@ export const depthAlphaDiscard = /* glsl */ `
   vec3 pos = vWorldPosition / 8.0;
   vec3 triBlend = calcTriPlanarBlend(vWorldNormal, blendOffset);
   vec3 matBlend = calcMaterialBlend(vMaterialWeights);
-  float alpha = sampleMaterialBlendAt(mapArray, pos, triBlend, matBlend, vMaterialIds, repeatScale).a;
+  
+  // Sample alpha with per-material repeat scales
+  int m0 = int(vMaterialIds.x);
+  int m1 = int(vMaterialIds.y);
+  int m2 = int(vMaterialIds.z);
+  float scale0 = repeatScales[m0];
+  float scale1 = repeatScales[m1];
+  float scale2 = repeatScales[m2];
+  
+  vec4 a0 = sampleTriPlanarAt(mapArray, pos, triBlend, scale0, vMaterialIds.x);
+  vec4 a1 = sampleTriPlanarAt(mapArray, pos, triBlend, scale1, vMaterialIds.y);
+  vec4 a2 = sampleTriPlanarAt(mapArray, pos, triBlend, scale2, vMaterialIds.z);
+  float alpha = (a0.a * matBlend.x + a1.a * matBlend.y + a2.a * matBlend.z);
+  
   if (alpha < alphaCutoff) {
     discard;
   }

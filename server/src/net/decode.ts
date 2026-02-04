@@ -9,10 +9,13 @@ import {
   MSG_PING,
   MSG_VOXEL_BUILD_INTENT,
   MSG_VOXEL_CHUNK_REQUEST,
+  MSG_MAP_TILE_REQUEST,
   ByteReader,
   decodeInput,
   decodeVoxelBuildIntent,
   decodeVoxelChunkRequest,
+  decodeMapTileRequest,
+  encodeMapTileData,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
 import { encodePong } from '@worldify/shared';
@@ -22,6 +25,7 @@ import {
   handleChunkRequest, 
   broadcastBuildCommit 
 } from '../rooms/BuildHandler.js';
+import { getMapTileProvider } from '../storage/StorageManager.js';
 
 /**
  * Decode and dispatch an incoming binary message.
@@ -120,9 +124,32 @@ function handleVoxelChunkRequest(roomId: string, playerId: number, reader: ByteR
   });
 }
 
+function handleMapTileRequest(roomId: string, playerId: number, reader: ByteReader): void {
+  const room = roomManager.getRoom(roomId);
+  if (!room) return;
+  
+  const ws = room.connections.get(playerId);
+  if (!ws) return;
+  
+  const request = decodeMapTileRequest(reader);
+  console.log(`[decode] Map tile request from player ${playerId}: (${request.tx}, ${request.tz})`);
+  
+  // Get or generate tile async
+  getMapTileProvider().getOrCreateAsync(request.tx, request.tz)
+    .then((tile) => {
+      const data = encodeMapTileData(tile);
+      ws.send(data);
+      console.log(`[decode] Sent map tile (${request.tx}, ${request.tz}) to player ${playerId}`);
+    })
+    .catch((err) => {
+      console.error('[decode] Error handling map tile request:', err);
+    });
+}
+
 // Register all message handlers
 registerHandler(MSG_JOIN, handleJoin);
 registerHandler(MSG_INPUT, handleInput);
 registerHandler(MSG_PING, handlePing);
 registerHandler(MSG_VOXEL_BUILD_INTENT, handleVoxelBuildIntent);
 registerHandler(MSG_VOXEL_CHUNK_REQUEST, handleVoxelChunkRequest);
+registerHandler(MSG_MAP_TILE_REQUEST, handleMapTileRequest);

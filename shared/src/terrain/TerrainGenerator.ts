@@ -608,6 +608,37 @@ export class TerrainGenerator implements HeightSampler {
   }
 
   /**
+   * Sample terrain surface at a world position (height + material)
+   * Used for map tile generation without creating full chunks.
+   * @param worldX - World X coordinate in meters
+   * @param worldZ - World Z coordinate in meters
+   * @returns Surface height (voxels) and material ID
+   */
+  sampleSurface(worldX: number, worldZ: number): { height: number; material: number } {
+    let height = this.sampleHeight(worldX, worldZ);
+    
+    // Apply pathway dip
+    const isPath = this.isOnPathway(worldX, worldZ);
+    if (isPath && this.config.pathwayConfig.dipDepth > 0) {
+      const depthFactor = this.getPathwayDepthFactor(worldX, worldZ);
+      height -= this.config.pathwayConfig.dipDepth * depthFactor;
+    }
+    
+    // Determine surface material
+    let material: number;
+    if (isPath) {
+      material = this.getPathwayMaterial(worldX, worldZ);
+    } else if (this.isOnPathwayBorder(worldX, worldZ)) {
+      material = this.config.pathwayConfig.borderMaterial;
+    } else {
+      // Surface material (depth 0)
+      material = this.getMaterialAtDepth(0);
+    }
+    
+    return { height: Math.floor(height), material };
+  }
+
+  /**
    * Get material ID based on depth from surface
    * @param depthFromSurface - Depth in voxels (positive = inside terrain)
    * @returns Material ID

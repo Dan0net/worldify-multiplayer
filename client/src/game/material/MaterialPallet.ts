@@ -35,6 +35,7 @@ export interface MaterialPallet {
     transparent: number[];
   };
   colors: string[];
+  repeatScales: number[];
 }
 
 // Cast the imported data to our interface

@@ -278,6 +278,10 @@ export interface GameState {
   
   // Debug panel section collapse state
   debugPanelSections: DebugPanelSections;
+  
+  // Map overlay
+  showMapOverlay: boolean;
+  mapTileCount: number;
 
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -327,6 +331,10 @@ export interface GameState {
   
   // Debug panel actions
   toggleDebugSection: (section: keyof DebugPanelSections) => void;
+  
+  // Map overlay actions
+  toggleMapOverlay: () => void;
+  setMapTileCount: (count: number) => void;
 }
 
 // Persist store across HMR to prevent React/game code store instance mismatch
@@ -398,6 +406,10 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     dayNightCycle: false,
     environment: false,
   },
+  
+  // Map overlay initial state
+  showMapOverlay: false,
+  mapTileCount: 0,
 
   // Actions
   setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -489,6 +501,12 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
       [section]: !state.debugPanelSections[section],
     },
   })),
+  
+  // Map overlay actions
+  toggleMapOverlay: () => set((state) => ({
+    showMapOverlay: !state.showMapOverlay,
+  })),
+  setMapTileCount: (count) => set({ mapTileCount: count }),
 }));
 
 // Store the instance on window for HMR persistence

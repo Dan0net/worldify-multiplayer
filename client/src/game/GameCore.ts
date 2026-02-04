@@ -24,7 +24,7 @@ import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult } from '@worldify/shared';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -32,6 +32,14 @@ import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime } from './material';
+import { getMapTileCache } from '../ui/MapOverlay';
+
+// Expose player position for map overlay
+declare global {
+  interface Window {
+    __playerPos?: { x: number; z: number };
+  }
+}
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -169,6 +177,7 @@ export class GameCore {
     on('snapshot', this.handleSnapshot);
     on('buildCommit', this.handleBuildCommit);
     on('chunkData', this.handleChunkData);
+    on('mapTileData', this.handleMapTileData);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
@@ -247,6 +256,14 @@ export class GameCore {
     
     // Apply chunk data to voxel world
     this.voxelIntegration.world.receiveChunkData(chunkData);
+  };
+
+  /**
+   * Handle map tile data from server - store in cache
+   */
+  private handleMapTileData = (tileData: MapTileResponse): void => {
+    const cache = getMapTileCache();
+    cache.receiveTileData(tileData.tx, tileData.tz, tileData.heights, tileData.materials);
   };
 
   /**
@@ -412,6 +429,9 @@ export class GameCore {
       updateCameraFromPlayer(camera, localPlayer);
       this.builder.update(camera);
     }
+
+    // Expose player position for map overlay
+    window.__playerPos = { x: localPlayer.position.x, z: localPlayer.position.z };
   }
 
   private onResize = (): void => {

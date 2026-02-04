@@ -3,6 +3,7 @@ import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
 import { BuildToolbar } from './ui/BuildToolbar';
+import { MapOverlay } from './ui/MapOverlay';
 import { useGameStore } from './state/store';
 import { createGame } from './game/createGame';
 
@@ -26,6 +27,7 @@ function App() {
           <Hud />
           <BuildToolbar />
           <DebugPanel />
+          <MapOverlay />
         </>
       )}
     </>

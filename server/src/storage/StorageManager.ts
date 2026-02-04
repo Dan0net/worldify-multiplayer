@@ -6,14 +6,26 @@
  */
 
 import { PersistentChunkStore } from './PersistentChunkStore.js';
+import { MapTileStore } from './MapTileStore.js';
 import { WorldStorage } from './WorldStorage.js';
 import { ChunkProvider } from '../voxel/ChunkProvider.js';
+import { MapTileProvider } from '../voxel/MapTileProvider.js';
+import { TerrainGenerator } from '@worldify/shared';
 
 /** Global persistent chunk store (shared across all rooms) */
 let globalChunkStore: PersistentChunkStore | null = null;
 
 /** Global chunk provider (shared across all rooms - uses global store) */
 let globalChunkProvider: ChunkProvider | null = null;
+
+/** Global map tile store */
+let globalMapTileStore: MapTileStore | null = null;
+
+/** Global map tile provider */
+let globalMapTileProvider: MapTileProvider | null = null;
+
+/** Global terrain generator (shared for map tile generation) */
+let globalTerrainGenerator: TerrainGenerator | null = null;
 
 /**
  * Initialize the global chunk storage. Must be called before handling any builds.
@@ -25,7 +37,15 @@ export async function initChunkStorage(): Promise<void> {
   globalChunkStore = new PersistentChunkStore(storage);
   globalChunkProvider = new ChunkProvider(globalChunkStore, storage.seed);
   
-  console.log('[storage] Chunk storage initialized');
+  // Initialize map tile system
+  globalTerrainGenerator = new TerrainGenerator({ seed: storage.seed });
+  globalMapTileStore = new MapTileStore(storage);
+  globalMapTileProvider = new MapTileProvider(
+    globalMapTileStore,
+    globalTerrainGenerator
+  );
+  
+  console.log('[storage] Chunk and map tile storage initialized');
 }
 
 /**
@@ -35,6 +55,9 @@ export async function flushChunkStorage(): Promise<void> {
   if (globalChunkStore) {
     await globalChunkStore.flush();
   }
+  if (globalMapTileStore) {
+    await globalMapTileStore.flush();
+  }
 }
 
 /**
@@ -43,6 +66,9 @@ export async function flushChunkStorage(): Promise<void> {
 export async function shutdownChunkStorage(): Promise<void> {
   if (globalChunkStore) {
     await globalChunkStore.flush();
+  }
+  if (globalMapTileStore) {
+    await globalMapTileStore.flush();
   }
   const storage = WorldStorage.getInstance();
   await storage.close();
@@ -59,14 +85,24 @@ export async function clearChunkStorage(): Promise<void> {
   // Clear the database
   await storage.clear();
   
-  // Clear in-memory cache if store exists
+  // Clear in-memory caches
   if (globalChunkStore) {
     globalChunkStore.clearCache();
   }
+  if (globalMapTileStore) {
+    globalMapTileStore.clearCache();
+  }
   
-  // Update chunk provider with new seed
-  if (globalChunkProvider) {
-    globalChunkProvider = new ChunkProvider(globalChunkStore!, storage.seed);
+  // Reinitialize providers with new seed
+  globalTerrainGenerator = new TerrainGenerator({ seed: storage.seed });
+  if (globalChunkStore) {
+    globalChunkProvider = new ChunkProvider(globalChunkStore, storage.seed);
+  }
+  if (globalMapTileStore && globalTerrainGenerator) {
+    globalMapTileProvider = new MapTileProvider(
+      globalMapTileStore,
+      globalTerrainGenerator
+    );
   }
   
   console.log('[storage] Chunk storage cleared and reinitialized');
@@ -81,6 +117,17 @@ export function getChunkProvider(): ChunkProvider {
     throw new Error('Chunk storage not initialized. Call initChunkStorage() first.');
   }
   return globalChunkProvider;
+}
+
+/**
+ * Get the global MapTileProvider.
+ * @throws Error if storage not initialized
+ */
+export function getMapTileProvider(): MapTileProvider {
+  if (!globalMapTileProvider) {
+    throw new Error('Chunk storage not initialized. Call initChunkStorage() first.');
+  }
+  return globalMapTileProvider;
 }
 
 /**

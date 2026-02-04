@@ -7,6 +7,7 @@ export * from './protocol/gameMode.js';
 export * from './protocol/movement.js';
 export * from './protocol/snapshot.js';
 export * from './protocol/buildMessages.js';
+export * from './protocol/mapTileMessages.js';
 export * from './protocol/messages.js';
 export * from './util/bytes.js';
 export * from './util/quantize.js';
@@ -26,6 +27,9 @@ export * from './voxel/buildTypes.js';
 export * from './voxel/buildPresets.js';
 export * from './voxel/shapes.js';
 export * from './voxel/drawing.js';
+
+// Map tiles
+export * from './maptile/index.js';
 
 // Terrain generation
 export * from './terrain/index.js';
