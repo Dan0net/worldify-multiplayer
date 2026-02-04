@@ -240,6 +240,15 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
           float roughnessFactor = 0.15;
         `
       );
+      
+      // Override metalness to 0 - water is a dielectric, not metallic
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <metalnessmap_fragment>',
+        /* glsl */ `
+          // Water is non-metallic (dielectric)
+          float metalnessFactor = 0.0;
+        `
+      );
     };
   }
   

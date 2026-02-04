@@ -58,40 +58,48 @@ export const waterVertexDisplacement = /* glsl */ `
 // ============== Fragment Shader - Texture-Based Animated Normals ==============
 
 /**
- * Sample water normal from texture at 3 scrolling UV layers
- * Similar to Three.js Water shader approach for realistic detail
+ * Sample water normal from texture at 4 scrolling UV layers
+ * Uses opposing scroll directions to create standing wave patterns (no flow direction)
  */
 export const waterNormalPerturbation = /* glsl */ `
-  // Sample normal texture at scrolling UV with tri-planar projection
-  vec3 sampleWaterNormal(sampler2DArray normalTex, float layer, vec2 uv, float scale) {
-    vec4 n = texture(normalTex, vec3(uv * scale, layer));
+  // Sample normal texture at scrolling UV
+  vec3 sampleWaterNormal(sampler2DArray normalTex, float layer, vec2 uv) {
+    vec4 n = texture(normalTex, vec3(uv, layer));
     return n.xyz * 2.0 - 1.0;
   }
   
-  // Get animated water normal from 3 scrolling texture layers
+  // Get animated water normal from 4 scrolling texture layers
+  // Opposing directions cancel out to prevent flow appearance
   vec3 getWaterNormal(vec3 worldPos, float time, vec3 baseNormal, sampler2DArray normalTex, float layer) {
-    // Use top-down UV projection for water (XZ plane)
-    vec2 baseUV = worldPos.xz / 8.0;
+    // Base UV from world position (XZ plane)
+    vec2 baseUV = worldPos.xz;
     float scale = uNormalScale;
     
-    // Layer 1: Medium scale, slow drift
-    vec2 uv0 = baseUV * scale + vec2(time * 0.03, time * 0.02);
-    vec3 n0 = sampleWaterNormal(normalTex, layer, uv0, 1.0);
+    // Layer 0: Fine detail, moving +X +Z
+    vec2 uv0 = baseUV * scale * 0.1 + vec2(time * 0.06, time * 0.035);
+    vec3 n0 = sampleWaterNormal(normalTex, layer, uv0);
     
-    // Layer 2: Larger scale, different direction
-    vec2 uv1 = baseUV * scale * 0.5 - vec2(time * 0.02, time * -0.025);
-    vec3 n1 = sampleWaterNormal(normalTex, layer, uv1, 1.0);
+    // Layer 1: Fine detail (similar scale), moving +X -Z (opposing Z!)
+    vec2 uv1 = baseUV * scale * 0.095 - vec2(time * -0.05, time * 0.03);
+    vec3 n1 = sampleWaterNormal(normalTex, layer, uv1);
     
-    // Layer 3: Smaller scale, faster movement for detail
-    vec2 uv2 = baseUV * scale * 2.0 + vec2(time * 0.04, time * 0.035);
-    vec3 n2 = sampleWaterNormal(normalTex, layer, uv2, 1.0);
+    // Layer 2: Medium detail, moving -X +Z
+    vec2 uv2 = baseUV * scale * 0.01 + vec2(time * 0.01, time * 0.01);
+    vec3 n2 = sampleWaterNormal(normalTex, layer, uv2);
     
-    // Blend the three normal samples (weighted average)
-    vec3 blendedNormal = normalize(n0 + n1 * 0.7 + n2 * 0.5);
+    // Layer 3: Coarse slow-moving, moving -X -Z (fully opposing)
+    vec2 uv3 = baseUV * scale * 0.001 - vec2(time * 0.009, time * -0.008);
+    vec3 n3 = sampleWaterNormal(normalTex, layer, uv3);
+    
+    // Sum and normalize (like Three.js: noise * 0.5 - 1.0 then sum)
+    vec3 blendedNormal = n0 + n1 + n2 + n3;
+    blendedNormal = blendedNormal * 0.5; // Average down
     
     // Apply strength and perturb base normal
+    // Three.js uses: surfaceNormal = normalize(noise.xzy * vec3(1.5, 1.0, 1.5))
     vec3 perturbedNormal = baseNormal;
-    perturbedNormal.xz += blendedNormal.xy * uNormalStrength;
+    perturbedNormal.x += blendedNormal.x * uNormalStrength;
+    perturbedNormal.z += blendedNormal.y * uNormalStrength; // Swizzle like Three.js
     
     return normalize(perturbedNormal);
   }
@@ -109,16 +117,14 @@ export const waterFresnelEffect = /* glsl */ `
   }
   
   // Scatter effect - makes normal variations visible in the color
-  // Like Three.js water: varies color based on normal vs view angle
+  // Direct approach like Three.js: scatter = dot(normal, viewDir) * waterColor
   vec3 getScatterColor(vec3 viewDir, vec3 normal, vec3 baseColor) {
     // Scatter intensity based on how much surface faces viewer
     float scatter = max(0.0, dot(normal, viewDir));
     
-    // Brighter where surface faces camera, darker at grazing angles
-    // This makes the animated normals visible in the diffuse color
-    vec3 scatterColor = baseColor * (0.7 + scatter * uScatterStrength * 0.6);
-    
-    return scatterColor;
+    // Three.js style: scatter directly multiplies color
+    // Higher scatter = brighter, creates visible surface variation
+    return baseColor * (0.5 + scatter * uScatterStrength);
   }
 `;
 
