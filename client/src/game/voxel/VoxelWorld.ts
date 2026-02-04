@@ -16,8 +16,7 @@ import {
   encodeVoxelChunkRequest,
   encodeSurfaceColumnRequest,
   SurfaceColumnResponse,
-  // computeVisibility,  // Temporarily disabled for debugging
-  VISIBILITY_ALL,
+  computeVisibility,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk } from './ChunkMesher.js';
@@ -367,9 +366,7 @@ export class VoxelWorld implements ChunkProvider {
     chunk.dirty = true;
     
     // Compute visibility graph for this chunk
-    // TEMPORARILY DISABLED for debugging
-    // chunk.visibilityBits = computeVisibility(voxelData);
-    chunk.visibilityBits = VISIBILITY_ALL;  // Assume all visible
+    chunk.visibilityBits = computeVisibility(voxelData);
     
     // Queue for remeshing
     this.remeshQueue.add(key);
@@ -423,9 +420,7 @@ export class VoxelWorld implements ChunkProvider {
       chunk.lastBuildSeq = lastBuildSeq;
       
       // Compute visibility graph for this chunk
-      // TEMPORARILY DISABLED for debugging
-      // chunk.visibilityBits = computeVisibility(voxelData);
-      chunk.visibilityBits = VISIBILITY_ALL;  // Assume all visible
+      chunk.visibilityBits = computeVisibility(voxelData);
       
       // Queue for remeshing
       this.remeshQueue.add(key);

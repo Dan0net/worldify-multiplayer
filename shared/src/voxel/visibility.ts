@@ -5,6 +5,11 @@
  * - For each chunk, compute which faces can "see" each other through non-solid voxels
  * - Uses flood fill to find connected empty regions
  * - Stores result as 15 bits (one per face pair)
+ * 
+ * OPTIMIZED: Zero allocations during computation.
+ * - All buffers are pre-allocated at module level
+ * - Uses flat indices instead of {x,y,z} objects
+ * - Pre-computed lookup tables for boundary detection
  */
 
 import {
@@ -14,7 +19,168 @@ import {
   VISIBILITY_ALL,
   VISIBILITY_NONE,
 } from './constants.js';
-import { isVoxelSolid, voxelIndex } from './voxelData.js';
+import { isVoxelSolid } from './voxelData.js';
+
+// ============== Pre-allocated Buffers ==============
+// All computation uses these module-level arrays - zero allocations per call
+
+/** Total voxels per chunk */
+const VOXELS = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+
+/** Queue for BFS flood fill (stores flat indices) */
+const queue = new Int32Array(VOXELS);
+
+/** Visited markers - generation-based to avoid clearing */
+const visited = new Uint8Array(VOXELS);
+
+/** Current generation for visited tracking */
+let visitedGeneration = 0;
+
+/** Stride for Y axis in flat index */
+const STRIDE_Y = CHUNK_SIZE;
+
+/** Stride for Z axis in flat index */
+const STRIDE_Z = CHUNK_SIZE * CHUNK_SIZE;
+
+/** Neighbor offsets as flat index deltas: [+X, -X, +Y, -Y, +Z, -Z] */
+const NEIGHBOR_DELTAS = new Int32Array([1, -1, STRIDE_Y, -STRIDE_Y, STRIDE_Z, -STRIDE_Z]);
+
+/** Max coordinate value */
+const MAX_COORD = CHUNK_SIZE - 1;
+
+// ============== Pre-computed Boundary Tables ==============
+// For each voxel index, which boundary faces it touches (as a 6-bit mask)
+
+/** Boundary face mask for each voxel index */
+const BOUNDARY_MASK = new Uint8Array(VOXELS);
+
+// Face bits: POS_X=1, NEG_X=2, POS_Y=4, NEG_Y=8, POS_Z=16, NEG_Z=32
+const FACE_BIT_POS_X = 1 << ChunkFace.POS_X;
+const FACE_BIT_NEG_X = 1 << ChunkFace.NEG_X;
+const FACE_BIT_POS_Y = 1 << ChunkFace.POS_Y;
+const FACE_BIT_NEG_Y = 1 << ChunkFace.NEG_Y;
+const FACE_BIT_POS_Z = 1 << ChunkFace.POS_Z;
+const FACE_BIT_NEG_Z = 1 << ChunkFace.NEG_Z;
+
+/** Pre-computed starting indices for each boundary face */
+const BOUNDARY_STARTS: Int32Array[] = new Array(6);
+
+// Initialize boundary lookup tables
+(function initBoundaryTables() {
+  // Build boundary mask for each voxel
+  for (let z = 0; z < CHUNK_SIZE; z++) {
+    for (let y = 0; y < CHUNK_SIZE; y++) {
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        const idx = x + y * STRIDE_Y + z * STRIDE_Z;
+        let mask = 0;
+        if (x === MAX_COORD) mask |= FACE_BIT_POS_X;
+        if (x === 0) mask |= FACE_BIT_NEG_X;
+        if (y === MAX_COORD) mask |= FACE_BIT_POS_Y;
+        if (y === 0) mask |= FACE_BIT_NEG_Y;
+        if (z === MAX_COORD) mask |= FACE_BIT_POS_Z;
+        if (z === 0) mask |= FACE_BIT_NEG_Z;
+        BOUNDARY_MASK[idx] = mask;
+      }
+    }
+  }
+  
+  // Build boundary start indices for each face
+  const faceSize = CHUNK_SIZE * CHUNK_SIZE;
+  
+  // POS_X: x = MAX_COORD
+  BOUNDARY_STARTS[ChunkFace.POS_X] = new Int32Array(faceSize);
+  for (let z = 0; z < CHUNK_SIZE; z++) {
+    for (let y = 0; y < CHUNK_SIZE; y++) {
+      BOUNDARY_STARTS[ChunkFace.POS_X][z * CHUNK_SIZE + y] = MAX_COORD + y * STRIDE_Y + z * STRIDE_Z;
+    }
+  }
+  
+  // NEG_X: x = 0
+  BOUNDARY_STARTS[ChunkFace.NEG_X] = new Int32Array(faceSize);
+  for (let z = 0; z < CHUNK_SIZE; z++) {
+    for (let y = 0; y < CHUNK_SIZE; y++) {
+      BOUNDARY_STARTS[ChunkFace.NEG_X][z * CHUNK_SIZE + y] = y * STRIDE_Y + z * STRIDE_Z;
+    }
+  }
+  
+  // POS_Y: y = MAX_COORD
+  BOUNDARY_STARTS[ChunkFace.POS_Y] = new Int32Array(faceSize);
+  for (let z = 0; z < CHUNK_SIZE; z++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      BOUNDARY_STARTS[ChunkFace.POS_Y][z * CHUNK_SIZE + x] = x + MAX_COORD * STRIDE_Y + z * STRIDE_Z;
+    }
+  }
+  
+  // NEG_Y: y = 0
+  BOUNDARY_STARTS[ChunkFace.NEG_Y] = new Int32Array(faceSize);
+  for (let z = 0; z < CHUNK_SIZE; z++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      BOUNDARY_STARTS[ChunkFace.NEG_Y][z * CHUNK_SIZE + x] = x + z * STRIDE_Z;
+    }
+  }
+  
+  // POS_Z: z = MAX_COORD
+  BOUNDARY_STARTS[ChunkFace.POS_Z] = new Int32Array(faceSize);
+  for (let y = 0; y < CHUNK_SIZE; y++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      BOUNDARY_STARTS[ChunkFace.POS_Z][y * CHUNK_SIZE + x] = x + y * STRIDE_Y + MAX_COORD * STRIDE_Z;
+    }
+  }
+  
+  // NEG_Z: z = 0
+  BOUNDARY_STARTS[ChunkFace.NEG_Z] = new Int32Array(faceSize);
+  for (let y = 0; y < CHUNK_SIZE; y++) {
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      BOUNDARY_STARTS[ChunkFace.NEG_Z][y * CHUNK_SIZE + x] = x + y * STRIDE_Y;
+    }
+  }
+})();
+
+// ============== Pre-computed Bounds Check Tables ==============
+// For each direction, which coordinates would go out of bounds
+
+/** For each voxel, which neighbor directions are valid (6-bit mask) */
+const VALID_NEIGHBORS = new Uint8Array(VOXELS);
+
+// Direction bits: +X=1, -X=2, +Y=4, -Y=8, +Z=16, -Z=32
+(function initValidNeighbors() {
+  for (let z = 0; z < CHUNK_SIZE; z++) {
+    for (let y = 0; y < CHUNK_SIZE; y++) {
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        const idx = x + y * STRIDE_Y + z * STRIDE_Z;
+        let mask = 0x3F; // All 6 directions initially valid
+        if (x === MAX_COORD) mask &= ~1;  // No +X
+        if (x === 0) mask &= ~2;          // No -X
+        if (y === MAX_COORD) mask &= ~4;  // No +Y
+        if (y === 0) mask &= ~8;          // No -Y
+        if (z === MAX_COORD) mask &= ~16; // No +Z
+        if (z === 0) mask &= ~32;         // No -Z
+        VALID_NEIGHBORS[idx] = mask;
+      }
+    }
+  }
+})();
+
+// ============== Face Pair Lookup Table ==============
+// Pre-computed bit positions for all face pairs
+
+/** Bit position for each face pair [faceA * 6 + faceB] */
+const FACE_PAIR_BITS = new Uint8Array(36);
+
+(function initFacePairBits() {
+  for (let a = 0; a < 6; a++) {
+    for (let b = 0; b < 6; b++) {
+      if (a === b) {
+        FACE_PAIR_BITS[a * 6 + b] = 255; // Invalid - same face
+      } else {
+        const lo = Math.min(a, b);
+        const hi = Math.max(a, b);
+        // Formula: lo * (11 - lo) / 2 + (hi - lo - 1)
+        FACE_PAIR_BITS[a * 6 + b] = lo * (11 - lo) / 2 + (hi - lo - 1);
+      }
+    }
+  }
+})();
 
 // ============== Face Pair Encoding ==============
 
@@ -27,14 +193,7 @@ import { isVoxelSolid, voxelIndex } from './voxelData.js';
  * @returns Bit index (0-14) for this face pair
  */
 export function getFacePairIndex(faceA: ChunkFace, faceB: ChunkFace): number {
-  // Ensure faceA < faceB for consistent ordering
-  if (faceA > faceB) {
-    [faceA, faceB] = [faceB, faceA];
-  }
-  
-  // Formula for combination index: sum of (5-i) for i < faceA, plus (faceB - faceA - 1)
-  // Simplified: faceA * (11 - faceA) / 2 + (faceB - faceA - 1)
-  return faceA * (11 - faceA) / 2 + (faceB - faceA - 1);
+  return FACE_PAIR_BITS[faceA * 6 + faceB];
 }
 
 /**
@@ -42,7 +201,7 @@ export function getFacePairIndex(faceA: ChunkFace, faceB: ChunkFace): number {
  */
 export function canSeeThrough(visibilityBits: number, entryFace: ChunkFace, exitFace: ChunkFace): boolean {
   if (entryFace === exitFace) return false; // Can't enter and exit same face
-  const bitIndex = getFacePairIndex(entryFace, exitFace);
+  const bitIndex = FACE_PAIR_BITS[entryFace * 6 + exitFace];
   return (visibilityBits & (1 << bitIndex)) !== 0;
 }
 
@@ -50,35 +209,20 @@ export function canSeeThrough(visibilityBits: number, entryFace: ChunkFace, exit
  * Get the opposite face.
  */
 export function getOppositeFace(face: ChunkFace): ChunkFace {
-  switch (face) {
-    case ChunkFace.POS_X: return ChunkFace.NEG_X;
-    case ChunkFace.NEG_X: return ChunkFace.POS_X;
-    case ChunkFace.POS_Y: return ChunkFace.NEG_Y;
-    case ChunkFace.NEG_Y: return ChunkFace.POS_Y;
-    case ChunkFace.POS_Z: return ChunkFace.NEG_Z;
-    case ChunkFace.NEG_Z: return ChunkFace.POS_Z;
-  }
+  // XOR with 1 flips between pairs: 0<->1, 2<->3, 4<->5
+  return face ^ 1;
 }
 
-// ============== Flood Fill ==============
-
-/** Offsets for 6-connected neighbors */
-const NEIGHBOR_OFFSETS = [
-  { dx: 1, dy: 0, dz: 0, face: ChunkFace.POS_X },
-  { dx: -1, dy: 0, dz: 0, face: ChunkFace.NEG_X },
-  { dx: 0, dy: 1, dz: 0, face: ChunkFace.POS_Y },
-  { dx: 0, dy: -1, dz: 0, face: ChunkFace.NEG_Y },
-  { dx: 0, dy: 0, dz: 1, face: ChunkFace.POS_Z },
-  { dx: 0, dy: 0, dz: -1, face: ChunkFace.NEG_Z },
-];
+// ============== Optimized Flood Fill ==============
 
 /**
  * Compute visibility bits for a chunk via flood fill.
  * 
- * Algorithm:
- * 1. For each non-solid boundary voxel, start a flood fill
- * 2. Track which faces are reached during the fill
- * 3. Connect all reached faces together in the visibility graph
+ * OPTIMIZED: Zero allocations during computation.
+ * - Pre-allocated queue and visited arrays
+ * - Flat indices instead of {x,y,z} objects  
+ * - Pre-computed boundary and neighbor tables
+ * - Bit masks for reached faces
  * 
  * @param voxelData - The chunk's voxel data (Uint16Array)
  * @returns 15-bit visibility mask
@@ -100,153 +244,81 @@ export function computeVisibility(voxelData: Uint16Array): number {
   if (!hasEmpty) return VISIBILITY_NONE; // All solid
   if (!hasSolid) return VISIBILITY_ALL;  // All empty (all faces connect)
   
-  // Visited set for flood fill (reused across fills)
-  const visited = new Uint8Array(voxelData.length);
-  let visitedGeneration = 0;
+  // Single generation for this entire computation
+  // Reset if would overflow
+  if (visitedGeneration >= 254) {
+    visited.fill(0);
+    visitedGeneration = 0;
+  }
+  visitedGeneration++;
+  const gen = visitedGeneration;
   
-  // Track which face pairs are connected
   let visibilityBits = 0;
+  const faceSize = CHUNK_SIZE * CHUNK_SIZE;
   
-  // Process each boundary voxel
-  for (let boundaryFace = 0; boundaryFace < CHUNK_FACE_COUNT; boundaryFace++) {
-    const boundaryVoxels = getBoundaryVoxels(boundaryFace as ChunkFace);
+  // Process each boundary face - find connected regions
+  for (let face = 0; face < CHUNK_FACE_COUNT; face++) {
+    const boundaryIndices = BOUNDARY_STARTS[face];
     
-    for (const { x, y, z } of boundaryVoxels) {
-      const idx = voxelIndex(x, y, z);
+    for (let i = 0; i < faceSize; i++) {
+      const startIdx = boundaryIndices[i];
       
-      // Skip if solid or already visited in a previous fill
-      if (isVoxelSolid(voxelData[idx])) continue;
-      if (visited[idx] === visitedGeneration + 1) continue;
+      // Skip if solid or already visited in THIS computation
+      if (isVoxelSolid(voxelData[startIdx])) continue;
+      if (visited[startIdx] === gen) continue;
       
-      // Start a new flood fill from this boundary voxel
-      visitedGeneration++;
-      const reachedFaces = floodFill(voxelData, x, y, z, visited, visitedGeneration);
+      // Flood fill using pre-allocated queue
+      let queueHead = 0;
+      let queueTail = 0;
+      queue[queueTail++] = startIdx;
+      visited[startIdx] = gen;
       
-      // Connect all pairs of reached faces
-      const faceList = Array.from(reachedFaces);
-      for (let i = 0; i < faceList.length; i++) {
-        for (let j = i + 1; j < faceList.length; j++) {
-          const bitIndex = getFacePairIndex(faceList[i], faceList[j]);
-          visibilityBits |= (1 << bitIndex);
+      // Track which faces are reached (6-bit mask)
+      let reachedFaces = 0;
+      
+      while (queueHead < queueTail) {
+        const idx = queue[queueHead++];
+        
+        // Check boundary membership using pre-computed table
+        reachedFaces |= BOUNDARY_MASK[idx];
+        
+        // Explore valid neighbors using pre-computed table
+        const validDirs = VALID_NEIGHBORS[idx];
+        
+        for (let d = 0; d < 6; d++) {
+          if (!(validDirs & (1 << d))) continue;
+          
+          const neighborIdx = idx + NEIGHBOR_DELTAS[d];
+          
+          // Skip if already visited or solid
+          if (visited[neighborIdx] === gen) continue;
+          if (isVoxelSolid(voxelData[neighborIdx])) continue;
+          
+          visited[neighborIdx] = gen;
+          queue[queueTail++] = neighborIdx;
         }
       }
+      
+      // Convert reached faces mask to visibility bits
+      // For each pair of reached faces, set the corresponding bit
+      if (reachedFaces !== 0) {
+        // Extract face indices from bit mask and connect pairs
+        for (let fA = 0; fA < 5; fA++) {
+          if (!(reachedFaces & (1 << fA))) continue;
+          for (let fB = fA + 1; fB < 6; fB++) {
+            if (!(reachedFaces & (1 << fB))) continue;
+            const pairBit = FACE_PAIR_BITS[fA * 6 + fB];
+            visibilityBits |= (1 << pairBit);
+          }
+        }
+      }
+      
+      // Early exit if already fully visible
+      if (visibilityBits === VISIBILITY_ALL) return visibilityBits;
     }
   }
   
   return visibilityBits;
-}
-
-/**
- * Get all voxel coordinates on a chunk boundary face.
- */
-function getBoundaryVoxels(face: ChunkFace): Array<{ x: number; y: number; z: number }> {
-  const result: Array<{ x: number; y: number; z: number }> = [];
-  const max = CHUNK_SIZE - 1;
-  
-  switch (face) {
-    case ChunkFace.POS_X:
-      for (let y = 0; y < CHUNK_SIZE; y++) {
-        for (let z = 0; z < CHUNK_SIZE; z++) {
-          result.push({ x: max, y, z });
-        }
-      }
-      break;
-    case ChunkFace.NEG_X:
-      for (let y = 0; y < CHUNK_SIZE; y++) {
-        for (let z = 0; z < CHUNK_SIZE; z++) {
-          result.push({ x: 0, y, z });
-        }
-      }
-      break;
-    case ChunkFace.POS_Y:
-      for (let x = 0; x < CHUNK_SIZE; x++) {
-        for (let z = 0; z < CHUNK_SIZE; z++) {
-          result.push({ x, y: max, z });
-        }
-      }
-      break;
-    case ChunkFace.NEG_Y:
-      for (let x = 0; x < CHUNK_SIZE; x++) {
-        for (let z = 0; z < CHUNK_SIZE; z++) {
-          result.push({ x, y: 0, z });
-        }
-      }
-      break;
-    case ChunkFace.POS_Z:
-      for (let x = 0; x < CHUNK_SIZE; x++) {
-        for (let y = 0; y < CHUNK_SIZE; y++) {
-          result.push({ x, y, z: max });
-        }
-      }
-      break;
-    case ChunkFace.NEG_Z:
-      for (let x = 0; x < CHUNK_SIZE; x++) {
-        for (let y = 0; y < CHUNK_SIZE; y++) {
-          result.push({ x, y, z: 0 });
-        }
-      }
-      break;
-  }
-  
-  return result;
-}
-
-/**
- * Flood fill from a starting voxel, returning which boundary faces are reached.
- * Uses iterative BFS to avoid stack overflow.
- */
-function floodFill(
-  voxelData: Uint16Array,
-  startX: number,
-  startY: number,
-  startZ: number,
-  visited: Uint8Array,
-  generation: number
-): Set<ChunkFace> {
-  const reachedFaces = new Set<ChunkFace>();
-  const queue: Array<{ x: number; y: number; z: number }> = [{ x: startX, y: startY, z: startZ }];
-  let queueHead = 0; // Use index instead of shift() for performance
-  const max = CHUNK_SIZE - 1;
-  
-  visited[voxelIndex(startX, startY, startZ)] = generation;
-  
-  while (queueHead < queue.length) {
-    const { x, y, z } = queue[queueHead++];
-    
-    // Check if we're at a boundary
-    if (x === 0) reachedFaces.add(ChunkFace.NEG_X);
-    if (x === max) reachedFaces.add(ChunkFace.POS_X);
-    if (y === 0) reachedFaces.add(ChunkFace.NEG_Y);
-    if (y === max) reachedFaces.add(ChunkFace.POS_Y);
-    if (z === 0) reachedFaces.add(ChunkFace.NEG_Z);
-    if (z === max) reachedFaces.add(ChunkFace.POS_Z);
-    
-    // Early exit if all faces reached
-    if (reachedFaces.size === CHUNK_FACE_COUNT) return reachedFaces;
-    
-    // Explore neighbors
-    for (const { dx, dy, dz } of NEIGHBOR_OFFSETS) {
-      const nx = x + dx;
-      const ny = y + dy;
-      const nz = z + dz;
-      
-      // Bounds check
-      if (nx < 0 || nx >= CHUNK_SIZE || ny < 0 || ny >= CHUNK_SIZE || nz < 0 || nz >= CHUNK_SIZE) {
-        continue;
-      }
-      
-      const nidx = voxelIndex(nx, ny, nz);
-      
-      // Skip if already visited or solid
-      if (visited[nidx] === generation) continue;
-      if (isVoxelSolid(voxelData[nidx])) continue;
-      
-      visited[nidx] = generation;
-      queue.push({ x: nx, y: ny, z: nz });
-    }
-  }
-  
-  return reachedFaces;
 }
 
 // ============== Face Direction Helpers ==============
