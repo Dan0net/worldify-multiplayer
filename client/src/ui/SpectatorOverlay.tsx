@@ -156,7 +156,8 @@ export function SpectatorOverlay() {
       {isConnected && (
         <p className="mt-8 text-white opacity-70 text-base text-center max-w-md">
           WASD to move • Space to jump • Shift to sprint<br />
-          1/2/3 for build tools • Click to place • Q/E to rotate
+          1/2/3 for build tools • Click to place • Q/E to rotate<br />
+          M for map
         </p>
       )}
     </div>

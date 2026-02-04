@@ -2,14 +2,14 @@
  * MapOverlay - Debug map visualization component
  * 
  * Shows an overhead view of map tiles using the MapRenderer.
- * Can be toggled with 'M' key.
+ * Can be toggled with 'M' key. Z/X to zoom in/out.
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useGameStore } from '../state/store';
 import { MapRenderer } from '../game/maptile/MapRenderer';
 import { MapTileCache } from '../game/maptile/MapTileCache';
-import { CHUNK_SIZE, VOXEL_SCALE, encodeMapTileRequest } from '@worldify/shared';
+import { CHUNK_SIZE, VOXEL_SCALE, STREAM_RADIUS, encodeMapTileRequest } from '@worldify/shared';
 import { sendBinary } from '../net/netClient';
 
 // Singleton instances managed by this component
@@ -18,6 +18,10 @@ let mapRenderer: MapRenderer | null = null;
 
 // Track requested tiles to avoid duplicate requests
 const requestedTiles = new Set<string>();
+
+// Zoom levels (scale values)
+const ZOOM_LEVELS = [0.5, 1, 2, 4];
+const DEFAULT_ZOOM_INDEX = 1; // scale = 1
 
 /**
  * Get the global map tile cache instance.
@@ -55,20 +59,27 @@ function requestTilesAround(worldX: number, worldZ: number, radius: number): voi
 export function MapOverlay() {
   const showMapOverlay = useGameStore((s) => s.showMapOverlay);
   const toggleMapOverlay = useGameStore((s) => s.toggleMapOverlay);
-  const setMapTileCount = useGameStore((s) => s.setMapTileCount);
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
   const playerPosRef = useRef({ x: 0, z: 0 });
+  const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
 
-  // Handle keyboard toggle
+  // Handle keyboard toggle and zoom
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if typing in an input
+      if (document.activeElement?.tagName === 'INPUT') return;
+      
       if (e.key === 'm' || e.key === 'M') {
-        // Don't toggle if typing in an input
-        if (document.activeElement?.tagName === 'INPUT') return;
         toggleMapOverlay();
+      } else if (e.key === 'z' || e.key === 'Z') {
+        // Zoom out (decrease scale)
+        setZoomIndex((prev) => Math.max(0, prev - 1));
+      } else if (e.key === 'x' || e.key === 'X') {
+        // Zoom in (increase scale)
+        setZoomIndex((prev) => Math.min(ZOOM_LEVELS.length - 1, prev + 1));
       }
     };
     
@@ -76,22 +87,29 @@ export function MapOverlay() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleMapOverlay]);
 
+  // Update renderer scale when zoom changes
+  useEffect(() => {
+    if (mapRenderer) {
+      mapRenderer.setConfig({ scale: ZOOM_LEVELS[zoomIndex] });
+    }
+  }, [zoomIndex]);
+
   // Initialize renderer when overlay is shown
   useEffect(() => {
     if (!showMapOverlay || !canvasRef.current) return;
     
     const canvas = canvasRef.current;
-    canvas.width = 400;
-    canvas.height = 400;
+    canvas.width = 200;
+    canvas.height = 200;
     
     if (!mapRenderer) {
-      mapRenderer = new MapRenderer(canvas, { scale: 4 });
+      mapRenderer = new MapRenderer(canvas, { scale: ZOOM_LEVELS[zoomIndex] });
     }
     
     return () => {
       cancelAnimationFrame(animationRef.current);
     };
-  }, [showMapOverlay]);
+  }, [showMapOverlay, zoomIndex]);
 
   // Render loop
   const render = useCallback(() => {
@@ -104,20 +122,17 @@ export function MapOverlay() {
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
     const centerTz = Math.floor(z / (CHUNK_SIZE * VOXEL_SCALE));
     
-    // Request tiles if connected
+    // Request tiles if connected - match chunk stream radius
     if (connectionStatus === 'connected') {
-      requestTilesAround(x, z, 5);
+      requestTilesAround(x, z, STREAM_RADIUS);
     }
     
     // Update renderer
     mapRenderer.setPlayerPosition(x, z);
     mapRenderer.render(cache.getAll(), centerTx, centerTz);
     
-    // Update store with tile count
-    setMapTileCount(cache.size);
-    
     animationRef.current = requestAnimationFrame(render);
-  }, [showMapOverlay, connectionStatus, setMapTileCount]);
+  }, [showMapOverlay, connectionStatus]);
 
   // Start render loop when visible
   useEffect(() => {
@@ -144,24 +159,12 @@ export function MapOverlay() {
   if (!showMapOverlay) return null;
 
   return (
-    <div className="fixed top-20 right-5 z-40 bg-black/80 rounded-lg p-2 border border-green-500/30">
-      <div className="flex justify-between items-center mb-2 px-1">
-        <span className="text-green-400 text-sm font-bold">Map</span>
-        <button
-          onClick={toggleMapOverlay}
-          className="text-gray-400 hover:text-white text-sm"
-        >
-          ✕
-        </button>
-      </div>
+    <div className="fixed top-5 right-5 z-40">
       <canvas
         ref={canvasRef}
-        className="rounded"
+        className="rounded border border-green-500/30 bg-black/80"
         style={{ imageRendering: 'pixelated' }}
       />
-      <div className="text-green-400/60 text-xs mt-1 text-center">
-        Tiles: {useGameStore.getState().mapTileCount} | Press M to toggle
-      </div>
     </div>
   );
 }

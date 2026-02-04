@@ -408,7 +408,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   },
   
   // Map overlay initial state
-  showMapOverlay: false,
+  showMapOverlay: true,
   mapTileCount: 0,
 
   // Actions

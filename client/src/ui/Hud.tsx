@@ -18,9 +18,9 @@ export function Hud() {
         <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/80 -translate-x-1/2" />
       </div>
 
-      {/* Room info */}
-      <div className="fixed top-5 right-5 py-2.5 px-4 bg-black/60 text-white rounded-lg text-sm z-50 whitespace-nowrap">
-        Room: {roomId || '...'} | Players: {playerCount}
+      {/* Room info - positioned below map overlay */}
+      <div className="fixed top-[230px] right-5 py-2 px-3 bg-black/60 text-white rounded-lg text-xs z-50 whitespace-nowrap">
+        {roomId} • {playerCount} player{playerCount !== 1 ? 's' : ''}
       </div>
     </>
   );
