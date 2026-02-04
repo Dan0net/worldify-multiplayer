@@ -258,16 +258,17 @@ export function getVisibleChunks(
     const idx = toRequestIndices[i];
     const { cx, cy, cz } = indexToWorldChunk(idx, baseCx, baseCy, baseCz, centerOffset);
     
-    // Frustum cull requests - no point loading chunks behind camera
-    const worldX = cx * CHUNK_WORLD_SIZE;
-    const worldY = cy * CHUNK_WORLD_SIZE;
-    const worldZ = cz * CHUNK_WORLD_SIZE;
-    tempBox.min.set(worldX, worldY, worldZ);
-    tempBox.max.set(worldX + CHUNK_WORLD_SIZE, worldY + CHUNK_WORLD_SIZE, worldZ + CHUNK_WORLD_SIZE);
-    
-    if (frustum.intersectsBox(tempBox)) {
-      toRequest.add(chunkKey(cx, cy, cz));
-    }
+    // TEMPORARILY DISABLED: Frustum cull requests - no point loading chunks behind camera
+    // const worldX = cx * CHUNK_WORLD_SIZE;
+    // const worldY = cy * CHUNK_WORLD_SIZE;
+    // const worldZ = cz * CHUNK_WORLD_SIZE;
+    // tempBox.min.set(worldX, worldY, worldZ);
+    // tempBox.max.set(worldX + CHUNK_WORLD_SIZE, worldY + CHUNK_WORLD_SIZE, worldZ + CHUNK_WORLD_SIZE);
+    // 
+    // if (frustum.intersectsBox(tempBox)) {
+    //   toRequest.add(chunkKey(cx, cy, cz));
+    // }
+    toRequest.add(chunkKey(cx, cy, cz));
   }
   
   return { reachable, toRequest };
