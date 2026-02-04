@@ -18,6 +18,7 @@ import { textureCache } from './TextureCache.js';
 import { getMaterialPallet } from './MaterialPallet.js';
 import { TERRAIN_MATERIAL_REPEAT_SCALE, TERRAIN_MATERIAL_BLEND_OFFSET_RAD } from './constants.js';
 import { createDefaultPlaceholders, loadPalletPlaceholders } from './PlaceholderTextures.js';
+import { WaterMaterial, getWaterMaterial, updateWaterTime } from './WaterMaterial.js';
 import {
   terrainVertexPrefix,
   terrainVertexSuffix,
@@ -450,8 +451,8 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
 
 let solidMaterial: TerrainMaterial | null = null;
 let transparentMaterial: TerrainMaterial | null = null;
-let liquidMaterial: TerrainMaterial | null = null;
 let transparentDepthMaterial: TransparentDepthMaterial | null = null;
+// Note: liquidMaterial now uses WaterMaterial from WaterMaterial.ts
 
 export function getTerrainMaterial(): TerrainMaterial {
   if (!solidMaterial) {
@@ -471,13 +472,8 @@ export function getTransparentTerrainMaterial(): TerrainMaterial {
   return transparentMaterial;
 }
 
-export function getLiquidTerrainMaterial(): TerrainMaterial {
-  if (!liquidMaterial) {
-    liquidMaterial = new TerrainMaterial(true);
-    // Set envMapIntensity from store to match MaterialPreview
-    liquidMaterial.envMapIntensity = useGameStore.getState().environment.environmentIntensity;
-  }
-  return liquidMaterial;
+export function getLiquidTerrainMaterial(): WaterMaterial {
+  return getWaterMaterial();
 }
 
 export function getTransparentDepthMaterial(): TransparentDepthMaterial {
@@ -491,7 +487,7 @@ export function getTransparentDepthMaterial(): TransparentDepthMaterial {
 function setAllMaterialTextures(textures: LoadedTextures): void {
   getTerrainMaterial().setTextures(textures);
   getTransparentTerrainMaterial().setTextures(textures);
-  getLiquidTerrainMaterial().setTextures(textures);
+  getWaterMaterial().setTextures(textures);
   getTransparentDepthMaterial().setTextures(textures);
 }
 
@@ -552,7 +548,7 @@ export function setTerrainDebugMode(mode: TerrainDebugMode): void {
  */
 export function updateWindTime(elapsedTime: number): void {
   transparentMaterial?.setWindTime(elapsedTime);
-  liquidMaterial?.setWindTime(elapsedTime);
+  updateWaterTime(elapsedTime); // Update water wave animation
   transparentDepthMaterial?.setWindTime(elapsedTime);
 }
 
@@ -569,10 +565,10 @@ export function setTerrainEnvMapIntensity(intensity: number): void {
     transparentMaterial.envMapIntensity = intensity;
     transparentMaterial.needsUpdate = true;
   }
-  if (liquidMaterial) {
-    liquidMaterial.envMapIntensity = intensity;
-    liquidMaterial.needsUpdate = true;
-  }
+  // Update water material
+  const waterMat = getWaterMaterial();
+  waterMat.envMapIntensity = intensity;
+  waterMat.needsUpdate = true;
 }
 
 // ============== Material Settings API ==============
@@ -595,7 +591,7 @@ export interface MaterialSettingsUpdate {
  * Called from the bridge when store state changes.
  */
 export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
-  const materials = [solidMaterial, transparentMaterial, liquidMaterial];
+  const materials = [solidMaterial, transparentMaterial];
   
   for (const mat of materials) {
     if (!mat) continue;
@@ -628,6 +624,8 @@ export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
       mat.setWindFrequency(settings.windFrequency);
     }
   }
+  
+  // Water material has its own settings - wind settings don't apply
 }
 
 /**
@@ -636,7 +634,7 @@ export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
 export function setTerrainRepeatScale(scale: number): void {
   solidMaterial?.setRepeatScale(scale);
   transparentMaterial?.setRepeatScale(scale);
-  liquidMaterial?.setRepeatScale(scale);
+  // Note: WaterMaterial has fixed repeat scale
 }
 
 // ============== Debug Console Access ==============

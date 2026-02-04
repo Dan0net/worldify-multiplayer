@@ -10,9 +10,10 @@
  * - Clean separation between React and imperative game code
  */
 
-import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState, MaterialSettings } from './store';
+import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState, MaterialSettings, WaterSettings } from './store';
 import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 import { applyMaterialSettings as applyMaterialSettingsToShaders } from '../game/material/TerrainMaterial';
+import { applyWaterSettings as applyWaterSettingsToShaders } from '../game/material/WaterMaterial';
 
 // Cache getState for cleaner access - always returns fresh state
 const getState = useGameStore.getState;
@@ -268,6 +269,39 @@ class StoreBridge {
    */
   applyCurrentMaterialSettings(): void {
     applyMaterialSettingsToShaders(this.materialSettings);
+  }
+
+  // ============== Water Settings ==============
+
+  get waterSettings(): WaterSettings {
+    return getState().waterSettings;
+  }
+
+  /**
+   * Update water settings and apply to shaders.
+   * Called from DebugPanel when sliders change.
+   */
+  setWaterSettings(updates: Partial<WaterSettings>): void {
+    getState().setWaterSettings(updates);
+    // Apply to shader uniforms
+    applyWaterSettingsToShaders(updates);
+  }
+
+  /**
+   * Reset water settings to defaults and apply to shaders.
+   */
+  resetWaterSettings(): void {
+    getState().resetWaterSettings();
+    // Apply defaults to shaders
+    applyWaterSettingsToShaders(getState().waterSettings);
+  }
+
+  /**
+   * Apply current water settings to shaders.
+   * Call this after materials are initialized.
+   */
+  applyCurrentWaterSettings(): void {
+    applyWaterSettingsToShaders(this.waterSettings);
   }
 
   // ============== Day-Night Cycle ==============

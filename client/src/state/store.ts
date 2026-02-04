@@ -145,6 +145,18 @@ export interface MaterialSettings {
   windFrequency: number;          // 0.1-3
 }
 
+/** Water shader settings for debug/tweaking */
+export interface WaterSettings {
+  waveAmplitude: number;          // 0-0.5, wave height
+  waveFrequency: number;          // 0.1-3, wave pattern frequency
+  waveSpeed: number;              // 0-2, wave animation speed
+  normalStrength: number;         // 0-1, shimmer intensity
+  normalScale: number;            // 0.1-3, texture sampling scale
+  fresnelPower: number;           // 1-8, edge reflection falloff
+  waterOpacity: number;           // 0-1, base transparency
+  waterTint: [number, number, number]; // RGB tint values 0-1
+}
+
 /** Default material settings - uses shared constants for consistency with pallet viewer */
 export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
   roughnessMultiplier: MATERIAL_ROUGHNESS_MULTIPLIER,
@@ -156,6 +168,18 @@ export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
   windStrength: 0.1,
   windSpeed: 0.7,
   windFrequency: 1.0,
+};
+
+/** Default water settings */
+export const DEFAULT_WATER_SETTINGS: WaterSettings = {
+  waveAmplitude: 0.1,
+  waveFrequency: 0.5,
+  waveSpeed: 0.5,
+  normalStrength: 0.3,
+  normalScale: 1.0,
+  fresnelPower: 3.0,
+  waterOpacity: 0.7,
+  waterTint: [0.6, 0.75, 0.85],
 };
 
 /** Default environment settings - uses shared constants for consistency with pallet viewer */
@@ -224,6 +248,7 @@ export interface DebugPanelSections {
   stats: boolean;
   debug: boolean;
   materials: boolean;
+  water: boolean;
   dayNightCycle: boolean;
   environment: boolean;
 }
@@ -275,6 +300,9 @@ export interface GameState {
   
   // Material shader settings
   materialSettings: MaterialSettings;
+  
+  // Water shader settings
+  waterSettings: WaterSettings;
   
   // Debug panel section collapse state
   debugPanelSections: DebugPanelSections;
@@ -328,6 +356,10 @@ export interface GameState {
   // Material settings actions
   setMaterialSettings: (updates: Partial<MaterialSettings>) => void;
   resetMaterialSettings: () => void;
+  
+  // Water settings actions
+  setWaterSettings: (updates: Partial<WaterSettings>) => void;
+  resetWaterSettings: () => void;
   
   // Debug panel actions
   toggleDebugSection: (section: keyof DebugPanelSections) => void;
@@ -398,11 +430,15 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Material settings initial state
   materialSettings: { ...DEFAULT_MATERIAL_SETTINGS },
   
+  // Water settings initial state
+  waterSettings: { ...DEFAULT_WATER_SETTINGS },
+  
   // Debug panel sections (all expanded by default)
   debugPanelSections: {
     stats: true,
     debug: false,
     materials: false,
+    water: false,
     dayNightCycle: false,
     environment: false,
   },
@@ -492,6 +528,14 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   })),
   resetMaterialSettings: () => set({
     materialSettings: { ...DEFAULT_MATERIAL_SETTINGS },
+  }),
+  
+  // Water settings actions
+  setWaterSettings: (updates) => set((state) => ({
+    waterSettings: { ...state.waterSettings, ...updates },
+  })),
+  resetWaterSettings: () => set({
+    waterSettings: { ...DEFAULT_WATER_SETTINGS },
   }),
   
   // Debug panel actions

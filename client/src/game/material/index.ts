@@ -24,6 +24,13 @@ export {
   type LoadedTextures,
 } from './TerrainMaterial.js';
 export {
+  WaterMaterial,
+  getWaterMaterial,
+  updateWaterTime,
+  applyWaterSettings,
+} from './WaterMaterial.js';
+export { DEFAULT_WATER_SETTINGS } from './waterShaders.js';
+export {
   MATERIAL_BASE_URL,
   TERRAIN_MATERIAL_REPEAT_SCALE,
   TERRAIN_MATERIAL_BLEND_OFFSET_RAD,

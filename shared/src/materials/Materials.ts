@@ -29,8 +29,10 @@ export const MATERIAL_NAMES = pallet.materials as MaterialName[];
 /** Array of material colors (hex strings) indexed by material ID */
 export const MATERIAL_COLORS = pallet.colors;
 
-/** Array of material repeat scales indexed by material ID */
-export const MATERIAL_REPEAT_SCALES = pallet.repeatScales;
+/** Array of material repeat scales indexed by material ID (default to 1.0 if not in pallet) */
+export const MATERIAL_REPEAT_SCALES: number[] = 
+  (pallet as { repeatScales?: number[] }).repeatScales ?? 
+  new Array(pallet.materials.length).fill(1.0);
 
 // ============== Materials API ==============
 

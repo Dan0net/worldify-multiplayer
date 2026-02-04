@@ -177,6 +177,7 @@ export function DebugPanel() {
     environment,
     setEnvironment,
     materialSettings,
+    waterSettings,
     debugPanelSections,
     toggleDebugSection,
   } = useGameStore();
@@ -228,6 +229,16 @@ export function DebugPanel() {
   // Reset material settings to defaults
   const handleResetMaterialSettings = () => {
     storeBridge.resetMaterialSettings();
+  };
+
+  // Apply water settings changes to shaders
+  const handleWaterChange = (updates: Partial<typeof waterSettings>) => {
+    storeBridge.setWaterSettings(updates);
+  };
+
+  // Reset water settings to defaults
+  const handleResetWaterSettings = () => {
+    storeBridge.resetWaterSettings();
   };
 
   // Keyboard shortcuts
@@ -522,6 +533,119 @@ export function DebugPanel() {
           <button
             onClick={handleResetMaterialSettings}
             className="w-full py-1 px-2 bg-yellow-900/50 hover:bg-yellow-800/50 text-yellow-400 rounded text-xs"
+          >
+            Reset to Defaults
+          </button>
+        </div>
+      </Section>
+
+      {/* ============== WATER SECTION ============== */}
+      <Section
+        title="💧 Water"
+        isOpen={debugPanelSections.water ?? false}
+        onToggle={() => toggleDebugSection('water')}
+        color="cyan"
+      >
+        {/* Wave Animation */}
+        <div className="mb-3">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🌊 Waves</div>
+          <Slider
+            label="Amplitude"
+            value={waterSettings.waveAmplitude}
+            min={0}
+            max={0.5}
+            step={0.01}
+            onChange={(v) => handleWaterChange({ waveAmplitude: v })}
+          />
+          <Slider
+            label="Frequency"
+            value={waterSettings.waveFrequency}
+            min={0.1}
+            max={3}
+            step={0.1}
+            onChange={(v) => handleWaterChange({ waveFrequency: v })}
+          />
+          <Slider
+            label="Speed"
+            value={waterSettings.waveSpeed}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => handleWaterChange({ waveSpeed: v })}
+          />
+        </div>
+        
+        {/* Surface Effects */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">✨ Surface</div>
+          <Slider
+            label="Normal Strength"
+            value={waterSettings.normalStrength}
+            min={0}
+            max={1}
+            step={0.02}
+            onChange={(v) => handleWaterChange({ normalStrength: v })}
+          />
+          <Slider
+            label="Normal Scale"
+            value={waterSettings.normalScale}
+            min={0.1}
+            max={3}
+            step={0.1}
+            onChange={(v) => handleWaterChange({ normalScale: v })}
+          />
+          <Slider
+            label="Fresnel Power"
+            value={waterSettings.fresnelPower}
+            min={1}
+            max={8}
+            step={0.1}
+            onChange={(v) => handleWaterChange({ fresnelPower: v })}
+          />
+          <Slider
+            label="Opacity"
+            value={waterSettings.waterOpacity}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => handleWaterChange({ waterOpacity: v })}
+          />
+        </div>
+        
+        {/* Color Tint */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🎨 Tint</div>
+          <Slider
+            label="Red"
+            value={waterSettings.waterTint[0]}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => handleWaterChange({ waterTint: [v, waterSettings.waterTint[1], waterSettings.waterTint[2]] })}
+          />
+          <Slider
+            label="Green"
+            value={waterSettings.waterTint[1]}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => handleWaterChange({ waterTint: [waterSettings.waterTint[0], v, waterSettings.waterTint[2]] })}
+          />
+          <Slider
+            label="Blue"
+            value={waterSettings.waterTint[2]}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => handleWaterChange({ waterTint: [waterSettings.waterTint[0], waterSettings.waterTint[1], v] })}
+          />
+        </div>
+        
+        {/* Reset Button */}
+        <div className="pt-2 border-t border-cyan-500/30">
+          <button
+            onClick={handleResetWaterSettings}
+            className="w-full py-1 px-2 bg-cyan-900/50 hover:bg-cyan-800/50 text-cyan-400 rounded text-xs"
           >
             Reset to Defaults
           </button>
