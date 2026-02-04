@@ -97,6 +97,7 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.uWaveFrequency = { value: DEFAULT_WATER_SETTINGS.waveFrequency };
       shader.uniforms.uNormalStrength = { value: DEFAULT_WATER_SETTINGS.normalStrength };
       shader.uniforms.uNormalScale = { value: DEFAULT_WATER_SETTINGS.normalScale };
+      shader.uniforms.uScatterStrength = { value: DEFAULT_WATER_SETTINGS.scatterStrength };
       shader.uniforms.uFresnelPower = { value: DEFAULT_WATER_SETTINGS.fresnelPower };
       shader.uniforms.uWaterTint = { value: new THREE.Vector3(...DEFAULT_WATER_SETTINGS.waterTint) };
       shader.uniforms.uWaterOpacity = { value: DEFAULT_WATER_SETTINGS.waterOpacity };
@@ -202,11 +203,16 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
           vec4 texColor = sampleMaterialBlend(mapArray);
           
           // Apply water tint to texture color
-          vec3 waterColor = texColor.rgb * uWaterTint;
+          vec3 baseWaterColor = texColor.rgb * uWaterTint;
           
-          // Calculate fresnel for edge opacity
+          // Calculate view direction and animated normal
           vec3 viewDir = normalize(vWaterViewDir);
           vec3 animatedNormal = getWaterNormal(vWorldPosition, uWaveTime, normalize(vWorldNormal), normalArray, vMaterialIds.x);
+          
+          // Apply scatter effect - makes normal variations visible in diffuse color
+          vec3 waterColor = getScatterColor(viewDir, animatedNormal, baseWaterColor);
+          
+          // Calculate fresnel for edge opacity
           float fresnel = getFresnelFactor(viewDir, animatedNormal);
           
           // Increase opacity at glancing angles (edges)
@@ -286,6 +292,12 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
     }
   }
   
+  setScatterStrength(value: number): void {
+    if (this._shader?.uniforms.uScatterStrength) {
+      this._shader.uniforms.uScatterStrength.value = value;
+    }
+  }
+  
   setFresnelPower(value: number): void {
     if (this._shader?.uniforms.uFresnelPower) {
       this._shader.uniforms.uFresnelPower.value = value;
@@ -336,6 +348,7 @@ export function applyWaterSettings(settings: {
   waveSpeed?: number;
   normalStrength?: number;
   normalScale?: number;
+  scatterStrength?: number;
   fresnelPower?: number;
   waterTint?: [number, number, number];
   waterOpacity?: number;
@@ -347,6 +360,7 @@ export function applyWaterSettings(settings: {
   if (settings.waveSpeed !== undefined) mat.setWaveSpeed(settings.waveSpeed);
   if (settings.normalStrength !== undefined) mat.setNormalStrength(settings.normalStrength);
   if (settings.normalScale !== undefined) mat.setNormalScale(settings.normalScale);
+  if (settings.scatterStrength !== undefined) mat.setScatterStrength(settings.scatterStrength);
   if (settings.fresnelPower !== undefined) mat.setFresnelPower(settings.fresnelPower);
   if (settings.waterTint !== undefined) mat.setWaterTint(...settings.waterTint);
   if (settings.waterOpacity !== undefined) mat.setWaterOpacity(settings.waterOpacity);

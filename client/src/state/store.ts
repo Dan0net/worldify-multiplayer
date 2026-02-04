@@ -150,8 +150,9 @@ export interface WaterSettings {
   waveAmplitude: number;          // 0-0.5, wave height
   waveFrequency: number;          // 0.1-3, wave pattern frequency
   waveSpeed: number;              // 0-2, wave animation speed
-  normalStrength: number;         // 0-1, shimmer intensity
+  normalStrength: number;         // 1-5, normal perturbation strength
   normalScale: number;            // 0.1-3, texture sampling scale
+  scatterStrength: number;        // 0-2, scatter color variation
   fresnelPower: number;           // 1-8, edge reflection falloff
   waterOpacity: number;           // 0-1, base transparency
   waterTint: [number, number, number]; // RGB tint values 0-1
@@ -175,8 +176,9 @@ export const DEFAULT_WATER_SETTINGS: WaterSettings = {
   waveAmplitude: 0.1,
   waveFrequency: 0.5,
   waveSpeed: 0.5,
-  normalStrength: 0.3,
+  normalStrength: 1.5,
   normalScale: 1.0,
+  scatterStrength: 1.0,
   fresnelPower: 3.0,
   waterOpacity: 0.7,
   waterTint: [0.6, 0.75, 0.85],

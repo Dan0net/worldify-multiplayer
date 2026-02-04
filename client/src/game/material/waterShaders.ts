@@ -19,6 +19,7 @@ export const waterUniformsFragment = /* glsl */ `
   uniform float uNormalStrength;
   uniform float uNormalScale;
   uniform float uFresnelPower;
+  uniform float uScatterStrength;
   uniform vec3 uWaterTint;
   uniform float uWaterOpacity;
 `;
@@ -106,6 +107,19 @@ export const waterFresnelEffect = /* glsl */ `
     float f0 = 0.02; // Water's reflectivity at normal incidence
     return f0 + (1.0 - f0) * pow(1.0 - cosTheta, uFresnelPower);
   }
+  
+  // Scatter effect - makes normal variations visible in the color
+  // Like Three.js water: varies color based on normal vs view angle
+  vec3 getScatterColor(vec3 viewDir, vec3 normal, vec3 baseColor) {
+    // Scatter intensity based on how much surface faces viewer
+    float scatter = max(0.0, dot(normal, viewDir));
+    
+    // Brighter where surface faces camera, darker at grazing angles
+    // This makes the animated normals visible in the diffuse color
+    vec3 scatterColor = baseColor * (0.7 + scatter * uScatterStrength * 0.6);
+    
+    return scatterColor;
+  }
 `;
 
 // ============== Full Shader Modifications ==============
@@ -174,8 +188,9 @@ export const DEFAULT_WATER_SETTINGS = {
   waveAmplitude: 0.1,       // Height of waves in world units
   waveFrequency: 0.5,       // Base frequency of wave pattern
   waveSpeed: 0.5,           // Speed of wave animation
-  normalStrength: 0.3,      // Strength of normal perturbation (higher = more shimmer)
+  normalStrength: 1.5,      // Strength of normal perturbation (1-5 range)
   normalScale: 1.0,         // Scale of normal texture sampling
+  scatterStrength: 1.0,     // Strength of scatter color variation (0-2)
   fresnelPower: 3.0,        // Fresnel falloff power
   waterTint: [0.6, 0.75, 0.85] as [number, number, number], // Slight blue tint
   waterOpacity: 0.7,        // Base opacity (edges will be more opaque)

@@ -581,9 +581,9 @@ export function DebugPanel() {
           <Slider
             label="Normal Strength"
             value={waterSettings.normalStrength}
-            min={0}
-            max={1}
-            step={0.02}
+            min={0.5}
+            max={5}
+            step={0.1}
             onChange={(v) => handleWaterChange({ normalStrength: v })}
           />
           <Slider
@@ -593,6 +593,14 @@ export function DebugPanel() {
             max={3}
             step={0.1}
             onChange={(v) => handleWaterChange({ normalScale: v })}
+          />
+          <Slider
+            label="Scatter"
+            value={waterSettings.scatterStrength}
+            min={0}
+            max={2}
+            step={0.1}
+            onChange={(v) => handleWaterChange({ scatterStrength: v })}
           />
           <Slider
             label="Fresnel Power"
