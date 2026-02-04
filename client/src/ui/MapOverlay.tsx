@@ -63,7 +63,7 @@ export function MapOverlay() {
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
-  const playerPosRef = useRef({ x: 0, z: 0 });
+  const playerPosRef = useRef({ x: 0, z: 0, rotation: 0 });
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
 
   // Handle keyboard toggle and zoom
@@ -116,7 +116,7 @@ export function MapOverlay() {
     if (!showMapOverlay || !mapRenderer) return;
     
     const cache = getMapTileCache();
-    const { x, z } = playerPosRef.current;
+    const { x, z, rotation } = playerPosRef.current;
     
     // Calculate center tile
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
@@ -129,6 +129,7 @@ export function MapOverlay() {
     
     // Update renderer
     mapRenderer.setPlayerPosition(x, z);
+    mapRenderer.setPlayerRotation(rotation);
     mapRenderer.render(cache.getAll(), centerTx, centerTz);
     
     animationRef.current = requestAnimationFrame(render);
@@ -146,7 +147,7 @@ export function MapOverlay() {
   useEffect(() => {
     const updatePos = () => {
       // Read from global if available (set by GameCore)
-      const pos = (window as unknown as { __playerPos?: { x: number; z: number } }).__playerPos;
+      const pos = (window as unknown as { __playerPos?: { x: number; z: number; rotation: number } }).__playerPos;
       if (pos) {
         playerPosRef.current = pos;
       }

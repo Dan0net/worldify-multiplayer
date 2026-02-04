@@ -63,6 +63,7 @@ export class MapRenderer {
   // Player marker
   private playerX = 0;
   private playerZ = 0;
+  private playerRotation = 0; // Radians, 0 = north (+Z), clockwise
 
   // Tile image cache (keyed by "tx,tz")
   private tileCache = new Map<string, CachedTile>();
@@ -99,6 +100,14 @@ export class MapRenderer {
   }
 
   /**
+   * Set the player rotation (for marker direction).
+   * @param rotation - Rotation in radians, 0 = north (+Z), clockwise
+   */
+  setPlayerRotation(rotation: number): void {
+    this.playerRotation = rotation;
+  }
+
+  /**
    * Update configuration.
    */
   setConfig(config: Partial<MapRendererConfig>): void {
@@ -111,14 +120,29 @@ export class MapRenderer {
 
   /**
    * Render all tiles centered on player position.
+   * Uses sub-tile offset for smooth scrolling.
    */
   render(tiles: Map<string, MapTileData>, centerTx: number, centerTz: number): void {
     const { scale } = this.config;
     const tileScreenSize = MAP_TILE_SIZE * scale;
     
-    // Calculate how many tiles fit on screen
-    const tilesX = Math.ceil(this.canvas.width / tileScreenSize) + 1;
-    const tilesZ = Math.ceil(this.canvas.height / tileScreenSize) + 1;
+    // Calculate player's sub-tile offset (position within current tile)
+    // VOXEL_SCALE = 0.25, so tile world size = MAP_TILE_SIZE * 0.25 = 8m
+    const tileWorldSize = MAP_TILE_SIZE * 0.25;
+    const playerTileX = this.playerX / tileWorldSize;
+    const playerTileZ = this.playerZ / tileWorldSize;
+    
+    // Fractional part = position within tile (0 to 1)
+    const fracX = playerTileX - Math.floor(playerTileX);
+    const fracZ = playerTileZ - Math.floor(playerTileZ);
+    
+    // Convert to screen offset (pixels to shift all tiles)
+    const offsetX = -fracX * tileScreenSize;
+    const offsetZ = -fracZ * tileScreenSize;
+    
+    // Calculate how many tiles fit on screen (add extra for offset)
+    const tilesX = Math.ceil(this.canvas.width / tileScreenSize) + 2;
+    const tilesZ = Math.ceil(this.canvas.height / tileScreenSize) + 2;
     
     // Center offset
     const halfTilesX = Math.floor(tilesX / 2);
@@ -131,7 +155,7 @@ export class MapRenderer {
     // Disable image smoothing for crisp pixels when scaled
     this.ctx.imageSmoothingEnabled = false;
 
-    // Render visible tiles
+    // Render visible tiles with offset
     for (let dz = -halfTilesZ; dz <= halfTilesZ; dz++) {
       for (let dx = -halfTilesX; dx <= halfTilesX; dx++) {
         const tx = centerTx + dx;
@@ -139,9 +163,9 @@ export class MapRenderer {
         const key = `${tx},${tz}`;
         const tile = tiles.get(key);
         
-        // Screen position for this tile
-        const screenX = Math.floor(this.canvas.width / 2 + dx * tileScreenSize);
-        const screenZ = Math.floor(this.canvas.height / 2 + dz * tileScreenSize);
+        // Screen position for this tile (with sub-tile offset for smooth scrolling)
+        const screenX = Math.floor(this.canvas.width / 2 + dx * tileScreenSize + offsetX);
+        const screenZ = Math.floor(this.canvas.height / 2 + dz * tileScreenSize + offsetZ);
         
         if (tile) {
           this.renderTile(tile, key, screenX, screenZ);
@@ -153,8 +177,8 @@ export class MapRenderer {
       }
     }
 
-    // Render player marker
-    this.renderPlayerMarker(centerTx, centerTz);
+    // Render player marker (always at center)
+    this.renderPlayerMarker();
   }
 
   /**
@@ -252,34 +276,46 @@ export class MapRenderer {
   }
 
   /**
-   * Render player position marker.
+   * Render player position marker at center with rotation.
    */
-  private renderPlayerMarker(centerTx: number, centerTz: number): void {
-    const { scale } = this.config;
+  private renderPlayerMarker(): void {
+    const centerX = this.canvas.width / 2;
+    const centerZ = this.canvas.height / 2;
     
-    // Calculate player position relative to center tile
-    const playerTileX = this.playerX / (MAP_TILE_SIZE * 0.25); // VOXEL_SCALE = 0.25
-    const playerTileZ = this.playerZ / (MAP_TILE_SIZE * 0.25);
+    // Save context state for rotation
+    this.ctx.save();
+    this.ctx.translate(centerX, centerZ);
+    this.ctx.rotate(this.playerRotation);
     
-    const relX = playerTileX - centerTx * MAP_TILE_SIZE;
-    const relZ = playerTileZ - centerTz * MAP_TILE_SIZE;
+    // Draw player marker (larger triangle pointing in rotation direction)
+    const size = 12;
     
-    const screenX = this.canvas.width / 2 + relX * scale;
-    const screenZ = this.canvas.height / 2 + relZ * scale;
+    // Outer glow/shadow for visibility
+    this.ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+    this.ctx.shadowBlur = 4;
+    this.ctx.shadowOffsetX = 0;
+    this.ctx.shadowOffsetY = 0;
     
-    // Draw player marker (triangle pointing up)
+    // Fill triangle
     this.ctx.fillStyle = '#ff4444';
     this.ctx.beginPath();
-    this.ctx.moveTo(screenX, screenZ - 8);
-    this.ctx.lineTo(screenX - 6, screenZ + 6);
-    this.ctx.lineTo(screenX + 6, screenZ + 6);
+    this.ctx.moveTo(0, -size);           // Tip (forward)
+    this.ctx.lineTo(-size * 0.7, size * 0.7);  // Bottom left
+    this.ctx.lineTo(0, size * 0.3);      // Notch
+    this.ctx.lineTo(size * 0.7, size * 0.7);   // Bottom right
     this.ctx.closePath();
     this.ctx.fill();
     
-    // Outline
+    // Reset shadow for outline
+    this.ctx.shadowBlur = 0;
+    
+    // White outline for contrast
     this.ctx.strokeStyle = '#ffffff';
     this.ctx.lineWidth = 2;
     this.ctx.stroke();
+    
+    // Restore context
+    this.ctx.restore();
   }
 
   /**

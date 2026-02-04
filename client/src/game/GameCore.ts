@@ -37,7 +37,7 @@ import { getMapTileCache } from '../ui/MapOverlay';
 // Expose player position for map overlay
 declare global {
   interface Window {
-    __playerPos?: { x: number; z: number };
+    __playerPos?: { x: number; z: number; rotation: number };
   }
 }
 
@@ -479,7 +479,7 @@ export class GameCore {
     }
 
     // Expose player position for map overlay
-    window.__playerPos = { x: localPlayer.position.x, z: localPlayer.position.z };
+    window.__playerPos = { x: localPlayer.position.x, z: localPlayer.position.z, rotation: localPlayer.yaw };
   }
 
   private onResize = (): void => {
