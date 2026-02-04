@@ -63,8 +63,11 @@ export const WEIGHT_MAX = 0.5;
 export const WEIGHT_RANGE = WEIGHT_MAX - WEIGHT_MIN; // 1.0
 
 // ============== Streaming ==============
-/** Number of chunks to load in each direction from player */
-export const STREAM_RADIUS = 6;
+/** XZ radius for surface column requests (horizontal view distance) */
+export const SURFACE_COLUMN_RADIUS = 6;
+
+/** 3D radius for chunk requests around player (caves/digging) */
+export const PLAYER_CHUNK_RADIUS = 2;
 
 /** Extra margin (in chunks) before unloading - prevents pop-in/out at boundaries */
 export const STREAM_UNLOAD_MARGIN = 1;

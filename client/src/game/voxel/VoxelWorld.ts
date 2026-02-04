@@ -4,8 +4,10 @@
 
 import * as THREE from 'three';
 import {
-  STREAM_RADIUS,
+  SURFACE_COLUMN_RADIUS,
+  PLAYER_CHUNK_RADIUS,
   STREAM_UNLOAD_MARGIN,
+  CHUNK_SIZE,
   worldToChunk,
   chunkKey,
   TerrainGenerator,
@@ -22,6 +24,7 @@ import { meshChunk } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
 import { sendBinary } from '../../net/netClient.js';
 import { storeBridge } from '../../state/bridge.js';
+import { getMapTileCache } from '../../ui/MapOverlay.js';
 
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
@@ -84,9 +87,8 @@ export class VoxelWorld {
       return;
     }
 
-    // Local mode: Generate initial 4×4×4 chunks centered at origin
-    // Stream radius of 2 means chunks from -2 to +1 (4 chunks per axis)
-    const halfRadius = Math.floor(STREAM_RADIUS / 2);
+    // Local mode: Generate initial chunks centered at origin
+    const halfRadius = Math.floor(PLAYER_CHUNK_RADIUS / 2);
 
     for (let cz = -halfRadius; cz < halfRadius; cz++) {
       for (let cy = -halfRadius; cy < halfRadius; cy++) {
@@ -137,36 +139,45 @@ export class VoxelWorld {
 
   /**
    * Update which chunks are loaded based on new player position.
+   * 
+   * Two-phase loading:
+   * 1. Surface columns (large XZ radius) - gets terrain + structures
+   * 2. 3D chunks (small radius around player) - for caves/digging below surface
    */
   private updateLoadedChunks(pcx: number, pcy: number, pcz: number): void {
-    const halfRadius = Math.floor(STREAM_RADIUS / 2);
-    // Use larger unload radius to prevent pop-in/out at chunk boundaries (hysteresis)
-    const halfUnloadRadius = halfRadius + STREAM_UNLOAD_MARGIN;
+    // Surface column bounds (XZ only, larger radius)
+    const surfaceMinCx = pcx - SURFACE_COLUMN_RADIUS;
+    const surfaceMaxCx = pcx + SURFACE_COLUMN_RADIUS - 1;
+    const surfaceMinCz = pcz - SURFACE_COLUMN_RADIUS;
+    const surfaceMaxCz = pcz + SURFACE_COLUMN_RADIUS - 1;
     
-    // Loading bounds (tighter)
-    const newMinCx = pcx - halfRadius;
-    const newMaxCx = pcx + halfRadius - 1;
-    const newMinCy = pcy - halfRadius;
-    const newMaxCy = pcy + halfRadius - 1;
-    const newMinCz = pcz - halfRadius;
-    const newMaxCz = pcz + halfRadius - 1;
+    // 3D chunk bounds (smaller radius)
+    const chunkMinCx = pcx - PLAYER_CHUNK_RADIUS;
+    const chunkMaxCx = pcx + PLAYER_CHUNK_RADIUS - 1;
+    const chunkMinCy = pcy - PLAYER_CHUNK_RADIUS;
+    const chunkMaxCy = pcy + PLAYER_CHUNK_RADIUS - 1;
+    const chunkMinCz = pcz - PLAYER_CHUNK_RADIUS;
+    const chunkMaxCz = pcz + PLAYER_CHUNK_RADIUS - 1;
+    
+    // Unload bounds: use larger of surface XZ or chunk XZ, plus margin
+    const unloadMarginXZ = SURFACE_COLUMN_RADIUS + STREAM_UNLOAD_MARGIN;
+    const unloadMarginY = PLAYER_CHUNK_RADIUS + STREAM_UNLOAD_MARGIN;
+    
+    const unloadMinCx = pcx - unloadMarginXZ;
+    const unloadMaxCx = pcx + unloadMarginXZ - 1;
+    const unloadMinCy = pcy - unloadMarginY;
+    const unloadMaxCy = pcy + unloadMarginY - 1;
+    const unloadMinCz = pcz - unloadMarginXZ;
+    const unloadMaxCz = pcz + unloadMarginXZ - 1;
 
-    // Unloading bounds (larger with margin)
-    const unloadMinCx = pcx - halfUnloadRadius;
-    const unloadMaxCx = pcx + halfUnloadRadius - 1;
-    const unloadMinCy = pcy - halfUnloadRadius;
-    const unloadMaxCy = pcy + halfUnloadRadius - 1;
-    const unloadMinCz = pcz - halfUnloadRadius;
-    const unloadMaxCz = pcz + halfUnloadRadius - 1;
-
-    // Unload chunks that are now out of unload range (larger threshold)
+    // Unload chunks outside unload bounds
     const chunksToUnload: string[] = [];
     for (const [key, chunk] of this.chunks) {
-      if (
-        chunk.cx < unloadMinCx || chunk.cx > unloadMaxCx ||
-        chunk.cy < unloadMinCy || chunk.cy > unloadMaxCy ||
-        chunk.cz < unloadMinCz || chunk.cz > unloadMaxCz
-      ) {
+      const outOfXZ = chunk.cx < unloadMinCx || chunk.cx > unloadMaxCx ||
+                      chunk.cz < unloadMinCz || chunk.cz > unloadMaxCz;
+      const outOfY = chunk.cy < unloadMinCy || chunk.cy > unloadMaxCy;
+      
+      if (outOfXZ || outOfY) {
         chunksToUnload.push(key);
       }
     }
@@ -176,21 +187,20 @@ export class VoxelWorld {
 
     // Load new chunks/columns based on mode
     if (storeBridge.useServerChunks) {
-      // Server mode: request surface columns (XZ only)
-      this.requestMissingColumns(newMinCx, newMaxCx, newMinCz, newMaxCz, pcy);
+      // Server mode: request surface columns + 3D chunks
+      this.requestMissingColumns(surfaceMinCx, surfaceMaxCx, surfaceMinCz, surfaceMaxCz);
+      this.requestMissing3DChunks(chunkMinCx, chunkMaxCx, chunkMinCy, chunkMaxCy, chunkMinCz, chunkMaxCz);
     } else {
-      // Local mode: generate all chunks in 3D volume
-      for (let cz = newMinCz; cz <= newMaxCz; cz++) {
-        for (let cy = newMinCy; cy <= newMaxCy; cy++) {
-          for (let cx = newMinCx; cx <= newMaxCx; cx++) {
+      // Local mode: generate all chunks in 3D volume (smaller radius)
+      for (let cz = chunkMinCz; cz <= chunkMaxCz; cz++) {
+        for (let cy = chunkMinCy; cy <= chunkMaxCy; cy++) {
+          for (let cx = chunkMinCx; cx <= chunkMaxCx; cx++) {
             const key = chunkKey(cx, cy, cz);
             if (!this.chunks.has(key) && !this.pendingChunks.has(key)) {
               const chunk = this.loadChunk(cx, cy, cz);
               
-              // Only queue for remesh if chunk was generated locally (not server mode)
               if (chunk) {
                 this.remeshQueue.add(key);
-                // Also queue neighbors for remesh (for seamless boundaries)
                 this.queueNeighborRemesh(cx, cy, cz);
               }
             }
@@ -200,9 +210,9 @@ export class VoxelWorld {
     }
 
     this.loadedBounds = {
-      minCx: newMinCx, maxCx: newMaxCx,
-      minCy: newMinCy, maxCy: newMaxCy,
-      minCz: newMinCz, maxCz: newMaxCz,
+      minCx: surfaceMinCx, maxCx: surfaceMaxCx,
+      minCy: chunkMinCy, maxCy: chunkMaxCy,
+      minCz: surfaceMinCz, maxCz: surfaceMaxCz,
     };
   }
 
@@ -212,20 +222,15 @@ export class VoxelWorld {
    */
   private requestMissingColumns(
     minCx: number, maxCx: number,
-    minCz: number, maxCz: number,
-    playerCy: number
+    minCz: number, maxCz: number
   ): void {
     for (let cz = minCz; cz <= maxCz; cz++) {
       for (let cx = minCx; cx <= maxCx; cx++) {
         const columnKey = `${cx},${cz}`;
         
-        // Skip if column already pending
+        // Skip if column already pending or we have any chunks in this column
         if (this.pendingColumns.has(columnKey)) continue;
-        
-        // Check if we already have chunks for this column
-        // We need to request if there are any missing chunks near player Y
-        const hasNearbyChunks = this.hasColumnChunksNear(cx, cz, playerCy);
-        if (hasNearbyChunks) continue;
+        if (this.hasAnyChunkInColumn(cx, cz)) continue;
         
         // Request surface column
         this.pendingColumns.add(columnKey);
@@ -237,14 +242,51 @@ export class VoxelWorld {
   }
 
   /**
-   * Check if we have chunks for a column near the player's Y position.
+   * Request missing 3D chunks around the player.
+   * Only requests chunks below surface height to avoid waste.
+   * Skips columns with pending surface requests (wait for those first).
    */
-  private hasColumnChunksNear(cx: number, cz: number, playerCy: number): boolean {
-    // Check for chunks in a Y range around player
-    for (let dy = -2; dy <= 2; dy++) {
-      const cy = playerCy + dy;
-      const key = chunkKey(cx, cy, cz);
-      if (this.chunks.has(key)) {
+  private requestMissing3DChunks(
+    minCx: number, maxCx: number,
+    minCy: number, maxCy: number,
+    minCz: number, maxCz: number
+  ): void {
+    const tileCache = getMapTileCache();
+    
+    for (let cz = minCz; cz <= maxCz; cz++) {
+      for (let cx = minCx; cx <= maxCx; cx++) {
+        const columnKey = `${cx},${cz}`;
+        
+        // Skip if surface column is pending - wait for it to return first
+        if (this.pendingColumns.has(columnKey)) continue;
+        
+        // Get surface height for this column to avoid requesting above surface
+        const yRange = tileCache.getYRange(cx, cz);
+        const surfaceCy = yRange ? Math.floor(yRange.maxY / CHUNK_SIZE) : null;
+        
+        for (let cy = minCy; cy <= maxCy; cy++) {
+          // Skip chunks above surface (already covered by surface columns)
+          if (surfaceCy !== null && cy > surfaceCy) continue;
+          
+          const key = chunkKey(cx, cy, cz);
+          
+          // Skip if already loaded or pending
+          if (this.chunks.has(key)) continue;
+          if (this.pendingChunks.has(key)) continue;
+          
+          // Request individual chunk
+          this.requestChunkFromServer(cx, cy, cz);
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if we have any chunks loaded in a column.
+   */
+  private hasAnyChunkInColumn(cx: number, cz: number): boolean {
+    for (const chunk of this.chunks.values()) {
+      if (chunk.cx === cx && chunk.cz === cz) {
         return true;
       }
     }

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { VoxelWorld } from './VoxelWorld.js';
 import {
   Chunk,
-  STREAM_RADIUS,
+  PLAYER_CHUNK_RADIUS,
   CHUNK_SIZE,
   CHUNK_WORLD_SIZE,
   INITIAL_TERRAIN_HEIGHT,
@@ -50,7 +50,7 @@ describe('Init Tests', () => {
     const { world } = createTestWorld();
     world.init();
     
-    const halfRadius = Math.floor(STREAM_RADIUS / 2);
+    const halfRadius = Math.floor(PLAYER_CHUNK_RADIUS / 2);
     
     expect(world.getChunk(-halfRadius, -halfRadius, -halfRadius)).toBeDefined();
     expect(world.getChunk(halfRadius - 1, halfRadius - 1, halfRadius - 1)).toBeDefined();
@@ -181,7 +181,7 @@ describe('Streaming Tests', () => {
     
     world.update(new THREE.Vector3(-16, 0, 0));
     
-    const halfRadius = Math.floor(STREAM_RADIUS / 2);
+    const halfRadius = Math.floor(PLAYER_CHUNK_RADIUS / 2);
     const chunk = world.getChunk(-2 - halfRadius, 0, 0);
     expect(chunk).toBeDefined();
     
@@ -295,7 +295,7 @@ describe('getStats Tests', () => {
     world.init();
     
     const stats = world.getStats();
-    const halfRadius = Math.floor(STREAM_RADIUS / 2);
+    const halfRadius = Math.floor(PLAYER_CHUNK_RADIUS / 2);
     
     expect(stats.bounds.minCx).toBe(-halfRadius);
     expect(stats.bounds.maxCx).toBe(halfRadius - 1);

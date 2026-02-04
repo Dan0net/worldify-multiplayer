@@ -7,7 +7,7 @@ import { describe, test, expect } from 'vitest';
 import * as THREE from 'three';
 import { VoxelIntegration, VoxelConfig } from './VoxelIntegration.js';
 import {
-  STREAM_RADIUS,
+  PLAYER_CHUNK_RADIUS,
   CHUNK_WORLD_SIZE,
   INITIAL_TERRAIN_HEIGHT,
   VOXEL_SCALE,

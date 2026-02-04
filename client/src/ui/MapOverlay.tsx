@@ -13,7 +13,7 @@ import { useGameStore } from '../state/store';
 import { storeBridge } from '../state/bridge';
 import { MapRenderer } from '../game/maptile/MapRenderer';
 import { MapTileCache } from '../game/maptile/MapTileCache';
-import { CHUNK_SIZE, VOXEL_SCALE, STREAM_RADIUS, encodeMapTileRequest } from '@worldify/shared';
+import { CHUNK_SIZE, VOXEL_SCALE, SURFACE_COLUMN_RADIUS, encodeMapTileRequest } from '@worldify/shared';
 import { sendBinary } from '../net/netClient';
 
 // Singleton instances managed by this component
@@ -159,9 +159,9 @@ export function MapOverlay() {
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
     const centerTz = Math.floor(z / (CHUNK_SIZE * VOXEL_SCALE));
     
-    // Request tiles if connected - match chunk stream radius
+    // Request tiles if connected - match surface column radius
     if (connectionStatus === 'connected') {
-      requestTilesAround(x, z, STREAM_RADIUS);
+      requestTilesAround(x, z, SURFACE_COLUMN_RADIUS);
     }
     
     // Update renderer and render tiles
