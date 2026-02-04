@@ -354,12 +354,15 @@ export class ChunkMesh {
 
   /**
    * Set visibility of all meshes (for culling).
+   * When preview is active, main meshes stay hidden regardless of this setting.
    * Does not affect preview meshes.
    */
   setVisible(visible: boolean): void {
-    if (this.solidMesh) this.solidMesh.visible = visible;
-    if (this.transparentMesh) this.transparentMesh.visible = visible;
-    if (this.liquidMesh) this.liquidMesh.visible = visible;
+    // If preview is active, main meshes must stay hidden
+    const effectiveVisible = visible && !this.previewActive;
+    if (this.solidMesh) this.solidMesh.visible = effectiveVisible;
+    if (this.transparentMesh) this.transparentMesh.visible = effectiveVisible;
+    if (this.liquidMesh) this.liquidMesh.visible = effectiveVisible;
   }
 
   /**
