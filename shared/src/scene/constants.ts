@@ -58,11 +58,11 @@ export const PLACEHOLDER_NORMAL = { r: 128, g: 128, b: 255 };
 
 // ============== Day-Night Cycle Defaults ==============
 
-/** Default time of day (0-1, 0.35 = ~8:30am morning light) */
-export const DEFAULT_TIME_OF_DAY = 0.5;
+/** Default time of day (0-1, 0.375 = 9:00am morning light) */
+export const DEFAULT_TIME_OF_DAY = 0.375;
 
 /** Default time speed in game-minutes per real-second (0 = paused) */
-export const DEFAULT_TIME_SPEED = 5;
+export const DEFAULT_TIME_SPEED = 0;
 
 /** Sun orbital elevation range (degrees) */
 export const SUN_ELEVATION_MIN = -20; // Below horizon at midnight
