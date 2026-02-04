@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
   VISIBILITY_UNLOAD_BUFFER,
+  CHUNK_WORLD_SIZE,
   worldToChunk,
   chunkKey,
   BuildOperation,
@@ -59,6 +60,12 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Last player chunk position (for detecting chunk changes) */
   private lastPlayerChunk: { cx: number; cy: number; cz: number } | null = null;
+
+  /** Last chunk where BFS was computed (for hysteresis) */
+  private lastBFSChunk: { cx: number; cy: number; cz: number } | null = null;
+
+  /** Cached reachable set from last BFS (reused until player changes chunk) */
+  private cachedReachable: Set<string> = new Set();
 
   /** Queue of chunks that need remeshing */
   private remeshQueue: Set<string> = new Set();
@@ -120,8 +127,9 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Update using visibility BFS (server mode).
-   * Handles initial bootstrap + ongoing visibility-based loading.
+   * Update using visibility BFS.
+   * BFS only runs when player moves to a new chunk (hysteresis).
+   * Frustum culling runs every frame for mesh visibility.
    */
   private updateWithVisibility(playerChunk: { cx: number; cy: number; cz: number }): void {
     // Bootstrap: request initial surface column if not yet done
@@ -136,26 +144,39 @@ export class VoxelWorld implements ChunkProvider {
       return;
     }
 
-    // Get visible chunks via BFS
+    // Check if player moved to a new chunk (hysteresis)
+    const chunkChanged = !this.lastBFSChunk ||
+      playerChunk.cx !== this.lastBFSChunk.cx ||
+      playerChunk.cy !== this.lastBFSChunk.cy ||
+      playerChunk.cz !== this.lastBFSChunk.cz;
+
     const frustum = getFrustumFromCamera(this.camera);
     const cameraDir = getCameraDirection(this.camera);
-    
-    const { visible, toRequest } = getVisibleChunks(
-      playerChunk,
-      cameraDir,
-      frustum,
-      this,
-      VISIBILITY_RADIUS
-    );
 
-    // Request missing visible chunks (one at a time for smooth loading)
-    this.requestVisibleChunks(toRequest);
+    if (chunkChanged) {
+      // Recompute BFS from new chunk
+      this.lastBFSChunk = { ...playerChunk };
+      
+      const { reachable, toRequest } = getVisibleChunks(
+        playerChunk,
+        cameraDir,
+        frustum,
+        this,
+        VISIBILITY_RADIUS
+      );
 
-    // Update mesh visibility
-    this.updateMeshVisibility(visible);
+      // Update cached reachable set
+      this.cachedReachable = reachable;
 
-    // Unload chunks far outside visible set
-    this.unloadDistantChunks(visible);
+      // Request missing chunks that are in frustum
+      this.requestVisibleChunks(toRequest);
+    }
+
+    // Always update mesh visibility with frustum culling (camera may have rotated)
+    this.updateMeshVisibilityWithFrustum(this.cachedReachable, frustum);
+
+    // Unload chunks far outside reachable set (with +2 hysteresis buffer)
+    this.unloadDistantChunks(this.cachedReachable);
   }
 
   /**
@@ -192,20 +213,44 @@ export class VoxelWorld implements ChunkProvider {
     }
   }
 
+  /** Reusable Box3 for frustum intersection tests */
+  private static readonly tempBox = new THREE.Box3();
+
   /**
-   * Update mesh visibility based on visible chunk set.
+   * Update mesh visibility based on reachable chunks + frustum culling.
+   * This runs every frame to handle camera rotation.
    */
-  private updateMeshVisibility(visible: Set<string>): void {
+  private updateMeshVisibilityWithFrustum(reachable: Set<string>, frustum: THREE.Frustum): void {
+    const box = VoxelWorld.tempBox;
+
     for (const [key, chunkMesh] of this.meshes) {
-      const shouldBeVisible = visible.has(key);
-      chunkMesh.setVisible(shouldBeVisible);
+      if (!reachable.has(key)) {
+        chunkMesh.setVisible(false);
+        continue;
+      }
+
+      // Frustum cull reachable chunks
+      const chunk = this.chunks.get(key);
+      if (!chunk) {
+        chunkMesh.setVisible(false);
+        continue;
+      }
+
+      const worldX = chunk.cx * CHUNK_WORLD_SIZE;
+      const worldY = chunk.cy * CHUNK_WORLD_SIZE;
+      const worldZ = chunk.cz * CHUNK_WORLD_SIZE;
+      box.min.set(worldX, worldY, worldZ);
+      box.max.set(worldX + CHUNK_WORLD_SIZE, worldY + CHUNK_WORLD_SIZE, worldZ + CHUNK_WORLD_SIZE);
+
+      chunkMesh.setVisible(frustum.intersectsBox(box));
     }
   }
 
   /**
-   * Unload chunks that are far outside the visible set.
+   * Unload chunks that are far outside the reachable set.
+   * Uses hysteresis (+2 chunks) to prevent popping at boundaries.
    */
-  private unloadDistantChunks(visible: Set<string>): void {
+  private unloadDistantChunks(reachable: Set<string>): void {
     if (!this.lastPlayerChunk) return;
     
     const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
@@ -213,10 +258,10 @@ export class VoxelWorld implements ChunkProvider {
     
     const chunksToUnload: string[] = [];
     for (const [key, chunk] of this.chunks) {
-      // Keep if visible
-      if (visible.has(key)) continue;
+      // Keep if reachable via BFS
+      if (reachable.has(key)) continue;
       
-      // Unload if outside unload radius
+      // Unload if outside unload radius (hysteresis buffer)
       const dx = Math.abs(chunk.cx - pcx);
       const dy = Math.abs(chunk.cy - pcy);
       const dz = Math.abs(chunk.cz - pcz);
@@ -261,6 +306,7 @@ export class VoxelWorld implements ChunkProvider {
     
     // Create or update chunk
     let chunk = this.chunks.get(key);
+    const isNewChunk = !chunk;
     if (!chunk) {
       chunk = new Chunk(cx, cy, cz);
       this.chunks.set(key, chunk);
@@ -276,6 +322,11 @@ export class VoxelWorld implements ChunkProvider {
     
     // Queue for remeshing
     this.remeshQueue.add(key);
+    
+    // Invalidate BFS cache when new chunks load (they may open visibility paths)
+    if (isNewChunk) {
+      this.lastBFSChunk = null;
+    }
     
     return chunk;
   }

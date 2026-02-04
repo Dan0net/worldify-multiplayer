@@ -28,9 +28,9 @@ import type { Chunk } from './Chunk.js';
 // ============== Types ==============
 
 export interface VisibilityResult {
-  /** Chunks that are visible and should be loaded/rendered */
-  visible: Set<string>;
-  /** Chunks that need to be requested (visible but not loaded) */
+  /** Chunks that are reachable via visibility graph (no frustum culling) */
+  reachable: Set<string>;
+  /** Chunks that need to be requested (in frustum, reachable, but not loaded) */
   toRequest: Set<string>;
 }
 
@@ -243,31 +243,22 @@ export function getVisibleChunks(
   }
   
   // Build output Sets
-  // Visible: frustum-culled for rendering. toRequest: also frustum-culled (no point loading behind camera)
-  const visible = new Set<string>();
+  // Reachable: all chunks BFS reached (no frustum - that's done per-frame in VoxelWorld)
+  // toRequest: frustum-culled (no point loading behind camera)
+  const reachable = new Set<string>();
   const toRequest = new Set<string>();
   
   for (let i = 0; i < visibleCount; i++) {
     const idx = visibleIndices[i];
     const { cx, cy, cz } = indexToWorldChunk(idx, baseCx, baseCy, baseCz, centerOffset);
-    
-    // Frustum cull
-    const worldX = cx * CHUNK_WORLD_SIZE;
-    const worldY = cy * CHUNK_WORLD_SIZE;
-    const worldZ = cz * CHUNK_WORLD_SIZE;
-    tempBox.min.set(worldX, worldY, worldZ);
-    tempBox.max.set(worldX + CHUNK_WORLD_SIZE, worldY + CHUNK_WORLD_SIZE, worldZ + CHUNK_WORLD_SIZE);
-    
-    if (frustum.intersectsBox(tempBox)) {
-      visible.add(chunkKey(cx, cy, cz));
-    }
+    reachable.add(chunkKey(cx, cy, cz));
   }
   
   for (let i = 0; i < toRequestCount; i++) {
     const idx = toRequestIndices[i];
     const { cx, cy, cz } = indexToWorldChunk(idx, baseCx, baseCy, baseCz, centerOffset);
     
-    // Also frustum cull requests - no point loading chunks behind camera
+    // Frustum cull requests - no point loading chunks behind camera
     const worldX = cx * CHUNK_WORLD_SIZE;
     const worldY = cy * CHUNK_WORLD_SIZE;
     const worldZ = cz * CHUNK_WORLD_SIZE;
@@ -279,7 +270,7 @@ export function getVisibleChunks(
     }
   }
   
-  return { visible, toRequest };
+  return { reachable, toRequest };
 }
 
 // ============== Helpers ==============
