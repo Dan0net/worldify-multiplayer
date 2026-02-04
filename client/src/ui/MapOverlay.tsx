@@ -97,7 +97,7 @@ export function MapOverlay() {
   const toggleMapOverlay = useGameStore((s) => s.toggleMapOverlay);
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const markerRef = useRef<SVGSVGElement>(null);
   const animationRef = useRef<number>(0);
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
@@ -132,14 +132,13 @@ export function MapOverlay() {
 
   // Initialize renderer when overlay is shown
   useEffect(() => {
-    if (!showMapOverlay || !canvasRef.current) return;
+    if (!showMapOverlay || !containerRef.current) return;
     
-    const canvas = canvasRef.current;
-    canvas.width = 200;
-    canvas.height = 200;
+    const container = containerRef.current;
     
     if (!mapRenderer) {
-      mapRenderer = new MapRenderer(canvas, { scale: ZOOM_LEVELS[zoomIndex] });
+      mapRenderer = new MapRenderer(container, { scale: ZOOM_LEVELS[zoomIndex] });
+      mapRenderer.setViewportSize(200, 200);
     }
     
     return () => {
@@ -193,10 +192,10 @@ export function MapOverlay() {
   return (
     <div className="fixed top-5 right-5 z-40" style={{ position: 'fixed' }}>
       <div className="relative">
-        <canvas
-          ref={canvasRef}
-          className="rounded border border-green-500/30 bg-black/80"
-          style={{ imageRendering: 'pixelated' }}
+        <div
+          ref={containerRef}
+          className="rounded border border-green-500/30 bg-black/80 overflow-hidden"
+          style={{ width: 200, height: 200, position: 'relative' }}
         />
         <PlayerMarker markerRef={markerRef} />
       </div>

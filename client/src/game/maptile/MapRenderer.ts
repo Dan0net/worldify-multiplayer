@@ -1,11 +1,14 @@
 /**
- * MapRenderer - Renders map tiles to a canvas using ImageData for performance
+ * MapRenderer - Renders map tiles using DOM elements for GPU-accelerated transforms
  * 
- * Optimizations:
- * - Pre-computed RGB color lookup table
- * - ImageData buffer for batch pixel writes (1 putImageData vs 1000+ fillRect)
- * - Cached tile images that only update when tile data changes
- * - Dirty tracking to skip unchanged tiles
+ * Architecture:
+ * - Each tile is a separate <img> element positioned absolutely
+ * - All tiles are inside a container that moves via CSS transform
+ * - Player movement only updates the container transform (no re-rendering)
+ * - Tile images only update when tile data changes (hash-based dirty check)
+ * 
+ * This approach uses the browser's compositor for smooth scrolling without
+ * any per-frame canvas operations.
  */
 
 import {
@@ -44,42 +47,53 @@ function initColorCache(): void {
   MATERIAL_RGB_CACHE[255] = [255, 255, 255];
 }
 
-/** Cached rendered tile data */
+/** Cached tile info */
 interface CachedTile {
-  /** The ImageData for this tile at scale 1 */
-  imageData: ImageData;
+  /** Data URL of the rendered tile image */
+  dataUrl: string;
   /** Hash of tile data for dirty checking */
   dataHash: number;
 }
 
 /**
- * Renders map tiles to a 2D canvas using ImageData for performance.
+ * DOM-based map renderer using CSS transforms for smooth scrolling.
  */
 export class MapRenderer {
-  private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
+  private container: HTMLDivElement;
+  private tilesContainer: HTMLDivElement;
   private config: MapRendererConfig;
+  private viewportWidth = 200;
+  private viewportHeight = 200;
   
-  // Player position for calculating map scroll offset
+  // Player position for calculating transform
   private playerX = 0;
   private playerZ = 0;
 
-  // Tile image cache (keyed by "tx,tz")
-  private tileCache = new Map<string, CachedTile>();
+  // Tile data cache (keyed by "tx,tz")
+  private tileDataCache = new Map<string, CachedTile>();
+  
+  // DOM element cache (keyed by "tx,tz")
+  private tileElements = new Map<string, HTMLDivElement>();
 
-  // Offscreen canvas for scaling
+  // Offscreen canvas for tile rendering
   private offscreenCanvas: HTMLCanvasElement;
   private offscreenCtx: CanvasRenderingContext2D;
 
-  constructor(canvas: HTMLCanvasElement, config: Partial<MapRendererConfig> = {}) {
-    this.canvas = canvas;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get 2D context');
-    this.ctx = ctx;
+  constructor(container: HTMLDivElement, config: Partial<MapRendererConfig> = {}) {
+    this.container = container;
     this.config = { ...DEFAULT_CONFIG, ...config };
     
     // Initialize color cache
     initColorCache();
+    
+    // Create tiles container (this will be transformed)
+    this.tilesContainer = document.createElement('div');
+    this.tilesContainer.style.cssText = `
+      position: absolute;
+      will-change: transform;
+      transform-origin: 0 0;
+    `;
+    this.container.appendChild(this.tilesContainer);
     
     // Create offscreen canvas for tile rendering
     this.offscreenCanvas = document.createElement('canvas');
@@ -88,6 +102,14 @@ export class MapRenderer {
     const offCtx = this.offscreenCanvas.getContext('2d');
     if (!offCtx) throw new Error('Failed to get offscreen 2D context');
     this.offscreenCtx = offCtx;
+  }
+
+  /**
+   * Set the viewport size (for centering calculations).
+   */
+  setViewportSize(width: number, height: number): void {
+    this.viewportWidth = width;
+    this.viewportHeight = height;
   }
 
   /**
@@ -102,119 +124,208 @@ export class MapRenderer {
    * Update configuration.
    */
   setConfig(config: Partial<MapRendererConfig>): void {
+    const scaleChanged = 'scale' in config && config.scale !== this.config.scale;
+    const shadingChanged = 'showHeightShading' in config || 'heightRange' in config;
+    
     this.config = { ...this.config, ...config };
-    // Clear cache if height shading settings changed
-    if ('showHeightShading' in config || 'heightRange' in config) {
-      this.tileCache.clear();
+    
+    // Clear data cache if shading settings changed (need to re-render tiles)
+    if (shadingChanged) {
+      this.tileDataCache.clear();
+    }
+    
+    // Update all tile sizes if scale changed
+    if (scaleChanged) {
+      this.updateAllTileSizes();
     }
   }
 
   /**
-   * Render all tiles centered on player position.
-   * Uses sub-tile offset for smooth scrolling.
+   * Update sizes of all tile elements after scale change.
    */
-  render(tiles: Map<string, MapTileData>, centerTx: number, centerTz: number): void {
+  private updateAllTileSizes(): void {
     const { scale } = this.config;
     const tileScreenSize = MAP_TILE_SIZE * scale;
     
-    // Calculate player's sub-tile offset (position within current tile)
-    // VOXEL_SCALE = 0.25, so tile world size = MAP_TILE_SIZE * 0.25 = 8m
+    for (const [key, element] of this.tileElements) {
+      const [txStr, tzStr] = key.split(',');
+      const tx = parseInt(txStr, 10);
+      const tz = parseInt(tzStr, 10);
+      
+      const left = tx * tileScreenSize;
+      const top = tz * tileScreenSize;
+      // Preserve the background-image when updating size
+      const bgImage = element.style.backgroundImage;
+      element.style.cssText = `
+        position: absolute;
+        image-rendering: pixelated;
+        pointer-events: none;
+        background-size: 100% 100%;
+        background-image: ${bgImage};
+        left: ${left}px;
+        top: ${top}px;
+        width: ${tileScreenSize}px;
+        height: ${tileScreenSize}px;
+      `;
+    }
+  }
+
+  /**
+   * Render visible tiles. Only updates DOM when tiles change.
+   */
+  render(tiles: Map<string, MapTileData>, _centerTx: number, _centerTz: number): void {
+    const { scale } = this.config;
+    const tileScreenSize = MAP_TILE_SIZE * scale;
+    
+    // Calculate tile world size (MAP_TILE_SIZE * VOXEL_SCALE = 32 * 0.25 = 8m)
     const tileWorldSize = MAP_TILE_SIZE * 0.25;
-    const playerTileX = this.playerX / tileWorldSize;
-    const playerTileZ = this.playerZ / tileWorldSize;
     
-    // Fractional part = position within tile (0 to 1)
-    const fracX = playerTileX - Math.floor(playerTileX);
-    const fracZ = playerTileZ - Math.floor(playerTileZ);
-    
-    // Convert to screen offset (pixels to shift all tiles)
-    const offsetX = -fracX * tileScreenSize;
-    const offsetZ = -fracZ * tileScreenSize;
-    
-    // Calculate how many tiles fit on screen (add extra for offset)
-    const tilesX = Math.ceil(this.canvas.width / tileScreenSize) + 2;
-    const tilesZ = Math.ceil(this.canvas.height / tileScreenSize) + 2;
-    
-    // Center offset
+    // Calculate how many tiles we need to cover the viewport
+    const tilesX = Math.ceil(this.viewportWidth / tileScreenSize) + 2;
+    const tilesZ = Math.ceil(this.viewportHeight / tileScreenSize) + 2;
     const halfTilesX = Math.floor(tilesX / 2);
     const halfTilesZ = Math.floor(tilesZ / 2);
     
-    // Clear canvas
-    this.ctx.fillStyle = '#1a1a2e';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-    // Disable image smoothing for crisp pixels when scaled
-    this.ctx.imageSmoothingEnabled = false;
-
-    // Render visible tiles with offset
+    // Calculate center tile based on player position
+    const centerTx = Math.floor(this.playerX / tileWorldSize);
+    const centerTz = Math.floor(this.playerZ / tileWorldSize);
+    
+    // Track which tiles should be visible
+    const visibleKeys = new Set<string>();
+    
+    // Update/create tile elements for visible area
     for (let dz = -halfTilesZ; dz <= halfTilesZ; dz++) {
       for (let dx = -halfTilesX; dx <= halfTilesX; dx++) {
         const tx = centerTx + dx;
         const tz = centerTz + dz;
         const key = `${tx},${tz}`;
+        visibleKeys.add(key);
+        
         const tile = tiles.get(key);
-        
-        // Screen position for this tile (with sub-tile offset for smooth scrolling)
-        const screenX = Math.floor(this.canvas.width / 2 + dx * tileScreenSize + offsetX);
-        const screenZ = Math.floor(this.canvas.height / 2 + dz * tileScreenSize + offsetZ);
-        
-        if (tile) {
-          this.renderTile(tile, key, screenX, screenZ);
-        } else {
-          // Render placeholder for missing tiles
-          this.ctx.fillStyle = '#2a2a3e';
-          this.ctx.fillRect(screenX, screenZ, tileScreenSize, tileScreenSize);
-        }
+        this.updateTileElement(tx, tz, key, tile);
       }
     }
-    // Player marker is rendered as SVG overlay by MapOverlay component
+    
+    // Remove tile elements that are no longer visible
+    for (const [key, element] of this.tileElements) {
+      if (!visibleKeys.has(key)) {
+        element.remove();
+        this.tileElements.delete(key);
+      }
+    }
+    
+    // Update container transform for smooth scrolling
+    this.updateTransform();
   }
 
   /**
-   * Render a single tile using cached ImageData.
+   * Update the container transform based on player position.
    */
-  private renderTile(tile: MapTileData, key: string, screenX: number, screenZ: number): void {
+  private updateTransform(): void {
     const { scale } = this.config;
+    const tileWorldSize = MAP_TILE_SIZE * 0.25;
+    const tileScreenSize = MAP_TILE_SIZE * scale;
     
-    // Get or create cached tile image
-    const cached = this.getCachedTile(tile, key);
+    // Player position in tile coordinates
+    const playerTileX = this.playerX / tileWorldSize;
+    const playerTileZ = this.playerZ / tileWorldSize;
     
-    // Draw cached image to offscreen canvas
-    this.offscreenCtx.putImageData(cached.imageData, 0, 0);
+    // Center tile
+    const centerTx = Math.floor(playerTileX);
+    const centerTz = Math.floor(playerTileZ);
     
-    // Draw scaled to main canvas
-    this.ctx.drawImage(
-      this.offscreenCanvas,
-      0, 0, MAP_TILE_SIZE, MAP_TILE_SIZE,
-      screenX, screenZ, MAP_TILE_SIZE * scale, MAP_TILE_SIZE * scale
-    );
+    // Fractional offset within tile (0 to 1)
+    const fracX = playerTileX - centerTx;
+    const fracZ = playerTileZ - centerTz;
+    
+    // Calculate transform offset:
+    // - Center the (0,0) tile at viewport center
+    // - Then offset by fractional position for smooth scrolling
+    const baseOffsetX = this.viewportWidth / 2 - tileScreenSize / 2;
+    const baseOffsetZ = this.viewportHeight / 2 - tileScreenSize / 2;
+    
+    // Shift by center tile position (tiles are positioned relative to 0,0)
+    // and subtract fractional offset for smooth scrolling
+    const translateX = baseOffsetX - (centerTx + fracX) * tileScreenSize;
+    const translateZ = baseOffsetZ - (centerTz + fracZ) * tileScreenSize;
+    
+    this.tilesContainer.style.transform = `translate(${translateX}px, ${translateZ}px)`;
   }
 
   /**
-   * Get or create cached tile image.
+   * Update or create a tile element.
+   */
+  private updateTileElement(tx: number, tz: number, key: string, tile: MapTileData | undefined): void {
+    const { scale } = this.config;
+    const tileScreenSize = MAP_TILE_SIZE * scale;
+    
+    let element = this.tileElements.get(key);
+    
+    if (tile) {
+      // Get or create cached tile data
+      const cached = this.getCachedTile(tile, key);
+      
+      if (!element) {
+        // Create new tile element (use div with background-image for reliable sizing)
+        element = document.createElement('div');
+        this.tilesContainer.appendChild(element);
+        this.tileElements.set(key, element);
+      }
+      
+      // Update image if data changed
+      if (element.dataset.hash !== String(cached.dataHash)) {
+        element.style.backgroundImage = `url(${cached.dataUrl})`;
+        element.dataset.hash = String(cached.dataHash);
+      }
+      
+      // Update all styles together to avoid partial updates
+      const left = tx * tileScreenSize;
+      const top = tz * tileScreenSize;
+      element.style.cssText = `
+        position: absolute;
+        image-rendering: pixelated;
+        pointer-events: none;
+        background-size: 100% 100%;
+        background-image: url(${cached.dataUrl});
+        left: ${left}px;
+        top: ${top}px;
+        width: ${tileScreenSize}px;
+        height: ${tileScreenSize}px;
+      `;
+    } else {
+      // No tile data - show placeholder or remove
+      if (element) {
+        element.remove();
+        this.tileElements.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Get or create cached tile data.
    */
   private getCachedTile(tile: MapTileData, key: string): CachedTile {
     const dataHash = this.computeTileHash(tile);
     
-    let cached = this.tileCache.get(key);
+    let cached = this.tileDataCache.get(key);
     if (cached && cached.dataHash === dataHash) {
       return cached;
     }
     
-    // Create new ImageData for this tile
-    const imageData = this.renderTileToImageData(tile);
-    cached = { imageData, dataHash };
-    this.tileCache.set(key, cached);
+    // Render tile to canvas and get data URL
+    this.renderTileToCanvas(tile);
+    const dataUrl = this.offscreenCanvas.toDataURL();
+    
+    cached = { dataUrl, dataHash };
+    this.tileDataCache.set(key, cached);
     
     return cached;
   }
 
   /**
    * Compute a simple hash of tile data for dirty checking.
-   * Uses all pixels for accurate change detection.
    */
   private computeTileHash(tile: MapTileData): number {
-    // Hash all pixels for accurate dirty detection
     let hash = 0;
     for (let i = 0; i < tile.heights.length; i++) {
       hash = ((hash << 5) - hash + tile.heights[i]) | 0;
@@ -224,11 +335,11 @@ export class MapRenderer {
   }
 
   /**
-   * Render tile to ImageData buffer.
+   * Render tile to offscreen canvas.
    */
-  private renderTileToImageData(tile: MapTileData): ImageData {
+  private renderTileToCanvas(tile: MapTileData): void {
     const { showHeightShading, heightRange } = this.config;
-    const imageData = new ImageData(MAP_TILE_SIZE, MAP_TILE_SIZE);
+    const imageData = this.offscreenCtx.createImageData(MAP_TILE_SIZE, MAP_TILE_SIZE);
     const data = imageData.data;
     
     for (let lz = 0; lz < MAP_TILE_SIZE; lz++) {
@@ -257,32 +368,36 @@ export class MapRenderer {
         data[pixelIndex] = r;
         data[pixelIndex + 1] = g;
         data[pixelIndex + 2] = b;
-        data[pixelIndex + 3] = 255; // Alpha
+        data[pixelIndex + 3] = 255;
       }
     }
     
-    return imageData;
+    this.offscreenCtx.putImageData(imageData, 0, 0);
   }
 
   /**
    * Invalidate cached tile (call when tile data changes).
    */
   invalidateTile(tx: number, tz: number): void {
-    this.tileCache.delete(`${tx},${tz}`);
+    this.tileDataCache.delete(`${tx},${tz}`);
   }
 
   /**
-   * Clear all cached tiles.
+   * Clear all cached tiles and DOM elements.
    */
   clearCache(): void {
-    this.tileCache.clear();
+    this.tileDataCache.clear();
+    for (const element of this.tileElements.values()) {
+      element.remove();
+    }
+    this.tileElements.clear();
   }
 
   /**
-   * Resize canvas to fit container.
+   * Clean up DOM elements.
    */
-  resize(width: number, height: number): void {
-    this.canvas.width = width;
-    this.canvas.height = height;
+  dispose(): void {
+    this.clearCache();
+    this.tilesContainer.remove();
   }
 }
