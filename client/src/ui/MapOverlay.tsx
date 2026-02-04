@@ -13,7 +13,7 @@ import { useGameStore } from '../state/store';
 import { storeBridge } from '../state/bridge';
 import { MapRenderer } from '../game/maptile/MapRenderer';
 import { MapTileCache } from '../game/maptile/MapTileCache';
-import { CHUNK_SIZE, VOXEL_SCALE, SURFACE_COLUMN_RADIUS, encodeMapTileRequest } from '@worldify/shared';
+import { CHUNK_SIZE, VOXEL_SCALE, VISIBILITY_RADIUS, MAP_TILE_SIZE, encodeMapTileRequest } from '@worldify/shared';
 import { sendBinary } from '../net/netClient';
 
 // Singleton instances managed by this component
@@ -23,9 +23,17 @@ let mapRenderer: MapRenderer | null = null;
 // Track requested tiles to avoid duplicate requests
 const requestedTiles = new Set<string>();
 
-// Zoom levels (scale values)
-const ZOOM_LEVELS = [0.5, 1, 2, 4];
-const DEFAULT_ZOOM_INDEX = 1; // scale = 1
+// Map viewport size in pixels
+const MAP_VIEWPORT_SIZE = 200;
+
+// Calculate scale to fit all tiles in VISIBILITY_RADIUS
+// tiles across = VISIBILITY_RADIUS * 2 + 1 (e.g., 8 * 2 + 1 = 17)
+const TILES_ACROSS = VISIBILITY_RADIUS * 2 + 1;
+const FIT_ALL_SCALE = MAP_VIEWPORT_SIZE / (TILES_ACROSS * MAP_TILE_SIZE);
+
+// Zoom levels - start with scale that fits all visible tiles
+const ZOOM_LEVELS = [FIT_ALL_SCALE, FIT_ALL_SCALE * 2, FIT_ALL_SCALE * 4, FIT_ALL_SCALE * 8];
+const DEFAULT_ZOOM_INDEX = 0; // Start at scale that shows all tiles
 
 /**
  * Get the global map tile cache instance.
@@ -138,7 +146,7 @@ export function MapOverlay() {
     
     if (!mapRenderer) {
       mapRenderer = new MapRenderer(container, { scale: ZOOM_LEVELS[zoomIndex] });
-      mapRenderer.setViewportSize(200, 200);
+      mapRenderer.setViewportSize(MAP_VIEWPORT_SIZE, MAP_VIEWPORT_SIZE);
     }
     
     return () => {
@@ -159,9 +167,9 @@ export function MapOverlay() {
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
     const centerTz = Math.floor(z / (CHUNK_SIZE * VOXEL_SCALE));
     
-    // Request tiles if connected - match surface column radius
+    // Request tiles if connected - match BFS visibility radius
     if (connectionStatus === 'connected') {
-      requestTilesAround(x, z, SURFACE_COLUMN_RADIUS);
+      requestTilesAround(x, z, VISIBILITY_RADIUS);
     }
     
     // Update renderer and render tiles
@@ -195,7 +203,7 @@ export function MapOverlay() {
         <div
           ref={containerRef}
           className="rounded border border-green-500/30 bg-black/80 overflow-hidden"
-          style={{ width: 200, height: 200, position: 'relative' }}
+          style={{ width: MAP_VIEWPORT_SIZE, height: MAP_VIEWPORT_SIZE, position: 'relative' }}
         />
         <PlayerMarker markerRef={markerRef} />
       </div>
