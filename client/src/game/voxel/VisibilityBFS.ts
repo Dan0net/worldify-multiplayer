@@ -17,7 +17,6 @@ import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
   VISIBILITY_ALL,
-  CHUNK_WORLD_SIZE,
   chunkKey,
   ChunkFace,
   canSeeThrough,
@@ -82,9 +81,6 @@ const NEIGHBOR_OFFSETS = new Int8Array([
   0, 0, -1,  // NEG_Z = 5
 ]);
 
-/** Reusable Box3 for frustum intersection tests */
-const tempBox = new THREE.Box3();
-
 /** Reusable frustum (avoid allocation per frame) */
 const reusableFrustum = new THREE.Frustum();
 const reusableMatrix = new THREE.Matrix4();
@@ -141,7 +137,7 @@ function indexToWorldChunk(
 export function getVisibleChunks(
   cameraChunk: { cx: number; cy: number; cz: number },
   _cameraDir: THREE.Vector3,  // Reserved for future direction-based culling
-  frustum: THREE.Frustum,
+  _frustum: THREE.Frustum,
   chunkProvider: ChunkProvider,
   maxRadius: number = VISIBILITY_RADIUS
 ): VisibilityResult {
