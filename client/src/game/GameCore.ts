@@ -142,8 +142,16 @@ export class GameCore {
     storeBridge.setQualityLevel(qualityLevel);
     const effectiveVisibility = savedVisibility ?? QUALITY_PRESETS[qualityLevel].visibilityRadius;
     storeBridge.setVisibilityRadius(effectiveVisibility);
-    // Sync shader map toggles to store
+    // Sync all quality settings to store
     const preset = QUALITY_PRESETS[qualityLevel];
+    storeBridge.setSsaoEnabled(preset.ssaoEnabled);
+    storeBridge.setBloomEnabled(preset.bloomEnabled);
+    storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
+    storeBridge.setShadowsEnabled(preset.shadowsEnabled);
+    storeBridge.setMoonShadows(preset.moonShadows);
+    storeBridge.setShadowMapSize(preset.shadowMapSize);
+    storeBridge.setAnisotropy(preset.anisotropy);
+    storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
     storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
     storeBridge.setShaderAoMaps(preset.shaderAoMaps);
     storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);

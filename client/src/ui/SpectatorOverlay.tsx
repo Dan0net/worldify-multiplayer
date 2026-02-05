@@ -169,10 +169,17 @@ export function SpectatorOverlay() {
                   const preset = QUALITY_PRESETS[level];
                   applyQuality(level, visibilityRadius);
                   storeBridge.setQualityLevel(level);
+                  storeBridge.setSsaoEnabled(preset.ssaoEnabled);
+                  storeBridge.setBloomEnabled(preset.bloomEnabled);
+                  storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
+                  storeBridge.setShadowsEnabled(preset.shadowsEnabled);
+                  storeBridge.setMoonShadows(preset.moonShadows);
+                  storeBridge.setShadowMapSize(preset.shadowMapSize);
+                  storeBridge.setAnisotropy(preset.anisotropy);
+                  storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
                   storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
                   storeBridge.setShaderAoMaps(preset.shaderAoMaps);
                   storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
-                  useGameStore.getState().setPostProcessingEnabled(preset.postProcessingEnabled);
                 }}
                 className={`py-1 px-3 text-xs rounded transition-all duration-100 ${
                   qualityLevel === level

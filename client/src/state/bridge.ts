@@ -354,6 +354,38 @@ class StoreBridge {
     return getState().visibilityRadius;
   }
 
+  get ssaoEnabled(): boolean {
+    return getState().ssaoEnabled;
+  }
+
+  get bloomEnabled(): boolean {
+    return getState().bloomEnabled;
+  }
+
+  get colorCorrectionEnabled(): boolean {
+    return getState().colorCorrectionEnabled;
+  }
+
+  get shadowsEnabled(): boolean {
+    return getState().shadowsEnabled;
+  }
+
+  get moonShadows(): boolean {
+    return getState().moonShadows;
+  }
+
+  get shadowMapSize(): number {
+    return getState().shadowMapSize;
+  }
+
+  get anisotropy(): number {
+    return getState().anisotropy;
+  }
+
+  get maxPixelRatio(): number {
+    return getState().maxPixelRatio;
+  }
+
   get shaderNormalMaps(): boolean {
     return getState().shaderNormalMaps;
   }
@@ -372,6 +404,38 @@ class StoreBridge {
 
   setVisibilityRadius(radius: number): void {
     getState().setVisibilityRadius(radius);
+  }
+
+  setSsaoEnabled(enabled: boolean): void {
+    getState().setSsaoEnabled(enabled);
+  }
+
+  setBloomEnabled(enabled: boolean): void {
+    getState().setBloomEnabled(enabled);
+  }
+
+  setColorCorrectionEnabled(enabled: boolean): void {
+    getState().setColorCorrectionEnabled(enabled);
+  }
+
+  setShadowsEnabled(enabled: boolean): void {
+    getState().setShadowsEnabled(enabled);
+  }
+
+  setMoonShadows(enabled: boolean): void {
+    getState().setMoonShadows(enabled);
+  }
+
+  setShadowMapSize(size: number): void {
+    getState().setShadowMapSize(size);
+  }
+
+  setAnisotropy(value: number): void {
+    getState().setAnisotropy(value);
+  }
+
+  setMaxPixelRatio(ratio: number): void {
+    getState().setMaxPixelRatio(ratio);
   }
 
   setShaderNormalMaps(enabled: boolean): void {

@@ -91,6 +91,8 @@ export interface PostProcessingOptions {
   bloomRadius?: number;
   
   // Color correction options
+  /** Enable color correction pass (default: true) */
+  colorCorrectionEnabled?: boolean;
   /** Saturation (default: 1.2) - 0=grayscale, 1=normal, 2=highly saturated */
   saturation?: number;
 }
@@ -107,6 +109,7 @@ const defaultOptions: Required<PostProcessingOptions> = {
   bloomThreshold: 0.85,
   bloomRadius: 0.4,
   // Color correction defaults
+  colorCorrectionEnabled: true,
   saturation: 1.2,  // Slightly boosted for more vivid colors
 };
 
@@ -223,6 +226,9 @@ export function updatePostProcessing(options: PostProcessingOptions): void {
   if (options.bloomEnabled !== undefined && bloomPass) {
     bloomPass.enabled = options.bloomEnabled && effectsEnabled;
   }
+  if (options.colorCorrectionEnabled !== undefined && colorCorrectionPass) {
+    colorCorrectionPass.enabled = options.colorCorrectionEnabled && effectsEnabled;
+  }
   if (options.saturation !== undefined && colorCorrectionPass) {
     colorCorrectionPass.uniforms.saturation.value = options.saturation;
     originalSaturation = options.saturation;
@@ -231,7 +237,7 @@ export function updatePostProcessing(options: PostProcessingOptions): void {
     effectsEnabled = options.enabled;
     if (ssaoPass) ssaoPass.enabled = options.enabled && (options.ssaoEnabled ?? ssaoPass.enabled);
     if (bloomPass) bloomPass.enabled = options.enabled && (options.bloomEnabled ?? bloomPass.enabled);
-    if (colorCorrectionPass) colorCorrectionPass.enabled = options.enabled;
+    if (colorCorrectionPass) colorCorrectionPass.enabled = options.enabled && (options.colorCorrectionEnabled ?? colorCorrectionPass.enabled);
   }
 }
 

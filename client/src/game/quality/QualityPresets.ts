@@ -23,13 +23,13 @@ export const QUALITY_LABELS: Record<QualityLevel, string> = {
 };
 
 export interface QualitySettings {
-  // Post-processing
-  postProcessingEnabled: boolean;
+  // Post-processing (individual toggles)
   ssaoEnabled: boolean;
   bloomEnabled: boolean;
+  colorCorrectionEnabled: boolean;
 
   // Shadows
-  shadowMapSize: number;      // 512, 1024, 2048, 4096
+  shadowMapSize: number;      // 0 (off), 512, 1024, 2048, 4096
   shadowsEnabled: boolean;
   moonShadows: boolean;       // Moon casts shadows too
 
@@ -49,9 +49,9 @@ export interface QualitySettings {
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
   ultra: {
-    postProcessingEnabled: true,
     ssaoEnabled: true,
     bloomEnabled: true,
+    colorCorrectionEnabled: true,
     shadowMapSize: 4096,
     shadowsEnabled: true,
     moonShadows: true,
@@ -64,9 +64,9 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderMetalnessMaps: true,
   },
   high: {
-    postProcessingEnabled: true,
     ssaoEnabled: false,
     bloomEnabled: true,
+    colorCorrectionEnabled: true,
     shadowMapSize: 2048,
     shadowsEnabled: true,
     moonShadows: false,
@@ -79,9 +79,9 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderMetalnessMaps: true,
   },
   medium: {
-    postProcessingEnabled: true,
     ssaoEnabled: false,
     bloomEnabled: false,
+    colorCorrectionEnabled: true,
     shadowMapSize: 1024,
     shadowsEnabled: true,
     moonShadows: false,
@@ -94,11 +94,11 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderMetalnessMaps: true,
   },
   low: {
-    postProcessingEnabled: false,
     ssaoEnabled: false,
     bloomEnabled: false,
-    shadowMapSize: 512,
-    shadowsEnabled: true,
+    colorCorrectionEnabled: false,
+    shadowMapSize: 0,
+    shadowsEnabled: false,
     moonShadows: false,
     maxPixelRatio: 1,
     antialias: false,

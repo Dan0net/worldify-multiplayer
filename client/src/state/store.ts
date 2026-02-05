@@ -250,6 +250,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
 export interface DebugPanelSections {
   stats: boolean;
   debug: boolean;
+  quality: boolean;
   materials: boolean;
   water: boolean;
   dayNightCycle: boolean;
@@ -292,12 +293,17 @@ export interface GameState {
   // Terrain shader debug
   terrainDebugMode: TerrainDebugMode;
   
-  // Post-processing (SSAO + bloom)
-  postProcessingEnabled: boolean;
-
-  // Quality presets
+  // Quality settings (individual controls)
   qualityLevel: QualityLevel;
   visibilityRadius: number;
+  ssaoEnabled: boolean;
+  bloomEnabled: boolean;
+  colorCorrectionEnabled: boolean;
+  shadowsEnabled: boolean;
+  moonShadows: boolean;
+  shadowMapSize: number;
+  anisotropy: number;
+  maxPixelRatio: number;
   shaderNormalMaps: boolean;
   shaderAoMaps: boolean;
   shaderMetalnessMaps: boolean;
@@ -341,13 +347,17 @@ export interface GameState {
   setTerrainDebugMode: (mode: TerrainDebugMode) => void;
   cycleTerrainDebugMode: () => void;
   
-  // Post-processing actions
-  togglePostProcessing: () => void;
-  setPostProcessingEnabled: (enabled: boolean) => void;
-
-  // Quality preset actions
+  // Quality actions
   setQualityLevel: (level: QualityLevel) => void;
   setVisibilityRadius: (radius: number) => void;
+  setSsaoEnabled: (enabled: boolean) => void;
+  setBloomEnabled: (enabled: boolean) => void;
+  setColorCorrectionEnabled: (enabled: boolean) => void;
+  setShadowsEnabled: (enabled: boolean) => void;
+  setMoonShadows: (enabled: boolean) => void;
+  setShadowMapSize: (size: number) => void;
+  setAnisotropy: (value: number) => void;
+  setMaxPixelRatio: (ratio: number) => void;
   setShaderNormalMaps: (enabled: boolean) => void;
   setShaderAoMaps: (enabled: boolean) => void;
   setShaderMetalnessMaps: (enabled: boolean) => void;
@@ -435,12 +445,17 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Terrain debug initial state
   terrainDebugMode: 0 as TerrainDebugMode,
   
-  // Post-processing initial state
-  postProcessingEnabled: true,
-
   // Quality initial state (auto-detect will override on first load)
   qualityLevel: 'ultra' as QualityLevel,
   visibilityRadius: 8,
+  ssaoEnabled: true,
+  bloomEnabled: true,
+  colorCorrectionEnabled: true,
+  shadowsEnabled: true,
+  moonShadows: true,
+  shadowMapSize: 4096,
+  anisotropy: 8,
+  maxPixelRatio: 2,
   shaderNormalMaps: true,
   shaderAoMaps: true,
   shaderMetalnessMaps: true,
@@ -461,6 +476,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   debugPanelSections: {
     stats: true,
     debug: false,
+    quality: false,
     materials: false,
     water: false,
     dayNightCycle: false,
@@ -508,15 +524,17 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     terrainDebugMode: ((state.terrainDebugMode + 1) % 12) as TerrainDebugMode,
   })),
   
-  // Post-processing actions
-  togglePostProcessing: () => set((state) => ({
-    postProcessingEnabled: !state.postProcessingEnabled,
-  })),
-  setPostProcessingEnabled: (enabled) => set({ postProcessingEnabled: enabled }),
-
-  // Quality preset actions
+  // Quality actions
   setQualityLevel: (level) => set({ qualityLevel: level }),
   setVisibilityRadius: (radius) => set({ visibilityRadius: radius }),
+  setSsaoEnabled: (enabled) => set({ ssaoEnabled: enabled }),
+  setBloomEnabled: (enabled) => set({ bloomEnabled: enabled }),
+  setColorCorrectionEnabled: (enabled) => set({ colorCorrectionEnabled: enabled }),
+  setShadowsEnabled: (enabled) => set({ shadowsEnabled: enabled }),
+  setMoonShadows: (enabled) => set({ moonShadows: enabled }),
+  setShadowMapSize: (size) => set({ shadowMapSize: size }),
+  setAnisotropy: (value) => set({ anisotropy: value }),
+  setMaxPixelRatio: (ratio) => set({ maxPixelRatio: ratio }),
   setShaderNormalMaps: (enabled) => set({ shaderNormalMaps: enabled }),
   setShaderAoMaps: (enabled) => set({ shaderAoMaps: enabled }),
   setShaderMetalnessMaps: (enabled) => set({ shaderMetalnessMaps: enabled }),

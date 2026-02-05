@@ -5,10 +5,11 @@
  * - WebGLRenderer (pixel ratio, shadows, antialias flag)
  * - Post-processing (SSAO, bloom, color correction)
  * - Lighting (shadow map size, moon shadows)
- * - TerrainMaterial (shader map defines)
+ * - TerrainMaterial (shader map defines, anisotropy)
  * - VoxelWorld (visibility radius)
  *
- * Call `applyQuality()` whenever the quality level changes.
+ * Call `applyQuality()` for a full preset, or individual `apply*()` for
+ * fine-grained control from the debug panel.
  */
 
 import * as THREE from 'three';
@@ -60,44 +61,15 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   currentSettings.visibilityRadius = effectiveVisibility;
 
   // --- Renderer ---
-  if (rendererRef) {
-    rendererRef.setPixelRatio(Math.min(window.devicePixelRatio, preset.maxPixelRatio));
-
-    rendererRef.shadowMap.enabled = preset.shadowsEnabled;
-    if (!preset.shadowsEnabled) {
-      // Need to invalidate all shadow maps
-      rendererRef.shadowMap.needsUpdate = true;
-    }
-  }
-
-  // --- Shadows ---
-  const sun = getSunLight();
-  if (sun) {
-    sun.castShadow = preset.shadowsEnabled;
-    if (sun.shadow.mapSize.width !== preset.shadowMapSize) {
-      sun.shadow.mapSize.width = preset.shadowMapSize;
-      sun.shadow.mapSize.height = preset.shadowMapSize;
-      sun.shadow.map?.dispose();
-      sun.shadow.map = null;
-    }
-  }
-  const moon = getMoonLight();
-  if (moon) {
-    moon.castShadow = preset.shadowsEnabled && preset.moonShadows;
-    if (moon.shadow.mapSize.width !== preset.shadowMapSize) {
-      moon.shadow.mapSize.width = preset.shadowMapSize;
-      moon.shadow.mapSize.height = preset.shadowMapSize;
-      moon.shadow.map?.dispose();
-      moon.shadow.map = null;
-    }
-  }
+  applyPixelRatio(preset.maxPixelRatio);
+  applyShadowsEnabled(preset.shadowsEnabled);
+  applyShadowMapSize(preset.shadowMapSize);
+  applyMoonShadows(preset.moonShadows);
 
   // --- Post-processing ---
-  updatePostProcessing({
-    enabled: preset.postProcessingEnabled,
-    ssaoEnabled: preset.ssaoEnabled,
-    bloomEnabled: preset.bloomEnabled,
-  });
+  applySsaoEnabled(preset.ssaoEnabled);
+  applyBloomEnabled(preset.bloomEnabled);
+  applyColorCorrectionEnabled(preset.colorCorrectionEnabled);
 
   // --- Terrain material shader maps ---
   setShaderMapDefines({
@@ -105,12 +77,10 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     aoMaps: preset.shaderAoMaps,
     metalnessMaps: preset.shaderMetalnessMaps,
   });
-  setTerrainAnisotropy(preset.anisotropy);
+  applyAnisotropy(preset.anisotropy);
 
   // --- Visibility radius ---
-  if (visibilityRadiusCallback) {
-    visibilityRadiusCallback(effectiveVisibility);
-  }
+  applyVisibilityRadius(effectiveVisibility);
 
   // Persist
   saveQualityLevel(level);
@@ -122,15 +92,86 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     pixelRatio: Math.min(window.devicePixelRatio, preset.maxPixelRatio),
     shadows: preset.shadowsEnabled,
     shadowMap: preset.shadowMapSize,
-    postfx: preset.postProcessingEnabled,
     ssao: preset.ssaoEnabled,
     bloom: preset.bloomEnabled,
+    colorCorrection: preset.colorCorrectionEnabled,
     visibility: effectiveVisibility,
     normalMaps: preset.shaderNormalMaps,
     aoMaps: preset.shaderAoMaps,
     metalness: preset.shaderMetalnessMaps,
     anisotropy: preset.anisotropy,
+    moonShadows: preset.moonShadows,
   });
+}
+
+// ============== Individual Setting Appliers ==============
+
+export function applyPixelRatio(maxRatio: number): void {
+  if (rendererRef) {
+    rendererRef.setPixelRatio(Math.min(window.devicePixelRatio, maxRatio));
+  }
+}
+
+export function applyShadowsEnabled(enabled: boolean): void {
+  if (rendererRef) {
+    rendererRef.shadowMap.enabled = enabled;
+    rendererRef.shadowMap.needsUpdate = true;
+  }
+  const sun = getSunLight();
+  if (sun) {
+    sun.castShadow = enabled;
+  }
+  const moon = getMoonLight();
+  if (moon) {
+    moon.castShadow = enabled && (currentSettings?.moonShadows ?? false);
+  }
+}
+
+export function applyShadowMapSize(size: number): void {
+  // Size 0 means shadows off - handled by applyShadowsEnabled
+  if (size <= 0) return;
+  
+  const sun = getSunLight();
+  if (sun && sun.shadow.mapSize.width !== size) {
+    sun.shadow.mapSize.width = size;
+    sun.shadow.mapSize.height = size;
+    sun.shadow.map?.dispose();
+    sun.shadow.map = null;
+  }
+  const moon = getMoonLight();
+  if (moon && moon.shadow.mapSize.width !== size) {
+    moon.shadow.mapSize.width = size;
+    moon.shadow.mapSize.height = size;
+    moon.shadow.map?.dispose();
+    moon.shadow.map = null;
+  }
+}
+
+export function applyMoonShadows(enabled: boolean): void {
+  const moon = getMoonLight();
+  if (moon) {
+    const shadowsOn = currentSettings?.shadowsEnabled ?? true;
+    moon.castShadow = shadowsOn && enabled;
+  }
+  if (currentSettings) {
+    currentSettings.moonShadows = enabled;
+  }
+}
+
+export function applySsaoEnabled(enabled: boolean): void {
+  updatePostProcessing({ ssaoEnabled: enabled });
+}
+
+export function applyBloomEnabled(enabled: boolean): void {
+  updatePostProcessing({ bloomEnabled: enabled });
+}
+
+export function applyColorCorrectionEnabled(enabled: boolean): void {
+  updatePostProcessing({ colorCorrectionEnabled: enabled });
+}
+
+export function applyAnisotropy(value: number): void {
+  setTerrainAnisotropy(value);
 }
 
 /**

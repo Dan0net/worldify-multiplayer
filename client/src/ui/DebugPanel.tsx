@@ -2,12 +2,23 @@ import { useEffect, useState, ReactNode } from 'react';
 import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
-import { togglePostProcessing as togglePostProcessingEffect, updatePostProcessing } from '../game/scene/postprocessing';
+import { updatePostProcessing } from '../game/scene/postprocessing';
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
 import { storeBridge } from '../state/bridge';
-import { cycleQualityLevel, QUALITY_LABELS, QUALITY_PRESETS } from '../game/quality/QualityPresets';
-import { applyQuality, applyVisibilityRadius } from '../game/quality/QualityManager';
+import { cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, QUALITY_PRESETS, type QualityLevel } from '../game/quality/QualityPresets';
+import {
+  applyQuality,
+  applyVisibilityRadius,
+  applySsaoEnabled,
+  applyBloomEnabled,
+  applyColorCorrectionEnabled,
+  applyShadowsEnabled,
+  applyShadowMapSize,
+  applyMoonShadows,
+  applyAnisotropy,
+  applyPixelRatio,
+} from '../game/quality/QualityManager';
 import { setShaderMapDefines } from '../game/material/TerrainMaterial';
 import * as THREE from 'three';
 
@@ -174,8 +185,6 @@ export function DebugPanel() {
     textureState,
     terrainDebugMode,
     cycleTerrainDebugMode,
-    postProcessingEnabled,
-    togglePostProcessing,
     forceRegenerateChunks,
     environment,
     setEnvironment,
@@ -183,8 +192,17 @@ export function DebugPanel() {
     waterSettings,
     debugPanelSections,
     toggleDebugSection,
+    // Quality state
     qualityLevel,
     visibilityRadius,
+    ssaoEnabled,
+    bloomEnabled,
+    colorCorrectionEnabled,
+    shadowsEnabled,
+    moonShadows,
+    shadowMapSize,
+    anisotropy,
+    maxPixelRatio,
     shaderNormalMaps,
     shaderAoMaps,
     shaderMetalnessMaps,
@@ -211,26 +229,32 @@ export function DebugPanel() {
     handleClearChunks();
   };
 
-  const handleTogglePostProcessing = () => {
-    togglePostProcessingEffect();
-    togglePostProcessing();
-  };
-
   const handleCycleQuality = () => {
     // Read from store directly to avoid stale closure in F8 event handler
     const currentLevel = useGameStore.getState().qualityLevel;
     const currentVisibility = useGameStore.getState().visibilityRadius;
     const next = cycleQualityLevel(currentLevel);
-    const preset = QUALITY_PRESETS[next];
-    // Apply the full preset (keep custom visibility)
-    applyQuality(next, currentVisibility);
-    // Sync store
-    storeBridge.setQualityLevel(next);
+    syncPresetToStore(next, currentVisibility);
+  };
+
+  /** Apply a full quality preset and sync all individual settings to store */
+  const syncPresetToStore = (level: QualityLevel, customVisibility?: number) => {
+    const preset = QUALITY_PRESETS[level];
+    const vis = customVisibility ?? preset.visibilityRadius;
+    applyQuality(level, vis);
+    storeBridge.setQualityLevel(level);
+    storeBridge.setVisibilityRadius(vis);
+    storeBridge.setSsaoEnabled(preset.ssaoEnabled);
+    storeBridge.setBloomEnabled(preset.bloomEnabled);
+    storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
+    storeBridge.setShadowsEnabled(preset.shadowsEnabled);
+    storeBridge.setMoonShadows(preset.moonShadows);
+    storeBridge.setShadowMapSize(preset.shadowMapSize);
+    storeBridge.setAnisotropy(preset.anisotropy);
+    storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
     storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
     storeBridge.setShaderAoMaps(preset.shaderAoMaps);
     storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
-    // Update postProcessingEnabled in store to match
-    useGameStore.getState().setPostProcessingEnabled(preset.postProcessingEnabled);
   };
 
   const handleVisibilityRadiusChange = (radius: number) => {
@@ -334,8 +358,9 @@ export function DebugPanel() {
     setShaderDebugMode(terrainDebugMode);
   }, [terrainDebugMode]);
 
-  // Shadow map size options
+  // Shadow map size options (0 = off)
   const shadowMapOptions = [
+    { label: 'Off', value: 0 },
     { label: '512', value: 512 },
     { label: '1024', value: 1024 },
     { label: '2048', value: 2048 },
@@ -448,39 +473,6 @@ export function DebugPanel() {
         </div>
         
         <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
-          <div className="mb-1 text-green-500 text-xs">Quality Settings:</div>
-          <Slider
-            label="View Distance"
-            value={visibilityRadius}
-            min={2}
-            max={10}
-            step={1}
-            onChange={handleVisibilityRadiusChange}
-            formatValue={(v) => `${v} chunks`}
-          />
-          <Toggle
-            label="Normal Maps"
-            value={shaderNormalMaps}
-            onChange={(v) => handleShaderMapToggle('normal', v)}
-          />
-          <Toggle
-            label="AO Maps"
-            value={shaderAoMaps}
-            onChange={(v) => handleShaderMapToggle('ao', v)}
-          />
-          <Toggle
-            label="Metalness Maps"
-            value={shaderMetalnessMaps}
-            onChange={(v) => handleShaderMapToggle('metalness', v)}
-          />
-          <Toggle
-            label="Post-FX"
-            value={postProcessingEnabled}
-            onChange={handleTogglePostProcessing}
-          />
-        </div>
-        
-        <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
           <div className="mb-1 text-green-500 text-xs">Cache:</div>
           <label 
             className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
@@ -503,6 +495,160 @@ export function DebugPanel() {
             />
             <span className={forceRegenerateChunks ? 'text-red-400' : ''}>F9 Force Regen</span>
           </label>
+        </div>
+      </Section>
+
+      {/* ============== QUALITY SECTION ============== */}
+      <Section
+        title="⚡ Quality"
+        isOpen={debugPanelSections.quality}
+        onToggle={() => toggleDebugSection('quality')}
+        color="yellow"
+      >
+        {/* Preset Selector */}
+        <div className="mb-2">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">Preset (F8)</div>
+          <div className="flex gap-1">
+            {QUALITY_LEVELS.map((level) => (
+              <button
+                key={level}
+                onClick={() => syncPresetToStore(level, visibilityRadius)}
+                className={`flex-1 py-1 text-xs rounded transition-colors ${
+                  qualityLevel === level
+                    ? 'bg-yellow-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                {QUALITY_LABELS[level]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Rendering */}
+        <div className="mb-2 pt-2 border-t border-yellow-500/30">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">🖥️ Rendering</div>
+          <Slider
+            label="View Distance"
+            value={visibilityRadius}
+            min={2}
+            max={10}
+            step={1}
+            onChange={handleVisibilityRadiusChange}
+            formatValue={(v) => `${v} chunks`}
+          />
+          <Slider
+            label="Pixel Ratio"
+            value={maxPixelRatio}
+            min={0.5}
+            max={2}
+            step={0.25}
+            onChange={(v) => {
+              storeBridge.setMaxPixelRatio(v);
+              applyPixelRatio(v);
+            }}
+            formatValue={(v) => `${v}x`}
+          />
+          <Slider
+            label="Anisotropy"
+            value={anisotropy}
+            min={1}
+            max={16}
+            step={1}
+            onChange={(v) => {
+              storeBridge.setAnisotropy(v);
+              applyAnisotropy(v);
+            }}
+            formatValue={(v) => `${v}x`}
+          />
+        </div>
+
+        {/* Shadows */}
+        <div className="mb-2 pt-2 border-t border-yellow-500/30">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">🌑 Shadows</div>
+          <Toggle
+            label="Shadows"
+            value={shadowsEnabled}
+            onChange={(v) => {
+              storeBridge.setShadowsEnabled(v);
+              applyShadowsEnabled(v);
+            }}
+          />
+          {shadowsEnabled && (
+            <>
+              <Select
+                label="Map Size"
+                value={shadowMapSize}
+                options={shadowMapOptions}
+                onChange={(v) => {
+                  if (v === 0) {
+                    storeBridge.setShadowsEnabled(false);
+                    applyShadowsEnabled(false);
+                  } else {
+                    storeBridge.setShadowMapSize(v);
+                    applyShadowMapSize(v);
+                  }
+                }}
+              />
+              <Toggle
+                label="Moon Shadows"
+                value={moonShadows}
+                onChange={(v) => {
+                  storeBridge.setMoonShadows(v);
+                  applyMoonShadows(v);
+                }}
+              />
+            </>
+          )}
+        </div>
+
+        {/* Post-Processing */}
+        <div className="mb-2 pt-2 border-t border-yellow-500/30">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">✨ Post-Processing</div>
+          <Toggle
+            label="SSAO"
+            value={ssaoEnabled}
+            onChange={(v) => {
+              storeBridge.setSsaoEnabled(v);
+              applySsaoEnabled(v);
+            }}
+          />
+          <Toggle
+            label="Bloom"
+            value={bloomEnabled}
+            onChange={(v) => {
+              storeBridge.setBloomEnabled(v);
+              applyBloomEnabled(v);
+            }}
+          />
+          <Toggle
+            label="Color Correction"
+            value={colorCorrectionEnabled}
+            onChange={(v) => {
+              storeBridge.setColorCorrectionEnabled(v);
+              applyColorCorrectionEnabled(v);
+            }}
+          />
+        </div>
+
+        {/* Shader Maps */}
+        <div className="mb-2 pt-2 border-t border-yellow-500/30">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">🗺️ Shader Maps</div>
+          <Toggle
+            label="Normal Maps"
+            value={shaderNormalMaps}
+            onChange={(v) => handleShaderMapToggle('normal', v)}
+          />
+          <Toggle
+            label="AO Maps"
+            value={shaderAoMaps}
+            onChange={(v) => handleShaderMapToggle('ao', v)}
+          />
+          <Toggle
+            label="Metalness Maps"
+            value={shaderMetalnessMaps}
+            onChange={(v) => handleShaderMapToggle('metalness', v)}
+          />
         </div>
       </Section>
 
