@@ -28,7 +28,7 @@ import {
   handleChunkRequest, 
   broadcastBuildCommit 
 } from '../rooms/BuildHandler.js';
-import { getMapTileProvider, getSurfaceColumnProvider } from '../storage/StorageManager.js';
+import { getSurfaceColumnProvider } from '../storage/StorageManager.js';
 
 /**
  * Decode and dispatch an incoming binary message.
@@ -137,9 +137,9 @@ function handleMapTileRequest(roomId: string, playerId: number, reader: ByteRead
   const request = decodeMapTileRequest(reader);
   console.log(`[decode] Map tile request from player ${playerId}: (${request.tx}, ${request.tz})`);
   
-  // Get or generate tile async
-  getMapTileProvider().getOrCreateAsync(request.tx, request.tz)
-    .then((tile) => {
+  // Generate full surface column (ensures chunks + stamps are captured), return just the tile
+  getSurfaceColumnProvider().getColumn(request.tx, request.tz)
+    .then(({ tile }) => {
       const data = encodeMapTileData(tile);
       ws.send(data);
       console.log(`[decode] Sent map tile (${request.tx}, ${request.tz}) to player ${playerId}`);

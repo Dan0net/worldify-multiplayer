@@ -36,21 +36,8 @@ export class MapTileProvider {
   }
 
   /**
-   * Get a tile, generating if needed.
-   */
-  getOrCreate(tx: number, tz: number): MapTileData {
-    // Check cache
-    let tile = this.store.get(tx, tz);
-    if (tile) return tile;
-
-    // Generate from terrain (fast path when no chunks exist yet)
-    tile = this.generateFromTerrain(tx, tz);
-    this.store.set(tx, tz, tile);
-    return tile;
-  }
-
-  /**
    * Get a tile asynchronously, loading from disk if available.
+   * Generates from terrain baseline if not found (stamps captured later by SurfaceColumnProvider).
    */
   async getOrCreateAsync(tx: number, tz: number): Promise<MapTileData> {
     // Try cache/disk
