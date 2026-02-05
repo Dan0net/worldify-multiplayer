@@ -10,7 +10,6 @@
 
 import { 
   CHUNK_SIZE, 
-  voxelIndex, 
   chunkKey,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
@@ -37,6 +36,9 @@ function getExpandedGrid(): Uint16Array {
 /**
  * Expand chunk data with margins into a flat 34x34x34 grid.
  * This allows direct index arithmetic in the SurfaceNet hot loop.
+ * 
+ * OPTIMIZED: Bulk-copies inner 32³ rows with TypedArray operations,
+ * only individually samples the ~5,600 margin voxels around the edges.
  */
 function expandChunkData(
   chunk: Chunk,
@@ -45,23 +47,56 @@ function expandChunkData(
   grid: Uint16Array
 ): void {
   const dataArray = (useTemp && chunk.tempData) ? chunk.tempData : chunk.data;
+  const CS = CHUNK_SIZE; // 32
+  const CS_SQ = CS * CS; // 1024
   
-  // Fill the grid - iterate over all 34x34x34 positions
-  for (let z = 0; z < GRID_SIZE; ++z) {
-    const lz = z; // local z in -0 to 33 range (we offset later)
+  // === Phase 1: Bulk-copy inner 32³ block (rows via subarray) ===
+  // Inner block occupies grid positions [0..31, 0..31, 0..31] 
+  // which maps to grid indices z*GRID_SIZE_SQ + y*GRID_SIZE + x
+  // Source data layout: x + y*CS + z*CS_SQ
+  for (let z = 0; z < CS; ++z) {
+    const gridZBase = z * GRID_SIZE_SQ;
+    const dataZBase = z * CS_SQ;
+    for (let y = 0; y < CS; ++y) {
+      const gridRowStart = gridZBase + y * GRID_SIZE;
+      const dataRowStart = dataZBase + y * CS;
+      // Copy 32 voxels in one bulk operation
+      grid.set(dataArray.subarray(dataRowStart, dataRowStart + CS), gridRowStart);
+    }
+  }
+  
+  // === Phase 2: Fill margin voxels (positions where any coord is 32 or 33) ===
+  // These are the faces/edges/corners that extend beyond the chunk bounds.
+  // We iterate strategically to only touch margin positions.
+  
+  // Fill z=32..33 slabs (full xy planes)
+  for (let z = CS; z < GRID_SIZE; ++z) {
+    const gridZBase = z * GRID_SIZE_SQ;
     for (let y = 0; y < GRID_SIZE; ++y) {
-      const ly = y;
       for (let x = 0; x < GRID_SIZE; ++x) {
-        const lx = x;
-        const gridIdx = z * GRID_SIZE_SQ + y * GRID_SIZE + x;
-        
-        // Check if within main chunk bounds (0-31)
-        if (lx < CHUNK_SIZE && ly < CHUNK_SIZE && lz < CHUNK_SIZE) {
-          grid[gridIdx] = dataArray[voxelIndex(lx, ly, lz)];
-        } else {
-          // Margin voxel - sample from neighbor
-          grid[gridIdx] = chunk.getVoxelWithMargin(lx, ly, lz, neighbors, useTemp);
-        }
+        grid[gridZBase + y * GRID_SIZE + x] = chunk.getVoxelWithMargin(x, y, z, neighbors, useTemp);
+      }
+    }
+  }
+  
+  // Fill y=32..33 rows (only z=0..31)
+  for (let z = 0; z < CS; ++z) {
+    const gridZBase = z * GRID_SIZE_SQ;
+    for (let y = CS; y < GRID_SIZE; ++y) {
+      const gridRowBase = gridZBase + y * GRID_SIZE;
+      for (let x = 0; x < GRID_SIZE; ++x) {
+        grid[gridRowBase + x] = chunk.getVoxelWithMargin(x, y, z, neighbors, useTemp);
+      }
+    }
+  }
+  
+  // Fill x=32..33 columns (only y=0..31, z=0..31)
+  for (let z = 0; z < CS; ++z) {
+    const gridZBase = z * GRID_SIZE_SQ;
+    for (let y = 0; y < CS; ++y) {
+      const gridRowBase = gridZBase + y * GRID_SIZE;
+      for (let x = CS; x < GRID_SIZE; ++x) {
+        grid[gridRowBase + x] = chunk.getVoxelWithMargin(x, y, z, neighbors, useTemp);
       }
     }
   }

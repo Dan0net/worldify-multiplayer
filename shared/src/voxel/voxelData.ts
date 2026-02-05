@@ -16,6 +16,7 @@ import {
   MATERIAL_MAX,
   LIGHT_MASK,
   LIGHT_MAX,
+  SURFACE_PACKED_THRESHOLD,
 } from './constants.js';
 
 // ============== Types ==============
@@ -108,10 +109,37 @@ export function getLight(packed: number): number {
  * Solid voxels are inside terrain/objects.
  */
 export function isVoxelSolid(packed: number): boolean {
-  // Weight bits > 7 means weight > 0 (solid)
+  // Weight bits > threshold means weight > 0 (solid)
   // This avoids floating point conversion for performance
   const packedWeight = (packed >> WEIGHT_SHIFT) & WEIGHT_MASK;
-  return packedWeight > (WEIGHT_MAX_PACKED >> 1);
+  return packedWeight > SURFACE_PACKED_THRESHOLD;
+}
+
+/**
+ * Fast check whether a packed voxel data array contains any surface crossings.
+ * A surface exists only when there are both "inside" (packedWeight > threshold)
+ * and "outside" (packedWeight <= threshold) voxels in the grid.
+ * 
+ * Uses raw bit operations on the packed data — no float conversion.
+ * Short-circuits as soon as both sides are found.
+ * 
+ * @param data Flat packed voxel data (Uint16Array)
+ * @returns true if a surface crossing exists in the data
+ */
+export function hasSurfaceCrossing(data: Uint16Array): boolean {
+  let hasInside = false;
+  let hasOutside = false;
+  const len = data.length;
+  for (let i = 0; i < len; ++i) {
+    if (((data[i] >> WEIGHT_SHIFT) & WEIGHT_MASK) > SURFACE_PACKED_THRESHOLD) {
+      hasInside = true;
+      if (hasOutside) return true;
+    } else {
+      hasOutside = true;
+      if (hasInside) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -120,7 +148,7 @@ export function isVoxelSolid(packed: number): boolean {
  */
 export function isVoxelEmpty(packed: number): boolean {
   const packedWeight = (packed >> WEIGHT_SHIFT) & WEIGHT_MASK;
-  return packedWeight < (WEIGHT_MAX_PACKED >> 1);
+  return packedWeight < SURFACE_PACKED_THRESHOLD;
 }
 
 /**

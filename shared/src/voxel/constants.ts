@@ -52,6 +52,12 @@ export const MATERIAL_MASK = MATERIAL_MAX; // 0b1111111
 /** Bit mask for weight field (before shift) */
 export const WEIGHT_MASK = WEIGHT_MAX_PACKED; // 0b1111
 
+/** Packed weight threshold for surface (weight=0 boundary) */
+export const SURFACE_PACKED_THRESHOLD = WEIGHT_MAX_PACKED >> 1; // 7
+
+/** Precomputed 1/WEIGHT_MAX_PACKED for fast weight unpacking */
+export const INV_WEIGHT_MAX_PACKED = 1.0 / WEIGHT_MAX_PACKED; // ~0.0667
+
 // ============== Weight Range ==============
 /** Minimum weight value in world units */
 export const WEIGHT_MIN = -0.5;
