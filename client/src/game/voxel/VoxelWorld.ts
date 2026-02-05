@@ -70,6 +70,9 @@ export class VoxelWorld implements ChunkProvider {
   /** Queue of chunks that need remeshing */
   private remeshQueue: Set<string> = new Set();
 
+  /** Reusable array for priority-sorted remesh processing (avoids allocation) */
+  private remeshSortBuffer: string[] = [];
+
   /** Whether the world has been initialized */
   private initialized = false;
 
@@ -142,7 +145,8 @@ export class VoxelWorld implements ChunkProvider {
     this.updateWithVisibility(playerChunk);
 
     // Process some remesh queue items per frame
-    this.processRemeshQueue(4); // Limit to 4 remeshes per frame
+    // Process remesh queue with time budget (target 60fps = 16.6ms frame budget)
+    this.processRemeshQueue(playerPos);
   }
 
   /**
@@ -497,37 +501,85 @@ export class VoxelWorld implements ChunkProvider {
     return false;
   }
 
-  /**
-   * Process some items from the remesh queue.
-   * @param maxCount Maximum number of chunks to remesh this call
+  /** 
+   * Maximum milliseconds to spend on remeshing per frame.
+   * At 60fps the frame budget is ~16.6ms. We reserve ~4ms for meshing
+   * to leave headroom for rendering, physics, and network.
+   * Adaptive: uses less when the queue is small.
    */
-  private processRemeshQueue(maxCount: number): void {
-    let count = 0;
+  private static readonly REMESH_BUDGET_MS = 4.0;
+
+  /**
+   * Process remesh queue with time budgeting and distance priority.
+   * 
+   * - Sorts queue by distance to player (nearest chunks first)
+   * - Guarantees at least 1 chunk per frame (prevents starvation)
+   * - Bails early when time budget is exceeded
+   * - Defers chunks with pending neighbors to avoid stitch artifacts
+   */
+  private processRemeshQueue(playerPos: THREE.Vector3): void {
+    const queueSize = this.remeshQueue.size;
+    if (queueSize === 0) return;
+
+    // === Priority sort: nearest chunks first ===
+    // Reuse buffer array to avoid allocation (clear + refill)
+    const sorted = this.remeshSortBuffer;
+    sorted.length = 0;
+    for (const key of this.remeshQueue) {
+      sorted.push(key);
+    }
+    
+    // Sort by squared distance to player in chunk space
+    // (cheaper than world space, same ordering)
+    const px = playerPos.x / CHUNK_WORLD_SIZE;
+    const py = playerPos.y / CHUNK_WORLD_SIZE;
+    const pz = playerPos.z / CHUNK_WORLD_SIZE;
+    
+    sorted.sort((a, b) => {
+      const ca = this.chunks.get(a);
+      const cb = this.chunks.get(b);
+      if (!ca || !cb) return ca ? -1 : cb ? 1 : 0;
+      const da = (ca.cx - px) ** 2 + (ca.cy - py) ** 2 + (ca.cz - pz) ** 2;
+      const db = (cb.cx - px) ** 2 + (cb.cy - py) ** 2 + (cb.cz - pz) ** 2;
+      return da - db;
+    });
+
+    // === Time-budgeted processing ===
+    const startTime = performance.now();
+    const budget = VoxelWorld.REMESH_BUDGET_MS;
+    let processed = 0;
     const deferred: string[] = [];
     
-    for (const key of this.remeshQueue) {
-      if (count >= maxCount) break;
+    for (let i = 0; i < sorted.length; ++i) {
+      const key = sorted[i];
+      
+      // After the first chunk, check time budget
+      if (processed > 0) {
+        const elapsed = performance.now() - startTime;
+        if (elapsed >= budget) break;
+      }
 
       const chunk = this.chunks.get(key);
-      if (chunk) {
-        // Defer meshing if any face neighbors are still pending from server
-        // This prevents stitching artifacts from missing neighbor data
-        if (this.hasNeighborsPending(chunk.cx, chunk.cy, chunk.cz)) {
-          deferred.push(key);
-          continue;
-        }
-        
-        this.remeshChunk(chunk);
-        count++;
+      if (!chunk) {
+        // Chunk was unloaded while queued
+        this.remeshQueue.delete(key);
+        continue;
       }
+      
+      // Defer meshing if any face neighbors are still pending from server
+      // This prevents stitching artifacts from missing neighbor data
+      if (this.hasNeighborsPending(chunk.cx, chunk.cy, chunk.cz)) {
+        deferred.push(key);
+        continue;
+      }
+      
+      this.remeshChunk(chunk);
       this.remeshQueue.delete(key);
+      processed++;
     }
     
-    // Re-add deferred chunks to be processed next frame
-    for (const key of deferred) {
-      this.remeshQueue.delete(key); // Remove from current iteration position
-      this.remeshQueue.add(key);    // Add back to end of Set
-    }
+    // Deferred chunks stay in queue for next frame
+    // (they're already in the Set, just not deleted)
   }
 
   /**
