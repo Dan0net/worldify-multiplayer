@@ -98,6 +98,8 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.uNormalStrength = { value: DEFAULT_WATER_SETTINGS.normalStrength };
       shader.uniforms.uNormalScale = { value: DEFAULT_WATER_SETTINGS.normalScale };
       shader.uniforms.uScatterStrength = { value: DEFAULT_WATER_SETTINGS.scatterStrength };
+      shader.uniforms.uScatterScale = { value: DEFAULT_WATER_SETTINGS.scatterScale };
+      shader.uniforms.uWaterRoughness = { value: DEFAULT_WATER_SETTINGS.roughness };
       shader.uniforms.uFresnelPower = { value: DEFAULT_WATER_SETTINGS.fresnelPower };
       shader.uniforms.uWaterTint = { value: new THREE.Vector3(...DEFAULT_WATER_SETTINGS.waterTint) };
       shader.uniforms.uWaterOpacity = { value: DEFAULT_WATER_SETTINGS.waterOpacity };
@@ -234,12 +236,12 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
         `
       );
       
-      // Override roughness to be low but not zero (allows normal variations to show)
+      // Override roughness - controlled by uWaterRoughness uniform
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <roughnessmap_fragment>',
         /* glsl */ `
-          // Water has low roughness for reflections, but not zero so normals affect shading
-          float roughnessFactor = 0.15;
+          // Water roughness - controlled via debug panel
+          float roughnessFactor = uWaterRoughness;
         `
       );
       
@@ -309,6 +311,18 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
     }
   }
   
+  setScatterScale(value: number): void {
+    if (this._shader?.uniforms.uScatterScale) {
+      this._shader.uniforms.uScatterScale.value = value;
+    }
+  }
+  
+  setWaterRoughness(value: number): void {
+    if (this._shader?.uniforms.uWaterRoughness) {
+      this._shader.uniforms.uWaterRoughness.value = value;
+    }
+  }
+  
   setFresnelPower(value: number): void {
     if (this._shader?.uniforms.uFresnelPower) {
       this._shader.uniforms.uFresnelPower.value = value;
@@ -360,6 +374,8 @@ export function applyWaterSettings(settings: {
   normalStrength?: number;
   normalScale?: number;
   scatterStrength?: number;
+  scatterScale?: number;
+  roughness?: number;
   fresnelPower?: number;
   waterTint?: [number, number, number];
   waterOpacity?: number;
@@ -372,6 +388,8 @@ export function applyWaterSettings(settings: {
   if (settings.normalStrength !== undefined) mat.setNormalStrength(settings.normalStrength);
   if (settings.normalScale !== undefined) mat.setNormalScale(settings.normalScale);
   if (settings.scatterStrength !== undefined) mat.setScatterStrength(settings.scatterStrength);
+  if (settings.scatterScale !== undefined) mat.setScatterScale(settings.scatterScale);
+  if (settings.roughness !== undefined) mat.setWaterRoughness(settings.roughness);
   if (settings.fresnelPower !== undefined) mat.setFresnelPower(settings.fresnelPower);
   if (settings.waterTint !== undefined) mat.setWaterTint(...settings.waterTint);
   if (settings.waterOpacity !== undefined) mat.setWaterOpacity(settings.waterOpacity);

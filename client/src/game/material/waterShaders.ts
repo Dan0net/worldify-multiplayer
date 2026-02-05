@@ -20,6 +20,8 @@ export const waterUniformsFragment = /* glsl */ `
   uniform float uNormalScale;
   uniform float uFresnelPower;
   uniform float uScatterStrength;
+  uniform float uScatterScale;
+  uniform float uWaterRoughness;
   uniform vec3 uWaterTint;
   uniform float uWaterOpacity;
 `;
@@ -82,36 +84,31 @@ export const waterNormalPerturbation = /* glsl */ `
     vec2 baseUV = worldPos.xz;
     float scale = uNormalScale;
     
-    // ===== PAIRED COUNTER-SCROLLING LAYERS =====
-    // Each pair uses the SAME scale but OPPOSITE scroll directions
-    // This creates standing wave interference patterns with no net flow
+    // ===== MULTI-SCALE SCROLLING LAYERS =====
+    // Different scales and directions create organic motion without obvious flow
     
-    // Pair A: Fine ripples (fast, small scale)
-    float fineScale = scale * 0.08;
-    vec2 fineSpeed = vec2(0.045, 0.03);
-    vec2 uvA0 = baseUV * fineScale + fineSpeed * time;      // +X +Z
-    vec2 uvA1 = baseUV * fineScale - fineSpeed * time;      // -X -Z (exact opposite)
-    vec3 nA0 = sampleWaterNormal(normalTex, layer, uvA0);
-    vec3 nA1 = sampleWaterNormal(normalTex, layer, uvA1);
+    // Layer A: Fine ripples (fast, small scale)
+    float fineScale = scale * 0.15;
+    vec2 uvA = baseUV * fineScale + vec2(time * 0.045, time * 0.03);
+    vec3 nA = sampleWaterNormal(normalTex, layer, uvA);
     
-    // Pair B: Medium waves (slower, larger scale)
-    float medScale = scale * 0.02;
-    vec2 medSpeed = vec2(0.02, 0.015);
-    vec2 uvB0 = baseUV * medScale + medSpeed * time;        // +X +Z
-    vec2 uvB1 = baseUV * medScale - medSpeed * time;        // -X -Z (exact opposite)
-    vec3 nB0 = sampleWaterNormal(normalTex, layer, uvB0);
-    vec3 nB1 = sampleWaterNormal(normalTex, layer, uvB1);
+    // Layer B: Medium waves (slower, larger scale, opposite direction)
+    float medScale = scale * 0.06;
+    vec2 uvB = baseUV * medScale - vec2(time * 0.025, time * -0.02);
+    vec3 nB = sampleWaterNormal(normalTex, layer, uvB);
     
-    // Pair C: Cross-pattern (perpendicular to break up regularity)
-    float crossScale = scale * 0.05;
-    vec2 crossSpeed = vec2(0.025, -0.02); // Different X/Z ratio
-    vec2 uvC0 = baseUV * crossScale + crossSpeed * time;    // +X -Z
-    vec2 uvC1 = baseUV * crossScale - crossSpeed * time;    // -X +Z (exact opposite)
-    vec3 nC0 = sampleWaterNormal(normalTex, layer, uvC0);
-    vec3 nC1 = sampleWaterNormal(normalTex, layer, uvC1);
+    // Layer C: Large swell (slowest, largest scale, cross direction)
+    float largeScale = scale * 0.03;
+    vec2 uvC = baseUV * largeScale + vec2(time * -0.015, time * 0.018);
+    vec3 nC = sampleWaterNormal(normalTex, layer, uvC);
     
-    // Blend all 6 samples (3 pairs × 2 each)
-    vec3 blendedNormal = (nA0 + nA1 + nB0 + nB1 + nC0 + nC1) / 6.0;
+    // Layer D: Detail (fastest, finest scale, diagonal)
+    float detailScale = scale * 0.25;
+    vec2 uvD = baseUV * detailScale + vec2(time * 0.035, time * -0.04);
+    vec3 nD = sampleWaterNormal(normalTex, layer, uvD);
+    
+    // Weighted blend: primary layers stronger, detail layers add breakup
+    vec3 blendedNormal = normalize(nA + nB * 0.8 + nC * 0.6 + nD * 0.4);
     
     // Apply strength and perturb base normal
     vec3 perturbedNormal = safeBaseNormal;
@@ -140,14 +137,21 @@ export const waterFresnelEffect = /* glsl */ `
   }
   
   // Scatter effect - makes normal variations visible in the color
-  // Direct approach like Three.js: scatter = dot(normal, viewDir) * waterColor
+  // Energy-conserving: redistributes brightness without changing overall level
   vec3 getScatterColor(vec3 viewDir, vec3 normal, vec3 baseColor) {
     // Scatter intensity based on how much surface faces viewer
     float scatter = clamp(dot(normal, viewDir), 0.0, 1.0);
     
-    // Three.js style: scatter directly multiplies color
-    // Higher scatter = brighter, creates visible surface variation
-    return baseColor * (0.5 + scatter * uScatterStrength);
+    // Scale the normal perturbation effect on scatter (controls spatial contrast)
+    // Higher scatterScale = more contrast between normal-facing and grazing areas
+    float scaledScatter = mix(0.5, scatter, uScatterScale);
+    
+    // Energy-conserving: center variation around 1.0 so strength
+    // only affects contrast, not overall brightness/opacity
+    float variation = (scaledScatter - 0.5) * uScatterStrength;
+    float factor = clamp(1.0 + variation, 0.2, 2.0);
+    
+    return baseColor * factor;
   }
 `;
 
@@ -217,9 +221,11 @@ export const DEFAULT_WATER_SETTINGS = {
   waveAmplitude: 0.1,       // Height of waves in world units
   waveFrequency: 0.5,       // Base frequency of wave pattern
   waveSpeed: 0.5,           // Speed of wave animation
-  normalStrength: 1.5,      // Strength of normal perturbation (1-5 range)
+  normalStrength: 2.5,      // Strength of normal perturbation (1-5 range)
   normalScale: 1.0,         // Scale of normal texture sampling
-  scatterStrength: 1.0,     // Strength of scatter color variation (0-2)
+  scatterStrength: 1.2,     // Strength of scatter color contrast (0-3)
+  scatterScale: 1.0,        // How much normals affect scatter (0=flat, 1=full)
+  roughness: 0.15,          // Surface roughness (0=mirror, 1=matte)
   fresnelPower: 3.0,        // Fresnel falloff power
   waterTint: [0.6, 0.75, 0.85] as [number, number, number], // Slight blue tint
   waterOpacity: 0.7,        // Base opacity (edges will be more opaque)
