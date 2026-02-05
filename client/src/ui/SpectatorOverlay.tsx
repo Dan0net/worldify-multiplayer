@@ -8,6 +8,9 @@ import { controls } from '../game/player/controls';
 import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
 import { useState, useEffect } from 'react';
+import { QUALITY_LABELS, QUALITY_LEVELS, QUALITY_PRESETS } from '../game/quality/QualityPresets';
+import { applyQuality, applyVisibilityRadius } from '../game/quality/QualityManager';
+import { storeBridge } from '../state/bridge';
 
 export function SpectatorOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
@@ -18,6 +21,8 @@ export function SpectatorOverlay() {
   const setGameMode = useGameStore((s) => s.setGameMode);
   const textureState = useGameStore((s) => s.textureState);
   const textureProgress = useGameStore((s) => s.textureProgress);
+  const qualityLevel = useGameStore((s) => s.qualityLevel);
+  const visibilityRadius = useGameStore((s) => s.visibilityRadius);
   
   const [hdCached, setHdCached] = useState<boolean | null>(null);
 
@@ -150,6 +155,57 @@ export function SpectatorOverlay() {
           </span>
           <span>{getHDLabel()}</span>
         </button>
+      )}
+
+      {/* Quality preset select */}
+      {isConnected && (
+        <div className="mt-3 flex items-center gap-2 pointer-events-auto">
+          <span className="text-white text-xs opacity-70">Quality:</span>
+          <div className="flex gap-1">
+            {QUALITY_LEVELS.map((level) => (
+              <button
+                key={level}
+                onClick={() => {
+                  const preset = QUALITY_PRESETS[level];
+                  applyQuality(level, visibilityRadius);
+                  storeBridge.setQualityLevel(level);
+                  storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
+                  storeBridge.setShaderAoMaps(preset.shaderAoMaps);
+                  storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
+                  useGameStore.getState().setPostProcessingEnabled(preset.postProcessingEnabled);
+                }}
+                className={`py-1 px-3 text-xs rounded transition-all duration-100 ${
+                  qualityLevel === level
+                    ? 'text-white bg-indigo-600'
+                    : 'text-gray-400 bg-gray-900/30 hover:bg-gray-900/50'
+                }`}
+              >
+                {QUALITY_LABELS[level]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Visibility radius slider */}
+      {isConnected && (
+        <div className="mt-2 flex items-center gap-2 pointer-events-auto">
+          <span className="text-white text-xs opacity-70 whitespace-nowrap">View Dist:</span>
+          <input
+            type="range"
+            min={2}
+            max={10}
+            step={1}
+            value={visibilityRadius}
+            onChange={(e) => {
+              const val = parseInt(e.target.value, 10);
+              storeBridge.setVisibilityRadius(val);
+              applyVisibilityRadius(val);
+            }}
+            className="w-24 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+          />
+          <span className="text-white text-xs opacity-70">{visibilityRadius}</span>
+        </div>
       )}
 
       {/* Controls hint - only show when connected */}

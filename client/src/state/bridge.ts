@@ -14,6 +14,7 @@ import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildSta
 import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 import { applyMaterialSettings as applyMaterialSettingsToShaders } from '../game/material/TerrainMaterial';
 import { applyWaterSettings as applyWaterSettingsToShaders } from '../game/material/WaterMaterial';
+import type { QualityLevel } from '../game/quality/QualityPresets';
 
 // Cache getState for cleaner access - always returns fresh state
 const getState = useGameStore.getState;
@@ -341,6 +342,48 @@ class StoreBridge {
    */
   setEnvironment(updates: Partial<typeof getState extends () => { environment: infer E } ? E : never>): void {
     getState().setEnvironment(updates);
+  }
+
+  // ============== Quality Settings ==============
+
+  get qualityLevel(): QualityLevel {
+    return getState().qualityLevel;
+  }
+
+  get visibilityRadius(): number {
+    return getState().visibilityRadius;
+  }
+
+  get shaderNormalMaps(): boolean {
+    return getState().shaderNormalMaps;
+  }
+
+  get shaderAoMaps(): boolean {
+    return getState().shaderAoMaps;
+  }
+
+  get shaderMetalnessMaps(): boolean {
+    return getState().shaderMetalnessMaps;
+  }
+
+  setQualityLevel(level: QualityLevel): void {
+    getState().setQualityLevel(level);
+  }
+
+  setVisibilityRadius(radius: number): void {
+    getState().setVisibilityRadius(radius);
+  }
+
+  setShaderNormalMaps(enabled: boolean): void {
+    getState().setShaderNormalMaps(enabled);
+  }
+
+  setShaderAoMaps(enabled: boolean): void {
+    getState().setShaderAoMaps(enabled);
+  }
+
+  setShaderMetalnessMaps(enabled: boolean): void {
+    getState().setShaderMetalnessMaps(enabled);
   }
 }
 

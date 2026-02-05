@@ -73,6 +73,8 @@ export interface PostProcessingOptions {
   enabled?: boolean;
   
   // SSAO options
+  /** Enable/disable SSAO independently */
+  ssaoEnabled?: boolean;
   /** SSAO kernel radius (default: 12) - based on worldify-app */
   ssaoKernelRadius?: number;
   /** SSAO min distance (default: 0.002) - based on worldify-app */
@@ -96,6 +98,7 @@ export interface PostProcessingOptions {
 const defaultOptions: Required<PostProcessingOptions> = {
   enabled: true,
   // SSAO defaults from worldify-app
+  ssaoEnabled: true,
   ssaoKernelRadius: 12,
   ssaoMinDistance: 0.002,
   // Bloom defaults from worldify-app
@@ -205,6 +208,9 @@ export function updatePostProcessing(options: PostProcessingOptions): void {
   if (options.ssaoMinDistance !== undefined && ssaoPass) {
     ssaoPass.minDistance = options.ssaoMinDistance;
   }
+  if (options.ssaoEnabled !== undefined && ssaoPass) {
+    ssaoPass.enabled = options.ssaoEnabled && effectsEnabled;
+  }
   if (options.bloomIntensity !== undefined && bloomPass) {
     bloomPass.strength = options.bloomIntensity;
   }
@@ -214,14 +220,17 @@ export function updatePostProcessing(options: PostProcessingOptions): void {
   if (options.bloomRadius !== undefined && bloomPass) {
     bloomPass.radius = options.bloomRadius;
   }
+  if (options.bloomEnabled !== undefined && bloomPass) {
+    bloomPass.enabled = options.bloomEnabled && effectsEnabled;
+  }
   if (options.saturation !== undefined && colorCorrectionPass) {
     colorCorrectionPass.uniforms.saturation.value = options.saturation;
     originalSaturation = options.saturation;
   }
   if (options.enabled !== undefined) {
     effectsEnabled = options.enabled;
-    if (ssaoPass) ssaoPass.enabled = options.enabled;
-    if (bloomPass) bloomPass.enabled = options.enabled;
+    if (ssaoPass) ssaoPass.enabled = options.enabled && (options.ssaoEnabled ?? ssaoPass.enabled);
+    if (bloomPass) bloomPass.enabled = options.enabled && (options.bloomEnabled ?? bloomPass.enabled);
     if (colorCorrectionPass) colorCorrectionPass.enabled = options.enabled;
   }
 }

@@ -1,5 +1,6 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { BUILD_ROTATION_STEPS, GameMode, clamp } from '@worldify/shared';
+import type { QualityLevel } from '../game/quality/QualityPresets';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
   MATERIAL_METALNESS_MULTIPLIER,
@@ -294,6 +295,13 @@ export interface GameState {
   // Post-processing (SSAO + bloom)
   postProcessingEnabled: boolean;
 
+  // Quality presets
+  qualityLevel: QualityLevel;
+  visibilityRadius: number;
+  shaderNormalMaps: boolean;
+  shaderAoMaps: boolean;
+  shaderMetalnessMaps: boolean;
+
   // Dev mode - force regenerate chunks on server
   forceRegenerateChunks: boolean;
 
@@ -336,6 +344,13 @@ export interface GameState {
   // Post-processing actions
   togglePostProcessing: () => void;
   setPostProcessingEnabled: (enabled: boolean) => void;
+
+  // Quality preset actions
+  setQualityLevel: (level: QualityLevel) => void;
+  setVisibilityRadius: (radius: number) => void;
+  setShaderNormalMaps: (enabled: boolean) => void;
+  setShaderAoMaps: (enabled: boolean) => void;
+  setShaderMetalnessMaps: (enabled: boolean) => void;
   
   // Build actions
   setBuildPreset: (presetId: number) => void;
@@ -423,6 +438,13 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Post-processing initial state
   postProcessingEnabled: true,
 
+  // Quality initial state (auto-detect will override on first load)
+  qualityLevel: 'ultra' as QualityLevel,
+  visibilityRadius: 8,
+  shaderNormalMaps: true,
+  shaderAoMaps: true,
+  shaderMetalnessMaps: true,
+
   // Dev mode initial state
   forceRegenerateChunks: false,
 
@@ -491,6 +513,13 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     postProcessingEnabled: !state.postProcessingEnabled,
   })),
   setPostProcessingEnabled: (enabled) => set({ postProcessingEnabled: enabled }),
+
+  // Quality preset actions
+  setQualityLevel: (level) => set({ qualityLevel: level }),
+  setVisibilityRadius: (radius) => set({ visibilityRadius: radius }),
+  setShaderNormalMaps: (enabled) => set({ shaderNormalMaps: enabled }),
+  setShaderAoMaps: (enabled) => set({ shaderAoMaps: enabled }),
+  setShaderMetalnessMaps: (enabled) => set({ shaderMetalnessMaps: enabled }),
   
   // Build actions
   setBuildPreset: (presetId) => set((state) => ({

@@ -6,6 +6,9 @@ import { togglePostProcessing as togglePostProcessingEffect, updatePostProcessin
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
 import { storeBridge } from '../state/bridge';
+import { cycleQualityLevel, QUALITY_LABELS, QUALITY_PRESETS } from '../game/quality/QualityPresets';
+import { applyQuality, applyVisibilityRadius } from '../game/quality/QualityManager';
+import { setShaderMapDefines } from '../game/material/TerrainMaterial';
 import * as THREE from 'three';
 
 // ============== Collapsible Section Component ==============
@@ -180,6 +183,11 @@ export function DebugPanel() {
     waterSettings,
     debugPanelSections,
     toggleDebugSection,
+    qualityLevel,
+    visibilityRadius,
+    shaderNormalMaps,
+    shaderAoMaps,
+    shaderMetalnessMaps,
   } = useGameStore();
 
   const [cacheClearing, setCacheClearing] = useState(false);
@@ -206,6 +214,39 @@ export function DebugPanel() {
   const handleTogglePostProcessing = () => {
     togglePostProcessingEffect();
     togglePostProcessing();
+  };
+
+  const handleCycleQuality = () => {
+    // Read from store directly to avoid stale closure in F8 event handler
+    const currentLevel = useGameStore.getState().qualityLevel;
+    const currentVisibility = useGameStore.getState().visibilityRadius;
+    const next = cycleQualityLevel(currentLevel);
+    const preset = QUALITY_PRESETS[next];
+    // Apply the full preset (keep custom visibility)
+    applyQuality(next, currentVisibility);
+    // Sync store
+    storeBridge.setQualityLevel(next);
+    storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
+    storeBridge.setShaderAoMaps(preset.shaderAoMaps);
+    storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
+    // Update postProcessingEnabled in store to match
+    useGameStore.getState().setPostProcessingEnabled(preset.postProcessingEnabled);
+  };
+
+  const handleVisibilityRadiusChange = (radius: number) => {
+    storeBridge.setVisibilityRadius(radius);
+    applyVisibilityRadius(radius);
+  };
+
+  const handleShaderMapToggle = (map: 'normal' | 'ao' | 'metalness', enabled: boolean) => {
+    if (map === 'normal') storeBridge.setShaderNormalMaps(enabled);
+    else if (map === 'ao') storeBridge.setShaderAoMaps(enabled);
+    else storeBridge.setShaderMetalnessMaps(enabled);
+    setShaderMapDefines({
+      normalMaps: map === 'normal' ? enabled : shaderNormalMaps,
+      aoMaps: map === 'ao' ? enabled : shaderAoMaps,
+      metalnessMaps: map === 'metalness' ? enabled : shaderMetalnessMaps,
+    });
   };
 
   // Apply environment changes to the scene
@@ -275,7 +316,7 @@ export function DebugPanel() {
           break;
         case 'F8':
           e.preventDefault();
-          handleTogglePostProcessing();
+          handleCycleQuality();
           break;
         case 'F9':
           e.preventDefault();
@@ -397,15 +438,46 @@ export function DebugPanel() {
             </span>
             <span>F7 {TERRAIN_DEBUG_MODE_NAMES[terrainDebugMode]}</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
-            <input
-              type="checkbox"
-              checked={postProcessingEnabled}
-              onChange={handleTogglePostProcessing}
-              className="accent-yellow-400"
-            />
-            <span>F8 Post-FX</span>
+          <label 
+            className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
+            onClick={handleCycleQuality}
+          >
+            <span className="w-4 h-4 flex items-center justify-center">⚡</span>
+            <span>F8 Quality: {QUALITY_LABELS[qualityLevel]}</span>
           </label>
+        </div>
+        
+        <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
+          <div className="mb-1 text-green-500 text-xs">Quality Settings:</div>
+          <Slider
+            label="View Distance"
+            value={visibilityRadius}
+            min={2}
+            max={10}
+            step={1}
+            onChange={handleVisibilityRadiusChange}
+            formatValue={(v) => `${v} chunks`}
+          />
+          <Toggle
+            label="Normal Maps"
+            value={shaderNormalMaps}
+            onChange={(v) => handleShaderMapToggle('normal', v)}
+          />
+          <Toggle
+            label="AO Maps"
+            value={shaderAoMaps}
+            onChange={(v) => handleShaderMapToggle('ao', v)}
+          />
+          <Toggle
+            label="Metalness Maps"
+            value={shaderMetalnessMaps}
+            onChange={(v) => handleShaderMapToggle('metalness', v)}
+          />
+          <Toggle
+            label="Post-FX"
+            value={postProcessingEnabled}
+            onChange={handleTogglePostProcessing}
+          />
         </div>
         
         <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">

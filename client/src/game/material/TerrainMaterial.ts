@@ -198,6 +198,11 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
   private textures: LoadedTextures | null = null;
   private _windSpeed: number = WIND_SPEED;
   
+  // Quality-driven shader defines
+  static qualityNormalMaps = true;
+  static qualityAoMaps = true;
+  static qualityMetalnessMaps = true;
+  
   constructor(isTransparent: boolean = false) {
     super({
       roughness: 1.0,
@@ -231,8 +236,13 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.normalStrength = { value: MATERIAL_NORMAL_STRENGTH };
       shader.uniforms.blendSharpness = { value: 8.0 };
       
+      // Quality-driven shader defines
+      shader.defines = shader.defines || {};
+      if (TerrainMaterial.qualityNormalMaps) shader.defines.QUALITY_NORMAL_MAPS = '';
+      if (TerrainMaterial.qualityAoMaps) shader.defines.QUALITY_AO_MAPS = '';
+      if (TerrainMaterial.qualityMetalnessMaps) shader.defines.QUALITY_METALNESS_MAPS = '';
+      
       if (isTransparent) {
-        shader.defines = shader.defines || {};
         shader.defines.USE_TEXTURE_ALPHA = '';
         shader.defines.USE_WIND = '';
         shader.uniforms.uTime = { value: 0.0 };
@@ -635,6 +645,53 @@ export function setTerrainRepeatScale(scale: number): void {
   solidMaterial?.setRepeatScale(scale);
   transparentMaterial?.setRepeatScale(scale);
   // Note: WaterMaterial has fixed repeat scale
+}
+
+// ============== Quality Shader Map Defines ==============
+
+export interface ShaderMapDefines {
+  normalMaps: boolean;
+  aoMaps: boolean;
+  metalnessMaps: boolean;
+}
+
+/**
+ * Update quality-driven shader defines and force recompilation.
+ * Toggling normal/AO/metalness maps skips expensive texture samples.
+ */
+export function setShaderMapDefines(defines: ShaderMapDefines): void {
+  const changed =
+    TerrainMaterial.qualityNormalMaps !== defines.normalMaps ||
+    TerrainMaterial.qualityAoMaps !== defines.aoMaps ||
+    TerrainMaterial.qualityMetalnessMaps !== defines.metalnessMaps;
+
+  TerrainMaterial.qualityNormalMaps = defines.normalMaps;
+  TerrainMaterial.qualityAoMaps = defines.aoMaps;
+  TerrainMaterial.qualityMetalnessMaps = defines.metalnessMaps;
+
+  if (changed) {
+    // Force shader recompilation by bumping material version
+    if (solidMaterial) solidMaterial.needsUpdate = true;
+    if (transparentMaterial) transparentMaterial.needsUpdate = true;
+    console.log(`[TerrainMaterial] Shader defines updated: normal=${defines.normalMaps}, ao=${defines.aoMaps}, metalness=${defines.metalnessMaps}`);
+  }
+}
+
+/**
+ * Set anisotropic filtering level on all loaded terrain textures.
+ */
+export function setTerrainAnisotropy(anisotropy: number): void {
+  const materials = [solidMaterial, transparentMaterial];
+  for (const mat of materials) {
+    if (!mat || !(mat as unknown as { textures: LoadedTextures | null }).textures) continue;
+    const textures = (mat as unknown as { textures: LoadedTextures }).textures;
+    for (const tex of [textures.albedo, textures.normal, textures.ao, textures.roughness, textures.metalness]) {
+      if (tex && tex.anisotropy !== anisotropy) {
+        tex.anisotropy = anisotropy;
+        tex.needsUpdate = true;
+      }
+    }
+  }
 }
 
 // ============== Debug Console Access ==============

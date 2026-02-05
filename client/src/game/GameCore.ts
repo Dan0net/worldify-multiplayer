@@ -22,6 +22,14 @@ import { updateSkyTime, updateSkyCamera } from './scene/SkyDome';
 import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
 import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
+import {
+  QualityLevel,
+  QUALITY_PRESETS,
+  loadSavedQualityLevel,
+  loadSavedVisibilityRadius,
+  detectQualityLevel,
+} from './quality/QualityPresets';
+import { applyQuality, setRendererRef, setVisibilityRadiusCallback } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
 import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, updateTileFromChunk, createMapTile } from '@worldify/shared';
@@ -117,6 +125,29 @@ export class GameCore {
       });
     }
 
+    // ---- Quality auto-detect / restore ----
+    setRendererRef(this.renderer);
+    const savedLevel = loadSavedQualityLevel();
+    const savedVisibility = loadSavedVisibilityRadius();
+    let qualityLevel: QualityLevel;
+    if (savedLevel) {
+      qualityLevel = savedLevel;
+      console.log(`[Quality] Restored saved preset: ${qualityLevel}`);
+    } else {
+      const gl = this.renderer.getContext();
+      qualityLevel = detectQualityLevel(gl);
+      console.log(`[Quality] Auto-detected preset: ${qualityLevel}`);
+    }
+    // Store the level so UI can read it
+    storeBridge.setQualityLevel(qualityLevel);
+    const effectiveVisibility = savedVisibility ?? QUALITY_PRESETS[qualityLevel].visibilityRadius;
+    storeBridge.setVisibilityRadius(effectiveVisibility);
+    // Sync shader map toggles to store
+    const preset = QUALITY_PRESETS[qualityLevel];
+    storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
+    storeBridge.setShaderAoMaps(preset.shaderAoMaps);
+    storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
+
     // Initialize voxel terrain system
     if (scene) {
       this.voxelIntegration = new VoxelIntegration(scene, {
@@ -131,6 +162,13 @@ export class GameCore {
       
       // Note: useServerChunks is read from store by VoxelWorld
       this.voxelIntegration.init();
+      
+      // Wire visibility radius callback for quality system
+      setVisibilityRadiusCallback((radius: number) => {
+        this.voxelIntegration.world.setVisibilityRadius(radius);
+      });
+      // Apply the quality preset (including visibility radius)
+      applyQuality(qualityLevel, effectiveVisibility);
       
       // Initialize spawn manager
       this.spawnManager = new SpawnManager(scene);

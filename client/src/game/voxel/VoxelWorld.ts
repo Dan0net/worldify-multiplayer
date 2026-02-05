@@ -73,6 +73,9 @@ export class VoxelWorld implements ChunkProvider {
   /** Whether the world has been initialized */
   private initialized = false;
 
+  /** Dynamic visibility radius (defaults to shared constant, overridden by quality settings) */
+  private _visibilityRadius: number = VISIBILITY_RADIUS;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
   }
@@ -91,6 +94,22 @@ export class VoxelWorld implements ChunkProvider {
    */
   setCamera(camera: THREE.Camera): void {
     this.camera = camera;
+  }
+
+  /**
+   * Set visibility radius dynamically (quality settings).
+   * Invalidates BFS cache so chunks update next frame.
+   */
+  setVisibilityRadius(radius: number): void {
+    if (radius === this._visibilityRadius) return;
+    this._visibilityRadius = radius;
+    // Invalidate BFS cache so it recomputes with new radius
+    this.lastBFSChunk = null;
+    console.log(`[VoxelWorld] Visibility radius set to ${radius}`);
+  }
+
+  get visibilityRadius(): number {
+    return this._visibilityRadius;
   }
 
   /**
@@ -162,7 +181,7 @@ export class VoxelWorld implements ChunkProvider {
         cameraDir,
         frustum,
         this,
-        VISIBILITY_RADIUS
+        this._visibilityRadius
       );
 
       // Update cached reachable set
@@ -226,7 +245,7 @@ export class VoxelWorld implements ChunkProvider {
     
     const box = VoxelWorld.tempBox;
     const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
-    const visibilityRadius = VISIBILITY_RADIUS + VISIBILITY_UNLOAD_BUFFER;
+    const visibilityRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
 
     for (const [key, chunkMesh] of this.meshes) {
       const chunk = this.chunks.get(key);
@@ -266,7 +285,7 @@ export class VoxelWorld implements ChunkProvider {
     if (!this.lastPlayerChunk) return;
     
     const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
-    const unloadRadius = VISIBILITY_RADIUS + VISIBILITY_UNLOAD_BUFFER;
+    const unloadRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
     
     const chunksToUnload: string[] = [];
     for (const [key, chunk] of this.chunks) {

@@ -247,21 +247,34 @@ export const terrainDiffuseFragment = /* glsl */ `
 `;
 
 export const terrainRoughnessFragment = /* glsl */ `
-  float roughnessFactor = sampleMaterialBlend(roughnessArray).r * roughnessMultiplier;
+  #ifdef QUALITY_METALNESS_MAPS
+    float roughnessFactor = sampleMaterialBlend(roughnessArray).r * roughnessMultiplier;
+  #else
+    float roughnessFactor = roughnessMultiplier;
+  #endif
 `;
 
 export const terrainMetalnessFragment = /* glsl */ `
-  float metalnessFactor = sampleMaterialBlend(metalnessArray).r * metalnessMultiplier;
+  #ifdef QUALITY_METALNESS_MAPS
+    float metalnessFactor = sampleMaterialBlend(metalnessArray).r * metalnessMultiplier;
+  #else
+    float metalnessFactor = 0.0;
+  #endif
 `;
 
 export const terrainAoFragment = /* glsl */ `
-  float aoSample = sampleMaterialBlend(aoArray).r;
-  float ambientOcclusion = mix(1.0, aoSample, aoIntensity);
+  #ifdef QUALITY_AO_MAPS
+    float aoSample = sampleMaterialBlend(aoArray).r;
+    float ambientOcclusion = mix(1.0, aoSample, aoIntensity);
+  #else
+    float ambientOcclusion = 1.0;
+  #endif
   reflectedLight.indirectDiffuse *= ambientOcclusion;
 `;
 
 export const terrainNormalFragment = /* glsl */ `
   #ifdef USE_NORMALMAP
+    #ifdef QUALITY_NORMAL_MAPS
     // Sample normals per-axis, per-material with individual repeat scales
     // Material 0
     vec3 normalSampleX_m0 = texture(normalArray, vec3(gTriUV_zy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
@@ -301,6 +314,10 @@ export const terrainNormalFragment = /* glsl */ `
     vec3 normalZ = normalize(tbnZ * normalSampleZ);
     
     normal = normalize(normalX * gTriBlend.x + normalY * gTriBlend.y + normalZ * gTriBlend.z);
+    #else
+    // Normal maps disabled by quality setting - use geometry normal
+    normal = normalize(vNormal);
+    #endif
   #endif
 `;
 
