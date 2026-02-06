@@ -4,7 +4,7 @@
  * Centralises the wiring between QualityPresets and:
  * - WebGLRenderer (pixel ratio, shadows, antialias flag)
  * - Post-processing (SSAO, bloom, color correction)
- * - Lighting (shadow map size, moon shadows)
+ * - Lighting (shadow map size, moon shadow eligibility)
  * - TerrainMaterial (shader map defines, anisotropy)
  * - VoxelWorld (visibility radius)
  *
@@ -21,7 +21,7 @@ import {
   saveVisibilityRadius,
 } from './QualityPresets.js';
 import { updatePostProcessing } from '../scene/postprocessing.js';
-import { getMoonLight, getSunLight } from '../scene/Lighting.js';
+import { getActiveShadowLight, setMoonShadowsAllowed, getSunLight, getMoonLight } from '../scene/Lighting.js';
 import {
   setShaderMapDefines,
   setTerrainAnisotropy,
@@ -117,13 +117,10 @@ export function applyShadowsEnabled(enabled: boolean): void {
     rendererRef.shadowMap.enabled = enabled;
     rendererRef.shadowMap.needsUpdate = true;
   }
-  const sun = getSunLight();
-  if (sun) {
-    sun.castShadow = enabled;
-  }
-  const moon = getMoonLight();
-  if (moon) {
-    moon.castShadow = enabled && (currentSettings?.moonShadows ?? false);
+  // The active shadow caster light is managed by Lighting.ts
+  const light = getActiveShadowLight();
+  if (light) {
+    light.castShadow = enabled;
   }
 }
 
@@ -131,28 +128,20 @@ export function applyShadowMapSize(size: number): void {
   // Size 0 means shadows off - handled by applyShadowsEnabled
   if (size <= 0) return;
   
-  const sun = getSunLight();
-  if (sun && sun.shadow.mapSize.width !== size) {
-    sun.shadow.mapSize.width = size;
-    sun.shadow.mapSize.height = size;
-    sun.shadow.map?.dispose();
-    sun.shadow.map = null;
-  }
-  const moon = getMoonLight();
-  if (moon && moon.shadow.mapSize.width !== size) {
-    moon.shadow.mapSize.width = size;
-    moon.shadow.mapSize.height = size;
-    moon.shadow.map?.dispose();
-    moon.shadow.map = null;
+  // Update both lights so the shadow config is correct after a swap
+  for (const light of [getSunLight(), getMoonLight()]) {
+    if (light && light.shadow.mapSize.width !== size) {
+      light.shadow.mapSize.width = size;
+      light.shadow.mapSize.height = size;
+      light.shadow.map?.dispose();
+      light.shadow.map = null;
+    }
   }
 }
 
 export function applyMoonShadows(enabled: boolean): void {
-  const moon = getMoonLight();
-  if (moon) {
-    const shadowsOn = currentSettings?.shadowsEnabled ?? true;
-    moon.castShadow = shadowsOn && enabled;
-  }
+  // Tell Lighting.ts whether moon is eligible to become the shadow caster
+  setMoonShadowsAllowed(enabled);
   if (currentSettings) {
     currentSettings.moonShadows = enabled;
   }

@@ -6,6 +6,12 @@
  * 
  * Sun and moon positions can be set via azimuth/elevation angles,
  * calculated automatically by DayNightCycle.ts or set manually.
+ * 
+ * SHADOW MODEL: Only one directional light casts shadows at a time.
+ * The shadow caster swaps between sun and moon based on which is
+ * dominant (above the horizon with higher intensity). This avoids
+ * the Three.js bug where toggling castShadow changes
+ * NUM_DIR_LIGHT_SHADOWS without recompiling receiver shaders.
  */
 
 import * as THREE from 'three';
@@ -20,6 +26,12 @@ let sunLight: THREE.DirectionalLight | null = null;
 let moonLight: THREE.DirectionalLight | null = null;
 let hemisphereLight: THREE.HemisphereLight | null = null;
 let renderer: THREE.WebGLRenderer | null = null;
+
+/** Which light currently owns the single shadow map: 'sun' | 'moon' */
+let activeShadowCaster: 'sun' | 'moon' = 'sun';
+
+/** Whether moon is allowed to become the shadow caster (quality setting) */
+let moonShadowsAllowed = false;
 
 // ============== Position Calculation ==============
 
@@ -77,7 +89,8 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   scene.add(sunLight);
   scene.add(sunLight.target);
   
-  // Moon (secondary directional light, casts shadows at night)
+  // Moon (secondary directional light — does NOT cast shadows on init;
+  // shadow caster is swapped at runtime by updateShadowCaster())
   moonLight = new THREE.DirectionalLight(
     settings.moonColor ?? '#8899bb',
     settings.moonIntensity ?? 0.3
@@ -88,10 +101,12 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
     settings.sunDistance ?? 150
   );
   moonLight.position.copy(moonPos);
-  moonLight.castShadow = true;
+  moonLight.castShadow = false;
   configureShadowCamera(moonLight, settings);
   scene.add(moonLight);
   scene.add(moonLight.target);
+  
+  activeShadowCaster = 'sun';
   
   // Hemisphere light (sky/ground gradient for natural outdoor lighting)
   if (settings.hemisphereEnabled ?? true) {
@@ -115,7 +130,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
     renderer.toneMappingExposure = settings.toneMappingExposure ?? 1.0;
   }
   
-  console.log('[Lighting] Initialized with sun + moon + hemisphere + procedural sky');
+  console.log('[Lighting] Initialized with sun + moon + hemisphere + procedural sky (single shadow caster)');
 }
 
 function configureShadowCamera(light: THREE.DirectionalLight, settings: EnvironmentSettings): void {
@@ -175,15 +190,22 @@ export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>)
     
     if (settings.shadowBias !== undefined) {
       sunLight.shadow.bias = settings.shadowBias;
+      if (moonLight) moonLight.shadow.bias = settings.shadowBias;
     }
     if (settings.shadowNormalBias !== undefined) {
       sunLight.shadow.normalBias = settings.shadowNormalBias;
+      if (moonLight) moonLight.shadow.normalBias = settings.shadowNormalBias;
     }
     if (settings.shadowMapSize !== undefined && sunLight.shadow.mapSize.width !== settings.shadowMapSize) {
-      sunLight.shadow.mapSize.width = settings.shadowMapSize;
-      sunLight.shadow.mapSize.height = settings.shadowMapSize;
-      sunLight.shadow.map?.dispose();
-      sunLight.shadow.map = null;
+      // Update both lights so either can be shadow caster
+      for (const light of [sunLight, moonLight]) {
+        if (light && light.shadow.mapSize.width !== settings.shadowMapSize) {
+          light.shadow.mapSize.width = settings.shadowMapSize;
+          light.shadow.mapSize.height = settings.shadowMapSize;
+          light.shadow.map?.dispose();
+          light.shadow.map = null;
+        }
+      }
     }
   }
   
@@ -280,6 +302,89 @@ export function getHemisphereLight(): THREE.HemisphereLight | null {
 }
 
 /**
+ * Get which light currently owns the shadow.
+ */
+export function getActiveShadowCaster(): 'sun' | 'moon' {
+  return activeShadowCaster;
+}
+
+/**
+ * Get the light that currently casts shadows.
+ */
+export function getActiveShadowLight(): THREE.DirectionalLight | null {
+  return activeShadowCaster === 'sun' ? sunLight : moonLight;
+}
+
+// ============== Shadow Caster Swap ==============
+
+/**
+ * Set whether moon is allowed to become the shadow caster.
+ * Called by QualityManager when the moonShadows quality setting changes.
+ */
+export function setMoonShadowsAllowed(allowed: boolean): void {
+  moonShadowsAllowed = allowed;
+  // If moon shadows just got disabled and moon currently owns the shadow, swap back to sun
+  if (!allowed && activeShadowCaster === 'moon') {
+    transferShadowCaster('sun');
+  }
+}
+
+export function isMoonShadowsAllowed(): boolean {
+  return moonShadowsAllowed;
+}
+
+/**
+ * Update which directional light casts shadows based on current intensities.
+ * Call each frame from DayNightCycle (or whenever intensities change).
+ * 
+ * Only ONE light casts shadows at a time. This keeps NUM_DIR_LIGHT_SHADOWS
+ * constant at 1 so receiver shaders never need recompilation.
+ * 
+ * @param sunIntensity - current sun light intensity
+ * @param moonIntensity - current moon light intensity
+ */
+export function updateShadowCaster(sunIntensity: number, moonIntensity: number): void {
+  if (!sunLight || !moonLight) return;
+  
+  // Determine who should own the shadow
+  let desired: 'sun' | 'moon' = 'sun';
+  if (moonShadowsAllowed && moonIntensity > sunIntensity) {
+    desired = 'moon';
+  }
+  
+  if (desired !== activeShadowCaster) {
+    transferShadowCaster(desired);
+  }
+}
+
+/**
+ * Transfer shadow casting from the current light to `target`.
+ * Disposes the old shadow map and marks the renderer for update.
+ */
+function transferShadowCaster(target: 'sun' | 'moon'): void {
+  const oldLight = activeShadowCaster === 'sun' ? sunLight : moonLight;
+  const newLight = target === 'sun' ? sunLight : moonLight;
+  if (!oldLight || !newLight) return;
+  
+  // Turn off old
+  oldLight.castShadow = false;
+  oldLight.shadow.map?.dispose();
+  oldLight.shadow.map = null;
+  
+  // Turn on new
+  newLight.castShadow = true;
+  // Shadow map will be auto-allocated on next render
+  
+  // Force the renderer to re-render shadows
+  if (renderer) {
+    renderer.shadowMap.needsUpdate = true;
+  }
+  
+  activeShadowCaster = target;
+  console.log(`[Lighting] Shadow caster swapped to ${target}`);
+}
+
+/**
  * Dispose of lighting resources.
  */
 export function disposeLighting(): void {
@@ -295,6 +400,7 @@ export function disposeLighting(): void {
   if (moonLight && scene) {
     scene.remove(moonLight);
     scene.remove(moonLight.target);
+    moonLight.shadow.map?.dispose();
     moonLight = null;
   }
   

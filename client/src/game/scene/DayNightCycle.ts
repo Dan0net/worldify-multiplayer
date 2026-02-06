@@ -6,6 +6,7 @@
  */
 
 import { useGameStore, EnvironmentSettings } from '../../state/store';
+import { updateShadowCaster } from './Lighting';
 import {
   // Solar
   SUN_ELEVATION_MIN,
@@ -173,6 +174,11 @@ export function updateDayNightCycle(deltaMs: number): void {
   if (env.autoMoonIntensity ?? true) {
     updates.moonIntensity = getMoonIntensity(sunElevation);
   }
+  
+  // Update which light casts shadows based on current intensities
+  const effectiveSunIntensity = updates.sunIntensity ?? env.sunIntensity ?? 3.0;
+  const effectiveMoonIntensity = updates.moonIntensity ?? env.moonIntensity ?? 0.3;
+  updateShadowCaster(effectiveSunIntensity, effectiveMoonIntensity);
   
   // Ambient - simple day/night with midpoint color
   if (env.autoAmbientColor ?? true) {
