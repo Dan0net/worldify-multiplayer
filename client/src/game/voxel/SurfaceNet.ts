@@ -127,18 +127,17 @@ const EDGE_TABLE = new Int32Array(256);
 // ============== Helper Functions ==============
 
 /**
- * Create an empty SurfaceNetOutput.
+ * Cached singleton empty output — avoids allocating zero-length arrays per call.
+ * Consumers must not mutate these arrays.
  */
-function emptyOutput(): SurfaceNetOutput {
-  return {
-    positions: new Float32Array(0),
-    normals: new Float32Array(0),
-    indices: new Uint32Array(0),
-    materials: new Uint8Array(0),
-    vertexCount: 0,
-    triangleCount: 0,
-  };
-}
+const EMPTY_OUTPUT: SurfaceNetOutput = Object.freeze({
+  positions: new Float32Array(0),
+  normals: new Float32Array(0),
+  indices: new Uint32Array(0),
+  materials: new Uint8Array(0),
+  vertexCount: 0,
+  triangleCount: 0,
+}) as SurfaceNetOutput;
 
 // Weight to treat "other type" voxels as slightly outside surface
 const FILTER_WEIGHT = -0.00001;
@@ -173,6 +172,17 @@ for (let i = 0; i < MESH_COUNT; ++i) {
     triCapacity: INITIAL_TRI_CAPACITY,
   });
 }
+
+/**
+ * Per-mesh-type grow-only buffers for normalized normals.
+ * Avoids allocating a new Float32Array in buildFinalOutput() every call.
+ */
+const normalizedNormalBuffers: Float32Array[] = [
+  new Float32Array(INITIAL_VERT_CAPACITY * 3),
+  new Float32Array(INITIAL_VERT_CAPACITY * 3),
+  new Float32Array(INITIAL_VERT_CAPACITY * 3),
+];
+const normalizedNormalCapacities = [INITIAL_VERT_CAPACITY, INITIAL_VERT_CAPACITY, INITIAL_VERT_CAPACITY];
 
 /** Ensure pool has enough vertex capacity, growing by 2x if needed */
 function ensureVertCapacity(pool: MeshPool, needed: number): void {
@@ -271,7 +281,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
 
   // === Early bail — use shared utility that respects bit layout constants ===
   if (!hasSurfaceCrossing(data)) {
-    return { solid: emptyOutput(), transparent: emptyOutput(), liquid: emptyOutput() };
+    return { solid: EMPTY_OUTPUT, transparent: EMPTY_OUTPUT, liquid: EMPTY_OUTPUT };
   }
 
   // Reset write cursors (pools/buffers are module-level, no allocation needed)
@@ -514,17 +524,27 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
     }
   }
 
-  // === Build final outputs by slicing typed arrays (no per-element copy) ===
+  // === Build final outputs using subarray views (zero-copy) ===
+  // IMPORTANT: Returned views are only valid until the next meshVoxelsSplit() call.
+  // Callers must consume the data synchronously before meshing another chunk.
   function buildFinalOutput(mt: number): SurfaceNetOutput {
     const vc = vertCounts[mt];
     const tc = triCounts[mt];
-    if (tc === 0) return emptyOutput();
+    if (tc === 0) return EMPTY_OUTPUT;
     
     const pool = meshPools[mt];
     
+    // Grow normalized normals buffer if needed
+    if (vc > normalizedNormalCapacities[mt]) {
+      let cap = normalizedNormalCapacities[mt];
+      while (cap < vc) cap <<= 1;
+      normalizedNormalBuffers[mt] = new Float32Array(cap * 3);
+      normalizedNormalCapacities[mt] = cap;
+    }
+    
     // Normalize accumulated normals and negate (face normals point inward from winding)
     const normSrc = pool.normals;
-    const normals = new Float32Array(vc * 3);
+    const normals = normalizedNormalBuffers[mt];
     for (let i = 0; i < vc; ++i) {
       const i3 = i * 3;
       const nx = normSrc[i3];
@@ -543,11 +563,12 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
       }
     }
     
+    // Return subarray views — zero allocation, valid until next meshVoxelsSplit()
     return {
-      positions: pool.positions.slice(0, vc * 3),
-      normals,
-      indices: pool.indices.slice(0, tc * 3),
-      materials: pool.materials.slice(0, vc),
+      positions: pool.positions.subarray(0, vc * 3),
+      normals: normals.subarray(0, vc * 3),
+      indices: pool.indices.subarray(0, tc * 3),
+      materials: pool.materials.subarray(0, vc),
       vertexCount: vc,
       triangleCount: tc,
     };

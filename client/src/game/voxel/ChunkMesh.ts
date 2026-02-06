@@ -98,57 +98,76 @@ export class ChunkMesh {
 
   /**
    * Create or update meshes from ChunkMeshOutput (solid + transparent + liquid).
+   * Reuses existing THREE.Mesh objects when possible to avoid scene.remove/add overhead.
    * @param output Mesh data for solid, transparent, and liquid materials
-   * @param scene Optional scene to add meshes to
+   * @param scene Optional scene to add/remove meshes
    */
   updateMeshes(output: ChunkMeshOutput, scene?: THREE.Scene): void {
-    // Dispose old meshes if they exist
-    this.disposeMeshes(scene);
+    // Clean up preview state (always needed before updating main meshes)
+    this.disposePreviewMeshes(scene);
+    this.previewActive = false;
 
     const worldPos = this.chunk.getWorldPosition();
     const chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
 
-    // Create solid mesh
-    if (output.solid.vertexCount > 0 && output.solid.triangleCount > 0) {
-      const solidGeometry = createGeometryFromSurfaceNet(output.solid);
-      this.solidMesh = createSolidMesh(solidGeometry, this.chunk.key);
-      this.solidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      this.solidMesh.userData.chunkCoords = chunkCoords;
-      
-      if (scene) {
-        scene.add(this.solidMesh);
-      }
-      this.solidMesh.updateMatrixWorld(true);
-    }
-
-    // Create transparent mesh
-    if (output.transparent.vertexCount > 0 && output.transparent.triangleCount > 0) {
-      const transparentGeometry = createGeometryFromSurfaceNet(output.transparent);
-      this.transparentMesh = createTransparentMesh(transparentGeometry, this.chunk.key);
-      this.transparentMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      this.transparentMesh.userData.chunkCoords = chunkCoords;
-      
-      if (scene) {
-        scene.add(this.transparentMesh);
-      }
-      this.transparentMesh.updateMatrixWorld(true);
-    }
-
-    // Create liquid mesh
-    if (output.liquid.vertexCount > 0 && output.liquid.triangleCount > 0) {
-      const liquidGeometry = createGeometryFromSurfaceNet(output.liquid);
-      this.liquidMesh = createLiquidMesh(liquidGeometry, this.chunk.key);
-      this.liquidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      this.liquidMesh.userData.chunkCoords = chunkCoords;
-      
-      if (scene) {
-        scene.add(this.liquidMesh);
-      }
-      this.liquidMesh.updateMatrixWorld(true);
-    }
+    // Update each mesh slot, reusing existing Mesh objects where possible
+    this.solidMesh = this.updateMeshSlot(
+      this.solidMesh, output.solid, createSolidMesh, worldPos, chunkCoords, scene
+    );
+    this.transparentMesh = this.updateMeshSlot(
+      this.transparentMesh, output.transparent, createTransparentMesh, worldPos, chunkCoords, scene
+    );
+    this.liquidMesh = this.updateMeshSlot(
+      this.liquidMesh, output.liquid, createLiquidMesh, worldPos, chunkCoords, scene
+    );
 
     this.disposed = false;
     this.meshGeneration++;
+  }
+
+  /**
+   * Update a single mesh slot: reuse existing mesh if possible, create/remove as needed.
+   * - non-empty → non-empty: swap geometry on existing mesh (no scene.remove/add)
+   * - empty → non-empty: create new mesh and add to scene  
+   * - non-empty → empty: remove from scene and dispose
+   * - empty → empty: no-op
+   */
+  private updateMeshSlot(
+    existing: THREE.Mesh | null,
+    output: SurfaceNetOutput,
+    createFn: (geometry: THREE.BufferGeometry, chunkKey: string) => THREE.Mesh,
+    worldPos: { x: number; y: number; z: number },
+    chunkCoords: { cx: number; cy: number; cz: number },
+    scene?: THREE.Scene,
+  ): THREE.Mesh | null {
+    const hasData = output.vertexCount > 0 && output.triangleCount > 0;
+
+    if (!hasData) {
+      // Remove existing mesh if present
+      if (existing) {
+        if (scene) scene.remove(existing);
+        existing.geometry.dispose();
+      }
+      return null;
+    }
+
+    const newGeometry = createGeometryFromSurfaceNet(output);
+
+    if (existing) {
+      // Reuse existing mesh — swap geometry, skip scene.remove/add
+      const oldGeometry = existing.geometry;
+      existing.geometry = newGeometry;
+      oldGeometry.dispose();
+      return existing;
+    }
+
+    // Create new mesh (first time or transitioning from empty)
+    const mesh = createFn(newGeometry, this.chunk.key);
+    mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+    mesh.userData.chunkCoords = chunkCoords;
+    if (scene) scene.add(mesh);
+    mesh.updateMatrixWorld(true);
+    return mesh;
   }
 
   /**
