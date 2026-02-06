@@ -164,12 +164,18 @@ export class BuildPreview {
       newActiveChunks.add(key);
     }
 
-    this.activePreviewChunks = newActiveChunks;
+    // Keep activePreviewChunks as union of old (still displayed) + new (dispatching)
+    // so clearPreview() knows about ALL chunks with visible preview meshes.
+    // The callback narrows it down after clearing stale ones.
+    for (const key of newActiveChunks) {
+      this.activePreviewChunks.add(key);
+    }
 
     if (batchItems.length === 0) {
       // No chunks to mesh — clear stale previews now
       for (const key of chunksToRemove) {
         this.clearChunkPreview(key);
+        this.activePreviewChunks.delete(key);
       }
       this.renderedHash = hash;
       return;
@@ -191,6 +197,7 @@ export class BuildPreview {
       // Atomic: clear stale chunks + apply new results in the same frame
       for (const key of chunksToRemove) {
         this.clearChunkPreview(key);
+        this.activePreviewChunks.delete(key);
       }
       for (const result of results) {
         const chunkMesh = world.meshes.get(result.chunkKey);
