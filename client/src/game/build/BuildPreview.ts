@@ -64,6 +64,9 @@ export class BuildPreview {
     hash: string;
   } | null = null;
 
+  /** Chunks with preview still visible after commit, waiting for remesh to replace them */
+  private pendingCommitChunks: Set<string> = new Set();
+
   /**
    * Set the voxel world, scene, and worker pool to use for preview.
    */
@@ -290,28 +293,40 @@ export class BuildPreview {
     this.batchInFlight = false;
     this.pendingOperation = null;
 
-    // Clear preview meshes first
+    // Discard temp data but KEEP preview meshes visible — they'll be cleared
+    // when the remesh results arrive (prevents flicker gap).
     for (const key of this.activePreviewChunks) {
       const chunk = this.world.chunks.get(key);
       if (chunk) {
         chunk.discardTemp();
       }
-
-      const chunkMesh = this.world.meshes.get(key);
-      if (chunkMesh) {
-        chunkMesh.setPreviewActive(false, this.scene);
-      }
+      this.pendingCommitChunks.add(key);
     }
 
     // Apply the operation using the shared VoxelWorld method (DRY)
     const modifiedKeys = this.world.applyBuildOperation(this.currentOperation);
 
-    // Clear preview state
+    // Clear preview state (but pendingCommitChunks stays until remesh completes)
     this.activePreviewChunks.clear();
     this.renderedHash = '';
     this.currentOperation = null;
 
     return modifiedKeys;
+  }
+
+  /**
+   * Called by VoxelWorld when a chunk's remesh result arrives.
+   * If this chunk had its preview kept visible after commit, clear it now.
+   */
+  onChunkRemeshed(chunkKey: string): void {
+    if (!this.pendingCommitChunks.has(chunkKey)) return;
+    this.pendingCommitChunks.delete(chunkKey);
+
+    if (!this.world || !this.scene) return;
+    const chunkMesh = this.world.meshes.get(chunkKey);
+    if (chunkMesh) {
+      chunkMesh.setPreviewActive(false, this.scene);
+    }
   }
 
   /**

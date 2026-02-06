@@ -82,6 +82,11 @@ export class Builder {
     this.voxelWorld = world;
     this.scene = scene;
     this.preview.initialize(world, scene, world.meshPool);
+
+    // When a chunk remesh completes, let preview clear committed preview meshes
+    world.onChunkRemeshed = (chunkKey) => {
+      this.preview.onChunkRemeshed(chunkKey);
+    };
   }
 
   /**

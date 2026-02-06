@@ -63,6 +63,9 @@ export class VoxelWorld implements ChunkProvider {
   /** Callback to notify external systems (e.g. map cache) when a tile arrives */
   onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
 
+  /** Callback when a chunk's remesh result is applied (used by BuildPreview to clear committed preview) */
+  onChunkRemeshed: ((chunkKey: string) => void) | null = null;
+
   /** Reference to the Three.js scene */
   readonly scene: THREE.Scene;
 
@@ -681,6 +684,9 @@ export class VoxelWorld implements ChunkProvider {
 
     chunkMesh.updateMeshesFromData(solid, transparent, liquid, this.scene);
     chunk.clearDirty();
+
+    // Notify listeners (e.g. BuildPreview clears committed preview meshes)
+    this.onChunkRemeshed?.(key);
   }
 
   /**

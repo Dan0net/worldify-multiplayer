@@ -136,8 +136,12 @@ export class ChunkMesh {
     liquid: ExpandedMeshData | null,
     scene?: THREE.Scene,
   ): void {
-    this.disposePreviewMeshes(scene);
-    this.previewActive = false;
+    // If preview is active (e.g. pending commit), don't touch preview state here.
+    // The real meshes are updated underneath; onChunkRemeshed will call
+    // setPreviewActive(false) to swap visibility atomically.
+    if (!this.previewActive) {
+      this.disposePreviewMeshes(scene);
+    }
 
     const worldPos = this.chunk.getWorldPosition();
     const chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
@@ -232,6 +236,8 @@ export class ChunkMesh {
     const mesh = createFn(newGeometry, this.chunk.key);
     mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
     mesh.userData.chunkCoords = chunkCoords;
+    // Keep hidden if preview is active (preview meshes are being shown instead)
+    if (this.previewActive) mesh.visible = false;
     if (scene) scene.add(mesh);
     mesh.updateMatrixWorld(true);
     return mesh;
@@ -263,6 +269,8 @@ export class ChunkMesh {
     const mesh = createFn(newGeometry, this.chunk.key);
     mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
     mesh.userData.chunkCoords = chunkCoords;
+    // Keep hidden if preview is active (preview meshes are being shown instead)
+    if (this.previewActive) mesh.visible = false;
     if (scene) scene.add(mesh);
     mesh.updateMatrixWorld(true);
     return mesh;
