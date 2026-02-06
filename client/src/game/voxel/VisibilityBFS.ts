@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
   VISIBILITY_ALL,
+  CHUNK_WORLD_SIZE,
   chunkKey,
   ChunkFace,
   canSeeThrough,
@@ -132,6 +133,7 @@ function indexToWorldChunk(
  * @param frustum - Three.js frustum for culling visible set
  * @param chunkProvider - Access to loaded chunks
  * @param maxRadius - Maximum BFS distance (default: VISIBILITY_RADIUS)
+ * @param playerWorldPos - Player world position for fractional chunk offset (optional)
  * @returns Set of visible chunk keys and chunks to request
  */
 export function getVisibleChunks(
@@ -139,7 +141,8 @@ export function getVisibleChunks(
   _cameraDir: THREE.Vector3,  // Reserved for future direction-based culling
   _frustum: THREE.Frustum,
   chunkProvider: ChunkProvider,
-  maxRadius: number = VISIBILITY_RADIUS
+  maxRadius: number = VISIBILITY_RADIUS,
+  playerWorldPos?: { x: number; y: number; z: number }
 ): VisibilityResult {
   // Reset generation counter if would overflow
   if (bfsGeneration >= 254) {
@@ -152,6 +155,15 @@ export function getVisibleChunks(
   // Camera chunk is at center of grid
   const centerOffset = VISIBILITY_RADIUS;
   const { cx: baseCx, cy: baseCy, cz: baseCz } = cameraChunk;
+  
+  // Fractional offset: player position within chunk, centered so 0 = chunk center
+  // Shifts the BFS distance measurement to the player's actual position
+  let fracX = 0, fracY = 0, fracZ = 0;
+  if (playerWorldPos) {
+    fracX = playerWorldPos.x / CHUNK_WORLD_SIZE - baseCx - 0.5;
+    fracY = playerWorldPos.y / CHUNK_WORLD_SIZE - baseCy - 0.5;
+    fracZ = playerWorldPos.z / CHUNK_WORLD_SIZE - baseCz - 0.5;
+  }
   
   // Track counts
   let visibleCount = 0;
@@ -217,8 +229,8 @@ export function getVisibleChunks(
       // Skip if already visited
       if (bfsVisited[neighborIdx] === gen) continue;
       
-      // Distance check (using grid distance from center)
-      const newDist = Math.abs(ngx - centerOffset) + Math.abs(ngy - centerOffset) + Math.abs(ngz - centerOffset);
+      // Distance check (offset by player's fractional position within their chunk)
+      const newDist = Math.abs(ngx - centerOffset - fracX) + Math.abs(ngy - centerOffset - fracY) + Math.abs(ngz - centerOffset - fracZ);
       if (newDist > maxRadius) continue;
       
       // Visibility check: can we see through from entry face to this exit face?

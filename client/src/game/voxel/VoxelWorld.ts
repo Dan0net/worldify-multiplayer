@@ -154,7 +154,7 @@ export class VoxelWorld implements ChunkProvider {
     this.lastPlayerChunk = { ...playerChunk };
 
     // Use visibility-based loading
-    this.updateWithVisibility(playerChunk);
+    this.updateWithVisibility(playerChunk, playerPos);
 
     // Process some remesh queue items per frame
     // Process remesh queue with time budget (target 60fps = 16.6ms frame budget)
@@ -166,7 +166,7 @@ export class VoxelWorld implements ChunkProvider {
    * BFS only runs when player moves to a new chunk (hysteresis).
    * Frustum culling runs every frame for mesh visibility.
    */
-  private updateWithVisibility(playerChunk: { cx: number; cy: number; cz: number }): void {
+  private updateWithVisibility(playerChunk: { cx: number; cy: number; cz: number }, playerPos?: THREE.Vector3): void {
     // Bootstrap: request initial surface column if not yet done
     if (!this.initialColumnRequested) {
       this.requestInitialSurfaceColumn(playerChunk.cx, playerChunk.cz);
@@ -197,7 +197,8 @@ export class VoxelWorld implements ChunkProvider {
         cameraDir,
         frustum,
         this,
-        this._visibilityRadius
+        this._visibilityRadius,
+        playerPos
       );
 
       // Update cached reachable set

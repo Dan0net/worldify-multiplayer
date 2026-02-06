@@ -165,11 +165,11 @@ export function MapOverlay() {
   if (!showMapOverlay) return null;
 
   return (
-    <div className="fixed top-5 right-5 z-40" style={{ position: 'fixed' }}>
+    <div className="fixed top-5 right-5 z-40" style={{ position: 'fixed', filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 1.0))' }}>
       <div className="relative">
         <div
           ref={containerRef}
-          className="rounded border border-green-500/30 bg-black/80 overflow-hidden"
+          className="rounded overflow-hidden"
           style={{ width: MAP_VIEWPORT_SIZE, height: MAP_VIEWPORT_SIZE, position: 'relative' }}
         />
         <PlayerMarker markerRef={markerRef} />
