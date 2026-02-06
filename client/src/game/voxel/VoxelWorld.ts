@@ -22,8 +22,9 @@ import {
   getChunkRangeFromHeights,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
-import { meshChunk } from './ChunkMesher.js';
+import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
+import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
 import { sendBinary } from '../../net/netClient.js';
 import { storeBridge } from '../../state/bridge.js';
 import { perfStats } from '../debug/PerformanceStats.js';
@@ -92,8 +93,12 @@ export class VoxelWorld implements ChunkProvider {
   /** Dynamic visibility radius (defaults to shared constant, overridden by quality settings) */
   private _visibilityRadius: number = VISIBILITY_RADIUS;
 
+  /** Worker pool for off-thread mesh generation */
+  readonly meshPool: MeshWorkerPool;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    this.meshPool = new MeshWorkerPool(2);
   }
 
   /**
@@ -533,7 +538,8 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Remesh a single chunk.
+   * Remesh a single chunk synchronously.
+   * Used by remeshAllDirty() and applyBuildOperation() where immediate results are needed.
    */
   remeshChunk(chunk: Chunk): void {
     const key = chunk.key;
@@ -581,19 +587,20 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /** 
-   * Maximum milliseconds to spend on remeshing per frame.
-   * At 60fps the frame budget is ~16.6ms. We reserve ~4ms for meshing
-   * to leave headroom for rendering, physics, and network.
-   * Adaptive: uses less when the queue is small.
+   * Maximum number of chunks to dispatch to workers per frame.
+   * Each dispatch costs ~0.5ms (expand grid), so 8 dispatches ≈ 4ms.
    */
-  private static readonly REMESH_BUDGET_MS = 4.0;
+  private static readonly MAX_DISPATCHES_PER_FRAME = 8;
 
   /**
-   * Process remesh queue with time budgeting and distance priority.
+   * Process remesh queue by dispatching to worker pool.
+   * 
+   * Main thread expands chunk data (~0.5ms each), transfers grid to worker.
+   * Worker runs SurfaceNet + geometry expansion (~3-5ms each, off-thread).
+   * Results applied asynchronously via applyMeshResult.
    * 
    * - Sorts queue by distance to player (nearest chunks first)
-   * - Guarantees at least 1 chunk per frame (prevents starvation)
-   * - Bails early when time budget is exceeded
+   * - Skips chunks already in-flight
    * - Defers chunks with pending neighbors to avoid stitch artifacts
    */
   private processRemeshQueue(playerPos: THREE.Vector3): void {
@@ -601,15 +608,12 @@ export class VoxelWorld implements ChunkProvider {
     if (queueSize === 0) return;
 
     // === Priority sort: nearest chunks first ===
-    // Reuse buffer array to avoid allocation (clear + refill)
     const sorted = this.remeshSortBuffer;
     sorted.length = 0;
     for (const key of this.remeshQueue) {
       sorted.push(key);
     }
     
-    // Sort by squared distance to player in chunk space
-    // (cheaper than world space, same ordering)
     const px = playerPos.x / CHUNK_WORLD_SIZE;
     const py = playerPos.y / CHUNK_WORLD_SIZE;
     const pz = playerPos.z / CHUNK_WORLD_SIZE;
@@ -623,42 +627,60 @@ export class VoxelWorld implements ChunkProvider {
       return da - db;
     });
 
-    // === Time-budgeted processing ===
-    const startTime = performance.now();
-    const budget = VoxelWorld.REMESH_BUDGET_MS;
-    let processed = 0;
-    const deferred: string[] = [];
+    // === Dispatch to workers ===
+    let dispatched = 0;
     
     for (let i = 0; i < sorted.length; ++i) {
+      if (dispatched >= VoxelWorld.MAX_DISPATCHES_PER_FRAME) break;
+
       const key = sorted[i];
-      
-      // After the first chunk, check time budget
-      if (processed > 0) {
-        const elapsed = performance.now() - startTime;
-        if (elapsed >= budget) break;
-      }
 
       const chunk = this.chunks.get(key);
       if (!chunk) {
-        // Chunk was unloaded while queued
         this.remeshQueue.delete(key);
         continue;
       }
+
+      // Skip if already being meshed by a worker
+      if (this.meshPool.isInFlight(key)) continue;
+
+      // Skip chunks owned by build preview (avoid competing with preview batch)
+      if (this.meshPool.isPreviewChunk(key)) continue;
       
-      // Defer meshing if any face neighbors are still pending from server
-      // This prevents stitching artifacts from missing neighbor data
-      if (this.hasNeighborsPending(chunk.cx, chunk.cy, chunk.cz)) {
-        deferred.push(key);
-        continue;
-      }
+      // Defer if any face neighbors are still pending from server
+      if (this.hasNeighborsPending(chunk.cx, chunk.cy, chunk.cz)) continue;
       
-      this.remeshChunk(chunk);
+      // Expand grid on main thread (~0.5ms) and dispatch to worker
+      const grid = this.meshPool.takeGrid();
+      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
+      
+      this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {
+        this.applyMeshResult(result);
+      });
+
       this.remeshQueue.delete(key);
-      processed++;
+      dispatched++;
     }
+  }
+
+  /**
+   * Apply meshing results from a worker to the scene.
+   * Called asynchronously when a worker completes.
+   */
+  private applyMeshResult(result: MeshResult): void {
+    const { chunkKey: key, solid, transparent, liquid } = result;
     
-    // Deferred chunks stay in queue for next frame
-    // (they're already in the Set, just not deleted)
+    const chunk = this.chunks.get(key);
+    if (!chunk) return; // Chunk was unloaded while worker was busy
+
+    let chunkMesh = this.meshes.get(key);
+    if (!chunkMesh) {
+      chunkMesh = new ChunkMesh(chunk);
+      this.meshes.set(key, chunkMesh);
+    }
+
+    chunkMesh.updateMeshesFromData(solid, transparent, liquid, this.scene);
+    chunk.clearDirty();
   }
 
   /**
@@ -761,8 +783,14 @@ export class VoxelWorld implements ChunkProvider {
 
   /**
    * Dispose of all chunks and meshes.
+   * @param keepWorkers If true, workers are kept alive (for clearAndReload)
    */
-  dispose(): void {
+  dispose(keepWorkers: boolean = false): void {
+    // Terminate workers unless told to keep them
+    if (!keepWorkers) {
+      this.meshPool.dispose();
+    }
+
     // Dispose all meshes
     for (const chunkMesh of this.meshes.values()) {
       chunkMesh.disposeMesh(this.scene);
@@ -796,8 +824,8 @@ export class VoxelWorld implements ChunkProvider {
   clearAndReload(playerPos?: THREE.Vector3): void {
     console.log('[VoxelWorld] Clearing all chunks and reloading...');
     
-    // Dispose everything
-    this.dispose();
+    // Dispose chunks but keep workers alive
+    this.dispose(true);
     
     // Re-initialize
     this.initialized = true;

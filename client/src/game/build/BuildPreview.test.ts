@@ -7,6 +7,7 @@ import { describe, test, expect } from 'vitest';
 import * as THREE from 'three';
 import { BuildPreview } from './BuildPreview.js';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
+import { MeshWorkerPool } from '../voxel/MeshWorkerPool.js';
 import {
   BUILD_RADIUS,
   BuildMode,
@@ -32,7 +33,7 @@ function createTestPreview(): {
 } {
   const { world, scene } = createTestWorld();
   const preview = new BuildPreview();
-  preview.initialize(world, scene);
+  preview.initialize(world, scene, world.meshPool);
   return { preview, world, scene };
 }
 

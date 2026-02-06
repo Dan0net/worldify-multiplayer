@@ -6,6 +6,10 @@
  * 
  * OPTIMIZATION: Pre-expands chunk data with margins into a flat array,
  * then passes it directly to SurfaceNet for cache-efficient access.
+ * 
+ * Two paths:
+ * - expandChunkToGrid(): Fills a grid buffer for worker dispatch (main thread only does expansion)
+ * - meshChunk(): Sync fallback — expand + SurfaceNet in one call (used by remeshAllDirty, etc.)
  */
 
 import { 
@@ -22,15 +26,14 @@ export type { SplitSurfaceNetOutput as ChunkMeshOutput };
 const GRID_SIZE = CHUNK_SIZE + 2; // 34
 const GRID_SIZE_SQ = GRID_SIZE * GRID_SIZE; // 1156
 
-// Reusable expanded grid buffer (avoids allocation per chunk)
-// Size: 34 * 34 * 34 = 39,304 entries
-let expandedGrid: Uint16Array | null = null;
+// Reusable expanded grid buffer for sync path (avoids allocation per chunk)
+let syncGrid: Uint16Array | null = null;
 
-function getExpandedGrid(): Uint16Array {
-  if (!expandedGrid) {
-    expandedGrid = new Uint16Array(GRID_SIZE * GRID_SIZE * GRID_SIZE);
+function getSyncGrid(): Uint16Array {
+  if (!syncGrid) {
+    syncGrid = new Uint16Array(GRID_SIZE * GRID_SIZE * GRID_SIZE);
   }
-  return expandedGrid;
+  return syncGrid;
 }
 
 /**
@@ -51,23 +54,17 @@ function expandChunkData(
   const CS_SQ = CS * CS; // 1024
   
   // === Phase 1: Bulk-copy inner 32³ block (rows via subarray) ===
-  // Inner block occupies grid positions [0..31, 0..31, 0..31] 
-  // which maps to grid indices z*GRID_SIZE_SQ + y*GRID_SIZE + x
-  // Source data layout: x + y*CS + z*CS_SQ
   for (let z = 0; z < CS; ++z) {
     const gridZBase = z * GRID_SIZE_SQ;
     const dataZBase = z * CS_SQ;
     for (let y = 0; y < CS; ++y) {
       const gridRowStart = gridZBase + y * GRID_SIZE;
       const dataRowStart = dataZBase + y * CS;
-      // Copy 32 voxels in one bulk operation
       grid.set(dataArray.subarray(dataRowStart, dataRowStart + CS), gridRowStart);
     }
   }
   
   // === Phase 2: Fill margin voxels (positions where any coord is 32 or 33) ===
-  // These are the faces/edges/corners that extend beyond the chunk bounds.
-  // We iterate strategically to only touch margin positions.
   
   // Fill z=32..33 slabs (full xy planes)
   for (let z = CS; z < GRID_SIZE; ++z) {
@@ -103,36 +100,42 @@ function expandChunkData(
 }
 
 /**
- * Create a SurfaceNetInput from a chunk and its neighbors.
- * Pre-expands data into a flat grid for cache-efficient access.
+ * Compute skipHighBoundary flags for a chunk.
  */
-function createChunkInput(
+function getSkipHighBoundary(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
-  useTemp: boolean
-): SurfaceNetInput {
-  const grid = getExpandedGrid();
-  expandChunkData(chunk, neighbors, useTemp, grid);
-
-  // Check which +X, +Y, +Z neighbors are missing - skip faces at those high boundaries
-  const skipHighBoundary: [boolean, boolean, boolean] = [
+): [boolean, boolean, boolean] {
+  return [
     !neighbors.has(chunkKey(chunk.cx + 1, chunk.cy, chunk.cz)),     // +X
     !neighbors.has(chunkKey(chunk.cx, chunk.cy + 1, chunk.cz)),     // +Y  
     !neighbors.has(chunkKey(chunk.cx, chunk.cy, chunk.cz + 1)),     // +Z
   ];
-
-  return { 
-    dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], 
-    data: grid,
-    skipHighBoundary 
-  };
 }
 
 /**
- * Generate meshes for a chunk, separated by material type.
+ * Expand chunk data into a provided grid buffer for worker dispatch.
+ * Main thread fills the grid, then transfers it to a worker for SurfaceNet.
  * 
- * OPTIMIZED: Pre-expands chunk data with margins, then uses direct
- * array access in the SurfaceNet algorithm for maximum performance.
+ * @param chunk The chunk to expand
+ * @param neighbors Map of neighbor chunks for margin sampling
+ * @param grid Grid buffer to fill (from MeshWorkerPool.takeGrid())
+ * @param useTemp If true, use tempData for preview rendering
+ * @returns skipHighBoundary flags for the worker
+ */
+export function expandChunkToGrid(
+  chunk: Chunk,
+  neighbors: Map<string, Chunk>,
+  grid: Uint16Array,
+  useTemp: boolean = false,
+): [boolean, boolean, boolean] {
+  expandChunkData(chunk, neighbors, useTemp, grid);
+  return getSkipHighBoundary(chunk, neighbors);
+}
+
+/**
+ * Generate meshes for a chunk synchronously (expand + SurfaceNet in one call).
+ * Used as fallback by remeshAllDirty() and other sync paths.
  * 
  * @param chunk The chunk to mesh
  * @param neighbors Map of neighbor chunks for margin sampling
@@ -144,6 +147,14 @@ export function meshChunk(
   neighbors: Map<string, Chunk>,
   useTemp: boolean = false
 ): SplitSurfaceNetOutput {
-  const input = createChunkInput(chunk, neighbors, useTemp);
+  const grid = getSyncGrid();
+  expandChunkData(chunk, neighbors, useTemp, grid);
+  const skipHighBoundary = getSkipHighBoundary(chunk, neighbors);
+
+  const input: SurfaceNetInput = { 
+    dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], 
+    data: grid,
+    skipHighBoundary,
+  };
   return meshVoxelsSplit(input);
 }

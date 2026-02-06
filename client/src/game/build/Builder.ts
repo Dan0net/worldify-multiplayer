@@ -81,7 +81,7 @@ export class Builder {
   setVoxelWorld(world: VoxelWorld, scene: THREE.Scene): void {
     this.voxelWorld = world;
     this.scene = scene;
-    this.preview.initialize(world, scene);
+    this.preview.initialize(world, scene, world.meshPool);
   }
 
   /**

@@ -12,7 +12,7 @@ import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import { ChunkMeshOutput } from './ChunkMesher.js';
 import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, getTransparentDepthMaterial } from './VoxelMaterials.js';
-import { createGeometryFromSurfaceNet } from './MeshGeometry.js';
+import { createGeometryFromSurfaceNet, createBufferGeometry, type ExpandedMeshData } from './MeshGeometry.js';
 
 /**
  * Create a solid (opaque) mesh from geometry.
@@ -126,6 +126,73 @@ export class ChunkMesh {
   }
 
   /**
+   * Create or update meshes from raw ExpandedMeshData (worker results).
+   * Same as updateMeshes() but accepts pre-expanded typed arrays instead of SurfaceNetOutput.
+   * Used by the worker pipeline — avoids needing SurfaceNetOutput on the main thread.
+   */
+  updateMeshesFromData(
+    solid: ExpandedMeshData | null,
+    transparent: ExpandedMeshData | null,
+    liquid: ExpandedMeshData | null,
+    scene?: THREE.Scene,
+  ): void {
+    this.disposePreviewMeshes(scene);
+    this.previewActive = false;
+
+    const worldPos = this.chunk.getWorldPosition();
+    const chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
+
+    this.solidMesh = this.updateMeshSlotFromData(
+      this.solidMesh, solid, createSolidMesh, worldPos, chunkCoords, scene
+    );
+    this.transparentMesh = this.updateMeshSlotFromData(
+      this.transparentMesh, transparent, createTransparentMesh, worldPos, chunkCoords, scene
+    );
+    this.liquidMesh = this.updateMeshSlotFromData(
+      this.liquidMesh, liquid, createLiquidMesh, worldPos, chunkCoords, scene
+    );
+
+    this.disposed = false;
+    this.meshGeneration++;
+  }
+
+  /**
+   * Update preview meshes from raw ExpandedMeshData (worker batch results).
+   * Used by BuildPreview's async worker pipeline.
+   */
+  updatePreviewMeshesFromData(
+    solid: ExpandedMeshData | null,
+    transparent: ExpandedMeshData | null,
+    liquid: ExpandedMeshData | null,
+    scene: THREE.Scene,
+  ): void {
+    this.disposePreviewMeshes(scene);
+    const worldPos = this.chunk.getWorldPosition();
+
+    if (solid) {
+      const geometry = createBufferGeometry(solid);
+      this.previewSolidMesh = createSolidMesh(geometry, this.chunk.key);
+      this.previewSolidMesh.userData.isPreview = true;
+      this.previewSolidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+      scene.add(this.previewSolidMesh);
+    }
+    if (transparent) {
+      const geometry = createBufferGeometry(transparent);
+      this.previewTransparentMesh = createTransparentMesh(geometry, this.chunk.key);
+      this.previewTransparentMesh.userData.isPreview = true;
+      this.previewTransparentMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+      scene.add(this.previewTransparentMesh);
+    }
+    if (liquid) {
+      const geometry = createBufferGeometry(liquid);
+      this.previewLiquidMesh = createLiquidMesh(geometry, this.chunk.key);
+      this.previewLiquidMesh.userData.isPreview = true;
+      this.previewLiquidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+      scene.add(this.previewLiquidMesh);
+    }
+  }
+
+  /**
    * Update a single mesh slot: reuse existing mesh if possible, create/remove as needed.
    * - non-empty → non-empty: swap geometry on existing mesh (no scene.remove/add)
    * - empty → non-empty: create new mesh and add to scene  
@@ -162,6 +229,37 @@ export class ChunkMesh {
     }
 
     // Create new mesh (first time or transitioning from empty)
+    const mesh = createFn(newGeometry, this.chunk.key);
+    mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+    mesh.userData.chunkCoords = chunkCoords;
+    if (scene) scene.add(mesh);
+    mesh.updateMatrixWorld(true);
+    return mesh;
+  }
+
+  /** Reusable slot updater for ExpandedMeshData (worker path). Same reuse logic as updateMeshSlot. */
+  private updateMeshSlotFromData(
+    existing: THREE.Mesh | null,
+    data: ExpandedMeshData | null,
+    createFn: (geometry: THREE.BufferGeometry, chunkKey: string) => THREE.Mesh,
+    worldPos: { x: number; y: number; z: number },
+    chunkCoords: { cx: number; cy: number; cz: number },
+    scene?: THREE.Scene,
+  ): THREE.Mesh | null {
+    if (!data) {
+      if (existing) {
+        if (scene) scene.remove(existing);
+        existing.geometry.dispose();
+      }
+      return null;
+    }
+    const newGeometry = createBufferGeometry(data);
+    if (existing) {
+      const oldGeometry = existing.geometry;
+      existing.geometry = newGeometry;
+      oldGeometry.dispose();
+      return existing;
+    }
     const mesh = createFn(newGeometry, this.chunk.key);
     mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
     mesh.userData.chunkCoords = chunkCoords;
