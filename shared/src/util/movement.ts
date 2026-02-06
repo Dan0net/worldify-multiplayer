@@ -105,3 +105,22 @@ export function getWorldDirectionFromInput(
   
   return rotateToWorldDirection(moveX, moveZ, yaw);
 }
+
+// ============== Angle Utilities ==============
+
+/**
+ * Interpolate between two angles using the shortest path around the circle.
+ * Handles wrap-around at ±π correctly so the rotation always takes
+ * the shortest route.
+ * 
+ * @param current Current angle in radians
+ * @param target Target angle in radians
+ * @param t Interpolation factor (0 = current, 1 = target)
+ * @returns Interpolated angle in radians
+ */
+export function lerpAngle(current: number, target: number, t: number): number {
+  let diff = target - current;
+  // Wrap difference to [-PI, PI] for shortest-path rotation
+  diff = diff - Math.PI * 2 * Math.round(diff / (Math.PI * 2));
+  return current + diff * t;
+}
