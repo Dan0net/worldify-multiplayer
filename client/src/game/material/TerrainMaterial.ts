@@ -203,6 +203,23 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
   static qualityAoMaps = true;
   static qualityMetalnessMaps = true;
   
+  /**
+   * Override customProgramCacheKey so that Three.js's program cache
+   * treats different quality-define combinations as distinct programs.
+   * Without this, toggling defines inside onBeforeCompile has no effect
+   * because the cache key (based on onBeforeCompile.toString()) never
+   * changes, so Three.js returns the old cached program and skips
+   * onBeforeCompile entirely.
+   */
+  customProgramCacheKey(): string {
+    return [
+      super.customProgramCacheKey(),
+      TerrainMaterial.qualityNormalMaps ? 'N' : 'n',
+      TerrainMaterial.qualityAoMaps ? 'A' : 'a',
+      TerrainMaterial.qualityMetalnessMaps ? 'M' : 'm',
+    ].join('|');
+  }
+  
   constructor(isTransparent: boolean = false) {
     super({
       roughness: 1.0,
@@ -237,10 +254,26 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.blendSharpness = { value: 8.0 };
       
       // Quality-driven shader defines
+      // CRITICAL: shader.defines is a direct reference to material.defines.
+      // We must explicitly DELETE defines when they should be off, otherwise
+      // they persist across recompilations (needsUpdate = true) and the
+      // shader still sees them even after the quality flag was turned off.
       shader.defines = shader.defines || {};
-      if (TerrainMaterial.qualityNormalMaps) shader.defines.QUALITY_NORMAL_MAPS = '';
-      if (TerrainMaterial.qualityAoMaps) shader.defines.QUALITY_AO_MAPS = '';
-      if (TerrainMaterial.qualityMetalnessMaps) shader.defines.QUALITY_METALNESS_MAPS = '';
+      if (TerrainMaterial.qualityNormalMaps) {
+        shader.defines.QUALITY_NORMAL_MAPS = '';
+      } else {
+        delete shader.defines.QUALITY_NORMAL_MAPS;
+      }
+      if (TerrainMaterial.qualityAoMaps) {
+        shader.defines.QUALITY_AO_MAPS = '';
+      } else {
+        delete shader.defines.QUALITY_AO_MAPS;
+      }
+      if (TerrainMaterial.qualityMetalnessMaps) {
+        shader.defines.QUALITY_METALNESS_MAPS = '';
+      } else {
+        delete shader.defines.QUALITY_METALNESS_MAPS;
+      }
       
       if (isTransparent) {
         shader.defines.USE_TEXTURE_ALPHA = '';
@@ -381,6 +414,19 @@ export const TERRAIN_DEBUG_MODES = {
   METALNESS: 9,
   METALNESS_FINAL: 10,
   MATERIAL_HUE: 11,
+  // Investigation modes for index-0 brightness bug
+  LAYER_ZERO_RAW: 12,      // Sample only layer 0 of albedo, NO sRGB conversion
+  LAYER_ZERO_SRGB: 13,     // Sample only layer 0 of albedo, WITH sRGB conversion
+  PRIMARY_ONLY: 14,         // Sample only m0 (primary material), with sRGB, no blend
+  ALBEDO_NO_SRGB: 15,      // Normal material blend but skip sRGB conversion
+  // PBR pass-through modes: full PBR pipeline but override one input
+  PBR_NO_METALNESS: 16,    // Force metalness=0 (isolate metalness as culprit)
+  PBR_NO_ROUGHNESS: 17,    // Force roughness=1.0 (isolate roughness as culprit)
+  PBR_NO_AO: 18,           // Force AO=1.0 (isolate AO as culprit)
+  PBR_NO_NORMALMAP: 19,    // Force geometry normals (isolate normal map as culprit)
+  // Post-PBR value inspection
+  OUTGOING_LIGHT: 20,      // Show outgoingLight before tone mapping
+  EFFECTIVE_DIFFUSE: 21,    // Show diffuseColor * (1-metalness) — what PBR actually lights
 } as const;
 
 export type TerrainDebugMode = typeof TERRAIN_DEBUG_MODES[keyof typeof TERRAIN_DEBUG_MODES];
@@ -696,6 +742,101 @@ export function setTerrainAnisotropy(anisotropy: number): void {
 
 // ============== Debug Console Access ==============
 
+/** Dump diagnostic info about the current texture state */
+function diagnoseTextures(): void {
+  const mat = solidMaterial;
+  if (!mat) {
+    console.log('[diagnose] solidMaterial not created yet');
+    return;
+  }
+  
+  const textures = (mat as unknown as { textures: LoadedTextures | null }).textures;
+  if (!textures) {
+    console.log('[diagnose] No textures loaded');
+    return;
+  }
+  
+  const describe = (name: string, tex: THREE.DataArrayTexture) => {
+    return {
+      name,
+      width: tex.image?.width,
+      height: tex.image?.height,
+      layers: tex.image?.depth,
+      format: tex.format === THREE.RGBAFormat ? 'RGBA' : tex.format === THREE.RedFormat ? 'RED' : tex.format,
+      internalFormat: tex.internalFormat,
+      colorSpace: tex.colorSpace,
+      type: tex.type === THREE.UnsignedByteType ? 'UnsignedByte' : tex.type,
+      minFilter: tex.minFilter,
+      magFilter: tex.magFilter,
+      anisotropy: tex.anisotropy,
+      generateMipmaps: tex.generateMipmaps,
+      needsUpdate: tex.needsUpdate,
+      version: tex.version,
+    };
+  };
+  
+  console.table([
+    describe('albedo', textures.albedo),
+    describe('normal', textures.normal),
+    describe('ao', textures.ao),
+    describe('roughness', textures.roughness),
+    describe('metalness', textures.metalness),
+  ]);
+  
+  // Shader state
+  const shader = (mat as unknown as { _shader: ShaderWithUniforms | null })._shader;
+  if (shader) {
+    const defines = shader.defines || {};
+    console.log('[diagnose] Shader defines:', defines);
+    console.log('[diagnose] Shader uniforms texture versions:', {
+      mapArray: (shader.uniforms.mapArray?.value as THREE.Texture)?.version,
+      normalArray: (shader.uniforms.normalArray?.value as THREE.Texture)?.version,
+      aoArray: (shader.uniforms.aoArray?.value as THREE.Texture)?.version,
+      roughnessArray: (shader.uniforms.roughnessArray?.value as THREE.Texture)?.version,
+      metalnessArray: (shader.uniforms.metalnessArray?.value as THREE.Texture)?.version,
+    });
+    console.log('[diagnose] Uniform texture matches this.textures?:', {
+      albedo: shader.uniforms.mapArray?.value === textures.albedo,
+      normal: shader.uniforms.normalArray?.value === textures.normal,
+      ao: shader.uniforms.aoArray?.value === textures.ao,
+      roughness: shader.uniforms.roughnessArray?.value === textures.roughness,
+      metalness: shader.uniforms.metalnessArray?.value === textures.metalness,
+    });
+  } else {
+    console.log('[diagnose] Shader not compiled yet (_shader is null)');
+  }
+  
+  // Quality state
+  console.log('[diagnose] Quality defines:', {
+    normalMaps: TerrainMaterial.qualityNormalMaps,
+    aoMaps: TerrainMaterial.qualityAoMaps,
+    metalnessMaps: TerrainMaterial.qualityMetalnessMaps,
+  });
+  
+  // Material state
+  console.log('[diagnose] Material version:', mat.version, 'needsUpdate:', mat.needsUpdate);
+}
+
+/** Force all terrain textures to re-upload to GPU */
+function forceReuploadTextures(): void {
+  for (const mat of [solidMaterial, transparentMaterial]) {
+    if (!mat) continue;
+    const textures = (mat as unknown as { textures: LoadedTextures | null }).textures;
+    if (!textures) continue;
+    for (const tex of [textures.albedo, textures.normal, textures.ao, textures.roughness, textures.metalness]) {
+      tex.needsUpdate = true;
+    }
+  }
+  console.log('[forceReupload] All texture needsUpdate flags set to true');
+}
+
+/** Force a full shader recompilation on all terrain materials */
+function forceRecompile(): void {
+  if (solidMaterial) solidMaterial.needsUpdate = true;
+  if (transparentMaterial) transparentMaterial.needsUpdate = true;
+  console.log('[forceRecompile] All terrain materials marked for recompilation');
+}
+
 if (typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).terrainDebug = {
     modes: TERRAIN_DEBUG_MODES,
@@ -709,6 +850,22 @@ if (typeof window !== 'undefined') {
     materialIds: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_IDS),
     materialWeights: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_WEIGHTS),
     worldNormal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.WORLD_NORMAL),
+    // Investigation tools for index-0 bug
+    layerZeroRaw: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.LAYER_ZERO_RAW),
+    layerZeroSrgb: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.LAYER_ZERO_SRGB),
+    primaryOnly: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PRIMARY_ONLY),
+    albedoNoSrgb: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.ALBEDO_NO_SRGB),
+    // PBR isolation: renders normally but overrides one PBR input
+    pbrNoMetal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_METALNESS),
+    pbrNoRough: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_ROUGHNESS),
+    pbrNoAo: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_AO),
+    pbrNoNormal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_NORMALMAP),
+    outgoingLight: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.OUTGOING_LIGHT),
+    effectiveDiffuse: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.EFFECTIVE_DIFFUSE),
+    // Diagnostic tools
+    diagnose: diagnoseTextures,
+    forceReupload: forceReuploadTextures,
+    forceRecompile,
   };
-  console.log('Terrain debug controls available: window.terrainDebug.albedo(), .normal(), .ao(), .roughness(), .off(), etc.');
+  console.log('Terrain debug: .off() .pbrNoMetal() .pbrNoRough() .pbrNoAo() .pbrNoNormal() .effectiveDiffuse() .outgoingLight() .diagnose()');
 }

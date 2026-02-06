@@ -78,35 +78,15 @@ async function processImage(
   if (mapConfig?.path) {
     const fullPath = path.join(SOURCES_DIR, mapConfig.path);
     
-    let image = sharp(fullPath)
+    // Normal maps must NOT be normalized — they encode tangent-space directions
+    // where (128, 128, 255) = flat surface. Stretching the range destroys this
+    // meaning and produces resolution-dependent results (low-res images have a
+    // narrower value range after downsampling, causing more aggressive distortion).
+    return sharp(fullPath)
       .resize(textureSize, textureSize)
       .ensureAlpha()
-      .raw();
-
-    // Normalize normal maps
-    if (mapType === 'normal') {
-      const { data, info } = await image.toBuffer({ resolveWithObject: true });
-      const { width, height, channels } = info;
-
-      // Find global min and max
-      let min = 255, max = 0;
-      for (let i = 0; i < data.length; i++) {
-        if (data[i] < min) min = data[i];
-        if (data[i] > max) max = data[i];
-      }
-
-      const range = max - min || 1;
-      const normalizedData = Buffer.alloc(data.length);
-      for (let i = 0; i < data.length; i++) {
-        normalizedData[i] = ((data[i] - min) * 255) / range;
-      }
-
-      return sharp(normalizedData, { raw: { width, height, channels } })
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-    }
-
-    return image.toBuffer({ resolveWithObject: true });
+      .raw()
+      .toBuffer({ resolveWithObject: true });
   }
 
   // Default colors for each map type when no texture is provided
