@@ -120,10 +120,12 @@ export class BuildPreview {
     // Get affected chunks
     const affectedKeys = getAffectedChunks(operation);
 
-    // Clear preview for chunks no longer affected
+    // Capture which old chunks to clear — but defer until batch completes
+    // so old preview stays visible until new meshes are ready (no flicker).
+    const chunksToRemove: string[] = [];
     for (const key of this.activePreviewChunks) {
       if (!affectedKeys.includes(key)) {
-        this.clearChunkPreview(key);
+        chunksToRemove.push(key);
       }
     }
 
@@ -165,6 +167,10 @@ export class BuildPreview {
     this.activePreviewChunks = newActiveChunks;
 
     if (batchItems.length === 0) {
+      // No chunks to mesh — clear stale previews now
+      for (const key of chunksToRemove) {
+        this.clearChunkPreview(key);
+      }
       this.renderedHash = hash;
       return;
     }
@@ -182,7 +188,10 @@ export class BuildPreview {
       this.cancelBatch = null;
       this.batchInFlight = false;
 
-      // Atomic apply: all preview meshes swap in one frame
+      // Atomic: clear stale chunks + apply new results in the same frame
+      for (const key of chunksToRemove) {
+        this.clearChunkPreview(key);
+      }
       for (const result of results) {
         const chunkMesh = world.meshes.get(result.chunkKey);
         if (!chunkMesh) continue;
