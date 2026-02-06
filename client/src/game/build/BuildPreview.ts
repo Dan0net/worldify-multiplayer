@@ -276,6 +276,38 @@ export class BuildPreview {
   }
 
   /**
+   * Hold preview meshes visible without applying the operation.
+   * Call this when the player clicks to place but the server handles the actual commit.
+   * Preview meshes stay visible until onChunkRemeshed clears them after the
+   * server-confirmed remesh arrives.
+   */
+  holdPreview(): void {
+    if (!this.world || !this.scene) return;
+
+    // Cancel in-flight batch
+    if (this.cancelBatch) {
+      this.cancelBatch();
+      this.cancelBatch = null;
+    }
+    this.batchInFlight = false;
+    this.pendingOperation = null;
+
+    // Discard temp data but KEEP preview meshes visible
+    for (const key of this.activePreviewChunks) {
+      const chunk = this.world.chunks.get(key);
+      if (chunk) {
+        chunk.discardTemp();
+      }
+      this.pendingCommitChunks.add(key);
+    }
+
+    // Clear preview state (but pendingCommitChunks stays until remesh completes)
+    this.activePreviewChunks.clear();
+    this.renderedHash = '';
+    this.currentOperation = null;
+  }
+
+  /**
    * Commit the current preview to actual voxel data.
    * Call this when the player clicks to place.
    * Delegates to VoxelWorld.applyBuildOperation for DRY.

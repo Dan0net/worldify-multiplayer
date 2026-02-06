@@ -209,8 +209,8 @@ export class Builder {
     sendBinary(encoded);
 
     // Note: We no longer apply locally - server will broadcast commit and we apply from that
-    // This ensures all clients stay in sync. Clear preview since we're waiting for server.
-    this.preview.clearPreview();
+    // This ensures all clients stay in sync. Hold preview visible until server-confirmed remesh.
+    this.preview.holdPreview();
   };
 
   /**
