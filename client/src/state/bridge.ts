@@ -10,7 +10,7 @@
  * - Clean separation between React and imperative game code
  */
 
-import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState, MaterialSettings, WaterSettings } from './store';
+import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState, MaterialSettings, WaterSettings, PerfSnapshot } from './store';
 import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
 import { applyMaterialSettings as applyMaterialSettingsToShaders } from '../game/material/TerrainMaterial';
 import { applyWaterSettings as applyWaterSettingsToShaders } from '../game/material/WaterMaterial';
@@ -148,6 +148,13 @@ class StoreBridge {
    */
   updateVoxelStats(stats: Partial<VoxelStats>): void {
     getState().setVoxelStats(stats);
+  }
+
+  /**
+   * Update detailed performance stats (already rate-limited by PerformanceStats collector)
+   */
+  updatePerfStats(stats: PerfSnapshot): void {
+    getState().setPerfStats(stats);
   }
 
   // Build system writes

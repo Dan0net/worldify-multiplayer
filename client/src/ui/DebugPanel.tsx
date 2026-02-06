@@ -179,6 +179,7 @@ export function DebugPanel() {
     connectionStatus, 
     serverTick, 
     playerCount,
+    perfStats,
     voxelDebug,
     voxelStats,
     toggleVoxelDebug,
@@ -393,6 +394,53 @@ export function DebugPanel() {
           <a href="/materials" className="text-green-500 hover:text-green-300 underline block">
             Textures: {textureState}
           </a>
+        </div>
+      </Section>
+
+      {/* ============== PERFORMANCE SECTION ============== */}
+      <Section
+        title="⚡ Performance"
+        isOpen={debugPanelSections.performance}
+        onToggle={() => toggleDebugSection('performance')}
+        color="cyan"
+      >
+        <div className="text-cyan-400">
+          <div className="mb-1 text-cyan-300 text-xs">Frame Timing (ms avg):</div>
+          <div className="grid grid-cols-2 gap-x-3">
+            <div>Total:</div><div className={perfStats.gameUpdate > 16.6 ? 'text-red-400' : ''}>{perfStats.gameUpdate.toFixed(1)}</div>
+            <div>Render:</div><div className={perfStats.render > 8 ? 'text-yellow-400' : ''}>{perfStats.render.toFixed(1)}</div>
+            <div>Voxel:</div><div className={perfStats.voxelUpdate > 4 ? 'text-yellow-400' : ''}>{perfStats.voxelUpdate.toFixed(1)}</div>
+            <div>Remesh:</div><div className={perfStats.remesh > 4 ? 'text-yellow-400' : ''}>{perfStats.remesh.toFixed(1)}</div>
+            <div>Physics:</div><div>{perfStats.physics.toFixed(1)}</div>
+            <div>Build:</div><div className={perfStats.buildPreview > 4 ? 'text-red-400' : ''}>{perfStats.buildPreview.toFixed(1)}</div>
+            <div>Players:</div><div>{perfStats.players.toFixed(1)}</div>
+            <div>Env:</div><div>{perfStats.environment.toFixed(1)}</div>
+          </div>
+
+          <div className="mt-2 pt-2 border-t border-cyan-500/30">
+            <div className="mb-1 text-cyan-300 text-xs">Renderer:</div>
+            <div className="grid grid-cols-2 gap-x-3">
+              <div>Draw calls:</div><div className={perfStats.drawCalls > 500 ? 'text-yellow-400' : ''}>{perfStats.drawCalls}</div>
+              <div>Triangles:</div><div>{perfStats.triangles > 1000000 ? (perfStats.triangles / 1000000).toFixed(1) + 'M' : perfStats.triangles > 1000 ? (perfStats.triangles / 1000).toFixed(0) + 'K' : perfStats.triangles}</div>
+              <div>Geometries:</div><div>{perfStats.geometries}</div>
+              <div>Textures:</div><div>{perfStats.textures}</div>
+              <div>Programs:</div><div>{perfStats.programs}</div>
+            </div>
+          </div>
+
+          <div className="mt-2 pt-2 border-t border-cyan-500/30">
+            <div className="mb-1 text-cyan-300 text-xs">Voxel Queue:</div>
+            <div className="grid grid-cols-2 gap-x-3">
+              <div>Remesh Q:</div><div className={perfStats.remeshQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.remeshQueueSize}</div>
+              <div>Pending:</div><div>{perfStats.pendingChunks}</div>
+            </div>
+          </div>
+
+          {perfStats.jsHeapMB > 0 && (
+            <div className="mt-2 pt-2 border-t border-cyan-500/30">
+              <div>JS Heap: {perfStats.jsHeapMB} MB</div>
+            </div>
+          )}
         </div>
       </Section>
 

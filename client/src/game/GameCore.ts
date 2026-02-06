@@ -41,6 +41,7 @@ import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime } from './material';
 import { getMapTileCache } from '../ui/MapOverlay';
+import { perfStats } from './debug/PerformanceStats';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -377,6 +378,8 @@ export class GameCore {
    * Main update loop callback - called by GameLoop
    */
   private update = (deltaMs: number, elapsedTime: number): void => {
+    perfStats.begin('gameUpdate');
+
     const gameMode = storeBridge.gameMode;
     const camera = getCamera();
     const localPlayer = this.playerManager.getLocalPlayer();
@@ -400,33 +403,39 @@ export class GameCore {
     }
 
     // Always update remote players (visible in all modes)
+    perfStats.begin('players');
     this.playerManager.updateRemotePlayers(deltaMs);
+    perfStats.end('players');
 
     // Update wind animation for foliage
     updateWindTime(elapsedTime);
 
-    // Update day-night cycle (calculates lighting based on time)
+    // Update day-night cycle + sky + environment
+    perfStats.begin('environment');
     updateDayNightCycle(deltaMs);
-    
-    // Update sky shader animation and camera matrices
     updateSkyTime(elapsedTime);
     if (camera) {
       updateSkyCamera(camera);
     }
-    
-    // Apply any environment changes to the lighting system
     const envState = storeBridge.environment;
     applyEnvironmentSettings(envState);
+    perfStats.end('environment');
 
     // Render with post-processing (SSAO + bloom) or fallback to direct render
     const scene = getScene();
     if (scene && camera) {
+      perfStats.begin('render');
       if (isPostProcessingEnabled()) {
         renderWithPostProcessing();
       } else {
         this.renderer.render(scene, camera);
       }
+      perfStats.end('render');
+      perfStats.captureRendererInfo(this.renderer);
     }
+
+    perfStats.end('gameUpdate');
+    perfStats.endFrame();
   };
 
   /**
@@ -500,7 +509,9 @@ export class GameCore {
 
     // Update voxel terrain centered on spectator center (preserves chunks when returning from playing)
     if (this.voxelIntegration) {
+      perfStats.begin('voxelUpdate');
       this.voxelIntegration.update(this.spectatorCenter);
+      perfStats.end('voxelUpdate');
     }
     
     // Update spawn detection
@@ -524,17 +535,23 @@ export class GameCore {
     deltaMs: number
   ): void {
     // Update player physics and movement
+    perfStats.begin('physics');
     this.playerManager.updateLocalPlayer(deltaMs);
+    perfStats.end('physics');
 
     // Update voxel terrain around player
     if (this.voxelIntegration) {
+      perfStats.begin('voxelUpdate');
       this.voxelIntegration.update(localPlayer.position);
+      perfStats.end('voxelUpdate');
     }
 
     // Update camera and build system
     if (camera) {
       updateCameraFromPlayer(camera, localPlayer);
+      perfStats.begin('buildPreview');
       this.builder.update(camera);
+      perfStats.end('buildPreview');
     }
 
     // Update player position for map overlay (via storeBridge, not window global)

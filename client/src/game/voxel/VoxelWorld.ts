@@ -26,6 +26,7 @@ import { meshChunk } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
 import { sendBinary } from '../../net/netClient.js';
 import { storeBridge } from '../../state/bridge.js';
+import { perfStats } from '../debug/PerformanceStats.js';
 import {
   getVisibleChunks,
   getFrustumFromCamera,
@@ -158,7 +159,12 @@ export class VoxelWorld implements ChunkProvider {
 
     // Process some remesh queue items per frame
     // Process remesh queue with time budget (target 60fps = 16.6ms frame budget)
+    perfStats.begin('remesh');
     this.processRemeshQueue(playerPos);
+    perfStats.end('remesh');
+
+    // Report queue stats for debug overlay
+    perfStats.setVoxelQueueStats(this.remeshQueue.size, this.pendingChunks.size);
   }
 
   /**

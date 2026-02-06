@@ -48,6 +48,30 @@ export interface VoxelStats {
   debugObjects: number;
 }
 
+/** Performance timing snapshot (updated from game loop) */
+export interface PerfSnapshot {
+  // Per-subsystem times in ms (rolling averages)
+  gameUpdate: number;
+  physics: number;
+  voxelUpdate: number;
+  remesh: number;
+  buildPreview: number;
+  players: number;
+  environment: number;
+  render: number;
+  // Three.js renderer info
+  drawCalls: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
+  programs: number;
+  // Voxel-specific
+  remeshQueueSize: number;
+  pendingChunks: number;
+  // Memory
+  jsHeapMB: number;
+}
+
 /** Build tool state */
 export interface BuildState {
   /** Currently selected preset ID (0-9, 0 = disabled) */
@@ -253,6 +277,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
 /** Debug panel section collapse state */
 export interface DebugPanelSections {
   stats: boolean;
+  performance: boolean;
   debug: boolean;
   quality: boolean;
   materials: boolean;
@@ -289,6 +314,9 @@ export interface GameState {
   fps: number;
   tickMs: number;
   serverTick: number;
+
+  // Performance stats (detailed subsystem timing)
+  perfStats: PerfSnapshot;
 
   // Voxel debug
   voxelDebug: VoxelDebugToggles;
@@ -341,6 +369,7 @@ export interface GameState {
   setUseServerChunks: (enabled: boolean) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
   setServerTick: (tick: number) => void;
+  setPerfStats: (stats: PerfSnapshot) => void;
   
   // Voxel debug actions
   toggleVoxelDebug: (key: keyof VoxelDebugToggles) => void;
@@ -424,6 +453,12 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   fps: 0,
   tickMs: 0,
   serverTick: 0,
+  perfStats: {
+    gameUpdate: 0, physics: 0, voxelUpdate: 0, remesh: 0,
+    buildPreview: 0, players: 0, environment: 0, render: 0,
+    drawCalls: 0, triangles: 0, geometries: 0, textures: 0, programs: 0,
+    remeshQueueSize: 0, pendingChunks: 0, jsHeapMB: 0,
+  },
   
   // Build initial state
   build: {
@@ -479,6 +514,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Debug panel sections (all expanded by default)
   debugPanelSections: {
     stats: true,
+    performance: false,
     debug: false,
     quality: false,
     materials: false,
@@ -501,6 +537,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setUseServerChunks: (enabled) => set({ useServerChunks: enabled }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),
   setServerTick: (tick) => set({ serverTick: tick }),
+  setPerfStats: (stats) => set({ perfStats: stats }),
   
   // Voxel debug actions
   toggleVoxelDebug: (key) => set((state) => ({
