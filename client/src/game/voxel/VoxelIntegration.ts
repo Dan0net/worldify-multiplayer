@@ -79,6 +79,12 @@ export class VoxelIntegration implements TerrainRaycaster {
     
     // Initialize the world (generates initial chunks)
     this.world.init();
+
+    // Rebuild collision BVH whenever a chunk is remeshed by a worker.
+    // This ensures collision always matches the actual rendered geometry.
+    this.world.onChunkRemeshed = (key) => {
+      this.rebuildCollisionForChunks([key]);
+    };
     
     // Build colliders for all initial chunk meshes
     this.syncColliders();

@@ -204,11 +204,6 @@ export class GameCore {
       this.builder.setMeshProvider(this.voxelIntegration);
       this.builder.setVoxelWorld(this.voxelIntegration.world, scene);
       this.builder.addToScene(scene);
-      
-      // Handle collision rebuild after builds
-      this.builder.onBuildCommit = (modifiedChunks: string[]) => {
-        this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
-      };
 
       // Register chunk clearing callback for F9 debug
       storeBridge.setClearChunksCallback(() => {
@@ -294,10 +289,9 @@ export class GameCore {
 
     const modifiedChunks = this.voxelIntegration.world.applyBuildOperation(operation);
 
-    // Rebuild collision for modified chunks
+    // Collision rebuild is deferred to onChunkRemeshed (when worker provides new geometry)
+    // so the BVH always matches the actual mesh.
     if (modifiedChunks.length > 0) {
-      this.voxelIntegration.rebuildCollisionForChunks(modifiedChunks);
-      
       // Update map tiles for modified chunks
       this.updateMapTilesFromChunks(modifiedChunks);
     }
