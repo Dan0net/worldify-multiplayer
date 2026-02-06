@@ -15,8 +15,11 @@ import {
   VoxelChunkData,
   encodeVoxelChunkRequest,
   encodeSurfaceColumnRequest,
+  encodeMapTileRequest,
   SurfaceColumnResponse,
+  MapTileResponse,
   computeVisibility,
+  getChunkRangeFromHeights,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk } from './ChunkMesher.js';
@@ -48,6 +51,15 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Columns pending data from server, keyed by "tx,tz" */
   private pendingColumns: Set<string> = new Set();
+
+  /** Tiles pending from server, keyed by "tx,tz" */
+  private pendingTiles: Set<string> = new Set();
+
+  /** Column info from received tiles: maxCy for the column. Keyed by "tx,tz" */
+  private columnInfo: Map<string, { maxCy: number }> = new Map();
+
+  /** Callback to notify external systems (e.g. map cache) when a tile arrives */
+  onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
 
   /** Reference to the Three.js scene */
   readonly scene: THREE.Scene;
@@ -218,21 +230,53 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Request visible chunks that aren't loaded yet.
-   * Requests one chunk at a time for smooth loading.
+   * Request visible chunks using two-phase approach:
+   * Phase 1: Request tiles for columns we don't know about yet
+   * Phase 2: Request individual chunks for columns where we have tile data
+   * 
+   * Chunks above the tile's maxCy are skipped (air).
    */
   private requestVisibleChunks(toRequest: Set<string>): void {
     // Limit concurrent requests
-    const MAX_PENDING = 4;
-    if (this.pendingChunks.size >= MAX_PENDING) return;
-    
+    const MAX_PENDING_TILES = 4;
+    const MAX_PENDING_CHUNKS = 4;
+
+    // Phase 1: Identify columns that need tiles
+    const columnsNeedingTiles = new Set<string>();
     for (const key of toRequest) {
-      if (this.pendingChunks.size >= MAX_PENDING) break;
+      const [cx, , cz] = key.split(',').map(Number);
+      const columnKey = `${cx},${cz}`;
+      if (!this.columnInfo.has(columnKey) && !this.pendingTiles.has(columnKey) && !this.pendingColumns.has(columnKey)) {
+        columnsNeedingTiles.add(columnKey);
+      }
+    }
+
+    // Request tiles for unknown columns
+    for (const columnKey of columnsNeedingTiles) {
+      if (this.pendingTiles.size >= MAX_PENDING_TILES) break;
+      const [tx, tz] = columnKey.split(',').map(Number);
+      this.requestTileFromServer(tx, tz);
+    }
+
+    // Phase 2: Request chunks only for columns we have tile info for
+    let chunkRequests = 0;
+    for (const key of toRequest) {
+      if (this.pendingChunks.size >= MAX_PENDING_CHUNKS) break;
+      if (chunkRequests >= MAX_PENDING_CHUNKS) break;
       if (this.pendingChunks.has(key)) continue;
       
-      // Parse key back to coordinates
       const [cx, cy, cz] = key.split(',').map(Number);
+      const columnKey = `${cx},${cz}`;
+      const info = this.columnInfo.get(columnKey);
+      
+      // Don't request chunks for columns without tile data yet
+      if (!info) continue;
+      
+      // Skip chunks above the surface (air)
+      if (cy > info.maxCy) continue;
+      
       this.requestChunkFromServer(cx, cy, cz);
+      chunkRequests++;
     }
   }
 
@@ -325,8 +369,42 @@ export class VoxelWorld implements ChunkProvider {
       forceRegen: storeBridge.forceRegenerateChunks,
     });
     sendBinary(request);
+  }
+
+  /**
+   * Request a tile from the server.
+   * Server generates all surface chunks under the hood but only returns tile data.
+   */
+  private requestTileFromServer(tx: number, tz: number): void {
+    const columnKey = `${tx},${tz}`;
+    if (this.pendingTiles.has(columnKey)) return;
     
-    // console.log(`[VoxelWorld] Requested chunk (${cx}, ${cy}, ${cz}) from server`);
+    this.pendingTiles.add(columnKey);
+    sendBinary(encodeMapTileRequest({ tx, tz }));
+  }
+
+  /**
+   * Receive standalone tile data from the server.
+   * Stores column info (maxCy) so BFS can request chunks for this column.
+   */
+  receiveTileData(tileData: MapTileResponse): void {
+    const { tx, tz, heights, materials } = tileData;
+    const columnKey = `${tx},${tz}`;
+    
+    // Remove from pending
+    this.pendingTiles.delete(columnKey);
+    
+    // Compute and store column info from tile heights
+    const { maxCy } = getChunkRangeFromHeights(heights);
+    this.columnInfo.set(columnKey, { maxCy });
+    
+    // Notify external systems (map cache)
+    if (this.onTileReceived) {
+      this.onTileReceived(tx, tz, heights, materials);
+    }
+    
+    // Invalidate BFS cache so chunk requests can proceed for this column
+    this.lastBFSChunk = null;
   }
 
   /**
@@ -383,10 +461,7 @@ export class VoxelWorld implements ChunkProvider {
    * Called by the network layer when surface column data arrives.
    * Contains a tile + multiple chunks for the column.
    */
-  receiveSurfaceColumnData(
-    columnData: SurfaceColumnResponse,
-    onTileReceived?: (tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void
-  ): void {
+  receiveSurfaceColumnData(columnData: SurfaceColumnResponse): void {
     const { tx, tz, heights, materials, chunks } = columnData;
     const columnKey = `${tx},${tz}`;
     
@@ -395,9 +470,13 @@ export class VoxelWorld implements ChunkProvider {
     // Remove from pending columns
     this.pendingColumns.delete(columnKey);
     
-    // Process tile data (pass to callback for map overlay)
-    if (onTileReceived) {
-      onTileReceived(tx, tz, heights, materials);
+    // Store column info from tile heights
+    const { maxCy } = getChunkRangeFromHeights(heights);
+    this.columnInfo.set(columnKey, { maxCy });
+    
+    // Notify external systems (map cache)
+    if (this.onTileReceived) {
+      this.onTileReceived(tx, tz, heights, materials);
     }
     
     // Process each chunk in the column
@@ -695,6 +774,11 @@ export class VoxelWorld implements ChunkProvider {
 
     // Clear pending
     this.pendingChunks.clear();
+    this.pendingColumns.clear();
+    this.pendingTiles.clear();
+
+    // Clear column info
+    this.columnInfo.clear();
 
     // Clear queue
     this.remeshQueue.clear();

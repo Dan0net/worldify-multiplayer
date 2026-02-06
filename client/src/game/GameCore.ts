@@ -193,6 +193,12 @@ export class GameCore {
       // Spawn position will be calculated when entering Playing mode
       // (chunks may not be loaded yet at init time)
 
+      // Wire tile data from VoxelWorld to map cache
+      this.voxelIntegration.world.onTileReceived = (tx, tz, heights, materials) => {
+        const cache = getMapTileCache();
+        cache.receiveTileData(tx, tz, heights, materials);
+      };
+
       // Initialize build system
       this.builder.setMeshProvider(this.voxelIntegration);
       this.builder.setVoxelWorld(this.voxelIntegration.world, scene);
@@ -352,25 +358,19 @@ export class GameCore {
   };
 
   /**
-   * Handle map tile data from server - store in cache
+   * Handle map tile data from server - route through VoxelWorld for column tracking
    */
   private handleMapTileData = (tileData: MapTileResponse): void => {
-    const cache = getMapTileCache();
-    cache.receiveTileData(tileData.tx, tileData.tz, tileData.heights, tileData.materials);
+    if (!this.voxelIntegration) return;
+    this.voxelIntegration.world.receiveTileData(tileData);
   };
 
   /**
    * Handle surface column data from server - contains tile + chunks
    */
   private handleSurfaceColumnData = (columnData: SurfaceColumnResponse): void => {
-    // Pass to VoxelWorld with callback to update map tile cache
-    this.voxelIntegration.world.receiveSurfaceColumnData(
-      columnData,
-      (tx, tz, heights, materials) => {
-        const cache = getMapTileCache();
-        cache.receiveTileData(tx, tz, heights, materials);
-      }
-    );
+    if (!this.voxelIntegration) return;
+    this.voxelIntegration.world.receiveSurfaceColumnData(columnData);
   };
 
   /**

@@ -13,15 +13,11 @@ import { useGameStore } from '../state/store';
 import { storeBridge } from '../state/bridge';
 import { MapRenderer } from '../game/maptile/MapRenderer';
 import { MapTileCache } from '../game/maptile/MapTileCache';
-import { CHUNK_SIZE, VOXEL_SCALE, VISIBILITY_RADIUS, MAP_TILE_SIZE, encodeMapTileRequest } from '@worldify/shared';
-import { sendBinary } from '../net/netClient';
+import { CHUNK_SIZE, VOXEL_SCALE, VISIBILITY_RADIUS, MAP_TILE_SIZE } from '@worldify/shared';
 
 // Singleton instances managed by this component
 let mapTileCache: MapTileCache | null = null;
 let mapRenderer: MapRenderer | null = null;
-
-// Track requested tiles to avoid duplicate requests
-const requestedTiles = new Set<string>();
 
 // Map viewport size in pixels
 const MAP_VIEWPORT_SIZE = 200;
@@ -43,29 +39,6 @@ export function getMapTileCache(): MapTileCache {
     mapTileCache = new MapTileCache();
   }
   return mapTileCache;
-}
-
-/**
- * Request tiles around a position.
- */
-function requestTilesAround(worldX: number, worldZ: number, radius: number): void {
-  const centerTx = Math.floor(worldX / (CHUNK_SIZE * VOXEL_SCALE));
-  const centerTz = Math.floor(worldZ / (CHUNK_SIZE * VOXEL_SCALE));
-  
-  for (let dz = -radius; dz <= radius; dz++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      const tx = centerTx + dx;
-      const tz = centerTz + dz;
-      const key = `${tx},${tz}`;
-      
-      // Skip if already requested or cached
-      if (requestedTiles.has(key)) continue;
-      if (getMapTileCache().has(tx, tz)) continue;
-      
-      requestedTiles.add(key);
-      sendBinary(encodeMapTileRequest({ tx, tz }));
-    }
-  }
 }
 
 /**
@@ -103,7 +76,6 @@ function PlayerMarker({ markerRef }: { markerRef: React.RefObject<SVGSVGElement>
 export function MapOverlay() {
   const showMapOverlay = useGameStore((s) => s.showMapOverlay);
   const toggleMapOverlay = useGameStore((s) => s.toggleMapOverlay);
-  const connectionStatus = useGameStore((s) => s.connectionStatus);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const markerRef = useRef<SVGSVGElement>(null);
@@ -167,12 +139,7 @@ export function MapOverlay() {
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
     const centerTz = Math.floor(z / (CHUNK_SIZE * VOXEL_SCALE));
     
-    // Request tiles if connected - match BFS visibility radius
-    if (connectionStatus === 'connected') {
-      requestTilesAround(x, z, VISIBILITY_RADIUS);
-    }
-    
-    // Update renderer and render tiles
+    // Update renderer and render tiles (tiles arrive passively via VoxelWorld)
     mapRenderer.setPlayerPosition(x, z);
     mapRenderer.render(cache.getAll(), centerTx, centerTz);
     
@@ -185,7 +152,7 @@ export function MapOverlay() {
     }
     
     animationRef.current = requestAnimationFrame(render);
-  }, [showMapOverlay, connectionStatus]);
+  }, [showMapOverlay]);
 
   // Start render loop when visible
   useEffect(() => {
