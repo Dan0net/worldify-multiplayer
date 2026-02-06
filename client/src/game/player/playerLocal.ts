@@ -170,8 +170,8 @@ export class PlayerLocal {
       }
 
       // Use smoothed direction for movement
-      const smoothX = Math.sin(this.smoothDirAngle);
-      const smoothZ = Math.cos(this.smoothDirAngle);
+      const smoothDirX = Math.sin(this.smoothDirAngle);
+      const smoothDirZ = Math.cos(this.smoothDirAngle);
 
       // Apply speed
       let speed = MOVE_SPEED;
@@ -179,8 +179,8 @@ export class PlayerLocal {
         speed *= SPRINT_MULTIPLIER;
       }
 
-      this.position.x += smoothX * speed * dt;
-      this.position.z += smoothZ * speed * dt;
+      this.position.x += smoothDirX * speed * dt;
+      this.position.z += smoothDirZ * speed * dt;
 
       this.wasMoving = true;
     } else {
