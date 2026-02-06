@@ -21,7 +21,7 @@ import {
   saveVisibilityRadius,
 } from './QualityPresets.js';
 import { updatePostProcessing } from '../scene/postprocessing.js';
-import { getActiveShadowLight, setMoonShadowsAllowed, getSunLight, getMoonLight } from '../scene/Lighting.js';
+import { getActiveShadowLight, setMoonShadowsAllowed, getSunLight, getMoonLight, updateShadowFrustumSize } from '../scene/Lighting.js';
 import {
   setShaderMapDefines,
   setTerrainAnisotropy,
@@ -173,6 +173,8 @@ export function applyVisibilityRadius(radius: number): void {
   if (visibilityRadiusCallback) {
     visibilityRadiusCallback(radius);
   }
+  // Tighten shadow frustum to match new visibility
+  updateShadowFrustumSize(radius);
   saveVisibilityRadius(radius);
 }
 

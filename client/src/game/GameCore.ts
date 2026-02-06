@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
-import { initLighting, applyEnvironmentSettings } from './scene/Lighting';
+import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
 import { updateSkyTime, updateSkyCamera } from './scene/SkyDome';
 import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
@@ -420,6 +420,10 @@ export class GameCore {
     const envState = storeBridge.environment;
     applyEnvironmentSettings(envState);
     perfStats.end('environment');
+
+    // Update shadow camera to follow current center point
+    const shadowCenter = gameMode === GameMode.Playing ? localPlayer.position : this.spectatorCenter;
+    updateShadowFollow(shadowCenter);
 
     // Render with post-processing (SSAO + bloom) or fallback to direct render
     const scene = getScene();

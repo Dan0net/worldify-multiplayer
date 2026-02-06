@@ -19,6 +19,7 @@ import { getScene } from './scene';
 import { setTerrainEnvMapIntensity } from '../material/TerrainMaterial';
 import { useGameStore, EnvironmentSettings } from '../../state/store';
 import { initSkyDome, updateSkyUniforms, disposeSkyDome } from './SkyDome';
+import { CHUNK_WORLD_SIZE } from '@worldify/shared';
 
 // ============== Internal State ==============
 
@@ -32,6 +33,15 @@ let activeShadowCaster: 'sun' | 'moon' = 'sun';
 
 /** Whether moon is allowed to become the shadow caster (quality setting) */
 let moonShadowsAllowed = false;
+
+/** Current shadow frustum half-size (updated when visibility changes) */
+let shadowFrustumSize = 40;
+
+/** Shadow camera far plane */
+const SHADOW_FAR = 200;
+
+/** Extra margin (meters) beyond visibility radius for shadow frustum */
+const SHADOW_MARGIN = 8;
 
 // ============== Position Calculation ==============
 
@@ -136,12 +146,12 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
 function configureShadowCamera(light: THREE.DirectionalLight, settings: EnvironmentSettings): void {
   light.shadow.mapSize.width = settings.shadowMapSize;
   light.shadow.mapSize.height = settings.shadowMapSize;
-  light.shadow.camera.left = -100;
-  light.shadow.camera.right = 100;
-  light.shadow.camera.top = 100;
-  light.shadow.camera.bottom = -100;
+  light.shadow.camera.left = -shadowFrustumSize;
+  light.shadow.camera.right = shadowFrustumSize;
+  light.shadow.camera.top = shadowFrustumSize;
+  light.shadow.camera.bottom = -shadowFrustumSize;
   light.shadow.camera.near = 0.5;
-  light.shadow.camera.far = 500;
+  light.shadow.camera.far = SHADOW_FAR;
   light.shadow.bias = settings.shadowBias;
   light.shadow.normalBias = settings.shadowNormalBias;
 }
@@ -382,6 +392,78 @@ function transferShadowCaster(target: 'sun' | 'moon'): void {
   
   activeShadowCaster = target;
   console.log(`[Lighting] Shadow caster swapped to ${target}`);
+}
+
+// ============== Shadow Follow ==============
+
+// Reusable vector to avoid per-frame allocation
+const _lightOffset = new THREE.Vector3();
+
+/**
+ * Update the shadow frustum size based on visibility radius.
+ * Call when quality/visibility settings change.
+ */
+export function updateShadowFrustumSize(visibilityRadius: number): void {
+  // Frustum covers the visible terrain + a small margin for shadow casters outside view
+  const newSize = visibilityRadius * CHUNK_WORLD_SIZE + SHADOW_MARGIN;
+  if (newSize === shadowFrustumSize) return;
+  shadowFrustumSize = newSize;
+
+  // Apply to both lights
+  for (const light of [sunLight, moonLight]) {
+    if (!light) continue;
+    const cam = light.shadow.camera;
+    cam.left = -shadowFrustumSize;
+    cam.right = shadowFrustumSize;
+    cam.top = shadowFrustumSize;
+    cam.bottom = -shadowFrustumSize;
+    cam.updateProjectionMatrix();
+  }
+}
+
+/**
+ * Update the shadow camera to follow a world position (player or spectator center).
+ * 
+ * Moves the active shadow light's target to `center` and offsets the light position
+ * along the light direction. Snaps to shadow texel grid to prevent shadow swimming.
+ * 
+ * Call once per frame from GameCore.update().
+ */
+export function updateShadowFollow(center: THREE.Vector3): void {
+  const light = activeShadowCaster === 'sun' ? sunLight : moonLight;
+  if (!light || !light.castShadow) return;
+
+  // The light direction is encoded in its position (directional light
+  // shines from position toward target). We keep the same direction but
+  // re-center around the player.
+  
+  // Compute the normalized light-to-target direction from current position
+  _lightOffset.copy(light.position).sub(light.target.position);
+  if (_lightOffset.lengthSq() < 0.001) return;
+  _lightOffset.normalize();
+
+  // Snap center to shadow texel grid to prevent shadow swimming/shimmer
+  // when the player moves sub-texel amounts
+  const shadowMapSize = light.shadow.mapSize.width;
+  const worldUnitsPerTexel = (shadowFrustumSize * 2) / shadowMapSize;
+  
+  // Snap in the shadow camera's "right" and "up" directions
+  // For simplicity, snap in world XZ (dominant axes for top-down shadow)
+  const snappedX = Math.floor(center.x / worldUnitsPerTexel) * worldUnitsPerTexel;
+  const snappedZ = Math.floor(center.z / worldUnitsPerTexel) * worldUnitsPerTexel;
+
+  // Move the light target to (snapped) player position
+  light.target.position.set(snappedX, center.y, snappedZ);
+  light.target.updateMatrixWorld();
+
+  // Offset the light itself at a fixed distance along the light direction
+  // Distance must be > shadow far / 2 to keep camera.near > 0
+  const lightDistance = SHADOW_FAR * 0.5;
+  light.position.set(
+    snappedX + _lightOffset.x * lightDistance,
+    center.y + _lightOffset.y * lightDistance,
+    snappedZ + _lightOffset.z * lightDistance,
+  );
 }
 
 /**
