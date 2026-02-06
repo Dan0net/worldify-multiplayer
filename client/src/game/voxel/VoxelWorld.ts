@@ -185,10 +185,9 @@ export class VoxelWorld implements ChunkProvider {
       playerChunk.cy !== this.lastBFSChunk.cy ||
       playerChunk.cz !== this.lastBFSChunk.cz;
 
-    const frustum = getFrustumFromCamera(this.camera);
-    const cameraDir = getCameraDirection(this.camera);
-
     if (chunkChanged) {
+      const frustum = getFrustumFromCamera(this.camera);
+      const cameraDir = getCameraDirection(this.camera);
       // Recompute BFS from new chunk
       this.lastBFSChunk = { ...playerChunk };
       
@@ -208,8 +207,8 @@ export class VoxelWorld implements ChunkProvider {
       this.requestVisibleChunks(toRequest);
     }
 
-    // Always update mesh visibility with frustum culling (camera may have rotated)
-    this.updateMeshVisibilityWithFrustum(this.cachedReachable, frustum);
+    // Always update mesh visibility (camera may have rotated)
+    this.updateMeshVisibility(this.cachedReachable);
 
     // Unload chunks far outside reachable set (with +2 hysteresis buffer)
     this.unloadDistantChunks(this.cachedReachable);
@@ -281,18 +280,19 @@ export class VoxelWorld implements ChunkProvider {
     }
   }
 
-  /** Reusable Box3 for frustum intersection tests */
-  private static readonly tempBox = new THREE.Box3();
-
   /**
-   * Update mesh visibility based on reachable chunks + frustum culling.
+   * Update mesh visibility based on reachable chunks and distance.
    * Uses hysteresis: show if reachable OR (loaded AND within extended radius).
    * This prevents popping when player crosses chunk boundaries.
+   * 
+   * NOTE: We intentionally do NOT frustum-cull here. Three.js's built-in per-mesh
+   * frustum culling tests each mesh against the active camera independently (main
+   * camera for the scene pass, light camera for shadow maps). Manual culling against
+   * the main camera would hide chunks that still need to cast shadows into view.
    */
-  private updateMeshVisibilityWithFrustum(reachable: Set<string>, frustum: THREE.Frustum): void {
+  private updateMeshVisibility(reachable: Set<string>): void {
     if (!this.lastPlayerChunk) return;
     
-    const box = VoxelWorld.tempBox;
     const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
     const visibilityRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
 
@@ -315,14 +315,7 @@ export class VoxelWorld implements ChunkProvider {
         continue;
       }
 
-      // Frustum cull
-      const worldX = chunk.cx * CHUNK_WORLD_SIZE;
-      const worldY = chunk.cy * CHUNK_WORLD_SIZE;
-      const worldZ = chunk.cz * CHUNK_WORLD_SIZE;
-      box.min.set(worldX, worldY, worldZ);
-      box.max.set(worldX + CHUNK_WORLD_SIZE, worldY + CHUNK_WORLD_SIZE, worldZ + CHUNK_WORLD_SIZE);
-
-      chunkMesh.setVisible(frustum.intersectsBox(box));
+      chunkMesh.setVisible(true);
     }
   }
 
