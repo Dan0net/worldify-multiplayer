@@ -21,6 +21,8 @@ import {
   PLAYER_RADIUS,
   PHYSICS_STEPS,
   MAX_FALL_TIME,
+  COYOTE_TIME,
+  JUMP_BUFFER_TIME,
   // Movement utilities from shared
   getWorldDirectionFromInput,
 } from '@worldify/shared';
@@ -50,6 +52,10 @@ export class PlayerLocal {
   // Fall detection
   private fallTime = 0; // Continuous time spent falling (seconds)
   private lastGroundedPosition: THREE.Vector3 | null = null;
+
+  // Coyote time and jump buffer
+  private timeSinceGrounded = 0; // Time since last grounded (seconds)
+  private jumpBufferTimer = 0; // Time since last jump input (seconds)
   
   // Respawn callback (set by GameCore)
   private onRespawnNeeded: RespawnCallback | null = null;
@@ -120,10 +126,21 @@ export class PlayerLocal {
     this.yaw = controls.yaw;
     this.pitch = controls.pitch;
 
-    // Handle jump - only if grounded
-    if (this.isGrounded && (buttons & INPUT_JUMP)) {
+    // Track jump buffer - remember recent jump input
+    if (buttons & INPUT_JUMP) {
+      this.jumpBufferTimer = JUMP_BUFFER_TIME;
+    } else {
+      this.jumpBufferTimer -= dt;
+    }
+
+    // Handle jump - allowed during coyote time or with buffered input on landing
+    const canCoyoteJump = this.timeSinceGrounded < COYOTE_TIME;
+    const hasJumpInput = (buttons & INPUT_JUMP) || this.jumpBufferTimer > 0;
+    if (canCoyoteJump && hasJumpInput) {
       this.velocity.y = JUMP_VELOCITY;
       this.isGrounded = false;
+      this.timeSinceGrounded = COYOTE_TIME; // Exhaust coyote time to prevent double jump
+      this.jumpBufferTimer = 0; // Consume the buffered jump
     }
 
     // Run physics in sub-steps for stability
@@ -185,6 +202,13 @@ export class PlayerLocal {
     const wasGrounded = this.isGrounded;
     this.isGrounded = result.isOnGround;
 
+    // Track time since grounded for coyote time
+    if (this.isGrounded) {
+      this.timeSinceGrounded = 0;
+    } else {
+      this.timeSinceGrounded += dt;
+    }
+
     // Apply position correction
     this.position.add(result.deltaVector);
 
@@ -240,6 +264,8 @@ export class PlayerLocal {
     this.velocity.set(0, 0, 0);
     this.isGrounded = false;
     this.fallTime = 0;
+    this.timeSinceGrounded = COYOTE_TIME; // Prevent jump immediately after respawn
+    this.jumpBufferTimer = 0;
   }
 
   /**
