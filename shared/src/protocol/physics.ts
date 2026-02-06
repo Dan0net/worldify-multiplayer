@@ -16,6 +16,12 @@ export const SPRINT_MULTIPLIER = 1.6;
 /** Jump impulse velocity in m/s */
 export const JUMP_VELOCITY = 15.0;
 
+/** Grace period after leaving ground where jump is still allowed (seconds) */
+export const COYOTE_TIME = 0.15;
+
+/** Window before landing where a jump input will be buffered (seconds) */
+export const JUMP_BUFFER_TIME = 0.15;
+
 // ============== Player Physics ==============
 
 /** Gravity acceleration in m/s² (negative = downward) */
