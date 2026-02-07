@@ -333,6 +333,8 @@ export const terrainNormalFragment = /* glsl */ `
         } else {
           normalSample = texture(normalArray, vec3(gTriUV_xy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
         }
+        // Assign to all three axis slots so the TBN blending below
+        // still works — the dominant axis will dominate via gTriBlend weights
         normalSampleX = normalSample;
         normalSampleY = normalSample;
         normalSampleZ = normalSample;
