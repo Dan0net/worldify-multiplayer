@@ -23,13 +23,18 @@ import { SurfaceNetOutput } from './SurfaceNet.js';
 /**
  * Raw expanded mesh data - plain typed arrays, no Three.js dependency.
  * This is what gets transferred between worker and main thread.
+ * 
+ * Barycentric weights are NOT stored — they are computed in the vertex shader
+ * from gl_VertexID % 3, since vertices are laid out sequentially per triangle.
+ * This saves 12 bytes per vertex (3 × float32) in memory and transfer.
+ * 
+ * materialIds use Uint8Array instead of Float32Array (3 bytes vs 12 bytes per vertex).
+ * Non-indexed geometry (no index buffer) since indices are always sequential.
  */
 export interface ExpandedMeshData {
   positions: Float32Array;
   normals: Float32Array;
-  materialIds: Float32Array;
-  materialWeights: Float32Array;
-  indices: Uint32Array;
+  materialIds: Uint8Array;
 }
 
 /**
@@ -47,9 +52,7 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
   
   const positions = new Float32Array(expandedVertexCount * 3);
   const normals = new Float32Array(expandedVertexCount * 3);
-  const materialIds = new Float32Array(expandedVertexCount * 3);
-  const materialWeights = new Float32Array(expandedVertexCount * 3);
-  const indices = new Uint32Array(expandedVertexCount);
+  const materialIds = new Uint8Array(expandedVertexCount * 3);
   
   for (let faceIdx = 0; faceIdx < triangleCount; faceIdx++) {
     const i0 = output.indices[faceIdx * 3];
@@ -94,31 +97,24 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
     materialIds[v0 * 3] = m0; materialIds[v0 * 3 + 1] = m1; materialIds[v0 * 3 + 2] = m2;
     materialIds[v1 * 3] = m0; materialIds[v1 * 3 + 1] = m1; materialIds[v1 * 3 + 2] = m2;
     materialIds[v2 * 3] = m0; materialIds[v2 * 3 + 1] = m1; materialIds[v2 * 3 + 2] = m2;
-    
-    // Barycentric weights: (1,0,0), (0,1,0), (0,0,1)
-    materialWeights[v0 * 3] = 1; materialWeights[v0 * 3 + 1] = 0; materialWeights[v0 * 3 + 2] = 0;
-    materialWeights[v1 * 3] = 0; materialWeights[v1 * 3 + 1] = 1; materialWeights[v1 * 3 + 2] = 0;
-    materialWeights[v2 * 3] = 0; materialWeights[v2 * 3 + 1] = 0; materialWeights[v2 * 3 + 2] = 1;
-    
-    indices[v0] = v0;
-    indices[v1] = v1;
-    indices[v2] = v2;
   }
   
-  return { positions, normals, materialIds, materialWeights, indices };
+  return { positions, normals, materialIds };
 }
 
 /**
  * Wrap raw expanded mesh data into a THREE.BufferGeometry.
  * Main thread only — lightweight, just setAttribute calls.
+ * 
+ * Uses non-indexed geometry (no index buffer) since vertices are sequential.
+ * materialIds stored as Uint8 (3 bytes/vertex vs 12 bytes/vertex with Float32).
+ * Barycentric weights computed in vertex shader from gl_VertexID.
  */
 export function createBufferGeometry(data: ExpandedMeshData): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
-  geometry.setAttribute('materialIds', new THREE.BufferAttribute(data.materialIds, 3));
-  geometry.setAttribute('materialWeights', new THREE.BufferAttribute(data.materialWeights, 3));
-  geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+  geometry.setAttribute('materialIds', new THREE.Uint8BufferAttribute(data.materialIds, 3, false));
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;

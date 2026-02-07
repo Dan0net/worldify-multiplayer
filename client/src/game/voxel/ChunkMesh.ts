@@ -541,20 +541,36 @@ export class ChunkMesh {
 
   /**
    * Get the total triangle count of all meshes.
+   * Uses position attribute count / 3 since geometry is non-indexed.
    */
   getTriangleCount(): number {
     let count = 0;
     if (this.solidMesh) {
       const index = this.solidMesh.geometry.index;
-      if (index) count += index.count / 3;
+      if (index) {
+        count += index.count / 3;
+      } else {
+        const posAttr = this.solidMesh.geometry.getAttribute('position');
+        if (posAttr) count += posAttr.count / 3;
+      }
     }
     if (this.transparentMesh) {
       const index = this.transparentMesh.geometry.index;
-      if (index) count += index.count / 3;
+      if (index) {
+        count += index.count / 3;
+      } else {
+        const posAttr = this.transparentMesh.geometry.getAttribute('position');
+        if (posAttr) count += posAttr.count / 3;
+      }
     }
     if (this.liquidMesh) {
       const index = this.liquidMesh.geometry.index;
-      if (index) count += index.count / 3;
+      if (index) {
+        count += index.count / 3;
+      } else {
+        const posAttr = this.liquidMesh.geometry.getAttribute('position');
+        if (posAttr) count += posAttr.count / 3;
+      }
     }
     return count;
   }

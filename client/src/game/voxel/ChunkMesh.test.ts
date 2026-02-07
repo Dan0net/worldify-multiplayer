@@ -58,8 +58,6 @@ describe('ChunkMesh Mesh Creation Tests', () => {
       expect(mesh.geometry.getAttribute('position')).toBeDefined();
       expect(mesh.geometry.getAttribute('normal')).toBeDefined();
       expect(mesh.geometry.getAttribute('materialIds')).toBeDefined();
-      expect(mesh.geometry.getAttribute('materialWeights')).toBeDefined();
-      expect(mesh.geometry.index).not.toBeNull();
       
       mesh.geometry.dispose();
     }
