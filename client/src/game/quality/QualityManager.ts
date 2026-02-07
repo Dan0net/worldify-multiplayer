@@ -76,6 +76,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     normalMaps: preset.shaderNormalMaps,
     aoMaps: preset.shaderAoMaps,
     metalnessMaps: preset.shaderMetalnessMaps,
+    reducedTriplanar: preset.shaderReducedTriplanar,
   });
   applyAnisotropy(preset.anisotropy);
 

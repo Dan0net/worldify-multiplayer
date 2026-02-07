@@ -45,6 +45,9 @@ export interface QualitySettings {
   shaderNormalMaps: boolean;
   shaderAoMaps: boolean;
   shaderMetalnessMaps: boolean;
+  
+  // Shader sampling optimization: use dominant axis only (1 sample vs 3 per material)
+  shaderReducedTriplanar: boolean;
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
@@ -62,6 +65,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: true,
     shaderAoMaps: true,
     shaderMetalnessMaps: true,
+    shaderReducedTriplanar: false,
   },
   high: {
     ssaoEnabled: false,
@@ -77,6 +81,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: true,
     shaderAoMaps: true,
     shaderMetalnessMaps: true,
+    shaderReducedTriplanar: false,
   },
   medium: {
     ssaoEnabled: false,
@@ -92,6 +97,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: false,
     shaderAoMaps: false,
     shaderMetalnessMaps: true,
+    shaderReducedTriplanar: false,
   },
   low: {
     ssaoEnabled: false,
@@ -107,6 +113,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: false,
     shaderAoMaps: false,
     shaderMetalnessMaps: false,
+    shaderReducedTriplanar: true,
   },
 };
 

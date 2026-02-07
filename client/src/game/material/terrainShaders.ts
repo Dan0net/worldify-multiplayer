@@ -10,7 +10,6 @@
 /** Material attribute declarations (vertex) */
 export const materialAttributesVertex = /* glsl */ `
   attribute vec3 materialIds;
-  attribute vec3 materialWeights;
   
   flat varying vec3 vMaterialIds;
   varying vec3 vMaterialWeights;
@@ -21,7 +20,11 @@ export const materialAttributesVertex = /* glsl */ `
 /** Material varying assignments (vertex suffix) */
 export const materialVaryingsSuffix = /* glsl */ `
   vMaterialIds = materialIds;
-  vMaterialWeights = materialWeights;
+  // Compute barycentric weights from vertex index instead of storing per-vertex.
+  // Vertices are laid out sequentially: 3 per triangle (0,1,2, 3,4,5, ...).
+  // gl_VertexID % 3 gives 0->( 1,0,0), 1->(0,1,0), 2->(0,0,1).
+  int baryIdx = gl_VertexID - (gl_VertexID / 3) * 3;
+  vMaterialWeights = vec3(float(baryIdx == 0), float(baryIdx == 1), float(baryIdx == 2));
   vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
   vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
 `;
@@ -161,22 +164,51 @@ export const terrainFragmentPrefix = /* glsl */ `
   ${blendingFunctions}
   
   // Sample tri-planar with per-material repeat scale
+  // With QUALITY_REDUCED_TRIPLANAR: uses only the dominant axis (1 sample instead of 3)
   vec4 sampleTriPlanarMat(sampler2DArray tex, float layer, vec2 uv_zy, vec2 uv_xz, vec2 uv_xy) {
-    vec4 xaxis = texture(tex, vec3(uv_zy, layer));
-    vec4 yaxis = texture(tex, vec3(uv_xz, layer));
-    vec4 zaxis = texture(tex, vec3(uv_xy, layer));
-    return xaxis * gTriBlend.x + yaxis * gTriBlend.y + zaxis * gTriBlend.z;
+    #ifdef QUALITY_REDUCED_TRIPLANAR
+      // Dominant-axis-only sampling: 1 texture fetch instead of 3
+      if (gTriBlend.y >= gTriBlend.x && gTriBlend.y >= gTriBlend.z) {
+        return texture(tex, vec3(uv_xz, layer));
+      } else if (gTriBlend.x >= gTriBlend.z) {
+        return texture(tex, vec3(uv_zy, layer));
+      } else {
+        return texture(tex, vec3(uv_xy, layer));
+      }
+    #else
+      vec4 xaxis = texture(tex, vec3(uv_zy, layer));
+      vec4 yaxis = texture(tex, vec3(uv_xz, layer));
+      vec4 zaxis = texture(tex, vec3(uv_xy, layer));
+      return xaxis * gTriBlend.x + yaxis * gTriBlend.y + zaxis * gTriBlend.z;
+    #endif
   }
   
   // Convenience wrappers using precomputed globals (for backward compatibility)
   vec4 sampleTriPlanar(sampler2DArray tex, float layer) {
-    vec4 xaxis = texture(tex, vec3(gTriUV_zy, layer));
-    vec4 yaxis = texture(tex, vec3(gTriUV_xz, layer));
-    vec4 zaxis = texture(tex, vec3(gTriUV_xy, layer));
-    return xaxis * gTriBlend.x + yaxis * gTriBlend.y + zaxis * gTriBlend.z;
+    #ifdef QUALITY_REDUCED_TRIPLANAR
+      if (gTriBlend.y >= gTriBlend.x && gTriBlend.y >= gTriBlend.z) {
+        return texture(tex, vec3(gTriUV_xz, layer));
+      } else if (gTriBlend.x >= gTriBlend.z) {
+        return texture(tex, vec3(gTriUV_zy, layer));
+      } else {
+        return texture(tex, vec3(gTriUV_xy, layer));
+      }
+    #else
+      vec4 xaxis = texture(tex, vec3(gTriUV_zy, layer));
+      vec4 yaxis = texture(tex, vec3(gTriUV_xz, layer));
+      vec4 zaxis = texture(tex, vec3(gTriUV_xy, layer));
+      return xaxis * gTriBlend.x + yaxis * gTriBlend.y + zaxis * gTriBlend.z;
+    #endif
   }
   
+  // Material blend with early-out for uniform materials (all 3 IDs equal).
+  // Most terrain triangles have the same material on all vertices, so this
+  // skips 2/3 of texture samples for the majority of fragments.
   vec4 sampleMaterialBlend(sampler2DArray tex) {
+    if (vMaterialIds.x == vMaterialIds.y && vMaterialIds.y == vMaterialIds.z) {
+      // Uniform material — sample once with tri-planar only
+      return sampleTriPlanarMat(tex, vMaterialIds.x, gTriUV_zy_m0, gTriUV_xz_m0, gTriUV_xy_m0);
+    }
     vec4 m0 = sampleTriPlanarMat(tex, vMaterialIds.x, gTriUV_zy_m0, gTriUV_xz_m0, gTriUV_xy_m0);
     vec4 m1 = sampleTriPlanarMat(tex, vMaterialIds.y, gTriUV_zy_m1, gTriUV_xz_m1, gTriUV_xy_m1);
     vec4 m2 = sampleTriPlanarMat(tex, vMaterialIds.z, gTriUV_zy_m2, gTriUV_xz_m2, gTriUV_xy_m2);
@@ -184,6 +216,9 @@ export const terrainFragmentPrefix = /* glsl */ `
   }
   
   vec4 sampleAxisMaterialBlend(sampler2DArray tex, vec2 uv) {
+    if (vMaterialIds.x == vMaterialIds.y && vMaterialIds.y == vMaterialIds.z) {
+      return texture(tex, vec3(uv, vMaterialIds.x));
+    }
     vec4 m0 = texture(tex, vec3(uv, vMaterialIds.x));
     vec4 m1 = texture(tex, vec3(uv, vMaterialIds.y));
     vec4 m2 = texture(tex, vec3(uv, vMaterialIds.z));
@@ -281,24 +316,51 @@ export const terrainAoFragment = /* glsl */ `
 export const terrainNormalFragment = /* glsl */ `
   #ifdef USE_NORMALMAP
     #ifdef QUALITY_NORMAL_MAPS
-    // Sample normals per-axis, per-material with individual repeat scales
-    // Material 0
-    vec3 normalSampleX_m0 = texture(normalArray, vec3(gTriUV_zy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
-    vec3 normalSampleY_m0 = texture(normalArray, vec3(gTriUV_xz_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
-    vec3 normalSampleZ_m0 = texture(normalArray, vec3(gTriUV_xy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
-    // Material 1
-    vec3 normalSampleX_m1 = texture(normalArray, vec3(gTriUV_zy_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
-    vec3 normalSampleY_m1 = texture(normalArray, vec3(gTriUV_xz_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
-    vec3 normalSampleZ_m1 = texture(normalArray, vec3(gTriUV_xy_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
-    // Material 2
-    vec3 normalSampleX_m2 = texture(normalArray, vec3(gTriUV_zy_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
-    vec3 normalSampleY_m2 = texture(normalArray, vec3(gTriUV_xz_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
-    vec3 normalSampleZ_m2 = texture(normalArray, vec3(gTriUV_xy_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
+    // Early-out for uniform materials: sample only one material instead of three
+    bool uniformMaterial = (vMaterialIds.x == vMaterialIds.y && vMaterialIds.y == vMaterialIds.z);
     
-    // Blend materials per-axis
-    vec3 normalSampleX = normalSampleX_m0 * gMatBlend.x + normalSampleX_m1 * gMatBlend.y + normalSampleX_m2 * gMatBlend.z;
-    vec3 normalSampleY = normalSampleY_m0 * gMatBlend.x + normalSampleY_m1 * gMatBlend.y + normalSampleY_m2 * gMatBlend.z;
-    vec3 normalSampleZ = normalSampleZ_m0 * gMatBlend.x + normalSampleZ_m1 * gMatBlend.y + normalSampleZ_m2 * gMatBlend.z;
+    vec3 normalSampleX, normalSampleY, normalSampleZ;
+    
+    if (uniformMaterial) {
+      // Single material — 3 texture samples instead of 9
+      #ifdef QUALITY_REDUCED_TRIPLANAR
+        // Dominant-axis only — 1 texture sample for normals
+        vec3 normalSample;
+        if (gTriBlend.y >= gTriBlend.x && gTriBlend.y >= gTriBlend.z) {
+          normalSample = texture(normalArray, vec3(gTriUV_xz_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+        } else if (gTriBlend.x >= gTriBlend.z) {
+          normalSample = texture(normalArray, vec3(gTriUV_zy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+        } else {
+          normalSample = texture(normalArray, vec3(gTriUV_xy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+        }
+        normalSampleX = normalSample;
+        normalSampleY = normalSample;
+        normalSampleZ = normalSample;
+      #else
+        normalSampleX = texture(normalArray, vec3(gTriUV_zy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+        normalSampleY = texture(normalArray, vec3(gTriUV_xz_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+        normalSampleZ = texture(normalArray, vec3(gTriUV_xy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+      #endif
+    } else {
+      // Sample normals per-axis, per-material with individual repeat scales
+      // Material 0
+      vec3 normalSampleX_m0 = texture(normalArray, vec3(gTriUV_zy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+      vec3 normalSampleY_m0 = texture(normalArray, vec3(gTriUV_xz_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+      vec3 normalSampleZ_m0 = texture(normalArray, vec3(gTriUV_xy_m0, vMaterialIds.x)).xyz * 2.0 - 1.0;
+      // Material 1
+      vec3 normalSampleX_m1 = texture(normalArray, vec3(gTriUV_zy_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
+      vec3 normalSampleY_m1 = texture(normalArray, vec3(gTriUV_xz_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
+      vec3 normalSampleZ_m1 = texture(normalArray, vec3(gTriUV_xy_m1, vMaterialIds.y)).xyz * 2.0 - 1.0;
+      // Material 2
+      vec3 normalSampleX_m2 = texture(normalArray, vec3(gTriUV_zy_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
+      vec3 normalSampleY_m2 = texture(normalArray, vec3(gTriUV_xz_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
+      vec3 normalSampleZ_m2 = texture(normalArray, vec3(gTriUV_xy_m2, vMaterialIds.z)).xyz * 2.0 - 1.0;
+      
+      // Blend materials per-axis
+      normalSampleX = normalSampleX_m0 * gMatBlend.x + normalSampleX_m1 * gMatBlend.y + normalSampleX_m2 * gMatBlend.z;
+      normalSampleY = normalSampleY_m0 * gMatBlend.x + normalSampleY_m1 * gMatBlend.y + normalSampleY_m2 * gMatBlend.z;
+      normalSampleZ = normalSampleZ_m0 * gMatBlend.x + normalSampleZ_m1 * gMatBlend.y + normalSampleZ_m2 * gMatBlend.z;
+    }
     
     normalSampleX.xy *= normalScale * normalStrength;
     normalSampleY.xy *= normalScale * normalStrength;

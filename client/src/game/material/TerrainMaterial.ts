@@ -202,6 +202,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
   static qualityNormalMaps = true;
   static qualityAoMaps = true;
   static qualityMetalnessMaps = true;
+  static qualityReducedTriplanar = false;
   
   /**
    * Override customProgramCacheKey so that Three.js's program cache
@@ -217,6 +218,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       TerrainMaterial.qualityNormalMaps ? 'N' : 'n',
       TerrainMaterial.qualityAoMaps ? 'A' : 'a',
       TerrainMaterial.qualityMetalnessMaps ? 'M' : 'm',
+      TerrainMaterial.qualityReducedTriplanar ? 'R' : 'r',
     ].join('|');
   }
   
@@ -273,6 +275,11 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
         shader.defines.QUALITY_METALNESS_MAPS = '';
       } else {
         delete shader.defines.QUALITY_METALNESS_MAPS;
+      }
+      if (TerrainMaterial.qualityReducedTriplanar) {
+        shader.defines.QUALITY_REDUCED_TRIPLANAR = '';
+      } else {
+        delete shader.defines.QUALITY_REDUCED_TRIPLANAR;
       }
       
       if (isTransparent) {
@@ -699,27 +706,32 @@ export interface ShaderMapDefines {
   normalMaps: boolean;
   aoMaps: boolean;
   metalnessMaps: boolean;
+  reducedTriplanar?: boolean;
 }
 
 /**
  * Update quality-driven shader defines and force recompilation.
  * Toggling normal/AO/metalness maps skips expensive texture samples.
+ * reducedTriplanar uses dominant-axis-only sampling (1 sample vs 3 per material).
  */
 export function setShaderMapDefines(defines: ShaderMapDefines): void {
+  const reducedTriplanar = defines.reducedTriplanar ?? false;
   const changed =
     TerrainMaterial.qualityNormalMaps !== defines.normalMaps ||
     TerrainMaterial.qualityAoMaps !== defines.aoMaps ||
-    TerrainMaterial.qualityMetalnessMaps !== defines.metalnessMaps;
+    TerrainMaterial.qualityMetalnessMaps !== defines.metalnessMaps ||
+    TerrainMaterial.qualityReducedTriplanar !== reducedTriplanar;
 
   TerrainMaterial.qualityNormalMaps = defines.normalMaps;
   TerrainMaterial.qualityAoMaps = defines.aoMaps;
   TerrainMaterial.qualityMetalnessMaps = defines.metalnessMaps;
+  TerrainMaterial.qualityReducedTriplanar = reducedTriplanar;
 
   if (changed) {
     // Force shader recompilation by bumping material version
     if (solidMaterial) solidMaterial.needsUpdate = true;
     if (transparentMaterial) transparentMaterial.needsUpdate = true;
-    console.log(`[TerrainMaterial] Shader defines updated: normal=${defines.normalMaps}, ao=${defines.aoMaps}, metalness=${defines.metalnessMaps}`);
+    console.log(`[TerrainMaterial] Shader defines updated: normal=${defines.normalMaps}, ao=${defines.aoMaps}, metalness=${defines.metalnessMaps}, reducedTriplanar=${reducedTriplanar}`);
   }
 }
 
