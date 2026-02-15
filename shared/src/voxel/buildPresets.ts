@@ -169,3 +169,14 @@ export const BUILD_ROTATION_STEPS = 16;
  * Rotation step in degrees (360 / BUILD_ROTATION_STEPS).
  */
 export const BUILD_ROTATION_STEP = 360 / BUILD_ROTATION_STEPS;
+
+/**
+ * Rotation step in radians.
+ */
+export const BUILD_ROTATION_STEP_RAD = (BUILD_ROTATION_STEP * Math.PI) / 180;
+
+/**
+ * Projection deadzone: axes with less normal contribution than one rotation step
+ * are considered parallel to the surface. Equal to sin(BUILD_ROTATION_STEP_RAD).
+ */
+export const BUILD_PROJECTION_DEADZONE = Math.sin(BUILD_ROTATION_STEP_RAD);

@@ -14,6 +14,7 @@ import {
   MAX_BUILD_DISTANCE,
   VOXEL_SCALE,
   BUILD_ROTATION_STEP,
+  BUILD_PROJECTION_DEADZONE,
   getPreset,
   composeRotation,
 } from '@worldify/shared';
@@ -63,6 +64,7 @@ export class BuildMarker {
 
   /** Temp vectors for projection calculations */
   private readonly _hNormal = new THREE.Vector3();
+  private readonly _hTangent = new THREE.Vector3();
   private readonly _tempAxis = new THREE.Vector3();
 
   /** Rotated OBB half-Y extent (world units), updated per-rebuild */
@@ -178,22 +180,21 @@ export class BuildMarker {
         break;
 
       case BuildPresetAlign.PROJECT: {
-        // Horizontal: base at surface (wireframe Y offset handles visual,
-        // getTargetPosition handles build center). No extra offset.
-        // Vertical: full OBB depth offset along horizontal normal so shape
-        // fully protrudes and nothing clips behind the surface.
+        // On horizontal surfaces: base sits on surface (handled by wireframe offset).
+        // On vertical surfaces: push shape out so it fully protrudes from the wall,
+        // then slide it sideways so the protruding corner sits at the hit point.
         if (Math.abs(hitNormal.y) < 0.5) {
-          const hN = this._hNormal.set(hitNormal.x, 0, hitNormal.z).normalize();
+          // Get the wall's horizontal normal and tangent directions
+          const wallNormal = this._hNormal.set(hitNormal.x, 0, hitNormal.z).normalize();
+          const wallTangent = this._hTangent.set(-wallNormal.z, 0, wallNormal.x);
 
-          // Full OBB support value along horizontal normal
-          this._tempAxis.set(1, 0, 0).applyQuaternion(this._composedQuat);
-          let depthExtent = size.x * Math.abs(this._tempAxis.dot(hN));
-          this._tempAxis.set(0, 1, 0).applyQuaternion(this._composedQuat);
-          depthExtent += size.y * Math.abs(this._tempAxis.dot(hN));
-          this._tempAxis.set(0, 0, 1).applyQuaternion(this._composedQuat);
-          depthExtent += size.z * Math.abs(this._tempAxis.dot(hN));
+          // How far does the rotated shape extend along the normal and tangent?
+          const { depth, slide } = this.getProjectedExtents(wallNormal, wallTangent, size);
 
-          pos.addScaledVector(hN, depthExtent * VOXEL_SCALE);
+          // Push outward so back face is flush with surface
+          pos.addScaledVector(wallNormal, depth * VOXEL_SCALE);
+          // Slide sideways so protruding corner aligns with hit point
+          pos.addScaledVector(wallTangent, slide * VOXEL_SCALE);
         }
         break;
       }
@@ -206,6 +207,53 @@ export class BuildMarker {
     }
 
     return pos;
+  }
+
+  /**
+   * For the rotated shape, compute how far it extends along a wall's normal
+   * and how far to slide it sideways so the protruding corner sits at the origin.
+   *
+   * Imagine the shape's 3 local axes (X, Y, Z) rotated into world space.
+   * Each axis contributes to both the wall-normal direction (depth) and
+   * the wall-tangent direction (sideways slide).
+   *
+   * - depth: total half-extent of the shape along the wall normal
+   *          (sum of each axis's normal contribution)
+   * - slide: how far the protruding corner is offset sideways from center.
+   *          Only axes that meaningfully face the wall contribute;
+   *          axes parallel to the wall (within deadzone) are ignored
+   *          so the shape stays centered at 0° and 90°.
+   */
+  private getProjectedExtents(
+    wallNormal: THREE.Vector3,
+    wallTangent: THREE.Vector3,
+    size: { x: number; y: number; z: number }
+  ): { depth: number; slide: number } {
+    const DEADZONE = BUILD_PROJECTION_DEADZONE;
+    const halfExtents = [size.x, size.y, size.z];
+    let depth = 0;
+    let slide = 0;
+
+    for (let i = 0; i < 3; i++) {
+      // Get this local axis in world space (only X and Z matter horizontally)
+      this._tempAxis.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0)
+        .applyQuaternion(this._composedQuat);
+
+      // How much does this axis point into/away from the wall?
+      const normalAmount = this._tempAxis.x * wallNormal.x + this._tempAxis.z * wallNormal.z;
+      // How much does this axis run along the wall surface?
+      const tangentAmount = this._tempAxis.x * wallTangent.x + this._tempAxis.z * wallTangent.z;
+
+      depth += halfExtents[i] * Math.abs(normalAmount);
+
+      // Only slide for axes that clearly face the wall (outside deadzone).
+      // At 0° and 90° the dominant axis is parallel → deadzone → no slide → centered.
+      if (Math.abs(normalAmount) > DEADZONE) {
+        slide += Math.sign(normalAmount) * halfExtents[i] * tangentAmount;
+      }
+    }
+
+    return { depth, slide };
   }
 
   /**
