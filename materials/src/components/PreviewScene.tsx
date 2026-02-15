@@ -16,8 +16,6 @@ import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
   MATERIAL_METALNESS_MULTIPLIER,
   DEFAULT_SKYBOX,
-  LIGHT_AMBIENT_COLOR,
-  LIGHT_AMBIENT_INTENSITY,
   LIGHT_SUN_COLOR,
   LIGHT_SUN_INTENSITY,
 } from '@worldify/shared/scene';
@@ -47,7 +45,7 @@ export function SceneSetup({ envMapEnabled }: { envMapEnabled: boolean }) {
 export function GameLighting() {
   return (
     <>
-      <ambientLight color={LIGHT_AMBIENT_COLOR} intensity={LIGHT_AMBIENT_INTENSITY} />
+      <hemisphereLight args={['#87ceeb', '#3d5c3d', 0.8]} />
       <directionalLight 
         position={[5, 5, 5]} 
         color={LIGHT_SUN_COLOR} 

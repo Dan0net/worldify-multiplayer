@@ -21,12 +21,6 @@ export const MATERIAL_NORMAL_STRENGTH = 1.0;
 
 // ============== Lighting Defaults ==============
 
-/** Ambient light color (hex) */
-export const LIGHT_AMBIENT_COLOR = '#ffffff';
-
-/** Ambient light intensity */
-export const LIGHT_AMBIENT_INTENSITY = 0.4;
-
 /** Sun light color - warm sunset yellow */
 export const LIGHT_SUN_COLOR = '#ffcc00';
 
@@ -35,8 +29,8 @@ export const LIGHT_SUN_INTENSITY = 3.0;
 
 // ============== Environment/IBL Defaults ==============
 
-/** Environment map intensity for IBL reflections - lower = less washed out colors */
-export const ENVIRONMENT_INTENSITY = 0.5;
+/** Environment map intensity for IBL reflections */
+export const ENVIRONMENT_INTENSITY = 1.0;
 
 /** Default skybox preset */
 export const DEFAULT_SKYBOX = 'forest';
@@ -91,16 +85,6 @@ export const SUN_COLOR_SUNRISE_PEACH = '#ffbb88';  // Peach morning
 export const SUN_COLOR_SUNSET_DEEP = '#ff4411';    // Deep orange sunset
 export const SUN_COLOR_SUNSET_PURPLE = '#993366';  // Purple dusk
 
-/** Ambient color at different times */
-export const AMBIENT_COLOR_DAY = '#ffffff';
-export const AMBIENT_COLOR_SUNRISE = '#ffeeff';   // Soft pink-tinted morning
-export const AMBIENT_COLOR_SUNSET = '#ffccaa';    // Warm orange evening
-export const AMBIENT_COLOR_NIGHT = '#334466';
-
-/** Ambient intensity range */
-export const AMBIENT_INTENSITY_DAY = 0.5;
-export const AMBIENT_INTENSITY_NIGHT = 5.0;
-
 /** Hemisphere light - sky color at different times */
 export const HEMISPHERE_SKY_DAY = '#87ceeb';          // Light sky blue
 export const HEMISPHERE_SKY_SUNRISE = '#ffccdd';      // Light pink morning
@@ -120,8 +104,8 @@ export const HEMISPHERE_INTENSITY_DAY = 0.8;
 export const HEMISPHERE_INTENSITY_NIGHT = 1.5;    // Main light source at night
 
 /** Environment/IBL intensity range (lower at night since we don't change envmap) */
-export const ENVIRONMENT_INTENSITY_DAY = 0.5;
-export const ENVIRONMENT_INTENSITY_NIGHT = 0.05;
+export const ENVIRONMENT_INTENSITY_DAY = 1.0;
+export const ENVIRONMENT_INTENSITY_NIGHT = 0.15;
 
 /** Time thresholds (0-1 normalized) for day phases - longer sunrise/sunset */
 export const TIME_SUNRISE_START = 0.15;  // 3:36 AM - early dawn

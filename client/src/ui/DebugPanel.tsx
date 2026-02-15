@@ -1025,7 +1025,7 @@ export function DebugPanel() {
             onChange={(v) => handleEnvironmentChange({ autoHemisphereIntensity: v })}
           />
           <Toggle
-            label="Environment (IBL)"
+            label="IBL Intensity"
             value={environment.autoEnvironmentIntensity ?? true}
             onChange={(v) => handleEnvironmentChange({ autoEnvironmentIntensity: v })}
           />
@@ -1148,12 +1148,12 @@ export function DebugPanel() {
               <ColorPicker
                 label="Sky"
                 value={environment.hemisphereSkyColor ?? '#87ceeb'}
-                onChange={(v) => handleEnvironmentChange({ hemisphereSkyColor: v })}
+                onChange={(v) => handleEnvironmentChange({ hemisphereSkyColor: v, autoHemisphereColors: false })}
               />
               <ColorPicker
                 label="Ground"
                 value={environment.hemisphereGroundColor ?? '#3d5c3d'}
-                onChange={(v) => handleEnvironmentChange({ hemisphereGroundColor: v })}
+                onChange={(v) => handleEnvironmentChange({ hemisphereGroundColor: v, autoHemisphereColors: false })}
               />
               <Slider
                 label="Intensity"
@@ -1161,7 +1161,7 @@ export function DebugPanel() {
                 min={0}
                 max={3}
                 step={0.1}
-                onChange={(v) => handleEnvironmentChange({ hemisphereIntensity: v })}
+                onChange={(v) => handleEnvironmentChange({ hemisphereIntensity: v, autoHemisphereIntensity: false })}
               />
             </>
           )}
@@ -1176,7 +1176,7 @@ export function DebugPanel() {
             min={0}
             max={3}
             step={0.1}
-            onChange={(v) => handleEnvironmentChange({ environmentIntensity: v })}
+            onChange={(v) => handleEnvironmentChange({ environmentIntensity: v, autoEnvironmentIntensity: false })}
           />
         </div>
 

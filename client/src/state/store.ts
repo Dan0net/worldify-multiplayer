@@ -8,8 +8,6 @@ import {
   MATERIAL_NORMAL_STRENGTH,
   ENVIRONMENT_INTENSITY,
   DEFAULT_SKYBOX,
-  LIGHT_AMBIENT_COLOR,
-  LIGHT_AMBIENT_INTENSITY,
   LIGHT_SUN_COLOR,
   LIGHT_SUN_INTENSITY,
   LIGHT_MOON_COLOR,
@@ -95,8 +93,6 @@ export interface EnvironmentSettings {
   autoSunIntensity: boolean;      // Calculate sun intensity from time
   autoMoonPosition: boolean;      // Calculate moon position from time
   autoMoonIntensity: boolean;     // Calculate moon intensity from time
-  autoAmbientColor: boolean;      // Calculate ambient color from time
-  autoAmbientIntensity: boolean;  // Calculate ambient intensity from time
   autoEnvironmentIntensity: boolean; // Calculate IBL intensity from time
   
   // Sun settings (manual values, or calculated when auto is enabled)
@@ -111,10 +107,6 @@ export interface EnvironmentSettings {
   moonIntensity: number;    // 0-2
   moonAzimuth: number;      // Horizontal angle in degrees
   moonElevation: number;    // Vertical angle in degrees
-  
-  // Ambient light
-  ambientColor: string;     // Hex color
-  ambientIntensity: number; // 0-2
   
   // Hemisphere light (sky/ground gradient)
   hemisphereEnabled: boolean;     // Toggle hemisphere light
@@ -226,8 +218,6 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   autoSunIntensity: true,
   autoMoonPosition: true,
   autoMoonIntensity: true,
-  autoAmbientColor: true,
-  autoAmbientIntensity: true,
   autoEnvironmentIntensity: true,
   
   sunColor: LIGHT_SUN_COLOR,
@@ -240,9 +230,6 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   moonIntensity: LIGHT_MOON_INTENSITY,
   moonAzimuth: 315,         // Opposite sun
   moonElevation: -45,       // Below horizon during day
-  
-  ambientColor: LIGHT_AMBIENT_COLOR,
-  ambientIntensity: LIGHT_AMBIENT_INTENSITY,
   
   // Hemisphere light - enabled by default for natural outdoor lighting
   hemisphereEnabled: true,

@@ -22,13 +22,6 @@ import {
   MOON_THRESHOLD_FAINT,
   MOON_THRESHOLD_RISING,
   MOON_THRESHOLD_FULL,
-  // Ambient
-  AMBIENT_COLOR_DAY,
-  AMBIENT_COLOR_SUNRISE,
-  AMBIENT_COLOR_SUNSET,
-  AMBIENT_COLOR_NIGHT,
-  AMBIENT_INTENSITY_DAY,
-  AMBIENT_INTENSITY_NIGHT,
   // Environment
   ENVIRONMENT_INTENSITY_DAY,
   ENVIRONMENT_INTENSITY_NIGHT,
@@ -179,17 +172,6 @@ export function updateDayNightCycle(deltaMs: number): void {
   const effectiveSunIntensity = updates.sunIntensity ?? env.sunIntensity ?? 3.0;
   const effectiveMoonIntensity = updates.moonIntensity ?? env.moonIntensity ?? 0.3;
   updateShadowCaster(effectiveSunIntensity, effectiveMoonIntensity);
-  
-  // Ambient - simple day/night with midpoint color
-  if (env.autoAmbientColor ?? true) {
-    updates.ambientColor = getPhaseColor(
-      time, AMBIENT_COLOR_DAY, AMBIENT_COLOR_NIGHT,
-      AMBIENT_COLOR_SUNRISE, AMBIENT_COLOR_SUNSET
-    );
-  }
-  if (env.autoAmbientIntensity ?? true) {
-    updates.ambientIntensity = getPhaseValue(time, AMBIENT_INTENSITY_DAY, AMBIENT_INTENSITY_NIGHT);
-  }
   
   // Environment intensity
   if (env.autoEnvironmentIntensity ?? true) {
