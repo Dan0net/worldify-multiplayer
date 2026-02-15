@@ -105,7 +105,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 5,
     name: 'Leafy Blob',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(2, 2, 2), material: 48 },
+    config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(3, 3, 3), material: 48 },
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },

@@ -21,6 +21,7 @@ import {
   chunkKey,
 } from './voxelData.js';
 import { ChunkData } from './ChunkData.js';
+import { isTransparent } from '../materials/Materials.js';
 
 // ============== Apply Functions ==============
 // These modify a single voxel based on the build mode
@@ -28,6 +29,7 @@ import { ChunkData } from './ChunkData.js';
 /**
  * Apply ADD mode to a voxel.
  * Combines new weight with existing, takes maximum, updates material if weight increases.
+ * Solid materials always overwrite transparent materials.
  */
 export function applyAdd(
   existingPacked: number,
@@ -42,8 +44,12 @@ export function applyAdd(
     -0.5, 0.5
   );
   
-  // Update material if new weight is >= existing
-  const finalMaterial = newWeight >= existing.weight ? newMaterial : existing.material;
+  // Update material if new weight is >= existing,
+  // or if we're overwriting a transparent material with a solid one
+  const existingIsTransparent = existing.weight > 0 && isTransparent(existing.material);
+  const newIsSolid = !isTransparent(newMaterial);
+  const finalMaterial = (newWeight >= existing.weight || (existingIsTransparent && newIsSolid && newWeight > 0))
+    ? newMaterial : existing.material;
   
   const newPacked = packVoxel(combinedWeight, finalMaterial, existing.light);
   return { packed: newPacked, changed: newPacked !== existingPacked };
@@ -91,7 +97,8 @@ export function applyPaint(
 
 /**
  * Apply FILL mode to a voxel.
- * Only fills where existing weight <= 0 (empty areas).
+ * Only fills where existing weight <= 0 (empty areas) OR
+ * where existing material is transparent (allows solid to overwrite transparent).
  */
 export function applyFill(
   existingPacked: number,
@@ -100,10 +107,14 @@ export function applyFill(
 ): { packed: number; changed: boolean } {
   const existing = unpackVoxel(existingPacked);
   
-  // FILL: only fill empty voxels
-  if (newWeight > existing.weight && existing.weight <= 0) {
-    const newPacked = packVoxel(newWeight, newMaterial, existing.light);
-    return { packed: newPacked, changed: true };
+  // FILL: fill empty voxels, or overwrite transparent materials with solid ones
+  const existingIsTransparent = existing.weight > 0 && isTransparent(existing.material);
+  const newIsSolid = !isTransparent(newMaterial);
+  
+  if (newWeight > 0 && (existing.weight <= 0 || (existingIsTransparent && newIsSolid))) {
+    const finalWeight = Math.max(newWeight, existing.weight);
+    const newPacked = packVoxel(finalWeight, newMaterial, existing.light);
+    return { packed: newPacked, changed: newPacked !== existingPacked };
   }
   
   return { packed: existingPacked, changed: false };

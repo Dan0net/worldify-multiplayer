@@ -241,9 +241,12 @@ export class VoxelIntegration implements TerrainRaycaster {
     const meshes: THREE.Object3D[] = [];
     for (const chunkMesh of this.world.meshes.values()) {
       if (chunkMesh.hasGeometry()) {
-        const mesh = chunkMesh.getMesh();
-        if (mesh) {
-          meshes.push(mesh);
+        const solid = chunkMesh.getMesh();
+        if (solid) {
+          meshes.push(solid);
+        }
+        if (chunkMesh.transparentMesh) {
+          meshes.push(chunkMesh.transparentMesh);
         }
       }
     }

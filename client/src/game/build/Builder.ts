@@ -17,7 +17,7 @@ import { storeBridge } from '../../state/bridge';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
 
 const EMPTY_SET: ReadonlySet<number> = new Set();
 
@@ -180,10 +180,12 @@ export class Builder {
     }
 
     // Check if build shape overlaps player or camera (for modes that add solid geometry)
+    // Skip check for transparent materials (player won't collide with them)
     if (hasValidTarget) {
       const preset = storeBridge.buildPreset;
       const mode = preset.config.mode;
-      if (mode === BuildMode.ADD || mode === BuildMode.FILL) {
+      const materialIsTransparent = isTransparent(preset.config.material);
+      if ((mode === BuildMode.ADD || mode === BuildMode.FILL) && !materialIsTransparent) {
         const aabb = this.marker.getWorldAABB();
         if (aabb && this.buildOverlapsPlayer(aabb, playerPosition, camera.position)) {
           hasValidTarget = false;
