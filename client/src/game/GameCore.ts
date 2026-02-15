@@ -79,7 +79,12 @@ export class GameCore {
     });
 
     // Create renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // antialias: false because EffectComposer uses its own MSAA render target;
+    // canvas-level MSAA would only antialias the final fullscreen quad (wasted GPU work).
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      powerPreference: 'high-performance',
+    });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x87ceeb); // Sky blue
@@ -418,6 +423,14 @@ export class GameCore {
     // Update shadow camera to follow current center point
     const shadowCenter = gameMode === GameMode.Playing ? localPlayer.position : this.spectatorCenter;
     updateShadowFollow(shadowCenter);
+
+    // Late-latch camera rotation: apply the very latest mouse input just before
+    // rendering, so any mousemove events that arrived during the update phase
+    // (physics, environment, shadows, etc.) are reflected this frame rather than
+    // being deferred to the next one.
+    if (gameMode === GameMode.Playing && camera) {
+      camera.rotation.set(controls.pitch, controls.yaw, 0);
+    }
 
     // Render with post-processing (SSAO + bloom) or fallback to direct render
     const scene = getScene();

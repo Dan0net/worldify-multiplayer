@@ -133,8 +133,18 @@ export function initPostProcessing(
   originalToneMappingExposure = renderer.toneMappingExposure;
   originalSaturation = opts.saturation;
   
-  // Create composer
-  composer = new EffectComposer(renderer);
+  // Create composer with an MSAA render target.
+  // Canvas-level antialias is disabled (it only antialiases the final quad,
+  // not the 3D scene).  Multisampled FBOs give proper scene MSAA through the
+  // entire post-processing chain.
+  const msaaTarget = new THREE.WebGLRenderTarget(width, height, {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.HalfFloatType,
+    samples: 4,
+  });
+  composer = new EffectComposer(renderer, msaaTarget);
   
   // Render pass - renders the scene
   const renderPass = new RenderPass(scene, camera);

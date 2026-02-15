@@ -59,6 +59,10 @@ export class GameLoop {
   }
 
   private loop = (time: number): void => {
+    // Schedule next frame FIRST - gives the browser maximum time to prepare
+    // the next vsync callback while we process the current frame.
+    this.animationId = requestAnimationFrame(this.loop);
+
     const deltaMs = time - this.lastTime;
     this.lastTime = time;
     this.elapsedTime += deltaMs / 1000;
@@ -77,8 +81,5 @@ export class GameLoop {
     if (this.callback) {
       this.callback(deltaMs, this.elapsedTime);
     }
-
-    // Schedule next frame
-    this.animationId = requestAnimationFrame(this.loop);
   };
 }
