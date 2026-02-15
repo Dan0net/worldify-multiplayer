@@ -150,9 +150,6 @@ export class BuildMarker {
    * Calculate the build position based on alignment mode.
    * Note: For BASE alignment, the wireframe is offset up within the group,
    * so the group position stays at the hit point (which is the base).
-   * 
-   * For SUBTRACT mode, we offset INTO the terrain (opposite of normal)
-   * so the carving actually affects the solid voxels.
    */
   private calculatePosition(
     preset: BuildPreset,
@@ -160,20 +157,11 @@ export class BuildMarker {
     hitNormal: THREE.Vector3
   ): THREE.Vector3 {
     const size = preset.config.size;
-    const mode = preset.config.mode;
     const pos = hitPoint.clone();
-    
-    // For carving modes, offset into terrain so we actually carve solid voxels
-    if (mode === BuildMode.SUBTRACT) {
-      // Offset by average half-size in opposite direction of normal (into terrain)
-      const avgHalfSize = ((size.x + size.y + size.z) / 3) * 0.5;
-      pos.addScaledVector(hitNormal, -avgHalfSize * VOXEL_SCALE);
-      return pos;
-    }
 
     switch (preset.align) {
       case BuildPresetAlign.CENTER:
-        // Center on hit point - no offset
+        // Center on hit point - no offset (works for both ADD and SUBTRACT)
         break;
 
       case BuildPresetAlign.BASE:
