@@ -72,6 +72,10 @@ export interface PostProcessingOptions {
   /** Enable/disable all effects (default: true) */
   enabled?: boolean;
   
+  // MSAA options
+  /** Number of MSAA samples for the composer render target (0 = off, 2, 4) */
+  msaaSamples?: number;
+  
   // SSAO options
   /** Enable/disable SSAO independently */
   ssaoEnabled?: boolean;
@@ -99,6 +103,8 @@ export interface PostProcessingOptions {
 
 const defaultOptions: Required<PostProcessingOptions> = {
   enabled: true,
+  // MSAA
+  msaaSamples: 4,
   // SSAO defaults from worldify-app
   ssaoEnabled: true,
   ssaoKernelRadius: 12,
@@ -133,7 +139,7 @@ export function initPostProcessing(
   originalToneMappingExposure = renderer.toneMappingExposure;
   originalSaturation = opts.saturation;
   
-  // Create composer with an MSAA render target.
+  // Create composer with an MSAA render target (when samples > 0).
   // Canvas-level antialias is disabled (it only antialiases the final quad,
   // not the 3D scene).  Multisampled FBOs give proper scene MSAA through the
   // entire post-processing chain.
@@ -142,7 +148,7 @@ export function initPostProcessing(
     magFilter: THREE.LinearFilter,
     format: THREE.RGBAFormat,
     type: THREE.HalfFloatType,
-    samples: 4,
+    samples: opts.msaaSamples,
   });
   composer = new EffectComposer(renderer, msaaTarget);
   
@@ -189,6 +195,7 @@ export function initPostProcessing(
     ssao: ssaoPass.enabled,
     bloom: bloomPass.enabled,
     saturation: opts.saturation,
+    msaaSamples: opts.msaaSamples,
     passes: composer.passes.length,
   });
   
@@ -260,6 +267,30 @@ export function setSaturation(value: number): void {
     // Update the original value so F8 toggle restores correctly
     originalSaturation = value;
   }
+}
+
+/**
+ * Update the MSAA sample count on the composer render target at runtime.
+ * A value of 0 disables MSAA entirely.
+ */
+export function updateMsaaSamples(samples: number): void {
+  if (!composer) return;
+  const rt = composer.renderTarget1;
+  if (rt.samples === samples) return;
+  rt.samples = samples;
+  rt.dispose(); // force WebGL to recreate the FBO with the new sample count
+  const rt2 = composer.renderTarget2;
+  rt2.samples = samples;
+  rt2.dispose();
+  console.log(`[PostProcessing] MSAA samples set to ${samples}`);
+}
+
+/**
+ * Get the current MSAA sample count.
+ */
+export function getMsaaSamples(): number {
+  if (!composer) return 0;
+  return composer.renderTarget1.samples;
 }
 
 /**

@@ -35,7 +35,7 @@ export interface QualitySettings {
 
   // Rendering
   maxPixelRatio: number;      // Cap for devicePixelRatio
-  antialias: boolean;
+  msaaSamples: number;        // MSAA samples for post-processing FBO (0, 2, or 4)
 
   // Terrain
   visibilityRadius: number;   // Chunk draw distance
@@ -56,7 +56,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowsEnabled: true,
     moonShadows: true,
     maxPixelRatio: 2,
-    antialias: true,
+    msaaSamples: 4,
     visibilityRadius: 8,
     anisotropy: 8,
     shaderNormalMaps: true,
@@ -71,7 +71,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowsEnabled: true,
     moonShadows: false,
     maxPixelRatio: 1.5,
-    antialias: true,
+    msaaSamples: 2,
     visibilityRadius: 6,
     anisotropy: 4,
     shaderNormalMaps: true,
@@ -86,7 +86,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowsEnabled: true,
     moonShadows: false,
     maxPixelRatio: 1,
-    antialias: false,
+    msaaSamples: 0,
     visibilityRadius: 5,
     anisotropy: 2,
     shaderNormalMaps: false,
@@ -101,7 +101,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowsEnabled: false,
     moonShadows: false,
     maxPixelRatio: 1,
-    antialias: false,
+    msaaSamples: 0,
     visibilityRadius: 3,
     anisotropy: 1,
     shaderNormalMaps: false,

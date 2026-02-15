@@ -18,6 +18,7 @@ import {
   applyMoonShadows,
   applyAnisotropy,
   applyPixelRatio,
+  applyMsaaSamples,
 } from '../game/quality/QualityManager';
 import { setShaderMapDefines } from '../game/material/TerrainMaterial';
 import * as THREE from 'three';
@@ -204,6 +205,7 @@ export function DebugPanel() {
     shadowMapSize,
     anisotropy,
     maxPixelRatio,
+    msaaSamples,
     shaderNormalMaps,
     shaderAoMaps,
     shaderMetalnessMaps,
@@ -253,6 +255,7 @@ export function DebugPanel() {
     storeBridge.setShadowMapSize(preset.shadowMapSize);
     storeBridge.setAnisotropy(preset.anisotropy);
     storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
+    storeBridge.setMsaaSamples(preset.msaaSamples);
     storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
     storeBridge.setShaderAoMaps(preset.shaderAoMaps);
     storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
@@ -366,6 +369,13 @@ export function DebugPanel() {
     { label: '1024', value: 1024 },
     { label: '2048', value: 2048 },
     { label: '4096', value: 4096 },
+  ];
+
+  // MSAA sample count options
+  const msaaOptions = [
+    { label: 'Off', value: 0 },
+    { label: '2x', value: 2 },
+    { label: '4x', value: 4 },
   ];
 
   return (
@@ -608,6 +618,15 @@ export function DebugPanel() {
               applyAnisotropy(v);
             }}
             formatValue={(v) => `${v}x`}
+          />
+          <Select
+            label="MSAA"
+            value={msaaSamples}
+            options={msaaOptions}
+            onChange={(v) => {
+              storeBridge.setMsaaSamples(v);
+              applyMsaaSamples(v);
+            }}
           />
         </div>
 

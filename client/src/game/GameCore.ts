@@ -158,6 +158,7 @@ export class GameCore {
     storeBridge.setShadowMapSize(preset.shadowMapSize);
     storeBridge.setAnisotropy(preset.anisotropy);
     storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
+    storeBridge.setMsaaSamples(preset.msaaSamples);
     storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
     storeBridge.setShaderAoMaps(preset.shaderAoMaps);
     storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);

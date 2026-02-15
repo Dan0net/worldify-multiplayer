@@ -445,6 +445,14 @@ class StoreBridge {
     getState().setMaxPixelRatio(ratio);
   }
 
+  get msaaSamples(): number {
+    return getState().msaaSamples;
+  }
+
+  setMsaaSamples(samples: number): void {
+    getState().setMsaaSamples(samples);
+  }
+
   setShaderNormalMaps(enabled: boolean): void {
     getState().setShaderNormalMaps(enabled);
   }

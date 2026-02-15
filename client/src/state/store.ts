@@ -336,6 +336,7 @@ export interface GameState {
   shadowMapSize: number;
   anisotropy: number;
   maxPixelRatio: number;
+  msaaSamples: number;
   shaderNormalMaps: boolean;
   shaderAoMaps: boolean;
   shaderMetalnessMaps: boolean;
@@ -391,6 +392,7 @@ export interface GameState {
   setShadowMapSize: (size: number) => void;
   setAnisotropy: (value: number) => void;
   setMaxPixelRatio: (ratio: number) => void;
+  setMsaaSamples: (samples: number) => void;
   setShaderNormalMaps: (enabled: boolean) => void;
   setShaderAoMaps: (enabled: boolean) => void;
   setShaderMetalnessMaps: (enabled: boolean) => void;
@@ -495,6 +497,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   shadowMapSize: 4096,
   anisotropy: 8,
   maxPixelRatio: 2,
+  msaaSamples: 4,
   shaderNormalMaps: true,
   shaderAoMaps: true,
   shaderMetalnessMaps: true,
@@ -576,6 +579,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setShadowMapSize: (size) => set({ shadowMapSize: size }),
   setAnisotropy: (value) => set({ anisotropy: value }),
   setMaxPixelRatio: (ratio) => set({ maxPixelRatio: ratio }),
+  setMsaaSamples: (samples) => set({ msaaSamples: samples }),
   setShaderNormalMaps: (enabled) => set({ shaderNormalMaps: enabled }),
   setShaderAoMaps: (enabled) => set({ shaderAoMaps: enabled }),
   setShaderMetalnessMaps: (enabled) => set({ shaderMetalnessMaps: enabled }),

@@ -20,7 +20,7 @@ import {
   saveQualityLevel,
   saveVisibilityRadius,
 } from './QualityPresets.js';
-import { updatePostProcessing } from '../scene/postprocessing.js';
+import { updatePostProcessing, updateMsaaSamples } from '../scene/postprocessing.js';
 import { getActiveShadowLight, setMoonShadowsAllowed, getSunLight, getMoonLight, updateShadowFrustumSize } from '../scene/Lighting.js';
 import {
   setShaderMapDefines,
@@ -66,6 +66,9 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   applyShadowMapSize(preset.shadowMapSize);
   applyMoonShadows(preset.moonShadows);
 
+  // --- MSAA ---
+  applyMsaaSamples(preset.msaaSamples);
+
   // --- Post-processing ---
   applySsaoEnabled(preset.ssaoEnabled);
   applyBloomEnabled(preset.bloomEnabled);
@@ -92,6 +95,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     pixelRatio: Math.min(window.devicePixelRatio, preset.maxPixelRatio),
     shadows: preset.shadowsEnabled,
     shadowMap: preset.shadowMapSize,
+    msaa: preset.msaaSamples,
     ssao: preset.ssaoEnabled,
     bloom: preset.bloomEnabled,
     colorCorrection: preset.colorCorrectionEnabled,
@@ -161,6 +165,10 @@ export function applyColorCorrectionEnabled(enabled: boolean): void {
 
 export function applyAnisotropy(value: number): void {
   setTerrainAnisotropy(value);
+}
+
+export function applyMsaaSamples(samples: number): void {
+  updateMsaaSamples(samples);
 }
 
 /**
