@@ -11,6 +11,7 @@ import { useState, useEffect } from 'react';
 import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
+import { getCamera } from '../game/scene/camera';
 
 export function SpectatorOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
@@ -23,6 +24,7 @@ export function SpectatorOverlay() {
   const textureProgress = useGameStore((s) => s.textureProgress);
   const qualityLevel = useGameStore((s) => s.qualityLevel);
   const visibilityRadius = useGameStore((s) => s.visibilityRadius);
+  const fov = useGameStore((s) => s.fov);
   
   const [hdCached, setHdCached] = useState<boolean | null>(null);
 
@@ -199,6 +201,31 @@ export function SpectatorOverlay() {
             className="w-24 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
           />
           <span className="text-white text-xs opacity-70">{visibilityRadius}</span>
+        </div>
+      )}
+
+      {/* FoV slider */}
+      {isConnected && (
+        <div className="mt-2 flex items-center gap-2 pointer-events-auto">
+          <span className="text-white text-xs opacity-70 whitespace-nowrap">FoV:</span>
+          <input
+            type="range"
+            min={75}
+            max={120}
+            step={1}
+            value={fov}
+            onChange={(e) => {
+              const val = parseInt(e.target.value, 10);
+              storeBridge.setFov(val);
+              const cam = getCamera();
+              if (cam) {
+                cam.fov = val;
+                cam.updateProjectionMatrix();
+              }
+            }}
+            className="w-24 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+          />
+          <span className="text-white text-xs opacity-70">{fov}°</span>
         </div>
       )}
 

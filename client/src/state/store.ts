@@ -315,6 +315,7 @@ export interface GameState {
   // Quality settings (individual controls)
   qualityLevel: QualityLevel;
   visibilityRadius: number;
+  fov: number;
   ssaoEnabled: boolean;
   bloomEnabled: boolean;
   colorCorrectionEnabled: boolean;
@@ -371,6 +372,7 @@ export interface GameState {
   // Quality actions
   setQualityLevel: (level: QualityLevel) => void;
   setVisibilityRadius: (radius: number) => void;
+  setFov: (fov: number) => void;
   setSsaoEnabled: (enabled: boolean) => void;
   setBloomEnabled: (enabled: boolean) => void;
   setColorCorrectionEnabled: (enabled: boolean) => void;
@@ -476,6 +478,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Quality initial state (auto-detect will override on first load)
   qualityLevel: 'ultra' as QualityLevel,
   visibilityRadius: 8,
+  fov: 75,
   ssaoEnabled: true,
   bloomEnabled: true,
   colorCorrectionEnabled: true,
@@ -558,6 +561,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Quality actions
   setQualityLevel: (level) => set({ qualityLevel: level }),
   setVisibilityRadius: (radius) => set({ visibilityRadius: radius }),
+  setFov: (fov) => set({ fov }),
   setSsaoEnabled: (enabled) => set({ ssaoEnabled: enabled }),
   setBloomEnabled: (enabled) => set({ bloomEnabled: enabled }),
   setColorCorrectionEnabled: (enabled) => set({ colorCorrectionEnabled: enabled }),

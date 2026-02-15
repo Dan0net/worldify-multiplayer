@@ -361,6 +361,10 @@ class StoreBridge {
     return getState().visibilityRadius;
   }
 
+  get fov(): number {
+    return getState().fov;
+  }
+
   get ssaoEnabled(): boolean {
     return getState().ssaoEnabled;
   }
@@ -411,6 +415,10 @@ class StoreBridge {
 
   setVisibilityRadius(radius: number): void {
     getState().setVisibilityRadius(radius);
+  }
+
+  setFov(fov: number): void {
+    getState().setFov(fov);
   }
 
   setSsaoEnabled(enabled: boolean): void {
