@@ -180,7 +180,9 @@ export class BuildMarker {
         break;
 
       case BuildPresetAlign.PROJECT: {
-        // On horizontal surfaces: base sits on surface (handled by wireframe offset).
+        // On horizontal surfaces: base sits on surface (handled by wireframe offset),
+        // and shape is offset so its front center is at the hit point.
+        // The shape pivots around the hit point as the user rotates.
         // On vertical surfaces: push shape out so it fully protrudes from the wall,
         // then slide it sideways so the protruding corner sits at the hit point.
         if (Math.abs(hitNormal.y) < 0.5) {
@@ -195,6 +197,26 @@ export class BuildMarker {
           pos.addScaledVector(wallNormal, depth * VOXEL_SCALE);
           // Slide sideways so protruding corner aligns with hit point
           pos.addScaledVector(wallTangent, slide * VOXEL_SCALE);
+        } else {
+          // Horizontal surface (floor or ceiling):
+          // Offset so front center of shape sits at hit point.
+          // "Front" = local +Z axis projected to horizontal after composed rotation.
+          // Fallback to local -Y if +Z is vertical (e.g. floor with 90° X rotation).
+          const forward = this._hNormal.set(0, 0, 1).applyQuaternion(this._composedQuat);
+          forward.y = 0;
+          if (forward.lengthSq() < 0.001) {
+            // +Z is vertical — use local -Y as forward (original depth axis before X rotation)
+            forward.set(0, -1, 0).applyQuaternion(this._composedQuat);
+            forward.y = 0;
+          }
+          if (forward.lengthSq() > 0.001) {
+            forward.normalize();
+            // Compute half-extent of the rotated shape along the forward direction
+            const halfExtent = this.getHorizontalExtent(forward, size);
+            // Offset forward so the back (bottom) edge sits at the hit point
+            // and the shape extends outward away from it
+            pos.addScaledVector(forward, halfExtent * VOXEL_SCALE);
+          }
         }
         break;
       }
@@ -254,6 +276,27 @@ export class BuildMarker {
     }
 
     return { depth, slide };
+  }
+
+  /**
+   * Compute the OBB half-extent of the rotated shape along a horizontal direction.
+   * Used to offset PROJECT shapes on horizontal surfaces so the front face
+   * sits at the hit point.
+   */
+  private getHorizontalExtent(
+    direction: THREE.Vector3,
+    size: { x: number; y: number; z: number }
+  ): number {
+    const halfExtents = [size.x, size.y, size.z];
+    let extent = 0;
+    for (let i = 0; i < 3; i++) {
+      this._tempAxis.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0)
+        .applyQuaternion(this._composedQuat);
+      // Dot product with direction using only horizontal (xz) components
+      const amount = this._tempAxis.x * direction.x + this._tempAxis.z * direction.z;
+      extent += halfExtents[i] * Math.abs(amount);
+    }
+    return extent;
   }
 
   /**
