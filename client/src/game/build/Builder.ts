@@ -17,7 +17,7 @@ import { storeBridge } from '../../state/bridge';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, BuildPresetSnapShape, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
 
 const EMPTY_SET: ReadonlySet<number> = new Set();
 
@@ -143,7 +143,10 @@ export class Builder {
     if (!this.meshProvider) return;
 
     // Sync snap state from bridge
-    this.snapManager.snapPointEnabled = storeBridge.buildSnapPoint;
+    // Only enable point snaps when snapping is toggled on AND the active preset supports snaps
+    const presetHasSnaps = storeBridge.buildIsEnabled
+      && storeBridge.buildPreset.snapShape !== BuildPresetSnapShape.NONE;
+    this.snapManager.snapPointEnabled = storeBridge.buildSnapPoint && presetHasSnaps;
     this.snapManager.gridSnapEnabled = storeBridge.buildSnapGrid;
 
     // Get collision meshes for raycasting
