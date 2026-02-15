@@ -449,11 +449,8 @@ class TransparentDepthMaterial extends THREE.MeshDepthMaterial {
       this._shader = shader;
 
       shader.uniforms.mapArray = { value: this.textures?.albedo };
-      shader.uniforms.repeatScale = { value: TERRAIN_MATERIAL_REPEAT_SCALE };
       shader.uniforms.repeatScales = { value: MATERIAL_REPEAT_SCALES };
-      shader.uniforms.blendOffset = { value: createBlendOffsetMatrix() };
       shader.uniforms.alphaCutoff = { value: ALPHA_CUTOFF };
-      shader.uniforms.blendSharpness = { value: 2.0 };
       shader.uniforms.uTime = { value: 0.0 };
       shader.uniforms.uWindStrength = { value: WIND_STRENGTH };
       shader.uniforms.uWindFrequency = { value: WIND_FREQUENCY };
