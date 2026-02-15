@@ -15,6 +15,7 @@ import {
   VOXEL_SCALE,
   BUILD_ROTATION_STEP,
   getPreset,
+  composeRotation,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
 
@@ -165,6 +166,7 @@ export class BuildMarker {
         break;
 
       case BuildPresetAlign.BASE:
+      case BuildPresetAlign.PROJECT:
         // Base at hit point - wireframe is offset up within the group
         // Group stays at hit point so the base (bottom) of marker aligns with surface
         break;
@@ -242,13 +244,13 @@ export class BuildMarker {
 
     this.wireframe = new THREE.LineSegments(edges, material);
 
-    // Apply rotation (Y-axis only)
-    const rotationRadians = (rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180;
-    this.wireframe.rotation.y = rotationRadians;
+    // Apply composed rotation (base rotation + user Y rotation)
+    const composed = composeRotation(preset, (rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180);
+    this.wireframe.quaternion.set(composed.x, composed.y, composed.z, composed.w);
 
-    // For BASE alignment, offset the wireframe up so its bottom is at the group origin
+    // For BASE/PROJECT alignment, offset the wireframe up so its bottom is at the group origin
     // This way the marker's base aligns with the hit point
-    if (preset.align === BuildPresetAlign.BASE) {
+    if (preset.align === BuildPresetAlign.BASE || preset.align === BuildPresetAlign.PROJECT) {
       this.wireframe.position.y = halfY;
     }
 
@@ -336,9 +338,9 @@ export class BuildMarker {
     const preset = getPreset(this.currentPresetId);
     const pos = this.group.position.clone();
 
-    // For BASE alignment, the group is at the hit point (base of the shape)
+    // For BASE/PROJECT alignment, the group is at the hit point (base of the shape)
     // but the build operation needs the center, so offset up by half-height
-    if (preset.align === BuildPresetAlign.BASE) {
+    if (preset.align === BuildPresetAlign.BASE || preset.align === BuildPresetAlign.PROJECT) {
       pos.y += preset.config.size.y * VOXEL_SCALE;
     }
 

@@ -21,7 +21,7 @@ import {
   BuildConfig,
   drawToChunk,
   getAffectedChunks,
-  yRotationQuat,
+  Quat,
   chunkKey,
   CHUNK_SIZE,
   voxelIndex,
@@ -62,7 +62,7 @@ export class BuildPreview {
   /** If aim moved while batch was in flight, store the new operation here */
   private pendingOperation: {
     center: THREE.Vector3;
-    rotationRadians: number;
+    rotation: Quat;
     config: BuildConfig;
     hash: string;
   } | null = null;
@@ -89,13 +89,13 @@ export class BuildPreview {
    */
   updatePreview(
     center: THREE.Vector3,
-    rotationRadians: number,
+    rotation: Quat,
     config: BuildConfig
   ): void {
     if (!this.world || !this.scene || !this.meshPool) return;
 
     // Create build operation
-    const operation = this.createOperation(center, rotationRadians, config);
+    const operation = this.createOperation(center, rotation, config);
 
     // Check if operation changed (avoid redundant work)
     const hash = this.hashOperation(operation);
@@ -108,7 +108,7 @@ export class BuildPreview {
 
     // If a batch is in flight, just store as pending — don't cancel, don't dispatch
     if (this.batchInFlight) {
-      this.pendingOperation = { center: center.clone(), rotationRadians, config, hash };
+      this.pendingOperation = { center: center.clone(), rotation, config, hash };
       return;
     }
 
@@ -285,14 +285,14 @@ export class BuildPreview {
   private processPending(): void {
     if (!this.pendingOperation) return;
 
-    const { rotationRadians, config, hash } = this.pendingOperation;
+    const { rotation, config, hash } = this.pendingOperation;
     const center = this.pendingOperation.center;
     this.pendingOperation = null;
 
     // Skip if the pending hash matches what we just rendered
     if (hash === this.renderedHash) return;
 
-    const operation = this.createOperation(center, rotationRadians, config);
+    const operation = this.createOperation(center, rotation, config);
     this.currentOperation = operation;
     this.dispatchPreviewBatch(operation, hash);
   }
@@ -435,12 +435,12 @@ export class BuildPreview {
    */
   private createOperation(
     center: THREE.Vector3,
-    rotationRadians: number,
+    rotation: Quat,
     config: BuildConfig
   ): BuildOperation {
     return {
       center: { x: center.x, y: center.y, z: center.z },
-      rotation: yRotationQuat(rotationRadians),
+      rotation,
       config,
     };
   }

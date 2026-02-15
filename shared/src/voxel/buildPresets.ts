@@ -1,8 +1,12 @@
 /**
  * Build presets - predefined build configurations mapped to keyboard 0-9
+ * Ported from worldify-app's BuildPresets.ts with architecture-appropriate types.
  */
 
-import { BuildConfig, BuildMode, BuildShape, Size3 } from './buildTypes.js';
+import {
+  BuildConfig, BuildMode, BuildShape, Size3, Quat,
+  yRotationQuat, xRotationQuat, multiplyQuats,
+} from './buildTypes.js';
 
 /**
  * How to align the build shape relative to the raycast hit point.
@@ -12,7 +16,9 @@ export enum BuildPresetAlign {
   CENTER = 'center',
   /** Place the base (bottom) at the hit point */
   BASE = 'base',
-  /** Offset from surface by half the shape size (for adding) */
+  /** Base projected along the surface normal (like BASE but for walls/floors) */
+  PROJECT = 'project',
+  /** Offset from surface by half the shape size (for carving into surfaces) */
   SURFACE = 'surface',
 }
 
@@ -28,6 +34,12 @@ export interface BuildPreset {
   config: BuildConfig;
   /** How to position relative to hit point */
   align: BuildPresetAlign;
+  /**
+   * Baked-in base rotation for the preset shape (e.g. floors rotated 90° on X).
+   * User's Y-axis rotation (Q/E) is composed on top of this.
+   * If omitted, treated as identity (no base rotation).
+   */
+  baseRotation?: Quat;
 }
 
 /**
@@ -40,6 +52,9 @@ function size(x: number, y: number, z: number): Size3 {
 /**
  * Default build presets (10 total, mapped to keys 0-9).
  * Preset 0 is "None" (building disabled).
+ *
+ * Ported from worldify-app BuildPresets — first 10 items mapped to hotbar.
+ * Material IDs match the shared pallet (pallet.json indices are identical).
  */
 export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   // 0 = None (disabled)
@@ -49,68 +64,75 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0, 0, 0), material: 0 },
     align: BuildPresetAlign.CENTER,
   },
-  // 1 = Small cube add (bottom-aligned, extends upward)
+  // 1 = Brick wall (cube, add, thin slab, base-projected)
   {
     id: 1,
-    name: 'Small Cube',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(3, 3, 3), material: 1 },
-    align: BuildPresetAlign.BASE,
+    name: 'Brick Wall',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 },
+    align: BuildPresetAlign.PROJECT,
   },
-  // 2 = Cube subtract (centered for carving)
+  // 2 = Stone floor (cube, fill, thin slab rotated flat, base-projected)
   {
     id: 2,
-    name: 'Cube Carve',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(3, 3, 3), material: 1 },
-    align: BuildPresetAlign.CENTER,
+    name: 'Stone Floor',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 },
+    align: BuildPresetAlign.PROJECT,
+    baseRotation: xRotationQuat(Math.PI / 2),
   },
-  // 3 = Sphere add (centered)
+  // 3 = Wooden pillar (cube, add, tall narrow, base-aligned)
   {
     id: 3,
-    name: 'Sphere Add',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.ADD, size: size(4, 4, 4), material: 2 },
-    align: BuildPresetAlign.CENTER,
+    name: 'Wood Pillar',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    align: BuildPresetAlign.BASE,
   },
-  // 4 = Sphere subtract (centered for carving)
+  // 4 = Wooden beam (cube, add, tall narrow rotated horizontal, base-projected)
   {
     id: 4,
-    name: 'Sphere Carve',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(4, 4, 4), material: 2 },
-    align: BuildPresetAlign.CENTER,
+    name: 'Wood Beam',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    align: BuildPresetAlign.PROJECT,
+    baseRotation: xRotationQuat(Math.PI / 2),
   },
-  // 5 = Large cube add (bottom-aligned)
+  // 5 = Leafy blob (sphere, fill, centered)
   {
     id: 5,
-    name: 'Large Cube',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(8, 8, 8), material: 3 },
-    align: BuildPresetAlign.BASE,
+    name: 'Leafy Blob',
+    config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(2, 2, 2), material: 48 },
+    align: BuildPresetAlign.CENTER,
   },
-  // 6 = Pillar (cylinder add, bottom-aligned)
+  // 6 = Stone stairs (cube, fill, angled slab, base-projected)
   {
     id: 6,
-    name: 'Pillar',
-    config: { shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(2, 6, 2), material: 4 },
-    align: BuildPresetAlign.BASE,
+    name: 'Stairs',
+    config: {
+      shape: BuildShape.CUBE, mode: BuildMode.FILL,
+      size: size(4, Math.sqrt(2 ** 2 + 4 ** 2), 1),
+      material: 29,
+    },
+    align: BuildPresetAlign.PROJECT,
+    baseRotation: xRotationQuat(Math.atan(4 / 2)),
   },
-  // 7 = Tunnel (cylinder subtract, centered)
+  // 7 = Blob carve (sphere, subtract, centered)
   {
     id: 7,
-    name: 'Tunnel',
-    config: { shape: BuildShape.CYLINDER, mode: BuildMode.SUBTRACT, size: size(4, 8, 4), material: 4 },
+    name: 'Blob Carve',
+    config: { shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 },
     align: BuildPresetAlign.CENTER,
   },
-  // 8 = Paint brush (sphere, centered)
+  // 8 = Door carve (cube, subtract, surface-aligned)
   {
     id: 8,
-    name: 'Paint',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(4, 4, 4), material: 5 },
-    align: BuildPresetAlign.CENTER,
+    name: 'Door Carve',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 },
+    align: BuildPresetAlign.SURFACE,
   },
-  // 9 = Fill cube (bottom-aligned)
+  // 9 = Blob paint (sphere, paint, centered)
   {
     id: 9,
-    name: 'Fill',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 4), material: 6 },
-    align: BuildPresetAlign.BASE,
+    name: 'Paint',
+    config: { shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 },
+    align: BuildPresetAlign.CENTER,
   },
 ] as const;
 
@@ -120,6 +142,17 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
  */
 export function getPreset(id: number): BuildPreset {
   return DEFAULT_BUILD_PRESETS[id] ?? DEFAULT_BUILD_PRESETS[0];
+}
+
+/**
+ * Compose the final rotation quaternion for a build operation.
+ * Combines the preset's baked base rotation with the user's Y-axis rotation.
+ * Order: baseRotation * yRotation (base first, then user spins around Y).
+ */
+export function composeRotation(preset: BuildPreset, userYRadians: number): Quat {
+  const userRot = yRotationQuat(userYRadians);
+  if (!preset.baseRotation) return userRot;
+  return multiplyQuats(userRot, preset.baseRotation);
 }
 
 /**

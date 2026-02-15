@@ -155,6 +155,33 @@ export function invertQuat(q: Quat): Quat {
 }
 
 /**
+ * Multiply two quaternions: result = a * b
+ * Applies rotation b first, then a (standard quaternion composition).
+ */
+export function multiplyQuats(a: Quat, b: Quat): Quat {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
+}
+
+/**
+ * Create a quaternion for rotation around the X axis.
+ * @param radians - The rotation angle in radians
+ */
+export function xRotationQuat(radians: number): Quat {
+  const halfAngle = radians * 0.5;
+  return {
+    x: Math.sin(halfAngle),
+    y: 0,
+    z: 0,
+    w: Math.cos(halfAngle),
+  };
+}
+
+/**
  * Create a quaternion for rotation around the Y axis.
  * @param radians - The rotation angle in radians
  */

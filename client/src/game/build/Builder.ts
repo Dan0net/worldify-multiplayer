@@ -16,7 +16,7 @@ import { storeBridge } from '../../state/bridge';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, yRotationQuat } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation } from '@worldify/shared';
 
 /**
  * Interface for objects that provide collision meshes for raycasting.
@@ -177,8 +177,9 @@ export class Builder {
     const preset = storeBridge.buildPreset;
     const rotationRadians = storeBridge.buildRotationRadians;
 
-    // Update preview
-    this.preview.updatePreview(targetPos, rotationRadians, preset.config);
+    // Update preview with composed rotation (base + user Y)
+    const rotation = composeRotation(preset, rotationRadians);
+    this.preview.updatePreview(targetPos, rotation, preset.config);
   }
 
   /**
@@ -197,10 +198,10 @@ export class Builder {
     const preset = storeBridge.buildPreset;
     const rotationRadians = storeBridge.buildRotationRadians;
 
-    // Create build intent using shared rotation helper
+    // Create build intent using composed rotation (base + user Y)
     const intent: VoxelBuildIntent = {
       center: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
-      rotation: yRotationQuat(rotationRadians),
+      rotation: composeRotation(preset, rotationRadians),
       config: preset.config,
     };
 
