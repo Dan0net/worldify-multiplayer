@@ -7,7 +7,7 @@
  */
 
 import * as THREE from 'three';
-import { 
+import {
   MovementInput, 
   PlayerSnapshot,
   INPUT_JUMP,
@@ -23,8 +23,10 @@ import {
   MAX_FALL_TIME,
   COYOTE_TIME,
   JUMP_BUFFER_TIME,
+  DIRECTION_SMOOTH_SPEED,
   // Movement utilities from shared
   getWorldDirectionFromInput,
+  lerpAngle,
 } from '@worldify/shared';
 import { Controls } from './controls';
 import type { VoxelIntegration } from '../voxel/VoxelIntegration';
@@ -56,6 +58,10 @@ export class PlayerLocal {
   // Fall detection
   private fallTime = 0; // Continuous time spent falling (seconds)
   private lastGroundedPosition: THREE.Vector3 | null = null;
+
+  // Smooth direction tracking
+  private smoothDirAngle = 0;
+  private wasMoving = false;
   
   // Respawn callback (set by GameCore)
   private onRespawnNeeded: RespawnCallback | null = null;
@@ -171,14 +177,34 @@ export class PlayerLocal {
     // Calculate horizontal movement using shared utility
     const worldDir = getWorldDirectionFromInput(buttons, this.yaw);
     if (worldDir) {
+      // Compute target direction angle
+      const targetAngle = Math.atan2(worldDir.worldX, worldDir.worldZ);
+
+      if (!this.wasMoving) {
+        // Just started moving - snap to target direction for responsiveness
+        this.smoothDirAngle = targetAngle;
+      } else {
+        // Smoothly rotate toward target (frame-rate independent exponential smoothing)
+        const smoothFactor = 1 - Math.exp(-DIRECTION_SMOOTH_SPEED * dt);
+        this.smoothDirAngle = lerpAngle(this.smoothDirAngle, targetAngle, smoothFactor);
+      }
+
+      // Use smoothed direction for movement
+      const smoothDirX = Math.sin(this.smoothDirAngle);
+      const smoothDirZ = Math.cos(this.smoothDirAngle);
+
       // Apply speed
       let speed = MOVE_SPEED;
       if (buttons & INPUT_SPRINT) {
         speed *= SPRINT_MULTIPLIER;
       }
 
-      this.position.x += worldDir.worldX * speed * dt;
-      this.position.z += worldDir.worldZ * speed * dt;
+      this.position.x += smoothDirX * speed * dt;
+      this.position.z += smoothDirZ * speed * dt;
+
+      this.wasMoving = true;
+    } else {
+      this.wasMoving = false;
     }
 
     // Apply voxel terrain collision
