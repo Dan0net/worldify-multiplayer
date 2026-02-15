@@ -21,7 +21,7 @@ const MARKER_RADIUS = 0.16;
 const COLOR_DEPOSITED = new THREE.Color(0x2266ff);
 
 /** Color for the specific deposited marker being snapped to */
-const COLOR_SNAPPED = new THREE.Color(0x00ff66);
+const COLOR_SNAPPED = new THREE.Color(0x00ff00);
 
 /** Color for current-shape snap points (same blue as deposited) */
 const COLOR_CURRENT = new THREE.Color(0x2266ff);
@@ -69,7 +69,7 @@ export class BuildSnapMarker {
     this.depositedMaterial = new THREE.MeshBasicMaterial({
       color: COLOR_DEPOSITED,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.7,
       depthWrite: false,
       depthTest: false,
       side: THREE.DoubleSide,
@@ -77,7 +77,7 @@ export class BuildSnapMarker {
     this.depositedMesh = new THREE.InstancedMesh(this.geometry, this.depositedMaterial, MAX_INSTANCES);
     this.depositedMesh.count = 0;
     this.depositedMesh.frustumCulled = false;
-    this.depositedMesh.renderOrder = 999;
+    this.depositedMesh.renderOrder = 1000;
     // Enable per-instance color
     this.depositedMesh.instanceColor = new THREE.InstancedBufferAttribute(
       new Float32Array(MAX_INSTANCES * 3), 3
