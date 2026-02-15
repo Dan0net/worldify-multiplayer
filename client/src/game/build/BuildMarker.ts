@@ -65,6 +65,9 @@ export class BuildMarker {
   private readonly _hNormal = new THREE.Vector3();
   private readonly _tempAxis = new THREE.Vector3();
 
+  /** Rotated OBB half-Y extent (world units), updated per-rebuild */
+  private rotatedHalfY = 0;
+
   /** Current preset ID being shown */
   private currentPresetId = -1;
 
@@ -134,10 +137,8 @@ export class BuildMarker {
     // Get hit point and normal
     this._hitPoint.copy(hit.point);
     if (hit.face) {
-      this._hitNormal.copy(hit.face.normal);
-      // Transform normal to world space
-      hit.object.localToWorld(this._hitNormal.add(hit.object.position));
-      this._hitNormal.sub(hit.object.position).normalize();
+      // Transform normal to world space (handles rotated/scaled meshes)
+      this._hitNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
     } else {
       this._hitNormal.set(0, 1, 0);
     }
@@ -177,26 +178,23 @@ export class BuildMarker {
         break;
 
       case BuildPresetAlign.PROJECT: {
-        // Offset depends on whether the surface is vertical or horizontal.
-        // Vertical: push away from surface (thin-axis clearance) + raise so base sits at hit Y
-        // Horizontal: center on hit point (no offset at all, floor straddles surface)
-        const minHalfExtent = Math.min(size.x, size.y, size.z);
+        // Horizontal: base at surface (wireframe Y offset handles visual,
+        // getTargetPosition handles build center). No extra offset.
+        // Vertical: full OBB depth offset along horizontal normal so shape
+        // fully protrudes and nothing clips behind the surface.
         if (Math.abs(hitNormal.y) < 0.5) {
-          // Vertical surface: offset along horizontal normal by thin-axis clearance
           const hN = this._hNormal.set(hitNormal.x, 0, hitNormal.z).normalize();
-          pos.addScaledVector(hN, minHalfExtent * VOXEL_SCALE);
 
-          // Raise so the base of the rotated shape sits at the hit Y level.
-          // Compute the OBB half-extent along the world Y axis.
+          // Full OBB support value along horizontal normal
           this._tempAxis.set(1, 0, 0).applyQuaternion(this._composedQuat);
-          let rotatedHalfY = size.x * Math.abs(this._tempAxis.y);
+          let depthExtent = size.x * Math.abs(this._tempAxis.dot(hN));
           this._tempAxis.set(0, 1, 0).applyQuaternion(this._composedQuat);
-          rotatedHalfY += size.y * Math.abs(this._tempAxis.y);
+          depthExtent += size.y * Math.abs(this._tempAxis.dot(hN));
           this._tempAxis.set(0, 0, 1).applyQuaternion(this._composedQuat);
-          rotatedHalfY += size.z * Math.abs(this._tempAxis.y);
-          pos.y += rotatedHalfY * VOXEL_SCALE;
+          depthExtent += size.z * Math.abs(this._tempAxis.dot(hN));
+
+          pos.addScaledVector(hN, depthExtent * VOXEL_SCALE);
         }
-        // Horizontal / ceiling surfaces: centered on hit point (no offset)
         break;
       }
 
@@ -278,10 +276,20 @@ export class BuildMarker {
     this._composedQuat.set(composed.x, composed.y, composed.z, composed.w);
     this.wireframe.quaternion.copy(this._composedQuat);
 
-    // For BASE alignment, offset the wireframe up so its bottom is at the group origin.
-    // PROJECT handles its own positioning in calculatePosition() (normal-dependent).
-    if (preset.align === BuildPresetAlign.BASE) {
-      this.wireframe.position.y = halfY;
+    // Compute the rotated OBB half-Y extent (world units).
+    // This is the correct base offset for shapes with baseRotation (e.g. floors, stairs).
+    this._tempAxis.set(1, 0, 0).applyQuaternion(this._composedQuat);
+    this.rotatedHalfY = size.x * Math.abs(this._tempAxis.y);
+    this._tempAxis.set(0, 1, 0).applyQuaternion(this._composedQuat);
+    this.rotatedHalfY += size.y * Math.abs(this._tempAxis.y);
+    this._tempAxis.set(0, 0, 1).applyQuaternion(this._composedQuat);
+    this.rotatedHalfY += size.z * Math.abs(this._tempAxis.y);
+    this.rotatedHalfY *= VOXEL_SCALE;
+
+    // For BASE and PROJECT, offset the wireframe up by the rotated half-Y so
+    // the shape's bottom edge sits at the group origin (base at surface).
+    if (preset.align === BuildPresetAlign.BASE || preset.align === BuildPresetAlign.PROJECT) {
+      this.wireframe.position.y = this.rotatedHalfY;
     }
 
     this.group.add(this.wireframe);
@@ -368,11 +376,10 @@ export class BuildMarker {
     const preset = getPreset(this.currentPresetId);
     const pos = this.group.position.clone();
 
-    // For BASE alignment, the group is at the hit point (base of the shape)
-    // but the build operation needs the center, so offset up by half-height.
-    // PROJECT group position is already the center (set in calculatePosition).
-    if (preset.align === BuildPresetAlign.BASE) {
-      pos.y += preset.config.size.y * VOXEL_SCALE;
+    // For BASE / PROJECT, the group is at the hit point (base of the shape)
+    // but the build operation needs the center, so offset up by the rotated half-Y.
+    if (preset.align === BuildPresetAlign.BASE || preset.align === BuildPresetAlign.PROJECT) {
+      pos.y += this.rotatedHalfY;
     }
 
     return pos;

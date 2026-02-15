@@ -16,7 +16,7 @@ export enum BuildPresetAlign {
   CENTER = 'center',
   /** Place the base (bottom) at the hit point */
   BASE = 'base',
-  /** Base projected along the surface normal (like BASE but for walls/floors) */
+  /** Projected along surface normal: base at surface on horizontal, fully protrudes on vertical */
   PROJECT = 'project',
   /** Offset from surface by half the shape size (for carving into surfaces) */
   SURFACE = 'surface',
