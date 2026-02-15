@@ -41,12 +41,14 @@ export function BuildToolbar() {
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50">
       {/* Preset bar */}
       <div className="flex items-center gap-1 p-1.5 bg-black/75 rounded-2xl backdrop-blur-sm">
-        {DEFAULT_BUILD_PRESETS.map((preset) => {
+        {/* Reorder presets: 1-9 first, then 0 to match keyboard layout */}
+        {[...DEFAULT_BUILD_PRESETS.slice(1), DEFAULT_BUILD_PRESETS[0]].map((preset) => {
           const isActive = build.presetId === preset.id;
           const mode = preset.config.mode;
           const modeColor = MODE_COLORS[mode] || 'bg-gray-600/80';
           const shapeIcon = SHAPE_ICONS[preset.config.shape] || '◼';
           const isNone = preset.id === 0;
+          const keyLabel = preset.id === 0 ? '0' : `${preset.id}`;
           
           return (
             <div
@@ -69,7 +71,7 @@ export function BuildToolbar() {
                 text-xs font-bold
                 ${isActive ? 'bg-cyan-400 text-black' : 'bg-white/20 text-white/80'}
               `}>
-                {preset.id}
+                {keyLabel}
               </div>
               
               {/* Shape icon or X for none */}
