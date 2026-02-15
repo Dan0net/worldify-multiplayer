@@ -78,6 +78,8 @@ export interface BuildState {
   rotationSteps: number;
   /** Whether a valid build target is found */
   hasValidTarget: boolean;
+  /** Reason the target is invalid, or null if valid */
+  invalidReason: 'tooClose' | null;
 }
 
 /** Environment/lighting settings */
@@ -390,6 +392,7 @@ export interface GameState {
   setBuildPreset: (presetId: number) => void;
   setBuildRotation: (rotationSteps: number) => void;
   setBuildHasValidTarget: (valid: boolean) => void;
+  setBuildInvalidReason: (reason: 'tooClose' | null) => void;
   
   // Material/texture actions
   setTextureState: (state: TextureLoadingState) => void;
@@ -456,6 +459,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     presetId: 0,        // Disabled by default
     rotationSteps: 0,   // No rotation
     hasValidTarget: false,
+    invalidReason: null,
   },
   
   // Voxel debug initial state
@@ -584,6 +588,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   })),
   setBuildHasValidTarget: (hasValidTarget) => set((state) => ({
     build: { ...state.build, hasValidTarget },
+  })),
+  setBuildInvalidReason: (invalidReason) => set((state) => ({
+    build: { ...state.build, invalidReason },
   })),
   
   // Material/texture actions

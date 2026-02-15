@@ -2,8 +2,21 @@
 import { useGameStore } from '../state/store';
 import { GameMode } from '@worldify/shared';
 
+/**
+ * Get crosshair color based on build state.
+ * Green = valid target, Red = invalid (too close), White = build disabled or no target.
+ */
+function useCrosshairColor(): string {
+  const build = useGameStore((s) => s.build);
+  if (build.presetId === 0) return 'bg-white/80'; // Build disabled
+  if (build.invalidReason === 'tooClose') return 'bg-red-500/90'; // Too close
+  if (build.hasValidTarget) return 'bg-green-500/90'; // Valid
+  return 'bg-white/80'; // No target
+}
+
 export function Hud() {
   const { playerCount, roomId, gameMode } = useGameStore();
+  const crosshairColor = useCrosshairColor();
 
   // Hide HUD when not playing
   if (gameMode !== GameMode.Playing) {
@@ -14,8 +27,8 @@ export function Hud() {
     <>
       {/* Crosshair */}
       <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-5 pointer-events-none z-50">
-        <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-white/80 -translate-y-1/2" />
-        <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/80 -translate-x-1/2" />
+        <div className={`absolute top-1/2 left-0 right-0 h-0.5 -translate-y-1/2 ${crosshairColor}`} />
+        <div className={`absolute left-1/2 top-0 bottom-0 w-0.5 -translate-x-1/2 ${crosshairColor}`} />
       </div>
 
       {/* Room info - positioned below map overlay */}

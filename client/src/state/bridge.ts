@@ -190,6 +190,13 @@ class StoreBridge {
     getState().setBuildHasValidTarget(valid);
   }
 
+  /**
+   * Update the invalid reason for build target.
+   */
+  setBuildInvalidReason(reason: 'tooClose' | null): void {
+    getState().setBuildInvalidReason(reason);
+  }
+
   // Texture/material system
 
   get textureState(): TextureLoadingState {

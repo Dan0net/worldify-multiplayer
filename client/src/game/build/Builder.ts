@@ -16,7 +16,7 @@ import { storeBridge } from '../../state/bridge';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, PLAYER_HEIGHT, PLAYER_RADIUS } from '@worldify/shared';
 
 /**
  * Interface for objects that provide collision meshes for raycasting.
@@ -127,8 +127,9 @@ export class Builder {
    * Should be called from the game loop when not spectating.
    * 
    * @param camera The camera to raycast from
+   * @param playerPosition The local player's position (eye level)
    */
-  update(camera: THREE.Camera): void {
+  update(camera: THREE.Camera, playerPosition: THREE.Vector3): void {
     // Skip if no mesh provider
     if (!this.meshProvider) return;
 
@@ -136,13 +137,66 @@ export class Builder {
     const meshes = this.meshProvider.getCollisionMeshes();
 
     // Update the marker and get valid target state
-    const { hasValidTarget } = this.marker.update(camera, meshes);
+    let { hasValidTarget } = this.marker.update(camera, meshes);
+    let invalidReason: 'tooClose' | null = null;
     
-    // Update store with valid target state
+    // Check if build shape overlaps player or camera (only for ADD mode)
+    if (hasValidTarget) {
+      const preset = storeBridge.buildPreset;
+      if (preset.config.mode === BuildMode.ADD) {
+        const aabb = this.marker.getWorldAABB();
+        if (aabb && this.buildOverlapsPlayer(aabb, playerPosition, camera.position)) {
+          hasValidTarget = false;
+          invalidReason = 'tooClose';
+          this.marker.setTooCloseWarning(true);
+        }
+      }
+    }
+
+    // Update store with valid target state and reason
     storeBridge.setBuildHasValidTarget(hasValidTarget);
+    storeBridge.setBuildInvalidReason(invalidReason);
 
     // Update voxel preview
     this.updateVoxelPreview();
+  }
+
+  /**
+   * Check if a build AABB overlaps the player capsule or camera position.
+   * Player capsule is approximated as an AABB for speed.
+   */
+  private buildOverlapsPlayer(
+    aabb: { min: THREE.Vector3; max: THREE.Vector3 },
+    playerPos: THREE.Vector3,
+    cameraPos: THREE.Vector3
+  ): boolean {
+    // Player capsule AABB: position is at eye level, feet at position.y - PLAYER_HEIGHT
+    const playerMin = {
+      x: playerPos.x - PLAYER_RADIUS,
+      y: playerPos.y - PLAYER_HEIGHT,
+      z: playerPos.z - PLAYER_RADIUS,
+    };
+    const playerMax = {
+      x: playerPos.x + PLAYER_RADIUS,
+      y: playerPos.y,
+      z: playerPos.z + PLAYER_RADIUS,
+    };
+
+    // AABB vs AABB overlap test (player capsule)
+    const overlapsPlayer =
+      aabb.min.x <= playerMax.x && aabb.max.x >= playerMin.x &&
+      aabb.min.y <= playerMax.y && aabb.max.y >= playerMin.y &&
+      aabb.min.z <= playerMax.z && aabb.max.z >= playerMin.z;
+
+    if (overlapsPlayer) return true;
+
+    // Point-in-AABB test (camera)
+    const containsCamera =
+      cameraPos.x >= aabb.min.x && cameraPos.x <= aabb.max.x &&
+      cameraPos.y >= aabb.min.y && cameraPos.y <= aabb.max.y &&
+      cameraPos.z >= aabb.min.z && cameraPos.z <= aabb.max.z;
+
+    return containsCamera;
   }
 
   /**

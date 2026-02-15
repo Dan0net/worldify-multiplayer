@@ -26,6 +26,7 @@ const COLOR_SUBTRACT = 0xff0000; // Red for subtract
 const COLOR_PAINT = 0x0088ff;    // Blue for paint
 const COLOR_FILL = 0xffff00;     // Yellow for fill
 const COLOR_INVALID = 0x888888;  // Gray for invalid/too far
+const COLOR_TOO_CLOSE = 0xff4400; // Orange for too close to player
 
 /**
  * Gets the wireframe color for a build mode.
@@ -454,6 +455,56 @@ export class BuildMarker {
       this.group.visible = false;
       this.isVisible = false;
     }
+  }
+
+  /**
+   * Get the world-space AABB of the build shape.
+   * Returns null if no valid target or preset is disabled.
+   */
+  getWorldAABB(): { min: THREE.Vector3; max: THREE.Vector3 } | null {
+    if (!this.isVisible || this.currentPresetId === 0) return null;
+
+    const preset = getPreset(this.currentPresetId);
+    const center = this.group.position.clone();
+
+    // For BASE / PROJECT, compute actual center (offset up from group position)
+    if (preset.align === BuildPresetAlign.BASE || preset.align === BuildPresetAlign.PROJECT) {
+      center.y += this.rotatedHalfY;
+    }
+
+    // Compute oriented bounding box projected to AABB
+    const size = preset.config.size;
+    const halfExtents = [size.x, size.y, size.z];
+    let halfX = 0, halfY = 0, halfZ = 0;
+
+    for (let i = 0; i < 3; i++) {
+      this._tempAxis.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0)
+        .applyQuaternion(this._composedQuat);
+      halfX += halfExtents[i] * Math.abs(this._tempAxis.x);
+      halfY += halfExtents[i] * Math.abs(this._tempAxis.y);
+      halfZ += halfExtents[i] * Math.abs(this._tempAxis.z);
+    }
+
+    halfX *= VOXEL_SCALE;
+    halfY *= VOXEL_SCALE;
+    halfZ *= VOXEL_SCALE;
+
+    return {
+      min: new THREE.Vector3(center.x - halfX, center.y - halfY, center.z - halfZ),
+      max: new THREE.Vector3(center.x + halfX, center.y + halfY, center.z + halfZ),
+    };
+  }
+
+  /**
+   * Set the wireframe to 'too close' warning color.
+   */
+  setTooCloseWarning(tooClose: boolean): void {
+    if (!this.wireframe) return;
+    if (tooClose) {
+      const material = this.wireframe.material as THREE.LineBasicMaterial;
+      material.color.setHex(COLOR_TOO_CLOSE);
+    }
+    // Normal color is restored by updateColor() in the next update() call
   }
 
   /**

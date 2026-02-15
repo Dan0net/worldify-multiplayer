@@ -546,7 +546,7 @@ export class GameCore {
     if (camera) {
       updateCameraFromPlayer(camera, localPlayer);
       perfStats.begin('buildPreview');
-      this.builder.update(camera);
+      this.builder.update(camera, localPlayer.position);
       perfStats.end('buildPreview');
     }
 
