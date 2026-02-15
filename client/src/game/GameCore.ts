@@ -29,7 +29,7 @@ import {
   loadSavedVisibilityRadius,
   detectQualityLevel,
 } from './quality/QualityPresets';
-import { applyQuality, setRendererRef, setVisibilityRadiusCallback } from './quality/QualityManager';
+import { setRendererRef, setVisibilityRadiusCallback, syncQualityToStore } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
 import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, updateTileFromChunk, createMapTile } from '@worldify/shared';
@@ -145,23 +145,7 @@ export class GameCore {
       console.log(`[Quality] Auto-detected preset: ${qualityLevel}`);
     }
     // Store the level so UI can read it
-    storeBridge.setQualityLevel(qualityLevel);
     const effectiveVisibility = savedVisibility ?? QUALITY_PRESETS[qualityLevel].visibilityRadius;
-    storeBridge.setVisibilityRadius(effectiveVisibility);
-    // Sync all quality settings to store
-    const preset = QUALITY_PRESETS[qualityLevel];
-    storeBridge.setSsaoEnabled(preset.ssaoEnabled);
-    storeBridge.setBloomEnabled(preset.bloomEnabled);
-    storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
-    storeBridge.setShadowsEnabled(preset.shadowsEnabled);
-    storeBridge.setMoonShadows(preset.moonShadows);
-    storeBridge.setShadowMapSize(preset.shadowMapSize);
-    storeBridge.setAnisotropy(preset.anisotropy);
-    storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
-    storeBridge.setMsaaSamples(preset.msaaSamples);
-    storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
-    storeBridge.setShaderAoMaps(preset.shaderAoMaps);
-    storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
 
     // Initialize voxel terrain system
     if (scene) {
@@ -182,8 +166,8 @@ export class GameCore {
       setVisibilityRadiusCallback((radius: number) => {
         this.voxelIntegration.world.setVisibilityRadius(radius);
       });
-      // Apply the quality preset (including visibility radius)
-      applyQuality(qualityLevel, effectiveVisibility);
+      // Apply the quality preset (including visibility radius) and sync to store
+      syncQualityToStore(qualityLevel, effectiveVisibility);
       
       // Initialize spawn manager
       this.spawnManager = new SpawnManager(scene);

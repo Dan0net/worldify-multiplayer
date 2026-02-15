@@ -6,9 +6,8 @@ import { updatePostProcessing } from '../game/scene/postprocessing';
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
 import { storeBridge } from '../state/bridge';
-import { cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, QUALITY_PRESETS, type QualityLevel } from '../game/quality/QualityPresets';
+import { cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, type QualityLevel } from '../game/quality/QualityPresets';
 import {
-  applyQuality,
   applyVisibilityRadius,
   applySsaoEnabled,
   applyBloomEnabled,
@@ -19,6 +18,7 @@ import {
   applyAnisotropy,
   applyPixelRatio,
   applyMsaaSamples,
+  syncQualityToStore,
 } from '../game/quality/QualityManager';
 import { setShaderMapDefines } from '../game/material/TerrainMaterial';
 import * as THREE from 'three';
@@ -242,23 +242,7 @@ export function DebugPanel() {
 
   /** Apply a full quality preset and sync all individual settings to store */
   const syncPresetToStore = (level: QualityLevel, customVisibility?: number) => {
-    const preset = QUALITY_PRESETS[level];
-    const vis = customVisibility ?? preset.visibilityRadius;
-    applyQuality(level, vis);
-    storeBridge.setQualityLevel(level);
-    storeBridge.setVisibilityRadius(vis);
-    storeBridge.setSsaoEnabled(preset.ssaoEnabled);
-    storeBridge.setBloomEnabled(preset.bloomEnabled);
-    storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
-    storeBridge.setShadowsEnabled(preset.shadowsEnabled);
-    storeBridge.setMoonShadows(preset.moonShadows);
-    storeBridge.setShadowMapSize(preset.shadowMapSize);
-    storeBridge.setAnisotropy(preset.anisotropy);
-    storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
-    storeBridge.setMsaaSamples(preset.msaaSamples);
-    storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
-    storeBridge.setShaderAoMaps(preset.shaderAoMaps);
-    storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
+    syncQualityToStore(level, customVisibility);
   };
 
   const handleVisibilityRadiusChange = (radius: number) => {

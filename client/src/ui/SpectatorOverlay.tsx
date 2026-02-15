@@ -8,8 +8,8 @@ import { controls } from '../game/player/controls';
 import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
 import { useState, useEffect } from 'react';
-import { QUALITY_LABELS, QUALITY_LEVELS, QUALITY_PRESETS } from '../game/quality/QualityPresets';
-import { applyQuality, applyVisibilityRadius } from '../game/quality/QualityManager';
+import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
+import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
 
 export function SpectatorOverlay() {
@@ -166,21 +166,7 @@ export function SpectatorOverlay() {
               <button
                 key={level}
                 onClick={() => {
-                  const preset = QUALITY_PRESETS[level];
-                  applyQuality(level, visibilityRadius);
-                  storeBridge.setQualityLevel(level);
-                  storeBridge.setSsaoEnabled(preset.ssaoEnabled);
-                  storeBridge.setBloomEnabled(preset.bloomEnabled);
-                  storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
-                  storeBridge.setShadowsEnabled(preset.shadowsEnabled);
-                  storeBridge.setMoonShadows(preset.moonShadows);
-                  storeBridge.setShadowMapSize(preset.shadowMapSize);
-                  storeBridge.setAnisotropy(preset.anisotropy);
-                  storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
-                  storeBridge.setMsaaSamples(preset.msaaSamples);
-                  storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
-                  storeBridge.setShaderAoMaps(preset.shaderAoMaps);
-                  storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
+                  syncQualityToStore(level, visibilityRadius);
                 }}
                 className={`py-1 px-3 text-xs rounded transition-all duration-100 ${
                   qualityLevel === level

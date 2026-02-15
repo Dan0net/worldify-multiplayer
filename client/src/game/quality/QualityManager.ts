@@ -26,6 +26,7 @@ import {
   setShaderMapDefines,
   setTerrainAnisotropy,
 } from '../material/TerrainMaterial.js';
+import { storeBridge } from '../../state/bridge.js';
 
 // ============== Managed References ==============
 
@@ -106,6 +107,31 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     anisotropy: preset.anisotropy,
     moonShadows: preset.moonShadows,
   });
+}
+
+/**
+ * Apply a quality preset AND sync every individual setting to the Zustand store.
+ * This is the single entry-point that UI buttons and GameCore.init should call
+ * so the store always mirrors the active rendering state.
+ */
+export function syncQualityToStore(level: QualityLevel, customVisibility?: number): void {
+  const preset = QUALITY_PRESETS[level];
+  const vis = customVisibility ?? preset.visibilityRadius;
+  applyQuality(level, vis);
+  storeBridge.setQualityLevel(level);
+  storeBridge.setVisibilityRadius(vis);
+  storeBridge.setSsaoEnabled(preset.ssaoEnabled);
+  storeBridge.setBloomEnabled(preset.bloomEnabled);
+  storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
+  storeBridge.setShadowsEnabled(preset.shadowsEnabled);
+  storeBridge.setMoonShadows(preset.moonShadows);
+  storeBridge.setShadowMapSize(preset.shadowMapSize);
+  storeBridge.setAnisotropy(preset.anisotropy);
+  storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
+  storeBridge.setMsaaSamples(preset.msaaSamples);
+  storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
+  storeBridge.setShaderAoMaps(preset.shaderAoMaps);
+  storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
 }
 
 // ============== Individual Setting Appliers ==============
