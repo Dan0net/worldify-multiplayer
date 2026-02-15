@@ -3,10 +3,10 @@
  * Ported from worldify-app's BuildPresets.ts with architecture-appropriate types.
  */
 
+import { BuildConfig, BuildMode, BuildShape, Size3 } from './buildTypes.js';
 import {
-  BuildConfig, BuildMode, BuildShape, Size3, Quat,
-  yRotationQuat, xRotationQuat, multiplyQuats,
-} from './buildTypes.js';
+  Quat, yRotationQuat, xRotationQuat, multiplyQuats,
+} from '../util/math.js';
 
 /**
  * How to align the build shape relative to the raycast hit point.

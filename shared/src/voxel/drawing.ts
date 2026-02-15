@@ -9,12 +9,10 @@ import {
   BuildConfig, 
   BuildMode, 
   BuildOperation, 
-  Vec3, 
   VoxelBBox,
-  applyQuatToVec3,
-  invertQuat,
   clamp,
 } from './buildTypes.js';
+import { Vec3, applyQuatToVec3, invertQuat } from '../util/math.js';
 import { sdfFromConfig, sdfToWeight } from './shapes.js';
 import { 
   packVoxel, 

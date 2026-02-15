@@ -2,6 +2,18 @@
  * Build system types - shared between client and server
  */
 
+// Import 3D math types for local use & re-export from util/math (canonical location)
+import type { Vec3, Quat } from '../util/math.js';
+export type { Vec3, Quat } from '../util/math.js';
+export {
+  identityQuat,
+  invertQuat,
+  multiplyQuats,
+  applyQuatToVec3,
+  xRotationQuat,
+  yRotationQuat,
+} from '../util/math.js';
+
 // ============== Enums ==============
 
 /**
@@ -37,25 +49,6 @@ export interface Size3 {
   x: number;
   y: number;
   z: number;
-}
-
-/**
- * 3D position vector.
- */
-export interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
-}
-
-/**
- * Quaternion for rotation.
- */
-export interface Quat {
-  x: number;
-  y: number;
-  z: number;
-  w: number;
 }
 
 /**
@@ -113,85 +106,6 @@ export function createDefaultBuildConfig(): BuildConfig {
     mode: BuildMode.ADD,
     size: { x: 2, y: 2, z: 2 },
     material: 1,
-  };
-}
-
-/**
- * Create an identity quaternion (no rotation).
- */
-export function identityQuat(): Quat {
-  return { x: 0, y: 0, z: 0, w: 1 };
-}
-
-/**
- * Apply quaternion rotation to a vector.
- * Returns a new vector (does not mutate input).
- */
-export function applyQuatToVec3(v: Vec3, q: Quat): Vec3 {
-  // Quaternion rotation: v' = q * v * q^-1
-  // Optimized formula using q = (x, y, z, w)
-  const qx = q.x, qy = q.y, qz = q.z, qw = q.w;
-  const vx = v.x, vy = v.y, vz = v.z;
-
-  // t = 2 * cross(q.xyz, v)
-  const tx = 2 * (qy * vz - qz * vy);
-  const ty = 2 * (qz * vx - qx * vz);
-  const tz = 2 * (qx * vy - qy * vx);
-
-  // result = v + w * t + cross(q.xyz, t)
-  return {
-    x: vx + qw * tx + (qy * tz - qz * ty),
-    y: vy + qw * ty + (qz * tx - qx * tz),
-    z: vz + qw * tz + (qx * ty - qy * tx),
-  };
-}
-
-/**
- * Get the inverse (conjugate) of a quaternion.
- * For unit quaternions, conjugate = inverse.
- */
-export function invertQuat(q: Quat): Quat {
-  return { x: -q.x, y: -q.y, z: -q.z, w: q.w };
-}
-
-/**
- * Multiply two quaternions: result = a * b
- * Applies rotation b first, then a (standard quaternion composition).
- */
-export function multiplyQuats(a: Quat, b: Quat): Quat {
-  return {
-    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-  };
-}
-
-/**
- * Create a quaternion for rotation around the X axis.
- * @param radians - The rotation angle in radians
- */
-export function xRotationQuat(radians: number): Quat {
-  const halfAngle = radians * 0.5;
-  return {
-    x: Math.sin(halfAngle),
-    y: 0,
-    z: 0,
-    w: Math.cos(halfAngle),
-  };
-}
-
-/**
- * Create a quaternion for rotation around the Y axis.
- * @param radians - The rotation angle in radians
- */
-export function yRotationQuat(radians: number): Quat {
-  const halfAngle = radians * 0.5;
-  return {
-    x: 0,
-    y: Math.sin(halfAngle),
-    z: 0,
-    w: Math.cos(halfAngle),
   };
 }
 
