@@ -10,6 +10,9 @@
 /** Base movement speed in meters per second */
 export const MOVE_SPEED = 6.0;
 
+/** How fast the movement direction rotates toward the target (radians/sec for exponential smoothing) */
+export const DIRECTION_SMOOTH_SPEED = 24;
+
 /** Multiplier applied when sprinting */
 export const SPRINT_MULTIPLIER = 1.6;
 
