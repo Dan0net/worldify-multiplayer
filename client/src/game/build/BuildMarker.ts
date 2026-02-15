@@ -11,6 +11,7 @@ import {
   BuildMode,
   BuildPreset,
   BuildPresetAlign,
+  BuildPresetSnapShape,
   MAX_BUILD_DISTANCE,
   VOXEL_SCALE,
   BUILD_ROTATION_STEP,
@@ -19,6 +20,34 @@ import {
   composeRotation,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
+
+/**
+ * Derive a "projection size" from the snap shape.
+ * PLANE zeroes the thinnest axis (treats the shape as a flat plane).
+ * LINE zeroes the two thinnest axes (treats it as a 1D line).
+ * All others return the original size unchanged.
+ */
+function getProjectionSize(snapShape: BuildPresetSnapShape, size: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
+  if (snapShape === BuildPresetSnapShape.PLANE) {
+    // Zero the smallest axis
+    const min = Math.min(size.x, size.y, size.z);
+    return {
+      x: size.x === min ? 0 : size.x,
+      y: size.y === min ? 0 : size.y,
+      z: size.z === min ? 0 : size.z,
+    };
+  }
+  if (snapShape === BuildPresetSnapShape.LINE) {
+    // Keep only the largest axis
+    const max = Math.max(size.x, size.y, size.z);
+    return {
+      x: size.x === max ? size.x : 0,
+      y: size.y === max ? size.y : 0,
+      z: size.z === max ? size.z : 0,
+    };
+  }
+  return size;
+}
 
 // Colors for different build modes
 const COLOR_ADD = 0x00ff00;      // Green for add
@@ -200,6 +229,10 @@ export class BuildMarker {
         break;
 
       case BuildPresetAlign.PROJECT: {
+        // Use projection size (snap-shape-aware) so plane-like shapes
+        // sit centered on the surface rather than fully protruding.
+        const projSize = getProjectionSize(preset.snapShape, size);
+
         // On horizontal surfaces: base sits on surface (handled by wireframe offset),
         // and shape is offset so its front center is at the hit point.
         // The shape pivots around the hit point as the user rotates.
@@ -211,7 +244,7 @@ export class BuildMarker {
           const wallTangent = this._hTangent.set(-wallNormal.z, 0, wallNormal.x);
 
           // How far does the rotated shape extend along the normal and tangent?
-          const { depth, slide } = this.getProjectedExtents(wallNormal, wallTangent, size);
+          const { depth, slide } = this.getProjectedExtents(wallNormal, wallTangent, projSize);
 
           // Push outward so back face is flush with surface
           pos.addScaledVector(wallNormal, depth * VOXEL_SCALE);
@@ -232,7 +265,7 @@ export class BuildMarker {
           if (forward.lengthSq() > 0.001) {
             forward.normalize();
             // Compute half-extent of the rotated shape along the forward direction
-            const halfExtent = this.getHorizontalExtent(forward, size);
+            const halfExtent = this.getHorizontalExtent(forward, projSize);
             // Offset forward so the back (bottom) edge sits at the hit point
             // and the shape extends outward away from it
             pos.addScaledVector(forward, halfExtent * VOXEL_SCALE);
