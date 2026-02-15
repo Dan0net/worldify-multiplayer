@@ -11,7 +11,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
 import { PlayerLocal, RespawnCallback } from './playerLocal.js';
-import { MAX_FALL_TIME } from '@worldify/shared';
+import { MAX_FALL_TIME, COYOTE_TIME, JUMP_BUFFER_TIME } from '@worldify/shared';
 
 // Mock Controls
 const createMockControls = () => ({
@@ -154,5 +154,40 @@ describe('PlayerLocal Position and Velocity', () => {
   test('initial yaw and pitch are zero', () => {
     expect(player.yaw).toBe(0);
     expect(player.pitch).toBe(0);
+  });
+});
+
+describe('Coyote Time and Jump Buffer Constants', () => {
+  test('COYOTE_TIME is a reasonable value', () => {
+    expect(COYOTE_TIME).toBeGreaterThan(0);
+    expect(COYOTE_TIME).toBeLessThanOrEqual(0.3); // Not too generous
+  });
+
+  test('JUMP_BUFFER_TIME is a reasonable value', () => {
+    expect(JUMP_BUFFER_TIME).toBeGreaterThan(0);
+    expect(JUMP_BUFFER_TIME).toBeLessThanOrEqual(0.3); // Not too generous
+  });
+
+  test('COYOTE_TIME is 150ms', () => {
+    expect(COYOTE_TIME).toBe(0.15);
+  });
+
+  test('JUMP_BUFFER_TIME is 150ms', () => {
+    expect(JUMP_BUFFER_TIME).toBe(0.15);
+  });
+});
+
+describe('PlayerLocal Coyote Time and Jump Buffer', () => {
+  let player: PlayerLocal;
+
+  beforeEach(() => {
+    player = new PlayerLocal();
+  });
+
+  test('respawn exhausts coyote time to prevent immediate jump', () => {
+    player.respawn(new THREE.Vector3(0, 20, 0));
+    // After respawn, player should not be able to coyote-jump
+    // (timeSinceGrounded is set to COYOTE_TIME)
+    expect(player.getIsGrounded()).toBe(false);
   });
 });
