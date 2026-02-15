@@ -23,10 +23,12 @@ import {
   getAffectedChunks,
   Quat,
   chunkKey,
+  parseChunkKey,
   CHUNK_SIZE,
   voxelIndex,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
+import { Chunk } from '../voxel/Chunk.js';
 import { expandChunkToGrid } from '../voxel/ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from '../voxel/MeshWorkerPool.js';
 
@@ -132,8 +134,13 @@ export class BuildPreview {
     const drawnSet = new Set<string>();
 
     for (const key of affectedKeys) {
-      const chunk = this.world.chunks.get(key);
-      if (!chunk) continue;
+      let chunk = this.world.chunks.get(key);
+      if (!chunk) {
+        // Chunk not loaded — create an empty one so the preview can render.
+        const { cx, cy, cz } = parseChunkKey(key);
+        chunk = new Chunk(cx, cy, cz);
+        this.world.chunks.set(key, chunk);
+      }
 
       chunk.copyToTemp();
       if (!chunk.tempData) continue;

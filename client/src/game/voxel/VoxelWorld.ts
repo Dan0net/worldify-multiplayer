@@ -9,6 +9,7 @@ import {
   CHUNK_WORLD_SIZE,
   worldToChunk,
   chunkKey,
+  parseChunkKey,
   BuildOperation,
   getAffectedChunks,
   drawToChunk,
@@ -772,10 +773,15 @@ export class VoxelWorld implements ChunkProvider {
     const modifiedKeys: string[] = [];
 
     for (const key of affectedKeys) {
-      const chunk = this.chunks.get(key);
+      let chunk = this.chunks.get(key);
       if (!chunk) {
-        // Chunk not loaded, skip (server has authoritative state)
-        continue;
+        // Chunk not loaded — create an empty one so the build can proceed.
+        // Server has the authoritative terrain; this just ensures client
+        // doesn't silently drop builds that extend into unloaded space.
+        const { cx, cy, cz } = parseChunkKey(key);
+        chunk = new Chunk(cx, cy, cz);
+        this.chunks.set(key, chunk);
+        this.lastBFSChunk = null; // invalidate BFS cache for new chunk
       }
 
       const changed = drawToChunk(chunk, operation);
