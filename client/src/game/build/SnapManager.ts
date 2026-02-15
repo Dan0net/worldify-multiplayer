@@ -2,10 +2,12 @@
  * SnapManager — Coordinates snap point detection, storage, and visualization.
  * 
  * Owns the deposited snap points and the BuildSnapMarker visuals.
+ * Uses a spatial hash map for efficient neighbor lookups.
  * Called by Builder each frame to:
  *   1. Detect the closest deposited↔current snap pair (trySnap)
- *   2. Apply the snap delta to move the build center
- *   3. Update visual markers at the post-snap position (updateVisuals)
+ *   2. Collect ALL overlapping pairs for visual highlighting
+ *   3. Apply the snap delta to move the build center
+ *   4. Update visual markers at the post-snap position (updateVisuals)
  * 
  * On placement, deposits the current shape's world-space snap points.
  */
@@ -22,6 +24,75 @@ import {
 } from '@worldify/shared';
 import type { Vec3, Quat } from '@worldify/shared';
 
+// ─── Spatial Hash Map ────────────────────────────────────────────────
+
+/** Cell size for the spatial hash — equal to snap distance so neighbors are within 1 cell radius */
+const CELL_SIZE = SNAP_DISTANCE_MAX;
+const INV_CELL_SIZE = 1 / CELL_SIZE;
+
+/** Hash a cell coordinate triple to a string key */
+function cellKey(cx: number, cy: number, cz: number): string {
+  return `${cx},${cy},${cz}`;
+}
+
+/**
+ * Lightweight spatial hash for deposited snap points.
+ * Maps cell keys → arrays of deposited point indices.
+ */
+class SpatialHash {
+  private cells = new Map<string, number[]>();
+
+  /** Rebuild from a list of points. */
+  rebuild(points: THREE.Vector3[]): void {
+    this.cells.clear();
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const key = cellKey(
+        Math.floor(p.x * INV_CELL_SIZE),
+        Math.floor(p.y * INV_CELL_SIZE),
+        Math.floor(p.z * INV_CELL_SIZE),
+      );
+      let bucket = this.cells.get(key);
+      if (!bucket) {
+        bucket = [];
+        this.cells.set(key, bucket);
+      }
+      bucket.push(i);
+    }
+  }
+
+  /**
+   * Return all deposited point indices within the 3×3×3 neighborhood
+   * of the cell containing `pos`.
+   */
+  queryNeighbors(pos: { x: number; y: number; z: number }): number[] {
+    const cx = Math.floor(pos.x * INV_CELL_SIZE);
+    const cy = Math.floor(pos.y * INV_CELL_SIZE);
+    const cz = Math.floor(pos.z * INV_CELL_SIZE);
+    const result: number[] = [];
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const bucket = this.cells.get(cellKey(cx + dx, cy + dy, cz + dz));
+          if (bucket) {
+            for (let i = 0; i < bucket.length; i++) {
+              result.push(bucket[i]);
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  clear(): void {
+    this.cells.clear();
+  }
+}
+
+// ─── SnapResult ──────────────────────────────────────────────────────
+
 /**
  * Result of a snap attempt.
  */
@@ -30,15 +101,22 @@ export interface SnapResult {
   snapped: boolean;
   /** Delta to apply to the build center (world units). Zero if not snapped. */
   delta: THREE.Vector3;
-  /** Index of the deposited marker that was snapped to (-1 if none) */
-  snappedDepositedIndex: number;
+  /** All deposited marker indices that overlap with a current-shape marker */
+  snappedDepositedIndices: Set<number>;
+  /** All current-shape marker indices that overlap with a deposited marker */
+  snappedCurrentIndices: Set<number>;
 }
+
+const EMPTY_SET: ReadonlySet<number> = new Set();
 
 const NO_SNAP: SnapResult = {
   snapped: false,
   delta: new THREE.Vector3(),
-  snappedDepositedIndex: -1,
+  snappedDepositedIndices: EMPTY_SET as Set<number>,
+  snappedCurrentIndices: EMPTY_SET as Set<number>,
 };
+
+// ─── SnapManager ─────────────────────────────────────────────────────
 
 /**
  * SnapManager manages snap point detection and deposited marker storage.
@@ -49,6 +127,9 @@ export class SnapManager {
 
   /** Deposited snap points in world space (FIFO ring buffer) */
   private depositedPoints: THREE.Vector3[] = [];
+
+  /** Spatial hash for fast deposited-point neighbor queries */
+  private readonly spatialHash = new SpatialHash();
 
   /** Whether snap point mode is enabled */
   private _snapPointEnabled = false;
@@ -127,13 +208,14 @@ export class SnapManager {
   }
 
   /**
-   * Detect snap: find the closest deposited↔current pair.
+   * Detect snap: find the closest deposited↔current pair using spatial hashing,
+   * and collect ALL overlapping pairs for green highlighting.
    * Does NOT update visuals — call updateVisuals() after applying the delta.
    * 
    * @param preset Current build preset
    * @param center Current build center position (world space)
    * @param rotation Current composed rotation quaternion
-   * @returns SnapResult with delta to apply
+   * @returns SnapResult with delta and all overlapping indices
    */
   trySnap(preset: BuildPreset, center: Vec3, rotation: Quat): SnapResult {
     if (!this._snapPointEnabled || preset.snapShape === BuildPresetSnapShape.NONE) {
@@ -149,30 +231,49 @@ export class SnapManager {
     // Transform to world space at current (pre-snap) position
     const worldPoints = snapPointsToWorld(localPoints, center, rotation);
 
-    // Find closest pair: current snap point ↔ deposited marker
+    // No deposited points → nothing to snap to
     if (this.depositedPoints.length === 0) {
       return NO_SNAP;
     }
 
     let minDist = SNAP_DISTANCE_MAX;
     let bestDelta: THREE.Vector3 | null = null;
-    let bestDepositedIndex = -1;
+    const snappedDepositedIndices = new Set<number>();
+    const snappedCurrentIndices = new Set<number>();
 
-    for (const wp of worldPoints) {
+    for (let ci = 0; ci < worldPoints.length; ci++) {
+      const wp = worldPoints[ci];
       this._tempCurrent.set(wp.x, wp.y, wp.z);
 
-      for (let di = 0; di < this.depositedPoints.length; di++) {
-        const d = this._tempCurrent.distanceTo(this.depositedPoints[di]);
-        if (d < minDist) {
-          minDist = d;
-          bestDelta = this._tempDelta.clone().subVectors(this._tempCurrent, this.depositedPoints[di]);
-          bestDepositedIndex = di;
+      // Query only nearby deposited points via spatial hash
+      const neighbors = this.spatialHash.queryNeighbors(wp);
+
+      for (let ni = 0; ni < neighbors.length; ni++) {
+        const di = neighbors[ni];
+        const dp = this.depositedPoints[di];
+        const d = this._tempCurrent.distanceTo(dp);
+
+        if (d < SNAP_DISTANCE_MAX) {
+          // Collect all overlapping pairs
+          snappedDepositedIndices.add(di);
+          snappedCurrentIndices.add(ci);
+
+          // Track the closest pair for the snap delta
+          if (d < minDist) {
+            minDist = d;
+            bestDelta = this._tempDelta.clone().subVectors(this._tempCurrent, dp);
+          }
         }
       }
     }
 
     if (bestDelta) {
-      return { snapped: true, delta: bestDelta, snappedDepositedIndex: bestDepositedIndex };
+      return {
+        snapped: true,
+        delta: bestDelta,
+        snappedDepositedIndices,
+        snappedCurrentIndices,
+      };
     }
 
     return NO_SNAP;
@@ -185,19 +286,26 @@ export class SnapManager {
    * @param preset Current build preset
    * @param center Build center AFTER snap offset (world space)
    * @param rotation Composed rotation quaternion
-   * @param snappedDepositedIndex Index of snapped deposited marker (-1 if none)
+   * @param snappedDepositedIndices Set of deposited indices to highlight
+   * @param snappedCurrentIndices Set of current-shape indices to highlight
    */
-  updateVisuals(preset: BuildPreset, center: Vec3, rotation: Quat, snappedDepositedIndex: number): void {
+  updateVisuals(
+    preset: BuildPreset,
+    center: Vec3,
+    rotation: Quat,
+    snappedDepositedIndices: ReadonlySet<number>,
+    snappedCurrentIndices: ReadonlySet<number>,
+  ): void {
     if (!this._snapPointEnabled || preset.snapShape === BuildPresetSnapShape.NONE) {
       this.marker.updateCurrent([]);
-      this.marker.setSnappedIndex(-1);
+      this.marker.setSnappedSets(EMPTY_SET, EMPTY_SET);
       return;
     }
 
     const localPoints = this.getLocalPoints(preset);
     if (localPoints.length === 0) {
       this.marker.updateCurrent([]);
-      this.marker.setSnappedIndex(-1);
+      this.marker.setSnappedSets(EMPTY_SET, EMPTY_SET);
       return;
     }
 
@@ -206,8 +314,8 @@ export class SnapManager {
     const currentPositions = worldPoints.map(p => new THREE.Vector3(p.x, p.y, p.z));
     this.marker.updateCurrent(currentPositions);
 
-    // Highlight the specific deposited marker being snapped to
-    this.marker.setSnappedIndex(snappedDepositedIndex);
+    // Highlight all overlapping markers
+    this.marker.setSnappedSets(snappedDepositedIndices, snappedCurrentIndices);
   }
 
   /**
@@ -227,9 +335,14 @@ export class SnapManager {
     for (const wp of worldPoints) {
       // Deduplicate: skip if very close to an existing deposited point
       const newPos = new THREE.Vector3(wp.x, wp.y, wp.z);
-      const isDuplicate = this.depositedPoints.some(
-        dp => dp.distanceTo(newPos) < 0.01
-      );
+      const neighbors = this.spatialHash.queryNeighbors(wp);
+      let isDuplicate = false;
+      for (const ni of neighbors) {
+        if (this.depositedPoints[ni].distanceTo(newPos) < 0.01) {
+          isDuplicate = true;
+          break;
+        }
+      }
       if (!isDuplicate) {
         this.depositedPoints.push(newPos);
       }
@@ -240,7 +353,8 @@ export class SnapManager {
       this.depositedPoints.shift();
     }
 
-    // Update visual markers
+    // Rebuild spatial hash and update visuals
+    this.spatialHash.rebuild(this.depositedPoints);
     this.marker.updateDeposited(this.depositedPoints);
   }
 
@@ -249,6 +363,7 @@ export class SnapManager {
    */
   clearDeposited(): void {
     this.depositedPoints.length = 0;
+    this.spatialHash.clear();
     this.marker.updateDeposited([]);
   }
 

@@ -19,6 +19,8 @@ import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
 import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE } from '@worldify/shared';
 
+const EMPTY_SET: ReadonlySet<number> = new Set();
+
 /**
  * Interface for objects that provide collision meshes for raycasting.
  */
@@ -157,7 +159,8 @@ export class Builder {
     }
 
     // Apply point snap
-    let snappedDepositedIndex = -1;
+    let snappedDepositedIndices: ReadonlySet<number> = EMPTY_SET;
+    let snappedCurrentIndices: ReadonlySet<number> = EMPTY_SET;
     if (hasValidTarget && this.snapManager.snapPointEnabled) {
       const targetPos = this.marker.getTargetPosition();
       if (targetPos) {
@@ -170,7 +173,8 @@ export class Builder {
         );
         if (snapResult.snapped) {
           this.marker.applySnapOffset(snapResult.delta);
-          snappedDepositedIndex = snapResult.snappedDepositedIndex;
+          snappedDepositedIndices = snapResult.snappedDepositedIndices;
+          snappedCurrentIndices = snapResult.snappedCurrentIndices;
         }
       }
     }
@@ -200,11 +204,12 @@ export class Builder {
           preset,
           { x: finalPos.x, y: finalPos.y, z: finalPos.z },
           rotation,
-          snappedDepositedIndex,
+          snappedDepositedIndices,
+          snappedCurrentIndices,
         );
       }
     } else if (this.snapManager.snapPointEnabled) {
-      this.snapManager.updateVisuals(storeBridge.buildPreset, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 }, -1);
+      this.snapManager.updateVisuals(storeBridge.buildPreset, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 }, EMPTY_SET, EMPTY_SET);
     }
 
     // Update store with valid target state and reason

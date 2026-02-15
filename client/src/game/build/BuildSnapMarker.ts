@@ -23,8 +23,8 @@ const COLOR_DEPOSITED = new THREE.Color(0x2266ff);
 /** Color for the specific deposited marker being snapped to */
 const COLOR_SNAPPED = new THREE.Color(0x00ff66);
 
-/** Color for current-shape snap points */
-const COLOR_CURRENT = new THREE.Color(0xffffff);
+/** Color for current-shape snap points (same blue as deposited) */
+const COLOR_CURRENT = new THREE.Color(0x2266ff);
 
 /**
  * BuildSnapMarker manages instanced mesh rendering for snap point visualization.
@@ -47,11 +47,17 @@ export class BuildSnapMarker {
   /** Dummy for setting instance matrices */
   private readonly dummy = new THREE.Object3D();
 
-  /** Currently highlighted deposited marker index (-1 = none) */
-  private highlightedIndex = -1;
+  /** Currently highlighted deposited marker indices */
+  private highlightedDeposited = new Set<number>();
+
+  /** Currently highlighted current-shape marker indices */
+  private highlightedCurrent = new Set<number>();
 
   /** Current deposited count (for color updates) */
   private depositedCount = 0;
+
+  /** Current-shape count (for color updates) */
+  private currentCount = 0;
 
   constructor() {
     this.group = new THREE.Group();
@@ -59,34 +65,42 @@ export class BuildSnapMarker {
 
     this.geometry = new THREE.OctahedronGeometry(MARKER_RADIUS, 0);
 
-    // Deposited markers — plain blue
+    // Deposited markers — plain blue, rendered on top of everything
     this.depositedMaterial = new THREE.MeshBasicMaterial({
       color: COLOR_DEPOSITED,
       transparent: true,
       opacity: 0.5,
       depthWrite: false,
+      depthTest: false,
       side: THREE.DoubleSide,
     });
     this.depositedMesh = new THREE.InstancedMesh(this.geometry, this.depositedMaterial, MAX_INSTANCES);
     this.depositedMesh.count = 0;
     this.depositedMesh.frustumCulled = false;
+    this.depositedMesh.renderOrder = 999;
     // Enable per-instance color
     this.depositedMesh.instanceColor = new THREE.InstancedBufferAttribute(
       new Float32Array(MAX_INSTANCES * 3), 3
     );
     this.group.add(this.depositedMesh);
 
-    // Current-shape markers — white, more transparent
+    // Current-shape markers — blue, more transparent, rendered on top
     this.currentMaterial = new THREE.MeshBasicMaterial({
       color: COLOR_CURRENT,
       transparent: true,
       opacity: 0.3,
       depthWrite: false,
+      depthTest: false,
       side: THREE.DoubleSide,
     });
     this.currentMesh = new THREE.InstancedMesh(this.geometry, this.currentMaterial, MAX_INSTANCES);
     this.currentMesh.count = 0;
     this.currentMesh.frustumCulled = false;
+    this.currentMesh.renderOrder = 999;
+    // Enable per-instance color for current markers
+    this.currentMesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(MAX_INSTANCES * 3), 3
+    );
     this.group.add(this.currentMesh);
   }
 
@@ -110,7 +124,7 @@ export class BuildSnapMarker {
     if (this.depositedMesh.instanceColor) {
       this.depositedMesh.instanceColor.needsUpdate = true;
     }
-    this.highlightedIndex = -1;
+    this.highlightedDeposited.clear();
   }
 
   /**
@@ -119,37 +133,70 @@ export class BuildSnapMarker {
   updateCurrent(positions: THREE.Vector3[]): void {
     const count = Math.min(positions.length, MAX_INSTANCES);
     this.currentMesh.count = count;
+    this.currentCount = count;
 
     for (let i = 0; i < count; i++) {
       this.dummy.position.copy(positions[i]);
       this.dummy.scale.setScalar(1);
       this.dummy.updateMatrix();
       this.currentMesh.setMatrixAt(i, this.dummy.matrix);
+      // Set default blue color
+      this.currentMesh.setColorAt(i, COLOR_CURRENT);
     }
     this.currentMesh.instanceMatrix.needsUpdate = true;
+    if (this.currentMesh.instanceColor) {
+      this.currentMesh.instanceColor.needsUpdate = true;
+    }
+    this.highlightedCurrent.clear();
   }
 
   /**
-   * Highlight a specific deposited marker as snapped (green).
-   * Pass -1 to clear highlighting.
+   * Highlight all deposited and current-shape markers that are overlapping (green).
+   * Pass empty sets to clear all highlighting.
    */
-  setSnappedIndex(index: number): void {
-    if (index === this.highlightedIndex) return;
+  setSnappedSets(depositedIndices: ReadonlySet<number>, currentIndices: ReadonlySet<number>): void {
+    // --- Deposited highlights ---
+    let depositedDirty = false;
 
-    // Reset previous highlight
-    if (this.highlightedIndex >= 0 && this.highlightedIndex < this.depositedCount) {
-      this.depositedMesh.setColorAt(this.highlightedIndex, COLOR_DEPOSITED);
+    // Reset previous highlights that are no longer in the set
+    for (const idx of this.highlightedDeposited) {
+      if (!depositedIndices.has(idx) && idx < this.depositedCount) {
+        this.depositedMesh.setColorAt(idx, COLOR_DEPOSITED);
+        depositedDirty = true;
+      }
     }
-
-    // Set new highlight
-    if (index >= 0 && index < this.depositedCount) {
-      this.depositedMesh.setColorAt(index, COLOR_SNAPPED);
+    // Set new highlights
+    for (const idx of depositedIndices) {
+      if (idx < this.depositedCount) {
+        this.depositedMesh.setColorAt(idx, COLOR_SNAPPED);
+        depositedDirty = true;
+      }
     }
-
-    this.highlightedIndex = index;
-
-    if (this.depositedMesh.instanceColor) {
+    this.highlightedDeposited = new Set(depositedIndices);
+    if (depositedDirty && this.depositedMesh.instanceColor) {
       this.depositedMesh.instanceColor.needsUpdate = true;
+    }
+
+    // --- Current-shape highlights ---
+    let currentDirty = false;
+
+    // Reset previous highlights that are no longer in the set
+    for (const idx of this.highlightedCurrent) {
+      if (!currentIndices.has(idx) && idx < this.currentCount) {
+        this.currentMesh.setColorAt(idx, COLOR_CURRENT);
+        currentDirty = true;
+      }
+    }
+    // Set new highlights
+    for (const idx of currentIndices) {
+      if (idx < this.currentCount) {
+        this.currentMesh.setColorAt(idx, COLOR_SNAPPED);
+        currentDirty = true;
+      }
+    }
+    this.highlightedCurrent = new Set(currentIndices);
+    if (currentDirty && this.currentMesh.instanceColor) {
+      this.currentMesh.instanceColor.needsUpdate = true;
     }
   }
 
@@ -167,7 +214,9 @@ export class BuildSnapMarker {
     this.depositedMesh.count = 0;
     this.currentMesh.count = 0;
     this.depositedCount = 0;
-    this.highlightedIndex = -1;
+    this.currentCount = 0;
+    this.highlightedDeposited.clear();
+    this.highlightedCurrent.clear();
   }
 
   /**
