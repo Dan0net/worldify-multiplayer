@@ -140,10 +140,11 @@ export class Builder {
     let { hasValidTarget } = this.marker.update(camera, meshes);
     let invalidReason: 'tooClose' | null = null;
     
-    // Check if build shape overlaps player or camera (only for ADD mode)
+    // Check if build shape overlaps player or camera (for modes that add solid geometry)
     if (hasValidTarget) {
       const preset = storeBridge.buildPreset;
-      if (preset.config.mode === BuildMode.ADD) {
+      const mode = preset.config.mode;
+      if (mode === BuildMode.ADD || mode === BuildMode.FILL) {
         const aabb = this.marker.getWorldAABB();
         if (aabb && this.buildOverlapsPlayer(aabb, playerPosition, camera.position)) {
           hasValidTarget = false;
