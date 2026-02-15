@@ -230,6 +230,8 @@ export class Builder {
   /**
    * Check if a build AABB overlaps the player capsule or camera position.
    * Player capsule is approximated as an AABB for speed.
+   * Adds leeway at the feet (raises the check bottom) so players can
+   * comfortably build floors underneath themselves.
    */
   private buildOverlapsPlayer(
     aabb: { min: THREE.Vector3; max: THREE.Vector3 },
@@ -237,9 +239,11 @@ export class Builder {
     cameraPos: THREE.Vector3
   ): boolean {
     // Player capsule AABB: position is at eye level, feet at position.y - PLAYER_HEIGHT
+    // Leeway: ignore the bottom 0.5m so floor builds under the feet are allowed
+    const FEET_LEEWAY = 0.5;
     const playerMin = {
       x: playerPos.x - PLAYER_RADIUS,
-      y: playerPos.y - PLAYER_HEIGHT,
+      y: playerPos.y - PLAYER_HEIGHT + FEET_LEEWAY,
       z: playerPos.z - PLAYER_RADIUS,
     };
     const playerMax = {
