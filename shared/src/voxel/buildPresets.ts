@@ -20,6 +20,8 @@ export enum BuildPresetAlign {
   PROJECT = 'project',
   /** Offset from surface by half the shape size (for carving into surfaces) */
   SURFACE = 'surface',
+  /** Carve into surface: auto-rotates to face normal and projects INTO the voxels */
+  CARVE = 'carve',
 }
 
 /**
@@ -42,6 +44,11 @@ export interface BuildPreset {
   baseRotation?: Quat;
   /** Shape of snap points generated for this preset */
   snapShape: BuildPresetSnapShape;
+  /**
+   * When true, the shape auto-rotates around the Y axis to face the
+   * hit surface normal. User Q/E rotation is ignored.
+   */
+  autoRotateY?: boolean;
 }
 
 /**
@@ -130,12 +137,13 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
-  // 8 = Door carve (cube, subtract, surface-aligned)
+  // 8 = Door carve (cube, subtract, auto-rotates to face wall and carves inward)
   {
     id: 8,
     name: 'Door Carve',
     config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 },
-    align: BuildPresetAlign.SURFACE,
+    align: BuildPresetAlign.CARVE,
+    autoRotateY: true,
     snapShape: BuildPresetSnapShape.NONE,
   },
   // 9 = Blob paint (sphere, paint, centered)

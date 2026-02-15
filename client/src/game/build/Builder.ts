@@ -165,7 +165,7 @@ export class Builder {
       const targetPos = this.marker.getTargetPosition();
       if (targetPos) {
         const preset = storeBridge.buildPreset;
-        const rotation = composeRotation(preset, storeBridge.buildRotationRadians);
+        const rotation = composeRotation(preset, this.marker.getEffectiveYRadians());
         const snapResult = this.snapManager.trySnap(
           preset,
           { x: targetPos.x, y: targetPos.y, z: targetPos.z },
@@ -201,7 +201,7 @@ export class Builder {
       const finalPos = this.marker.getTargetPosition();
       if (finalPos) {
         const preset = storeBridge.buildPreset;
-        const rotation = composeRotation(preset, storeBridge.buildRotationRadians);
+        const rotation = composeRotation(preset, this.marker.getEffectiveYRadians());
         this.snapManager.updateVisuals(
           preset,
           { x: finalPos.x, y: finalPos.y, z: finalPos.z },
@@ -299,7 +299,7 @@ export class Builder {
 
     // Get preset and rotation
     const preset = storeBridge.buildPreset;
-    const rotationRadians = storeBridge.buildRotationRadians;
+    const rotationRadians = this.marker.getEffectiveYRadians();
 
     // Update preview with composed rotation (base + user Y)
     const rotation = composeRotation(preset, rotationRadians);
@@ -320,7 +320,7 @@ export class Builder {
     if (!targetPos) return;
 
     const preset = storeBridge.buildPreset;
-    const rotationRadians = storeBridge.buildRotationRadians;
+    const rotationRadians = this.marker.getEffectiveYRadians();
 
     // Create build intent using composed rotation (base + user Y)
     const rotation = composeRotation(preset, rotationRadians);

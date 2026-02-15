@@ -80,6 +80,12 @@ export class BuildMarker {
   /** Whether marker is currently visible */
   private isVisible = false;
 
+  /** Auto-computed Y rotation from face normal (radians), null when not auto-rotating */
+  private autoYRadians: number | null = null;
+
+  /** Cached auto-rotation Y steps equivalent (for dirty-checking) */
+  private lastAutoYAngle = NaN;
+
   constructor() {
     this.group = new THREE.Group();
     this.group.name = 'BuildMarker';
@@ -114,11 +120,19 @@ export class BuildMarker {
 
     const preset = getPreset(presetId);
 
-    // Rebuild wireframe if preset or rotation changed
-    if (presetId !== this.currentPresetId || rotationSteps !== this.currentRotation) {
-      this.rebuildWireframe(preset, rotationSteps);
+    // For non-auto-rotate presets, rebuild wireframe when preset or rotation changes
+    if (!preset.autoRotateY) {
+      this.autoYRadians = null;
+      if (presetId !== this.currentPresetId || rotationSteps !== this.currentRotation) {
+        this.rebuildWireframe(preset, rotationSteps);
+        this.currentPresetId = presetId;
+        this.currentRotation = rotationSteps;
+      }
+    } else if (presetId !== this.currentPresetId) {
+      // Auto-rotate: rebuild geometry on preset change only (rotation updated per-frame below)
+      this.rebuildWireframe(preset, 0);
       this.currentPresetId = presetId;
-      this.currentRotation = rotationSteps;
+      this.currentRotation = 0;
     }
 
     // Raycast from camera center
@@ -149,6 +163,11 @@ export class BuildMarker {
     // Calculate marker position based on align mode
     const position = this.calculatePosition(preset, this._hitPoint, this._hitNormal);
     this.group.position.copy(position);
+
+    // For auto-rotate presets, derive Y rotation from the hit normal each frame
+    if (preset.autoRotateY) {
+      this.applyAutoRotateY(preset, this._hitNormal);
+    }
 
     // Update color based on validity
     this.updateColor(preset.config.mode, isValid);
@@ -222,11 +241,30 @@ export class BuildMarker {
         break;
       }
 
-      case BuildPresetAlign.SURFACE:
+      case BuildPresetAlign.SURFACE: {
         // Offset along normal by half size (average half-extent)
         const avgSize = (size.x + size.y + size.z) / 3;
         pos.addScaledVector(hitNormal, avgSize * VOXEL_SCALE);
         break;
+      }
+
+      case BuildPresetAlign.CARVE: {
+        // Carve INTO the surface: offset along the negative normal.
+        // The shape's OBB extent along the normal gives the carve depth.
+        // On vertical surfaces the base sits on the ground (Y offset up).
+        if (Math.abs(hitNormal.y) < 0.5) {
+          // Vertical wall: compute depth along the horizontal normal
+          const wallNormal = this._hNormal.set(hitNormal.x, 0, hitNormal.z).normalize();
+          const depth = this.getCarveDepth(wallNormal, size);
+          // Push INTO the wall (negative normal direction)
+          pos.addScaledVector(wallNormal, -depth * VOXEL_SCALE);
+        } else {
+          // Horizontal surface: push into the surface
+          const depth = this.getCarveDepthVertical(size);
+          pos.addScaledVector(hitNormal, -depth * VOXEL_SCALE);
+        }
+        break;
+      }
     }
 
     return pos;
@@ -298,6 +336,92 @@ export class BuildMarker {
       extent += halfExtents[i] * Math.abs(amount);
     }
     return extent;
+  }
+
+  /**
+   * Compute the OBB half-extent along a horizontal wall normal direction.
+   * Used by CARVE alignment to determine how far to push INTO the wall.
+   */
+  private getCarveDepth(
+    wallNormal: THREE.Vector3,
+    size: { x: number; y: number; z: number }
+  ): number {
+    const halfExtents = [size.x, size.y, size.z];
+    let depth = 0;
+    for (let i = 0; i < 3; i++) {
+      this._tempAxis.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0)
+        .applyQuaternion(this._composedQuat);
+      const normalAmount = this._tempAxis.x * wallNormal.x + this._tempAxis.z * wallNormal.z;
+      depth += halfExtents[i] * Math.abs(normalAmount);
+    }
+    return depth;
+  }
+
+  /**
+   * Compute the OBB half-extent along the vertical (Y) axis.
+   * Used by CARVE alignment on horizontal surfaces.
+   */
+  private getCarveDepthVertical(size: { x: number; y: number; z: number }): number {
+    const halfExtents = [size.x, size.y, size.z];
+    let depth = 0;
+    for (let i = 0; i < 3; i++) {
+      this._tempAxis.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0)
+        .applyQuaternion(this._composedQuat);
+      depth += halfExtents[i] * Math.abs(this._tempAxis.y);
+    }
+    return depth;
+  }
+
+  /**
+   * Apply auto-rotation around Y axis based on the hit normal.
+   * Computes the Y angle so the shape faces into the surface,
+   * then updates the wireframe quaternion and composed quat.
+   */
+  private applyAutoRotateY(preset: BuildPreset, hitNormal: THREE.Vector3): void {
+    // Get horizontal component of the normal
+    const nx = hitNormal.x;
+    const nz = hitNormal.z;
+    const hLen = Math.sqrt(nx * nx + nz * nz);
+
+    let yAngle: number;
+    if (hLen > 0.01) {
+      // Face INTO the wall: shape Z aligns with -normal (pointing into surface)
+      yAngle = Math.atan2(-nx, -nz);
+    } else {
+      // Horizontal surface — keep current user rotation
+      yAngle = storeBridge.buildRotationRadians;
+    }
+
+    // Skip update if angle hasn't changed meaningfully
+    if (Math.abs(yAngle - this.lastAutoYAngle) < 0.001) return;
+    this.lastAutoYAngle = yAngle;
+    this.autoYRadians = yAngle;
+
+    // Recompute composed quaternion and apply to wireframe
+    const composed = composeRotation(preset, yAngle);
+    this._composedQuat.set(composed.x, composed.y, composed.z, composed.w);
+    if (this.wireframe) {
+      this.wireframe.quaternion.copy(this._composedQuat);
+    }
+
+    // Recompute rotated half-Y extent
+    const size = preset.config.size;
+    this._tempAxis.set(1, 0, 0).applyQuaternion(this._composedQuat);
+    this.rotatedHalfY = size.x * Math.abs(this._tempAxis.y);
+    this._tempAxis.set(0, 1, 0).applyQuaternion(this._composedQuat);
+    this.rotatedHalfY += size.y * Math.abs(this._tempAxis.y);
+    this._tempAxis.set(0, 0, 1).applyQuaternion(this._composedQuat);
+    this.rotatedHalfY += size.z * Math.abs(this._tempAxis.y);
+    this.rotatedHalfY *= VOXEL_SCALE;
+  }
+
+  /**
+   * Get the effective Y rotation in radians.
+   * Returns the auto-computed angle when autoRotateY is active,
+   * otherwise returns the user's manual rotation.
+   */
+  getEffectiveYRadians(): number {
+    return this.autoYRadians ?? storeBridge.buildRotationRadians;
   }
 
   /**
