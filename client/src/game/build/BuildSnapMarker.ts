@@ -10,12 +10,18 @@
  */
 
 import * as THREE from 'three';
+import { MAX_BUILD_DISTANCE } from '@worldify/shared';
 
 /** Maximum instances per instanced mesh */
 const MAX_INSTANCES = 128;
 
 /** Marker geometry radius */
 const MARKER_RADIUS = 0.16;
+
+/** Distance at which markers start fading out (fraction of MAX_BUILD_DISTANCE) */
+const FADE_START = MAX_BUILD_DISTANCE * 0.65;
+/** Distance at which markers are fully invisible */
+const FADE_END = MAX_BUILD_DISTANCE;
 
 /** Color for deposited markers (idle) */
 const COLOR_DEPOSITED = new THREE.Color(0x2266ff);
@@ -58,6 +64,10 @@ export class BuildSnapMarker {
 
   /** Current-shape count (for color updates) */
   private currentCount = 0;
+
+  /** Stored positions for distance fade calculations */
+  private depositedPositions: THREE.Vector3[] = [];
+  private currentPositions: THREE.Vector3[] = [];
 
   constructor() {
     this.group = new THREE.Group();
@@ -111,6 +121,7 @@ export class BuildSnapMarker {
     const count = Math.min(positions.length, MAX_INSTANCES);
     this.depositedMesh.count = count;
     this.depositedCount = count;
+    this.depositedPositions = positions.slice(0, count);
 
     for (let i = 0; i < count; i++) {
       this.dummy.position.copy(positions[i]);
@@ -134,6 +145,7 @@ export class BuildSnapMarker {
     const count = Math.min(positions.length, MAX_INSTANCES);
     this.currentMesh.count = count;
     this.currentCount = count;
+    this.currentPositions = positions.slice(0, count);
 
     for (let i = 0; i < count; i++) {
       this.dummy.position.copy(positions[i]);
@@ -197,6 +209,62 @@ export class BuildSnapMarker {
     this.highlightedCurrent = new Set(currentIndices);
     if (currentDirty && this.currentMesh.instanceColor) {
       this.currentMesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Update per-instance scale based on distance from camera.
+   * Markers fade out (shrink) between FADE_START and FADE_END.
+   */
+  updateFade(cameraPosition: THREE.Vector3): void {
+    const invRange = 1 / (FADE_END - FADE_START);
+
+    // Fade deposited markers
+    if (this.depositedCount > 0) {
+      let dirty = false;
+      for (let i = 0; i < this.depositedCount; i++) {
+        const dist = this.depositedPositions[i].distanceTo(cameraPosition);
+        let scale: number;
+        if (dist <= FADE_START) {
+          scale = 1;
+        } else if (dist >= FADE_END) {
+          scale = 0;
+        } else {
+          scale = 1 - (dist - FADE_START) * invRange;
+        }
+        this.dummy.position.copy(this.depositedPositions[i]);
+        this.dummy.scale.setScalar(scale);
+        this.dummy.updateMatrix();
+        this.depositedMesh.setMatrixAt(i, this.dummy.matrix);
+        dirty = true;
+      }
+      if (dirty) {
+        this.depositedMesh.instanceMatrix.needsUpdate = true;
+      }
+    }
+
+    // Fade current-shape markers
+    if (this.currentCount > 0) {
+      let dirty = false;
+      for (let i = 0; i < this.currentCount; i++) {
+        const dist = this.currentPositions[i].distanceTo(cameraPosition);
+        let scale: number;
+        if (dist <= FADE_START) {
+          scale = 1;
+        } else if (dist >= FADE_END) {
+          scale = 0;
+        } else {
+          scale = 1 - (dist - FADE_START) * invRange;
+        }
+        this.dummy.position.copy(this.currentPositions[i]);
+        this.dummy.scale.setScalar(scale);
+        this.dummy.updateMatrix();
+        this.currentMesh.setMatrixAt(i, this.dummy.matrix);
+        dirty = true;
+      }
+      if (dirty) {
+        this.currentMesh.instanceMatrix.needsUpdate = true;
+      }
     }
   }
 

@@ -359,6 +359,14 @@ export class SnapManager {
   }
 
   /**
+   * Update distance-based fade for all markers.
+   * Call every frame with the current camera position.
+   */
+  updateFade(cameraPosition: THREE.Vector3): void {
+    this.marker.updateFade(cameraPosition);
+  }
+
+  /**
    * Clear all deposited markers.
    */
   clearDeposited(): void {

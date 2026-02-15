@@ -214,6 +214,11 @@ export class Builder {
       this.snapManager.updateVisuals(storeBridge.buildPreset, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 }, EMPTY_SET, EMPTY_SET);
     }
 
+    // Fade snap markers based on distance from camera
+    if (this.snapManager.snapPointEnabled) {
+      this.snapManager.updateFade(camera.position as THREE.Vector3);
+    }
+
     // Update store with valid target state and reason
     storeBridge.setBuildHasValidTarget(hasValidTarget);
     storeBridge.setBuildInvalidReason(invalidReason);
