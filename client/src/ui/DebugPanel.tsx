@@ -14,6 +14,7 @@ import {
   applyColorCorrectionEnabled,
   applyShadowsEnabled,
   applyMoonShadows,
+  applyShadowRadius,
   applyAnisotropy,
   applyPixelRatio,
   applyMsaaSamples,
@@ -201,6 +202,7 @@ export function DebugPanel() {
     colorCorrectionEnabled,
     shadowsEnabled,
     moonShadows,
+    shadowRadius,
     anisotropy,
     maxPixelRatio,
     msaaSamples,
@@ -632,6 +634,18 @@ export function DebugPanel() {
                   storeBridge.setMoonShadows(v);
                   applyMoonShadows(v);
                 }}
+              />
+              <Slider
+                label="Shadow Radius"
+                value={shadowRadius}
+                min={1}
+                max={8}
+                step={1}
+                onChange={(v) => {
+                  storeBridge.setShadowRadius(v);
+                  applyShadowRadius(v);
+                }}
+                formatValue={(v) => `${v} chunks`}
               />
             </>
           )}

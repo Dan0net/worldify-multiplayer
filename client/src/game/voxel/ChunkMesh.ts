@@ -500,6 +500,17 @@ export class ChunkMesh {
   }
 
   /**
+   * Toggle castShadow on solid and transparent meshes.
+   * Used for shadow distance culling — chunks beyond the shadow radius
+   * still render but don't cast into the shadow map, reducing draw calls
+   * in the shadow pass.
+   */
+  setShadowCasting(enabled: boolean): void {
+    if (this.solidMesh) this.solidMesh.castShadow = enabled;
+    if (this.transparentMesh) this.transparentMesh.castShadow = enabled;
+  }
+
+  /**
    * Get the solid mesh (for collision, etc).
    * @returns The solid mesh or null if not created/disposed
    */

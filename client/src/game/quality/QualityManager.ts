@@ -70,6 +70,9 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   storeBridge.setEnvironment({ shadowMapSize: preset.shadowMapSize });
   applyEnvironmentSettings({ shadowMapSize: preset.shadowMapSize });
 
+  // --- Shadow frustum (uses shadow-specific radius, not visibility) ---
+  updateShadowFrustumSize(preset.shadowRadius);
+
   // --- MSAA ---
   applyMsaaSamples(preset.msaaSamples);
 
@@ -99,6 +102,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     pixelRatio: Math.min(window.devicePixelRatio, preset.maxPixelRatio),
     shadows: preset.shadowsEnabled,
     shadowMap: preset.shadowMapSize,
+    shadowRadius: preset.shadowRadius,
     msaa: preset.msaaSamples,
     ssao: preset.ssaoEnabled,
     bloom: preset.bloomEnabled,
@@ -128,6 +132,7 @@ export function syncQualityToStore(level: QualityLevel, customVisibility?: numbe
   storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
   storeBridge.setShadowsEnabled(preset.shadowsEnabled);
   storeBridge.setMoonShadows(preset.moonShadows);
+  storeBridge.setShadowRadius(preset.shadowRadius);
   storeBridge.setAnisotropy(preset.anisotropy);
   storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
   storeBridge.setMsaaSamples(preset.msaaSamples);
@@ -194,9 +199,25 @@ export function applyVisibilityRadius(radius: number): void {
   if (visibilityRadiusCallback) {
     visibilityRadiusCallback(radius);
   }
-  // Tighten shadow frustum to match new visibility
-  updateShadowFrustumSize(radius);
   saveVisibilityRadius(radius);
+}
+
+/**
+ * Apply shadow radius (controls shadow frustum AND per-chunk castShadow culling).
+ */
+export function applyShadowRadius(radius: number): void {
+  if (currentSettings) {
+    currentSettings.shadowRadius = radius;
+  }
+  updateShadowFrustumSize(radius);
+}
+
+/**
+ * Get the current shadow radius in chunks.
+ * Used by VoxelWorld for per-chunk castShadow distance culling.
+ */
+export function getShadowRadius(): number {
+  return currentSettings?.shadowRadius ?? 4;
 }
 
 export function getCurrentSettings(): QualitySettings | null {

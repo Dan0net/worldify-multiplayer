@@ -381,6 +381,10 @@ class StoreBridge {
     return getState().moonShadows;
   }
 
+  get shadowRadius(): number {
+    return getState().shadowRadius;
+  }
+
   get anisotropy(): number {
     return getState().anisotropy;
   }
@@ -427,6 +431,10 @@ class StoreBridge {
 
   setMoonShadows(enabled: boolean): void {
     getState().setMoonShadows(enabled);
+  }
+
+  setShadowRadius(radius: number): void {
+    getState().setShadowRadius(radius);
   }
 
   setAnisotropy(value: number): void {
