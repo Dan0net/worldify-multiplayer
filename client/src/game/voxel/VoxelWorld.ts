@@ -792,7 +792,12 @@ export class VoxelWorld implements ChunkProvider {
       }
     }
 
-    // console.log(`[VoxelWorld] Applied build to ${modifiedKeys.length}/${affectedKeys.length} loaded chunks`);
+    // Invalidate BFS cache so visibility recomputes with updated chunk data.
+    // Carving can expose previously-hidden chunks that need to be loaded.
+    if (modifiedKeys.length > 0) {
+      this.lastBFSChunk = null;
+    }
+
     return modifiedKeys;
   }
 
