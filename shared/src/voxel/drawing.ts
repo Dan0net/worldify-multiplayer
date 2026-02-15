@@ -144,8 +144,9 @@ export function calculateBuildBBox(operation: BuildOperation): VoxelBBox {
   
   // Calculate max radius in any direction (conservative estimate for rotated shapes)
   const maxSize = Math.max(config.size.x, config.size.y, config.size.z);
-  // Add some margin for rotation and smooth transitions
-  const margin = maxSize + 2;
+  // Add margin for rotation, smooth transitions, and 1 extra voxel so surface nets
+  // can read the empty neighbor row beyond the SDF shape boundary
+  const margin = maxSize + 3;
   
   // Convert world center to voxel coordinates
   const centerVoxelX = center.x / VOXEL_SCALE;
