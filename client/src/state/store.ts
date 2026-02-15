@@ -80,6 +80,10 @@ export interface BuildState {
   hasValidTarget: boolean;
   /** Reason the target is invalid, or null if valid */
   invalidReason: 'tooClose' | null;
+  /** Whether point-snapping is enabled */
+  snapPoint: boolean;
+  /** Whether grid-snapping is enabled */
+  snapGrid: boolean;
 }
 
 /** Environment/lighting settings */
@@ -393,6 +397,8 @@ export interface GameState {
   setBuildRotation: (rotationSteps: number) => void;
   setBuildHasValidTarget: (valid: boolean) => void;
   setBuildInvalidReason: (reason: 'tooClose' | null) => void;
+  toggleBuildSnapPoint: () => void;
+  toggleBuildSnapGrid: () => void;
   
   // Material/texture actions
   setTextureState: (state: TextureLoadingState) => void;
@@ -460,6 +466,8 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     rotationSteps: 0,   // No rotation
     hasValidTarget: false,
     invalidReason: null,
+    snapPoint: true,    // Point snapping on by default
+    snapGrid: false,    // Grid snapping off by default
   },
   
   // Voxel debug initial state
@@ -591,6 +599,12 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   })),
   setBuildInvalidReason: (invalidReason) => set((state) => ({
     build: { ...state.build, invalidReason },
+  })),
+  toggleBuildSnapPoint: () => set((state) => ({
+    build: { ...state.build, snapPoint: !state.build.snapPoint },
+  })),
+  toggleBuildSnapGrid: () => set((state) => ({
+    build: { ...state.build, snapGrid: !state.build.snapGrid },
   })),
   
   // Material/texture actions

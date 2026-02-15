@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useGameStore } from '../state/store';
+import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
@@ -98,9 +99,9 @@ export function Landing({ onJoin }: LandingProps) {
           {error}
         </p>
       )}
-      <p className="mt-8 opacity-50 text-sm max-w-md text-center">
-        Click to capture mouse • WASD to move • Space to jump • Shift to sprint
-      </p>
+      <div className="mt-8 opacity-50">
+        <KeyInstructions rows={GAME_KEY_ROWS} />
+      </div>
     </div>
   );
 }

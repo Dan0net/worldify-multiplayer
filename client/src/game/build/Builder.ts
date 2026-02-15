@@ -12,11 +12,12 @@
 import * as THREE from 'three';
 import { BuildMarker } from './BuildMarker';
 import { BuildPreview } from './BuildPreview';
+import { SnapManager } from './SnapManager';
 import { storeBridge } from '../../state/bridge';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, PLAYER_HEIGHT, PLAYER_RADIUS } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE } from '@worldify/shared';
 
 /**
  * Interface for objects that provide collision meshes for raycasting.
@@ -35,6 +36,9 @@ export class Builder {
 
   /** The build preview (voxel preview rendering) */
   private readonly preview: BuildPreview;
+
+  /** Snap point manager */
+  private readonly snapManager: SnapManager;
 
   /** Provider for collision meshes */
   private meshProvider: CollisionMeshProvider | null = null;
@@ -61,6 +65,7 @@ export class Builder {
     this.controls = controls;
     this.marker = new BuildMarker();
     this.preview = new BuildPreview();
+    this.snapManager = new SnapManager();
 
     // Register for build place events from controls
     this.controls.onBuildPlace = this.handlePlace;
@@ -108,6 +113,7 @@ export class Builder {
   addToScene(scene: THREE.Scene): void {
     if (this.addedToScene) return;
     scene.add(this.marker.getObject());
+    scene.add(this.snapManager.getObject());
     this.scene = scene;
     this.addedToScene = true;
   }
@@ -118,6 +124,7 @@ export class Builder {
   removeFromScene(scene: THREE.Scene): void {
     if (!this.addedToScene) return;
     scene.remove(this.marker.getObject());
+    scene.remove(this.snapManager.getObject());
     this.preview.clearPreview();
     this.addedToScene = false;
   }
@@ -133,13 +140,41 @@ export class Builder {
     // Skip if no mesh provider
     if (!this.meshProvider) return;
 
+    // Sync snap state from bridge
+    this.snapManager.snapPointEnabled = storeBridge.buildSnapPoint;
+    this.snapManager.gridSnapEnabled = storeBridge.buildSnapGrid;
+
     // Get collision meshes for raycasting
     const meshes = this.meshProvider.getCollisionMeshes();
 
     // Update the marker and get valid target state
     let { hasValidTarget } = this.marker.update(camera, meshes);
     let invalidReason: 'tooClose' | null = null;
-    
+
+    // Apply grid snap to marker position (before overlap check)
+    if (hasValidTarget && this.snapManager.gridSnapEnabled) {
+      this.snapManager.applyGridSnap(this.marker.getObject().position, VOXEL_SCALE);
+    }
+
+    // Apply point snap
+    let snappedDepositedIndex = -1;
+    if (hasValidTarget && this.snapManager.snapPointEnabled) {
+      const targetPos = this.marker.getTargetPosition();
+      if (targetPos) {
+        const preset = storeBridge.buildPreset;
+        const rotation = composeRotation(preset, storeBridge.buildRotationRadians);
+        const snapResult = this.snapManager.trySnap(
+          preset,
+          { x: targetPos.x, y: targetPos.y, z: targetPos.z },
+          rotation,
+        );
+        if (snapResult.snapped) {
+          this.marker.applySnapOffset(snapResult.delta);
+          snappedDepositedIndex = snapResult.snappedDepositedIndex;
+        }
+      }
+    }
+
     // Check if build shape overlaps player or camera (for modes that add solid geometry)
     if (hasValidTarget) {
       const preset = storeBridge.buildPreset;
@@ -152,6 +187,24 @@ export class Builder {
           this.marker.setTooCloseWarning(true);
         }
       }
+    }
+
+    // Update snap visuals AFTER snap offset and overlap check
+    // Hide current-shape markers when target is invalid
+    if (hasValidTarget && this.snapManager.snapPointEnabled) {
+      const finalPos = this.marker.getTargetPosition();
+      if (finalPos) {
+        const preset = storeBridge.buildPreset;
+        const rotation = composeRotation(preset, storeBridge.buildRotationRadians);
+        this.snapManager.updateVisuals(
+          preset,
+          { x: finalPos.x, y: finalPos.y, z: finalPos.z },
+          rotation,
+          snappedDepositedIndex,
+        );
+      }
+    } else if (this.snapManager.snapPointEnabled) {
+      this.snapManager.updateVisuals(storeBridge.buildPreset, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 }, -1);
     }
 
     // Update store with valid target state and reason
@@ -254,15 +307,21 @@ export class Builder {
     const rotationRadians = storeBridge.buildRotationRadians;
 
     // Create build intent using composed rotation (base + user Y)
+    const rotation = composeRotation(preset, rotationRadians);
+    const center = { x: targetPos.x, y: targetPos.y, z: targetPos.z };
+
     const intent: VoxelBuildIntent = {
-      center: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
-      rotation: composeRotation(preset, rotationRadians),
+      center,
+      rotation,
       config: preset.config,
     };
 
     // Send build intent to server
     const encoded = encodeVoxelBuildIntent(intent);
     sendBinary(encoded);
+
+    // Deposit snap points at the placed position
+    this.snapManager.deposit(preset, center, rotation);
 
     // Note: We no longer apply locally - server will broadcast commit and we apply from that
     // This ensures all clients stay in sync. Hold preview visible until server-confirmed remesh.
@@ -293,5 +352,6 @@ export class Builder {
     }
     this.marker.dispose();
     this.preview.dispose();
+    this.snapManager.dispose();
   }
 }

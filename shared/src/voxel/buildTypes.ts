@@ -40,6 +40,24 @@ export enum BuildShape {
   PRISM = 'prism',
 }
 
+/**
+ * Snap shape determines which corners/edges of a build shape generate snap points.
+ */
+export enum BuildPresetSnapShape {
+  /** No snap points */
+  NONE = 'none',
+  /** 8 corners of a box */
+  CUBE = 'cube',
+  /** 4 corners of a rectangular plane (XY) */
+  PLANE = 'plane',
+  /** 2 endpoints along Y axis */
+  LINE = 'line',
+  /** Single point at center */
+  POINT = 'point',
+  /** 10 points around cylinder (cardinal + top/bottom center) */
+  CYLINDER = 'cylinder',
+}
+
 // ============== Interfaces ==============
 
 /**

@@ -84,6 +84,14 @@ class StoreBridge {
     return this.buildPresetId !== 0;
   }
 
+  get buildSnapPoint(): boolean {
+    return getState().build.snapPoint;
+  }
+
+  get buildSnapGrid(): boolean {
+    return getState().build.snapGrid;
+  }
+
   get useServerChunks(): boolean {
     return getState().useServerChunks;
   }
@@ -195,6 +203,20 @@ class StoreBridge {
    */
   setBuildInvalidReason(reason: 'tooClose' | null): void {
     getState().setBuildInvalidReason(reason);
+  }
+
+  /**
+   * Toggle point-snap on/off.
+   */
+  toggleBuildSnapPoint(): void {
+    getState().toggleBuildSnapPoint();
+  }
+
+  /**
+   * Toggle grid-snap on/off.
+   */
+  toggleBuildSnapGrid(): void {
+    getState().toggleBuildSnapGrid();
   }
 
   // Texture/material system

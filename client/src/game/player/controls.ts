@@ -65,6 +65,16 @@ export class Controls {
       storeBridge.rotateBuild(1);
       return;
     }
+
+    // Snap toggles
+    if (e.code === 'KeyG') {
+      storeBridge.toggleBuildSnapGrid();
+      return;
+    }
+    if (e.code === 'KeyT') {
+      storeBridge.toggleBuildSnapPoint();
+      return;
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {

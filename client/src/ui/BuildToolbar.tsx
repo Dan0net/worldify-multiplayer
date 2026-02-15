@@ -12,6 +12,7 @@
 
 import { useGameStore } from '../state/store';
 import { DEFAULT_BUILD_PRESETS, BuildMode, GameMode } from '@worldify/shared';
+import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 
 /** Mode colors for visual distinction */
 const MODE_COLORS: Record<BuildMode, string> = {
@@ -89,17 +90,7 @@ export function BuildToolbar() {
       </div>
 
       {/* Hotkey hints */}
-      <div className="flex gap-4 text-white/60 text-xs">
-        <span>
-          <kbd className="px-1.5 py-0.5 bg-white/20 rounded">Q</kbd>
-          <kbd className="px-1.5 py-0.5 bg-white/20 rounded ml-0.5">E</kbd>
-          <span className="ml-1">Rotate</span>
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 bg-white/20 rounded">Click</kbd>
-          <span className="ml-1">Place</span>
-        </span>
-      </div>
+      <KeyInstructions rows={GAME_KEY_ROWS} />
     </div>
   );
 }

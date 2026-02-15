@@ -28,6 +28,7 @@ export * from './voxel/chunkUtils.js';
 export * from './voxel/visibility.js';
 export * from './voxel/buildTypes.js';
 export * from './voxel/buildPresets.js';
+export * from './voxel/snapPoints.js';
 export * from './voxel/shapes.js';
 export * from './voxel/drawing.js';
 

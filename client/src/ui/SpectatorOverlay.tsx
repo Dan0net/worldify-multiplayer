@@ -12,6 +12,7 @@ import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
 import { getCamera } from '../game/scene/camera';
+import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 
 export function SpectatorOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
@@ -231,11 +232,9 @@ export function SpectatorOverlay() {
 
       {/* Controls hint - only show when connected */}
       {isConnected && (
-        <p className="mt-8 text-white opacity-70 text-base text-center max-w-md">
-          WASD to move • Space to jump • Shift to sprint<br />
-          1/2/3 for build tools • Click to place • Q/E to rotate<br />
-          M for map
-        </p>
+        <div className="mt-8">
+          <KeyInstructions rows={GAME_KEY_ROWS} />
+        </div>
       )}
     </div>
   );

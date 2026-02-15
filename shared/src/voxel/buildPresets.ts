@@ -3,7 +3,7 @@
  * Ported from worldify-app's BuildPresets.ts with architecture-appropriate types.
  */
 
-import { BuildConfig, BuildMode, BuildShape, Size3 } from './buildTypes.js';
+import { BuildConfig, BuildMode, BuildPresetSnapShape, BuildShape, Size3 } from './buildTypes.js';
 import {
   Quat, yRotationQuat, xRotationQuat, multiplyQuats,
 } from '../util/math.js';
@@ -40,6 +40,8 @@ export interface BuildPreset {
    * If omitted, treated as identity (no base rotation).
    */
   baseRotation?: Quat;
+  /** Shape of snap points generated for this preset */
+  snapShape: BuildPresetSnapShape;
 }
 
 /**
@@ -63,6 +65,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     name: 'None',
     config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0, 0, 0), material: 0 },
     align: BuildPresetAlign.CENTER,
+    snapShape: BuildPresetSnapShape.POINT,
   },
   // 1 = Brick wall (cube, add, thin slab, base-projected)
   {
@@ -70,6 +73,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     name: 'Brick Wall',
     config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 },
     align: BuildPresetAlign.PROJECT,
+    snapShape: BuildPresetSnapShape.PLANE,
   },
   // 2 = Stone floor (cube, fill, thin slab rotated flat, base-projected)
   {
@@ -78,6 +82,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 },
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.PI / 2),
+    snapShape: BuildPresetSnapShape.PLANE,
   },
   // 3 = Wooden pillar (cube, add, tall narrow, base-aligned)
   {
@@ -85,6 +90,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     name: 'Wood Pillar',
     config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
     align: BuildPresetAlign.BASE,
+    snapShape: BuildPresetSnapShape.LINE,
   },
   // 4 = Wooden beam (cube, add, tall narrow rotated horizontal, base-projected)
   {
@@ -93,6 +99,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.PI / 2),
+    snapShape: BuildPresetSnapShape.LINE,
   },
   // 5 = Leafy blob (sphere, fill, centered)
   {
@@ -100,6 +107,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     name: 'Leafy Blob',
     config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(2, 2, 2), material: 48 },
     align: BuildPresetAlign.CENTER,
+    snapShape: BuildPresetSnapShape.NONE,
   },
   // 6 = Stone stairs (cube, fill, angled slab, base-projected)
   {
@@ -112,6 +120,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     },
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.atan(4 / 2)),
+    snapShape: BuildPresetSnapShape.PLANE,
   },
   // 7 = Blob carve (sphere, subtract, centered)
   {
@@ -119,6 +128,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     name: 'Blob Carve',
     config: { shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 },
     align: BuildPresetAlign.CENTER,
+    snapShape: BuildPresetSnapShape.NONE,
   },
   // 8 = Door carve (cube, subtract, surface-aligned)
   {
@@ -126,6 +136,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     name: 'Door Carve',
     config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 },
     align: BuildPresetAlign.SURFACE,
+    snapShape: BuildPresetSnapShape.NONE,
   },
   // 9 = Blob paint (sphere, paint, centered)
   {
@@ -133,6 +144,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     name: 'Paint',
     config: { shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 },
     align: BuildPresetAlign.CENTER,
+    snapShape: BuildPresetSnapShape.NONE,
   },
 ] as const;
 

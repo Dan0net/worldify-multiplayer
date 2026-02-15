@@ -528,6 +528,14 @@ export class BuildMarker {
   }
 
   /**
+   * Apply a snap offset to the marker's group position.
+   * Called after update() to shift the marker to the snapped position.
+   */
+  applySnapOffset(delta: THREE.Vector3): void {
+    this.group.position.sub(delta);
+  }
+
+  /**
    * Dispose of all resources.
    */
   dispose(): void {
