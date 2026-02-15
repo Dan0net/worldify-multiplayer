@@ -29,7 +29,7 @@ export interface QualitySettings {
   colorCorrectionEnabled: boolean;
 
   // Shadows
-  shadowMapSize: number;      // 0 (off), 512, 1024, 2048, 4096
+  shadowMapSize: number;      // 512, 1024, 2048, 4096 (applied via environment settings)
   shadowsEnabled: boolean;
   moonShadows: boolean;       // Moon casts shadows too
 
@@ -97,7 +97,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     ssaoEnabled: false,
     bloomEnabled: false,
     colorCorrectionEnabled: false,
-    shadowMapSize: 0,
+    shadowMapSize: 512,
     shadowsEnabled: false,
     moonShadows: false,
     maxPixelRatio: 1,

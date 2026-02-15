@@ -4,7 +4,7 @@
  * Centralises the wiring between QualityPresets and:
  * - WebGLRenderer (pixel ratio, shadows, antialias flag)
  * - Post-processing (SSAO, bloom, color correction)
- * - Lighting (shadow map size, moon shadow eligibility)
+ * - Lighting (shadow map size via environment settings, moon shadow eligibility)
  * - TerrainMaterial (shader map defines, anisotropy)
  * - VoxelWorld (visibility radius)
  *
@@ -21,7 +21,7 @@ import {
   saveVisibilityRadius,
 } from './QualityPresets.js';
 import { updatePostProcessing, updateMsaaSamples } from '../scene/postprocessing.js';
-import { getActiveShadowLight, setMoonShadowsAllowed, getSunLight, getMoonLight, updateShadowFrustumSize } from '../scene/Lighting.js';
+import { getActiveShadowLight, setMoonShadowsAllowed, updateShadowFrustumSize, applyEnvironmentSettings } from '../scene/Lighting.js';
 import {
   setShaderMapDefines,
   setTerrainAnisotropy,
@@ -64,8 +64,11 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   // --- Renderer ---
   applyPixelRatio(preset.maxPixelRatio);
   applyShadowsEnabled(preset.shadowsEnabled);
-  applyShadowMapSize(preset.shadowMapSize);
   applyMoonShadows(preset.moonShadows);
+
+  // --- Shadow map size (routed through environment settings) ---
+  storeBridge.setEnvironment({ shadowMapSize: preset.shadowMapSize });
+  applyEnvironmentSettings({ shadowMapSize: preset.shadowMapSize });
 
   // --- MSAA ---
   applyMsaaSamples(preset.msaaSamples);
@@ -125,7 +128,6 @@ export function syncQualityToStore(level: QualityLevel, customVisibility?: numbe
   storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
   storeBridge.setShadowsEnabled(preset.shadowsEnabled);
   storeBridge.setMoonShadows(preset.moonShadows);
-  storeBridge.setShadowMapSize(preset.shadowMapSize);
   storeBridge.setAnisotropy(preset.anisotropy);
   storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
   storeBridge.setMsaaSamples(preset.msaaSamples);
@@ -151,21 +153,6 @@ export function applyShadowsEnabled(enabled: boolean): void {
   const light = getActiveShadowLight();
   if (light) {
     light.castShadow = enabled;
-  }
-}
-
-export function applyShadowMapSize(size: number): void {
-  // Size 0 means shadows off - handled by applyShadowsEnabled
-  if (size <= 0) return;
-  
-  // Update both lights so the shadow config is correct after a swap
-  for (const light of [getSunLight(), getMoonLight()]) {
-    if (light && light.shadow.mapSize.width !== size) {
-      light.shadow.mapSize.width = size;
-      light.shadow.mapSize.height = size;
-      light.shadow.map?.dispose();
-      light.shadow.map = null;
-    }
   }
 }
 

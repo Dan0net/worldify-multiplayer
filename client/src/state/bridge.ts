@@ -381,10 +381,6 @@ class StoreBridge {
     return getState().moonShadows;
   }
 
-  get shadowMapSize(): number {
-    return getState().shadowMapSize;
-  }
-
   get anisotropy(): number {
     return getState().anisotropy;
   }
@@ -431,10 +427,6 @@ class StoreBridge {
 
   setMoonShadows(enabled: boolean): void {
     getState().setMoonShadows(enabled);
-  }
-
-  setShadowMapSize(size: number): void {
-    getState().setShadowMapSize(size);
   }
 
   setAnisotropy(value: number): void {

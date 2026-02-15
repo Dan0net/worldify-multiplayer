@@ -13,7 +13,6 @@ import {
   applyBloomEnabled,
   applyColorCorrectionEnabled,
   applyShadowsEnabled,
-  applyShadowMapSize,
   applyMoonShadows,
   applyAnisotropy,
   applyPixelRatio,
@@ -202,7 +201,6 @@ export function DebugPanel() {
     colorCorrectionEnabled,
     shadowsEnabled,
     moonShadows,
-    shadowMapSize,
     anisotropy,
     maxPixelRatio,
     msaaSamples,
@@ -627,20 +625,6 @@ export function DebugPanel() {
           />
           {shadowsEnabled && (
             <>
-              <Select
-                label="Map Size"
-                value={shadowMapSize}
-                options={shadowMapOptions}
-                onChange={(v) => {
-                  if (v === 0) {
-                    storeBridge.setShadowsEnabled(false);
-                    applyShadowsEnabled(false);
-                  } else {
-                    storeBridge.setShadowMapSize(v);
-                    applyShadowMapSize(v);
-                  }
-                }}
-              />
               <Toggle
                 label="Moon Shadows"
                 value={moonShadows}
