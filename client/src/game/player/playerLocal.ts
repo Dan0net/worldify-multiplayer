@@ -21,6 +21,8 @@ import {
   PLAYER_RADIUS,
   PHYSICS_STEPS,
   MAX_FALL_TIME,
+  COYOTE_TIME,
+  JUMP_BUFFER_TIME,
   // Movement utilities from shared
   getWorldDirectionFromInput,
 } from '@worldify/shared';
@@ -46,6 +48,10 @@ export class PlayerLocal {
   // State
   private isGrounded = false;
   private inputSeq = 0;
+
+  // Jump assist timers
+  private coyoteTimer = 0;     // Time since last grounded (for coyote time)
+  private jumpBufferTimer = 0; // Time since last jump press (for jump buffering)
 
   // Fall detection
   private fallTime = 0; // Continuous time spent falling (seconds)
@@ -120,10 +126,24 @@ export class PlayerLocal {
     this.yaw = controls.yaw;
     this.pitch = controls.pitch;
 
-    // Handle jump - only if grounded
-    if (this.isGrounded && (buttons & INPUT_JUMP)) {
+    // Update jump buffer: record when jump was pressed
+    if (buttons & INPUT_JUMP) {
+      this.jumpBufferTimer = JUMP_BUFFER_TIME;
+    }
+
+    // Handle jump with coyote time + jump buffer
+    const canCoyoteJump = this.isGrounded || this.coyoteTimer > 0;
+    if (canCoyoteJump && this.jumpBufferTimer > 0) {
       this.velocity.y = JUMP_VELOCITY;
       this.isGrounded = false;
+      this.coyoteTimer = 0;      // Consume coyote time
+      this.jumpBufferTimer = 0;  // Consume jump buffer
+    }
+
+    // Tick down timers
+    this.jumpBufferTimer -= dt;
+    if (!this.isGrounded) {
+      this.coyoteTimer -= dt;
     }
 
     // Run physics in sub-steps for stability
@@ -185,6 +205,11 @@ export class PlayerLocal {
     const wasGrounded = this.isGrounded;
     this.isGrounded = result.isOnGround;
 
+    // Reset coyote timer when grounded; start it when leaving ground (not from jumping)
+    if (this.isGrounded) {
+      this.coyoteTimer = COYOTE_TIME;
+    }
+
     // Apply position correction
     this.position.add(result.deltaVector);
 
@@ -240,6 +265,8 @@ export class PlayerLocal {
     this.velocity.set(0, 0, 0);
     this.isGrounded = false;
     this.fallTime = 0;
+    this.coyoteTimer = 0;
+    this.jumpBufferTimer = 0;
   }
 
   /**

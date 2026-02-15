@@ -38,6 +38,14 @@ export const PLAYER_HEIGHT_INNER = PLAYER_HEIGHT - PLAYER_RADIUS * 2;
 /** Ground level Y coordinate */
 export const GROUND_LEVEL = 0;
 
+// ============== Jump Assist ==============
+
+/** Time after leaving ground where jump is still allowed (seconds) */
+export const COYOTE_TIME = 0.15;
+
+/** Time before landing where a jump input is remembered and applied on land (seconds) */
+export const JUMP_BUFFER_TIME = 0.1;
+
 // ============== Fall Detection ==============
 
 /** Maximum continuous fall time before triggering respawn (seconds) */
