@@ -58,6 +58,13 @@ export class BuildMarker {
   private readonly _hitPoint = new THREE.Vector3();
   private readonly _hitNormal = new THREE.Vector3();
 
+  /** Stored composed rotation quaternion (base + user Y rotation) */
+  private readonly _composedQuat = new THREE.Quaternion();
+
+  /** Temp vectors for projection calculations */
+  private readonly _hNormal = new THREE.Vector3();
+  private readonly _tempAxis = new THREE.Vector3();
+
   /** Current preset ID being shown */
   private currentPresetId = -1;
 
@@ -166,10 +173,32 @@ export class BuildMarker {
         break;
 
       case BuildPresetAlign.BASE:
-      case BuildPresetAlign.PROJECT:
         // Base at hit point - wireframe is offset up within the group
-        // Group stays at hit point so the base (bottom) of marker aligns with surface
         break;
+
+      case BuildPresetAlign.PROJECT: {
+        // Offset depends on whether the surface is vertical or horizontal.
+        // Vertical: push away from surface (thin-axis clearance) + raise so base sits at hit Y
+        // Horizontal: center on hit point (no offset at all, floor straddles surface)
+        const minHalfExtent = Math.min(size.x, size.y, size.z);
+        if (Math.abs(hitNormal.y) < 0.5) {
+          // Vertical surface: offset along horizontal normal by thin-axis clearance
+          const hN = this._hNormal.set(hitNormal.x, 0, hitNormal.z).normalize();
+          pos.addScaledVector(hN, minHalfExtent * VOXEL_SCALE);
+
+          // Raise so the base of the rotated shape sits at the hit Y level.
+          // Compute the OBB half-extent along the world Y axis.
+          this._tempAxis.set(1, 0, 0).applyQuaternion(this._composedQuat);
+          let rotatedHalfY = size.x * Math.abs(this._tempAxis.y);
+          this._tempAxis.set(0, 1, 0).applyQuaternion(this._composedQuat);
+          rotatedHalfY += size.y * Math.abs(this._tempAxis.y);
+          this._tempAxis.set(0, 0, 1).applyQuaternion(this._composedQuat);
+          rotatedHalfY += size.z * Math.abs(this._tempAxis.y);
+          pos.y += rotatedHalfY * VOXEL_SCALE;
+        }
+        // Horizontal / ceiling surfaces: centered on hit point (no offset)
+        break;
+      }
 
       case BuildPresetAlign.SURFACE:
         // Offset along normal by half size (average half-extent)
@@ -246,11 +275,12 @@ export class BuildMarker {
 
     // Apply composed rotation (base rotation + user Y rotation)
     const composed = composeRotation(preset, (rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180);
-    this.wireframe.quaternion.set(composed.x, composed.y, composed.z, composed.w);
+    this._composedQuat.set(composed.x, composed.y, composed.z, composed.w);
+    this.wireframe.quaternion.copy(this._composedQuat);
 
-    // For BASE/PROJECT alignment, offset the wireframe up so its bottom is at the group origin
-    // This way the marker's base aligns with the hit point
-    if (preset.align === BuildPresetAlign.BASE || preset.align === BuildPresetAlign.PROJECT) {
+    // For BASE alignment, offset the wireframe up so its bottom is at the group origin.
+    // PROJECT handles its own positioning in calculatePosition() (normal-dependent).
+    if (preset.align === BuildPresetAlign.BASE) {
       this.wireframe.position.y = halfY;
     }
 
@@ -338,9 +368,10 @@ export class BuildMarker {
     const preset = getPreset(this.currentPresetId);
     const pos = this.group.position.clone();
 
-    // For BASE/PROJECT alignment, the group is at the hit point (base of the shape)
-    // but the build operation needs the center, so offset up by half-height
-    if (preset.align === BuildPresetAlign.BASE || preset.align === BuildPresetAlign.PROJECT) {
+    // For BASE alignment, the group is at the hit point (base of the shape)
+    // but the build operation needs the center, so offset up by half-height.
+    // PROJECT group position is already the center (set in calculatePosition).
+    if (preset.align === BuildPresetAlign.BASE) {
       pos.y += preset.config.size.y * VOXEL_SCALE;
     }
 
