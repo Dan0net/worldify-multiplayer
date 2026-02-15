@@ -191,4 +191,4 @@ export const BUILD_ROTATION_STEP_RAD = (BUILD_ROTATION_STEP * Math.PI) / 180;
  * Projection deadzone: axes with less normal contribution than one rotation step
  * are considered parallel to the surface. Equal to sin(BUILD_ROTATION_STEP_RAD).
  */
-export const BUILD_PROJECTION_DEADZONE = Math.sin(BUILD_ROTATION_STEP_RAD);
+export const BUILD_PROJECTION_DEADZONE = Math.sin(BUILD_ROTATION_STEP_RAD / 2.0);
