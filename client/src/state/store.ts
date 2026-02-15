@@ -333,7 +333,7 @@ export interface GameState {
   colorCorrectionEnabled: boolean;
   shadowsEnabled: boolean;
   moonShadows: boolean;
-  shadowMapSize: number;
+  shadowRadius: number;
   anisotropy: number;
   maxPixelRatio: number;
   msaaSamples: number;
@@ -389,7 +389,7 @@ export interface GameState {
   setColorCorrectionEnabled: (enabled: boolean) => void;
   setShadowsEnabled: (enabled: boolean) => void;
   setMoonShadows: (enabled: boolean) => void;
-  setShadowMapSize: (size: number) => void;
+  setShadowRadius: (radius: number) => void;
   setAnisotropy: (value: number) => void;
   setMaxPixelRatio: (ratio: number) => void;
   setMsaaSamples: (samples: number) => void;
@@ -494,7 +494,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   colorCorrectionEnabled: true,
   shadowsEnabled: true,
   moonShadows: true,
-  shadowMapSize: 4096,
+  shadowRadius: 5,
   anisotropy: 8,
   maxPixelRatio: 2,
   msaaSamples: 4,
@@ -576,7 +576,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setColorCorrectionEnabled: (enabled) => set({ colorCorrectionEnabled: enabled }),
   setShadowsEnabled: (enabled) => set({ shadowsEnabled: enabled }),
   setMoonShadows: (enabled) => set({ moonShadows: enabled }),
-  setShadowMapSize: (size) => set({ shadowMapSize: size }),
+  setShadowRadius: (radius) => set({ shadowRadius: radius }),
   setAnisotropy: (value) => set({ anisotropy: value }),
   setMaxPixelRatio: (ratio) => set({ maxPixelRatio: ratio }),
   setMsaaSamples: (samples) => set({ msaaSamples: samples }),

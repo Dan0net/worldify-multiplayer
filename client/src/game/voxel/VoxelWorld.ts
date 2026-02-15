@@ -28,6 +28,7 @@ import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
 import { sendBinary } from '../../net/netClient.js';
 import { storeBridge } from '../../state/bridge.js';
 import { perfStats } from '../debug/PerformanceStats.js';
+import { getShadowRadius } from '../quality/QualityManager.js';
 import {
   getVisibleChunks,
   getFrustumFromCamera,
@@ -299,6 +300,9 @@ export class VoxelWorld implements ChunkProvider {
    * Uses hysteresis: show if reachable OR (loaded AND within extended radius).
    * This prevents popping when player crosses chunk boundaries.
    * 
+   * Also applies shadow distance culling: chunks beyond the shadow radius
+   * have castShadow disabled so they don't contribute to the shadow pass.
+   * 
    * NOTE: We intentionally do NOT frustum-cull here. Three.js's built-in per-mesh
    * frustum culling tests each mesh against the active camera independently (main
    * camera for the scene pass, light camera for shadow maps). Manual culling against
@@ -309,6 +313,7 @@ export class VoxelWorld implements ChunkProvider {
     
     const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
     const visibilityRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
+    const shadowRadius = getShadowRadius();
 
     for (const [key, chunkMesh] of this.meshes) {
       const chunk = this.chunks.get(key);
@@ -330,6 +335,10 @@ export class VoxelWorld implements ChunkProvider {
       }
 
       chunkMesh.setVisible(true);
+
+      // Shadow distance culling: only chunks within shadow radius cast shadows
+      const inShadowRadius = dx <= shadowRadius && dy <= shadowRadius && dz <= shadowRadius;
+      chunkMesh.setShadowCasting(inShadowRadius);
     }
   }
 

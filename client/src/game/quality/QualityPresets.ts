@@ -29,9 +29,10 @@ export interface QualitySettings {
   colorCorrectionEnabled: boolean;
 
   // Shadows
-  shadowMapSize: number;      // 0 (off), 512, 1024, 2048, 4096
+  shadowMapSize: number;      // 512, 1024, 2048, 4096 (applied via environment settings)
   shadowsEnabled: boolean;
   moonShadows: boolean;       // Moon casts shadows too
+  shadowRadius: number;       // Shadow casting distance in chunks (independent of visibility)
 
   // Rendering
   maxPixelRatio: number;      // Cap for devicePixelRatio
@@ -55,6 +56,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 4096,
     shadowsEnabled: true,
     moonShadows: true,
+    shadowRadius: 5,
     maxPixelRatio: 2,
     msaaSamples: 4,
     visibilityRadius: 8,
@@ -70,6 +72,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 2048,
     shadowsEnabled: true,
     moonShadows: false,
+    shadowRadius: 4,
     maxPixelRatio: 1.5,
     msaaSamples: 2,
     visibilityRadius: 6,
@@ -85,6 +88,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 1024,
     shadowsEnabled: true,
     moonShadows: false,
+    shadowRadius: 3,
     maxPixelRatio: 1,
     msaaSamples: 0,
     visibilityRadius: 5,
@@ -97,9 +101,10 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     ssaoEnabled: false,
     bloomEnabled: false,
     colorCorrectionEnabled: false,
-    shadowMapSize: 0,
+    shadowMapSize: 512,
     shadowsEnabled: false,
     moonShadows: false,
+    shadowRadius: 2,
     maxPixelRatio: 1,
     msaaSamples: 0,
     visibilityRadius: 3,

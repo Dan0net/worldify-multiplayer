@@ -13,8 +13,8 @@ import {
   applyBloomEnabled,
   applyColorCorrectionEnabled,
   applyShadowsEnabled,
-  applyShadowMapSize,
   applyMoonShadows,
+  applyShadowRadius,
   applyAnisotropy,
   applyPixelRatio,
   applyMsaaSamples,
@@ -202,7 +202,7 @@ export function DebugPanel() {
     colorCorrectionEnabled,
     shadowsEnabled,
     moonShadows,
-    shadowMapSize,
+    shadowRadius,
     anisotropy,
     maxPixelRatio,
     msaaSamples,
@@ -627,20 +627,6 @@ export function DebugPanel() {
           />
           {shadowsEnabled && (
             <>
-              <Select
-                label="Map Size"
-                value={shadowMapSize}
-                options={shadowMapOptions}
-                onChange={(v) => {
-                  if (v === 0) {
-                    storeBridge.setShadowsEnabled(false);
-                    applyShadowsEnabled(false);
-                  } else {
-                    storeBridge.setShadowMapSize(v);
-                    applyShadowMapSize(v);
-                  }
-                }}
-              />
               <Toggle
                 label="Moon Shadows"
                 value={moonShadows}
@@ -648,6 +634,18 @@ export function DebugPanel() {
                   storeBridge.setMoonShadows(v);
                   applyMoonShadows(v);
                 }}
+              />
+              <Slider
+                label="Shadow Radius"
+                value={shadowRadius}
+                min={1}
+                max={8}
+                step={1}
+                onChange={(v) => {
+                  storeBridge.setShadowRadius(v);
+                  applyShadowRadius(v);
+                }}
+                formatValue={(v) => `${v} chunks`}
               />
             </>
           )}

@@ -422,35 +422,37 @@ export const depthVertexSuffix = /* glsl */ `
 
 export const depthFragmentPrefix = /* glsl */ `
   uniform sampler2DArray mapArray;
-  uniform float repeatScale;
   uniform float repeatScales[64];
-  uniform mat3 blendOffset;
   uniform float alphaCutoff;
-  uniform float blendSharpness;
   
   ${fragmentVaryings}
-  
-  ${blendingFunctions}
 `;
 
 export const depthAlphaDiscard = /* glsl */ `
+  // Simplified alpha test for shadow depth pass:
+  // Sample only the dominant material on the dominant tri-planar axis.
+  // Reduces 9 texture fetches (3 materials × 3 axes) to 1.
   vec3 pos = vWorldPosition / 8.0;
-  vec3 triBlend = calcTriPlanarBlend(vWorldNormal, blendOffset);
-  vec3 matBlend = calcMaterialBlend(vMaterialWeights);
-  
-  // Sample alpha with per-material repeat scales
-  int m0 = int(vMaterialIds.x);
-  int m1 = int(vMaterialIds.y);
-  int m2 = int(vMaterialIds.z);
-  float scale0 = repeatScales[m0];
-  float scale1 = repeatScales[m1];
-  float scale2 = repeatScales[m2];
-  
-  vec4 a0 = sampleTriPlanarAt(mapArray, pos, triBlend, scale0, vMaterialIds.x);
-  vec4 a1 = sampleTriPlanarAt(mapArray, pos, triBlend, scale1, vMaterialIds.y);
-  vec4 a2 = sampleTriPlanarAt(mapArray, pos, triBlend, scale2, vMaterialIds.z);
-  float alpha = (a0.a * matBlend.x + a1.a * matBlend.y + a2.a * matBlend.z);
-  
+  vec3 absN = abs(vWorldNormal);
+
+  // Pick dominant material (highest weight)
+  float domId = vMaterialIds.x;
+  float domW  = vMaterialWeights.x;
+  if (vMaterialWeights.y > domW) { domId = vMaterialIds.y; domW = vMaterialWeights.y; }
+  if (vMaterialWeights.z > domW) { domId = vMaterialIds.z; }
+
+  // Pick dominant axis and sample once
+  float scale = repeatScales[int(domId)];
+  vec2 uv;
+  if (absN.x >= absN.y && absN.x >= absN.z) {
+    uv = pos.zy * scale;
+  } else if (absN.y >= absN.z) {
+    uv = pos.xz * scale;
+  } else {
+    uv = pos.xy * scale;
+  }
+  float alpha = texture(mapArray, vec3(uv, domId)).a;
+
   if (alpha < alphaCutoff) {
     discard;
   }

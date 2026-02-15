@@ -400,12 +400,14 @@ function transferShadowCaster(target: 'sun' | 'moon'): void {
 const _lightOffset = new THREE.Vector3();
 
 /**
- * Update the shadow frustum size based on visibility radius.
- * Call when quality/visibility settings change.
+ * Update the shadow frustum size based on shadow radius (in chunks).
+ * Uses a dedicated shadow radius that is typically smaller than visibility radius,
+ * so the frustum is tighter and produces higher-resolution shadows.
+ * Call when quality settings change.
  */
-export function updateShadowFrustumSize(visibilityRadius: number): void {
-  // Frustum covers the visible terrain + a small margin for shadow casters outside view
-  const newSize = visibilityRadius * CHUNK_WORLD_SIZE + SHADOW_MARGIN;
+export function updateShadowFrustumSize(shadowRadius: number): void {
+  // Frustum covers the shadow-casting area + a small margin
+  const newSize = shadowRadius * CHUNK_WORLD_SIZE + SHADOW_MARGIN;
   if (newSize === shadowFrustumSize) return;
   shadowFrustumSize = newSize;
 
