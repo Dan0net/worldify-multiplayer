@@ -17,6 +17,7 @@ import {
   GameMode,
   type MaterialName,
 } from '@worldify/shared';
+import { useMaterialThumbnails } from './useMaterialThumbnails';
 
 // ============== Constants ==============
 
@@ -31,11 +32,13 @@ function formatName(name: string): string {
 function MaterialSwatch({
   name,
   color,
+  thumbnailUrl,
   isActive,
   onSelect,
 }: {
   name: MaterialName;
   color: string;
+  thumbnailUrl?: string;
   isActive: boolean;
   onSelect: () => void;
 }) {
@@ -43,7 +46,7 @@ function MaterialSwatch({
     <button
       onClick={onSelect}
       className={`
-        group relative w-10 h-10 rounded-lg border-2 transition-all
+        group relative w-10 h-10 rounded-lg border-2 transition-all overflow-hidden
         ${isActive
           ? 'border-cyan-400 shadow-lg shadow-cyan-400/30 scale-110 z-10'
           : 'border-transparent hover:border-white/40 hover:scale-105'
@@ -52,6 +55,14 @@ function MaterialSwatch({
       style={{ backgroundColor: color }}
       title={formatName(name)}
     >
+      {thumbnailUrl && (
+        <img
+          src={thumbnailUrl}
+          alt={name}
+          className="absolute inset-0 w-full h-full object-cover"
+          draggable={false}
+        />
+      )}
       {/* Tooltip on hover */}
       <div className="
         absolute -top-8 left-1/2 -translate-x-1/2 
@@ -78,6 +89,9 @@ export function BuildMenu() {
   const currentConfig = presetConfigs[presetId];
   const currentMaterial = currentConfig?.material ?? 0;
   const isNonePreset = presetId === NONE_PRESET_ID;
+
+  // Material texture thumbnails (loaded once from albedo.bin)
+  const thumbnails = useMaterialThumbnails();
 
   const handleClose = useCallback(() => {
     setBuildMenuOpen(false);
@@ -136,6 +150,7 @@ export function BuildMenu() {
                     key={id}
                     name={name}
                     color={MATERIAL_COLORS[id] ?? '#888'}
+                    thumbnailUrl={thumbnails?.[id]}
                     isActive={currentMaterial === id}
                     onSelect={() => handleSelectMaterial(id)}
                   />
@@ -148,9 +163,13 @@ export function BuildMenu() {
           {!isNonePreset && (
             <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/10">
               <div
-                className="w-8 h-8 rounded border border-white/20"
+                className="w-8 h-8 rounded border border-white/20 overflow-hidden"
                 style={{ backgroundColor: MATERIAL_COLORS[currentMaterial] ?? '#888' }}
-              />
+              >
+                {thumbnails?.[currentMaterial] && (
+                  <img src={thumbnails[currentMaterial]} alt="" className="w-full h-full object-cover" />
+                )}
+              </div>
               <div>
                 <div className="text-sm text-white/80">
                   {formatName(MATERIAL_NAMES[currentMaterial] ?? 'unknown')}
