@@ -215,17 +215,27 @@ export function sdfFromConfig(p: Vec3, config: BuildConfig): number {
   // Apply hollow modifier if thickness is specified
   if (config.thickness !== undefined && config.thickness > 0) {
     const worldThickness = config.thickness * VOXEL_SCALE;
-    // For hollow shapes with open top/bottom, extend the hollow region
-    if (config.shape === BuildShape.CYLINDER || config.shape === BuildShape.CUBE) {
-      const hollowD = hollowSdf(d, worldThickness);
-      if (!config.closed) {
-        // Open top/bottom: also cut out the vertical caps
-        const capCut = -(Math.abs(p.y) - worldSize.y);
-        d = Math.min(hollowD, capCut);
+    if (!config.closed && (config.shape === BuildShape.CYLINDER || config.shape === BuildShape.CUBE)) {
+      // Open top/bottom: compute a 2D cross-section shell (walls only),
+      // then intersect with the height range so caps are removed.
+      let d2D: number;
+      if (config.shape === BuildShape.CYLINDER) {
+        // Radial distance to cylindrical surface in XZ
+        d2D = Math.sqrt(p.x * p.x + p.z * p.z) - worldSize.x;
       } else {
-        d = hollowD;
+        // 2D box SDF in XZ (side walls only, ignoring Y)
+        const dx = Math.abs(p.x) - worldSize.x;
+        const dz = Math.abs(p.z) - worldSize.z;
+        const outsideX = Math.max(dx, 0);
+        const outsideZ = Math.max(dz, 0);
+        d2D = Math.sqrt(outsideX * outsideX + outsideZ * outsideZ) + Math.min(Math.max(dx, dz), 0);
       }
-    } else {
+      // Shell around the 2D cross-section
+      const wallShell = Math.abs(d2D) - worldThickness;
+      // Clip to height range (intersection removes top/bottom caps)
+      const dHeight = Math.abs(p.y) - worldSize.y;
+      d = Math.max(wallShell, dHeight);
+    } else if (config.thickness > 0) {
       d = hollowSdf(d, worldThickness);
     }
   }
