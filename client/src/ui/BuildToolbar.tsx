@@ -44,12 +44,14 @@ export function HotbarStrip({
       {[...DEFAULT_BUILD_PRESETS.slice(1), DEFAULT_BUILD_PRESETS[0]].map((preset) => {
         const isActive = build.presetId === preset.id;
         const config = build.presetConfigs[preset.id];
+        const meta = build.presetMeta[preset.id];
         const mode = config.mode;
         const modeColor = MODE_COLORS[mode] || 'bg-gray-600/80';
         const shapeIcon = SHAPE_ICONS[config.shape] || '◼';
         const isNone = preset.id === NONE_PRESET_ID;
         const keyLabel = `${preset.id}`;
         const materialColor = MATERIAL_COLORS[config.material] ?? '#888';
+        const displayName = meta?.templateName || preset.name;
 
         return (
           <div
@@ -64,7 +66,7 @@ export function HotbarStrip({
               }
               ${isNone ? 'bg-white/5' : modeColor}
             `}
-            title={preset.name}
+            title={displayName}
           >
             {/* Key number badge */}
             <div className={`
@@ -91,7 +93,7 @@ export function HotbarStrip({
 
             {/* Preset name (abbreviated) */}
             <div className="text-[9px] text-white/70 mt-0.5 truncate max-w-[52px]">
-              {preset.name}
+              {displayName}
             </div>
           </div>
         );

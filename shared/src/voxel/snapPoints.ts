@@ -53,6 +53,15 @@ export function generateSnapPointsLocal(snapShape: BuildPresetSnapShape, size: S
         { x: -sx, y: -sy, z: 0 },
       ];
 
+    case BuildPresetSnapShape.PRISM:
+      // 3 corners of a triangular prism face (matching prism geometry):
+      // top center, bottom-left, bottom-right
+      return [
+        { x: 0, y: sy, z: 0 },
+        { x: -sx, y: -sy, z: 0 },
+        { x: sx, y: -sy, z: 0 },
+      ];
+
     case BuildPresetSnapShape.LINE:
       return [
         { x: 0, y: sy, z: 0 },

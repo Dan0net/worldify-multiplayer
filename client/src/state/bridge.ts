@@ -66,8 +66,13 @@ class StoreBridge {
 
   get buildPreset(): BuildPreset {
     const state = getState();
-    const base = getPreset(this.buildPresetId);
-    const config = state.build.presetConfigs[this.buildPresetId];
+    const id = this.buildPresetId;
+    const base = getPreset(id);
+    const config = state.build.presetConfigs[id];
+    const meta = state.build.presetMeta[id];
+    if (config && meta) {
+      return { ...base, config, align: meta.align, snapShape: meta.snapShape, baseRotation: meta.baseRotation, autoRotateY: meta.autoRotateY };
+    }
     if (config) {
       return { ...base, config };
     }
@@ -237,6 +242,14 @@ class StoreBridge {
    */
   updatePresetConfig(presetId: number, updates: Partial<BuildConfig>): void {
     getState().updatePresetConfig(presetId, updates);
+  }
+
+  /**
+   * Apply a preset template to a hotbar slot.
+   * Copies the template's config AND placement metadata (align, snap, rotation).
+   */
+  applyPresetTemplate(slotId: number, templateIndex: number): void {
+    getState().applyPresetTemplate(slotId, templateIndex);
   }
 
   /**

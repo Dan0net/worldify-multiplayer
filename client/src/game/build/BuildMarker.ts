@@ -16,7 +16,6 @@ import {
   VOXEL_SCALE,
   BUILD_ROTATION_STEP,
   BUILD_PROJECTION_DEADZONE,
-  getPreset,
   composeRotation,
   NONE_PRESET_ID,
 } from '@worldify/shared';
@@ -29,7 +28,7 @@ import { storeBridge } from '../../state/bridge';
  * All others return the original size unchanged.
  */
 function getProjectionSize(snapShape: BuildPresetSnapShape, size: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
-  if (snapShape === BuildPresetSnapShape.PLANE) {
+  if (snapShape === BuildPresetSnapShape.PLANE || snapShape === BuildPresetSnapShape.PRISM) {
     // Zero the smallest axis
     const min = Math.min(size.x, size.y, size.z);
     return {
@@ -107,6 +106,9 @@ export class BuildMarker {
   /** Current rotation steps */
   private currentRotation = -1;
 
+  /** Config fingerprint for detecting preset template changes within the same slot */
+  private currentConfigFingerprint = '';
+
   /** Whether marker is currently visible */
   private isVisible = false;
 
@@ -148,21 +150,28 @@ export class BuildMarker {
       return { hasValidTarget: false };
     }
 
-    const preset = getPreset(presetId);
+    const preset = storeBridge.buildPreset;
 
-    // For non-auto-rotate presets, rebuild wireframe when preset or rotation changes
+    // Generate a fingerprint to detect config/meta changes within the same slot
+    const cfg = preset.config;
+    const fp = `${cfg.shape}|${cfg.size.x},${cfg.size.y},${cfg.size.z}|${preset.snapShape}|${preset.align}|${cfg.thickness ?? ''}|${cfg.arcSweep ?? ''}|${preset.baseRotation?.x ?? ''},${preset.baseRotation?.y ?? ''},${preset.baseRotation?.z ?? ''},${preset.baseRotation?.w ?? ''}`;
+    const configChanged = fp !== this.currentConfigFingerprint;
+
+    // For non-auto-rotate presets, rebuild wireframe when preset, config, or rotation changes
     if (!preset.autoRotateY) {
       this.autoYRadians = null;
-      if (presetId !== this.currentPresetId || rotationSteps !== this.currentRotation) {
+      if (presetId !== this.currentPresetId || rotationSteps !== this.currentRotation || configChanged) {
         this.rebuildWireframe(preset, rotationSteps);
         this.currentPresetId = presetId;
         this.currentRotation = rotationSteps;
+        this.currentConfigFingerprint = fp;
       }
-    } else if (presetId !== this.currentPresetId) {
-      // Auto-rotate: rebuild geometry on preset change only (rotation updated per-frame below)
+    } else if (presetId !== this.currentPresetId || configChanged) {
+      // Auto-rotate: rebuild geometry on preset/config change only (rotation updated per-frame below)
       this.rebuildWireframe(preset, 0);
       this.currentPresetId = presetId;
       this.currentRotation = 0;
+      this.currentConfigFingerprint = fp;
     }
 
     // Raycast from camera center
@@ -622,7 +631,7 @@ export class BuildMarker {
   getWorldAABB(): { min: THREE.Vector3; max: THREE.Vector3 } | null {
     if (!this.isVisible || this.currentPresetId === NONE_PRESET_ID) return null;
 
-    const preset = getPreset(this.currentPresetId);
+    const preset = storeBridge.buildPreset;
     const center = this.group.position.clone();
 
     // For BASE / PROJECT, compute actual center (offset up from group position)
@@ -673,7 +682,7 @@ export class BuildMarker {
   getTargetPosition(): THREE.Vector3 | null {
     if (!this.isVisible) return null;
 
-    const preset = getPreset(this.currentPresetId);
+    const preset = storeBridge.buildPreset;
     const pos = this.group.position.clone();
 
     // For BASE / PROJECT, the group is at the hit point (base of the shape)

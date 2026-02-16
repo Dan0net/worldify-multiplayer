@@ -47,4 +47,4 @@ export type { PlayerSnapshot, RoomSnapshot } from './protocol/snapshot.js';
 export type { UnpackedVoxel, ChunkCoord, VoxelCoord, WorldCoord } from './voxel/voxelData.js';
 export type { SerializedChunkData } from './voxel/ChunkData.js';
 export type { BuildConfig, BuildOperation, Vec3, Quat, Size3, VoxelBBox } from './voxel/buildTypes.js';
-export type { BuildPreset } from './voxel/buildPresets.js';
+export type { BuildPreset, BuildPresetTemplate, PresetSlotMeta } from './voxel/buildPresets.js';

@@ -139,7 +139,7 @@ export class SnapManager {
 
   /** Cached local snap points for current preset */
   private cachedLocalPoints: Vec3[] = [];
-  private cachedPresetId = -1;
+  private cachedSnapFingerprint = '';
 
   /** Temp vectors for computation */
   private readonly _tempCurrent = new THREE.Vector3();
@@ -377,11 +377,13 @@ export class SnapManager {
 
   /**
    * Get cached local snap points for a preset.
+   * Uses a fingerprint of snapShape + size to detect template changes within the same slot.
    */
   private getLocalPoints(preset: BuildPreset): Vec3[] {
-    if (preset.id !== this.cachedPresetId) {
+    const fp = `${preset.snapShape}|${preset.config.size.x},${preset.config.size.y},${preset.config.size.z}`;
+    if (fp !== this.cachedSnapFingerprint) {
       this.cachedLocalPoints = generateSnapPointsLocal(preset.snapShape, preset.config.size);
-      this.cachedPresetId = preset.id;
+      this.cachedSnapFingerprint = fp;
     }
     return this.cachedLocalPoints;
   }

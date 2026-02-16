@@ -50,6 +50,8 @@ export enum BuildPresetSnapShape {
   CUBE = 'cube',
   /** 4 corners of a rectangular plane (XY) */
   PLANE = 'plane',
+  /** 3 corners of a triangular prism face (XY, z=0) */
+  PRISM = 'prism',
   /** 2 endpoints along Y axis */
   LINE = 'line',
   /** Single point at center */

@@ -1,5 +1,5 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID, DEFAULT_BUILD_PRESETS, type BuildConfig } from '@worldify/shared';
+import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID, DEFAULT_BUILD_PRESETS, presetToSlotMeta, templateToSlotMeta, PRESET_TEMPLATES, type BuildConfig, type PresetSlotMeta } from '@worldify/shared';
 import type { QualityLevel } from '../game/quality/QualityPresets';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
@@ -88,6 +88,8 @@ export interface BuildState {
   menuOpen: boolean;
   /** Mutable preset configs (user can change material/shape) */
   presetConfigs: BuildConfig[];
+  /** Per-slot metadata (align, snapShape, baseRotation, autoRotateY, templateName) */
+  presetMeta: PresetSlotMeta[];
 }
 
 /** Environment/lighting settings */
@@ -406,6 +408,7 @@ export interface GameState {
   setBuildMenuOpen: (open: boolean) => void;
   toggleBuildMenu: () => void;
   updatePresetConfig: (presetId: number, updates: Partial<BuildConfig>) => void;
+  applyPresetTemplate: (slotId: number, templateIndex: number) => void;
   
   // Material/texture actions
   setTextureState: (state: TextureLoadingState) => void;
@@ -477,6 +480,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     snapGrid: false,    // Grid snapping off by default
     menuOpen: false,
     presetConfigs: DEFAULT_BUILD_PRESETS.map(p => ({ ...p.config })),
+    presetMeta: DEFAULT_BUILD_PRESETS.map(p => presetToSlotMeta(p)),
   },
   
   // Voxel debug initial state
@@ -625,6 +629,15 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     const configs = [...state.build.presetConfigs];
     configs[presetId] = { ...configs[presetId], ...updates };
     return { build: { ...state.build, presetConfigs: configs } };
+  }),
+  applyPresetTemplate: (slotId, templateIndex) => set((state) => {
+    const template = PRESET_TEMPLATES[templateIndex];
+    if (!template) return state;
+    const configs = [...state.build.presetConfigs];
+    configs[slotId] = { ...template.config };
+    const metas = [...state.build.presetMeta];
+    metas[slotId] = templateToSlotMeta(template);
+    return { build: { ...state.build, presetConfigs: configs, presetMeta: metas } };
   }),
   
   // Material/texture actions
