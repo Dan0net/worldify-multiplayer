@@ -58,67 +58,44 @@ function size(x: number, y: number, z: number): Size3 {
   return { x, y, z };
 }
 
+/** Preset ID for the "None" (disabled) preset */
+export const NONE_PRESET_ID = 1;
+
 /**
  * Default build presets (10 total, mapped to keys 0-9).
- * Preset 0 is "None" (building disabled).
+ * Preset 1 is "None" (building disabled) — key 1 is the default.
  *
  * Ported from worldify-app BuildPresets — first 10 items mapped to hotbar.
  * Material IDs match the shared pallet (pallet.json indices are identical).
  */
 export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
-  // 0 = None (disabled)
+  // 0 = Blob paint (sphere, paint, centered) — last in keyboard layout
   {
     id: 0,
+    name: 'Paint',
+    config: { shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 },
+    align: BuildPresetAlign.CENTER,
+    snapShape: BuildPresetSnapShape.NONE,
+  },
+  // 1 = None (disabled)
+  {
+    id: 1,
     name: 'None',
     config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0, 0, 0), material: 0 },
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.POINT,
   },
-  // 1 = Brick wall (cube, add, thin slab, base-projected)
+  // 2 = Brick wall (cube, add, thin slab, base-projected)
   {
-    id: 1,
+    id: 2,
     name: 'Brick Wall',
     config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 },
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.PLANE,
   },
-  // 2 = Stone floor (cube, fill, thin slab rotated flat, base-projected)
-  {
-    id: 2,
-    name: 'Stone Floor',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 },
-    align: BuildPresetAlign.PROJECT,
-    baseRotation: xRotationQuat(Math.PI / 2),
-    snapShape: BuildPresetSnapShape.PLANE,
-  },
-  // 3 = Wooden pillar (cube, add, tall narrow, base-aligned)
+  // 3 = Stone stairs (cube, fill, angled slab, base-projected)
   {
     id: 3,
-    name: 'Wood Pillar',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
-    align: BuildPresetAlign.BASE,
-    snapShape: BuildPresetSnapShape.LINE,
-  },
-  // 4 = Wooden beam (cube, add, tall narrow rotated horizontal, base-projected)
-  {
-    id: 4,
-    name: 'Wood Beam',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
-    align: BuildPresetAlign.PROJECT,
-    baseRotation: xRotationQuat(Math.PI / 2),
-    snapShape: BuildPresetSnapShape.LINE,
-  },
-  // 5 = Leafy blob (sphere, fill, centered)
-  {
-    id: 5,
-    name: 'Leafy Blob',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(3, 3, 3), material: 48 },
-    align: BuildPresetAlign.CENTER,
-    snapShape: BuildPresetSnapShape.NONE,
-  },
-  // 6 = Stone stairs (cube, fill, angled slab, base-projected)
-  {
-    id: 6,
     name: 'Stairs',
     config: {
       shape: BuildShape.CUBE, mode: BuildMode.FILL,
@@ -129,39 +106,65 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
     baseRotation: xRotationQuat(Math.atan(4 / 2)),
     snapShape: BuildPresetSnapShape.PLANE,
   },
-  // 7 = Blob carve (sphere, subtract, centered)
+  // 4 = Wooden pillar (cube, add, tall narrow, base-aligned)
+  {
+    id: 4,
+    name: 'Wood Pillar',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    align: BuildPresetAlign.BASE,
+    snapShape: BuildPresetSnapShape.LINE,
+  },
+  // 5 = Wooden beam (cube, add, tall narrow rotated horizontal, base-projected)
+  {
+    id: 5,
+    name: 'Wood Beam',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    align: BuildPresetAlign.PROJECT,
+    baseRotation: xRotationQuat(Math.PI / 2),
+    snapShape: BuildPresetSnapShape.LINE,
+  },
+  // 6 = Stone floor (cube, fill, thin slab rotated flat, base-projected)
+  {
+    id: 6,
+    name: 'Stone Floor',
+    config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 },
+    align: BuildPresetAlign.PROJECT,
+    baseRotation: xRotationQuat(Math.PI / 2),
+    snapShape: BuildPresetSnapShape.PLANE,
+  },
+  // 7 = Leafy blob (sphere, fill, centered)
   {
     id: 7,
+    name: 'Leafy Blob',
+    config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(3, 3, 3), material: 48 },
+    align: BuildPresetAlign.CENTER,
+    snapShape: BuildPresetSnapShape.NONE,
+  },
+  // 8 = Blob carve (sphere, subtract, centered)
+  {
+    id: 8,
     name: 'Blob Carve',
     config: { shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 },
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
-  // 8 = Door carve (cube, subtract, auto-rotates to face wall and carves inward)
+  // 9 = Door carve (cube, subtract, auto-rotates to face wall and carves inward)
   {
-    id: 8,
+    id: 9,
     name: 'Door Carve',
     config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 },
     align: BuildPresetAlign.CARVE,
     autoRotateY: true,
     snapShape: BuildPresetSnapShape.NONE,
   },
-  // 9 = Blob paint (sphere, paint, centered)
-  {
-    id: 9,
-    name: 'Paint',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 },
-    align: BuildPresetAlign.CENTER,
-    snapShape: BuildPresetSnapShape.NONE,
-  },
 ] as const;
 
 /**
  * Get a preset by ID.
- * Returns preset 0 (None) if ID is out of range.
+ * Returns the None preset if ID is out of range.
  */
 export function getPreset(id: number): BuildPreset {
-  return DEFAULT_BUILD_PRESETS[id] ?? DEFAULT_BUILD_PRESETS[0];
+  return DEFAULT_BUILD_PRESETS[id] ?? DEFAULT_BUILD_PRESETS[NONE_PRESET_ID];
 }
 
 /**

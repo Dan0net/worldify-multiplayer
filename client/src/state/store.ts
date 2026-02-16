@@ -1,5 +1,5 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { BUILD_ROTATION_STEPS, GameMode, clamp } from '@worldify/shared';
+import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID } from '@worldify/shared';
 import type { QualityLevel } from '../game/quality/QualityPresets';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
@@ -462,7 +462,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   
   // Build initial state
   build: {
-    presetId: 0,        // Disabled by default
+    presetId: NONE_PRESET_ID,  // Disabled by default (key 1 = None)
     rotationSteps: 0,   // No rotation
     hasValidTarget: false,
     invalidReason: null,

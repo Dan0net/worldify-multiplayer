@@ -11,7 +11,7 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState, MaterialSettings, WaterSettings, PerfSnapshot } from './store';
-import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode } from '@worldify/shared';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode, NONE_PRESET_ID } from '@worldify/shared';
 import { applyMaterialSettings as applyMaterialSettingsToShaders } from '../game/material/TerrainMaterial';
 import { applyWaterSettings as applyWaterSettingsToShaders } from '../game/material/WaterMaterial';
 import type { QualityLevel } from '../game/quality/QualityPresets';
@@ -81,7 +81,7 @@ class StoreBridge {
   }
 
   get buildIsEnabled(): boolean {
-    return this.buildPresetId !== 0;
+    return this.buildPresetId !== NONE_PRESET_ID;
   }
 
   get buildSnapPoint(): boolean {

@@ -1,6 +1,6 @@
 
 import { useGameStore } from '../state/store';
-import { GameMode } from '@worldify/shared';
+import { GameMode, NONE_PRESET_ID } from '@worldify/shared';
 
 /**
  * Get crosshair color based on build state.
@@ -8,7 +8,7 @@ import { GameMode } from '@worldify/shared';
  */
 function useCrosshairColor(): string {
   const build = useGameStore((s) => s.build);
-  if (build.presetId === 0) return 'bg-white/80'; // Build disabled
+  if (build.presetId === NONE_PRESET_ID) return 'bg-white/80'; // Build disabled
   if (build.invalidReason === 'tooClose') return 'bg-red-500/90'; // Too close
   if (build.hasValidTarget) return 'bg-green-500/90'; // Valid
   return 'bg-white/80'; // No target

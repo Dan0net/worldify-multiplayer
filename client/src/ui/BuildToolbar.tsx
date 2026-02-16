@@ -11,7 +11,7 @@
  */
 
 import { useGameStore } from '../state/store';
-import { DEFAULT_BUILD_PRESETS, BuildMode, GameMode } from '@worldify/shared';
+import { DEFAULT_BUILD_PRESETS, BuildMode, GameMode, NONE_PRESET_ID } from '@worldify/shared';
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 
 /** Mode colors for visual distinction */
@@ -48,8 +48,8 @@ export function BuildToolbar() {
           const mode = preset.config.mode;
           const modeColor = MODE_COLORS[mode] || 'bg-gray-600/80';
           const shapeIcon = SHAPE_ICONS[preset.config.shape] || '◼';
-          const isNone = preset.id === 0;
-          const keyLabel = preset.id === 0 ? '0' : `${preset.id}`;
+          const isNone = preset.id === NONE_PRESET_ID;
+          const keyLabel = `${preset.id}`;
           
           return (
             <div

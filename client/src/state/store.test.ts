@@ -17,7 +17,7 @@ describe('Zustand store', () => {
       tickMs: 0,
       serverTick: 0,
       build: {
-        presetId: 0,
+        presetId: 1,
         rotationSteps: 0,
         hasValidTarget: false,
       },

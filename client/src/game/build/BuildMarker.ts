@@ -18,6 +18,7 @@ import {
   BUILD_PROJECTION_DEADZONE,
   getPreset,
   composeRotation,
+  NONE_PRESET_ID,
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
 
@@ -141,8 +142,8 @@ export class BuildMarker {
     const presetId = storeBridge.buildPresetId;
     const rotationSteps = storeBridge.buildRotationSteps;
 
-    // Hide if build mode disabled (preset 0)
-    if (presetId === 0) {
+    // Hide if build mode disabled (None preset)
+    if (presetId === NONE_PRESET_ID) {
       this.hide();
       return { hasValidTarget: false };
     }
@@ -470,7 +471,7 @@ export class BuildMarker {
     }
 
     // Don't create wireframe for disabled preset
-    if (preset.id === 0) return;
+    if (preset.id === NONE_PRESET_ID) return;
 
     const size = preset.config.size;
     const shape = preset.config.shape;
@@ -619,7 +620,7 @@ export class BuildMarker {
    * Returns null if no valid target or preset is disabled.
    */
   getWorldAABB(): { min: THREE.Vector3; max: THREE.Vector3 } | null {
-    if (!this.isVisible || this.currentPresetId === 0) return null;
+    if (!this.isVisible || this.currentPresetId === NONE_PRESET_ID) return null;
 
     const preset = getPreset(this.currentPresetId);
     const center = this.group.position.clone();
