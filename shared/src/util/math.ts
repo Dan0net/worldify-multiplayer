@@ -103,6 +103,52 @@ export function yRotationQuat(radians: number): Quat {
   };
 }
 
+/**
+ * Create a quaternion for rotation around the Z axis.
+ * @param radians - The rotation angle in radians
+ */
+export function zRotationQuat(radians: number): Quat {
+  const halfAngle = radians * 0.5;
+  return {
+    x: 0,
+    y: 0,
+    z: Math.sin(halfAngle),
+    w: Math.cos(halfAngle),
+  };
+}
+
+/**
+ * Compose a quaternion from Euler angles (XYZ order).
+ * @param xRad - Rotation around X axis in radians
+ * @param yRad - Rotation around Y axis in radians
+ * @param zRad - Rotation around Z axis in radians
+ */
+export function eulerToQuat(xRad: number, yRad: number, zRad: number): Quat {
+  return multiplyQuats(multiplyQuats(zRotationQuat(zRad), yRotationQuat(yRad)), xRotationQuat(xRad));
+}
+
+/**
+ * Extract Euler angles (XYZ order) from a quaternion.
+ * Returns angles in radians.
+ */
+export function quatToEuler(q: Quat): { x: number; y: number; z: number } {
+  // Roll (X)
+  const sinrCosp = 2 * (q.w * q.x + q.y * q.z);
+  const cosrCosp = 1 - 2 * (q.x * q.x + q.y * q.y);
+  const x = Math.atan2(sinrCosp, cosrCosp);
+
+  // Pitch (Y)
+  const sinp = 2 * (q.w * q.y - q.z * q.x);
+  const y = Math.abs(sinp) >= 1 ? (Math.sign(sinp) * Math.PI) / 2 : Math.asin(sinp);
+
+  // Yaw (Z)
+  const sinyCosp = 2 * (q.w * q.z + q.x * q.y);
+  const cosyCosp = 1 - 2 * (q.y * q.y + q.z * q.z);
+  const z = Math.atan2(sinyCosp, cosyCosp);
+
+  return { x, y, z };
+}
+
 // ============== Interpolation ==============
 
 /**
