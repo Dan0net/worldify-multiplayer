@@ -147,6 +147,11 @@ export class Controls {
         }
         storeBridge.setGameMode(GameMode.MainMenu);
       }
+    } else {
+      // Pointer lock regained — ensure build menu is closed
+      if (storeBridge.buildMenuOpen) {
+        storeBridge.setBuildMenuOpen(false);
+      }
     }
   };
 

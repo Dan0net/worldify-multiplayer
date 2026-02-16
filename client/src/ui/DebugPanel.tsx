@@ -873,7 +873,7 @@ export function DebugPanel() {
             label="Scatter Scale"
             value={waterSettings.scatterScale}
             min={0}
-            max={1}
+            max={5}
             step={0.05}
             onChange={(v) => handleWaterChange({ scatterScale: v })}
           />
