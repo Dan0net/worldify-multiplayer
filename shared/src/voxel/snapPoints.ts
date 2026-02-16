@@ -54,10 +54,10 @@ export function generateSnapPointsLocal(snapShape: BuildPresetSnapShape, size: S
       ];
 
     case BuildPresetSnapShape.PRISM:
-      // 3 corners of a triangular prism face (matching prism geometry):
-      // top center, bottom-left, bottom-right
+      // 3 corners of a right-angled triangular prism face (matching SDF):
+      // top-left, bottom-left (right angle), bottom-right
       return [
-        { x: 0, y: sy, z: 0 },
+        { x: -sx, y: sy, z: 0 },
         { x: -sx, y: -sy, z: 0 },
         { x: sx, y: -sy, z: 0 },
       ];

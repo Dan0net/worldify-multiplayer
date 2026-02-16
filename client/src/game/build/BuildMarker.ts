@@ -558,20 +558,21 @@ export class BuildMarker {
    * Create a triangular prism geometry.
    */
   private createPrismGeometry(width: number, height: number, depth: number): THREE.BufferGeometry {
-    // Simple triangular prism
+    // Right-angled triangular prism matching the SDF:
+    // Right angle at bottom-left (-hw, -hh), hypotenuse from (hw, -hh) to (-hw, hh)
     const hw = width / 2;
     const hh = height / 2;
     const hd = depth / 2;
 
     const vertices = new Float32Array([
-      // Front triangle
-      0, hh, hd,      // top
-      -hw, -hh, hd,   // bottom left
-      hw, -hh, hd,    // bottom right
-      // Back triangle
-      0, hh, -hd,     // top
-      -hw, -hh, -hd,  // bottom left
-      hw, -hh, -hd,   // bottom right
+      // Front triangle (z = +hd)
+      -hw, hh, hd,     // top-left
+      -hw, -hh, hd,    // bottom-left (right angle)
+      hw, -hh, hd,     // bottom-right
+      // Back triangle (z = -hd)
+      -hw, hh, -hd,    // top-left
+      -hw, -hh, -hd,   // bottom-left (right angle)
+      hw, -hh, -hd,    // bottom-right
     ]);
 
     const indices = [
@@ -581,9 +582,9 @@ export class BuildMarker {
       3, 5, 4,
       // Bottom face
       1, 4, 5, 1, 5, 2,
-      // Left face
+      // Left face (vertical edge)
       0, 3, 4, 0, 4, 1,
-      // Right face
+      // Hypotenuse face
       0, 2, 5, 0, 5, 3,
     ];
 
