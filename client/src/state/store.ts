@@ -1,5 +1,5 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID } from '@worldify/shared';
+import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID, DEFAULT_BUILD_PRESETS, type BuildConfig } from '@worldify/shared';
 import type { QualityLevel } from '../game/quality/QualityPresets';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
@@ -84,6 +84,10 @@ export interface BuildState {
   snapPoint: boolean;
   /** Whether grid-snapping is enabled */
   snapGrid: boolean;
+  /** Whether the build menu overlay is open */
+  menuOpen: boolean;
+  /** Mutable preset configs (user can change material/shape) */
+  presetConfigs: BuildConfig[];
 }
 
 /** Environment/lighting settings */
@@ -399,6 +403,9 @@ export interface GameState {
   setBuildInvalidReason: (reason: 'tooClose' | null) => void;
   toggleBuildSnapPoint: () => void;
   toggleBuildSnapGrid: () => void;
+  setBuildMenuOpen: (open: boolean) => void;
+  toggleBuildMenu: () => void;
+  updatePresetConfig: (presetId: number, updates: Partial<BuildConfig>) => void;
   
   // Material/texture actions
   setTextureState: (state: TextureLoadingState) => void;
@@ -468,6 +475,8 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     invalidReason: null,
     snapPoint: true,    // Point snapping on by default
     snapGrid: false,    // Grid snapping off by default
+    menuOpen: false,
+    presetConfigs: DEFAULT_BUILD_PRESETS.map(p => ({ ...p.config })),
   },
   
   // Voxel debug initial state
@@ -606,6 +615,17 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   toggleBuildSnapGrid: () => set((state) => ({
     build: { ...state.build, snapGrid: !state.build.snapGrid },
   })),
+  setBuildMenuOpen: (open) => set((state) => ({
+    build: { ...state.build, menuOpen: open },
+  })),
+  toggleBuildMenu: () => set((state) => ({
+    build: { ...state.build, menuOpen: !state.build.menuOpen },
+  })),
+  updatePresetConfig: (presetId, updates) => set((state) => {
+    const configs = [...state.build.presetConfigs];
+    configs[presetId] = { ...configs[presetId], ...updates };
+    return { build: { ...state.build, presetConfigs: configs } };
+  }),
   
   // Material/texture actions
   setTextureState: (textureState) => set({ textureState }),

@@ -11,7 +11,7 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState, MaterialSettings, WaterSettings, PerfSnapshot } from './store';
-import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode, NONE_PRESET_ID } from '@worldify/shared';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode, NONE_PRESET_ID, type BuildConfig } from '@worldify/shared';
 import { applyMaterialSettings as applyMaterialSettingsToShaders } from '../game/material/TerrainMaterial';
 import { applyWaterSettings as applyWaterSettingsToShaders } from '../game/material/WaterMaterial';
 import type { QualityLevel } from '../game/quality/QualityPresets';
@@ -65,7 +65,13 @@ class StoreBridge {
   }
 
   get buildPreset(): BuildPreset {
-    return getPreset(this.buildPresetId);
+    const state = getState();
+    const base = getPreset(this.buildPresetId);
+    const config = state.build.presetConfigs[this.buildPresetId];
+    if (config) {
+      return { ...base, config };
+    }
+    return base;
   }
 
   get buildRotationSteps(): number {
@@ -203,6 +209,34 @@ class StoreBridge {
    */
   setBuildInvalidReason(reason: 'tooClose' | null): void {
     getState().setBuildInvalidReason(reason);
+  }
+
+  /**
+   * Whether build menu is open.
+   */
+  get buildMenuOpen(): boolean {
+    return getState().build.menuOpen;
+  }
+
+  /**
+   * Open/close the build menu overlay.
+   */
+  setBuildMenuOpen(open: boolean): void {
+    getState().setBuildMenuOpen(open);
+  }
+
+  /**
+   * Toggle the build menu overlay.
+   */
+  toggleBuildMenu(): void {
+    getState().toggleBuildMenu();
+  }
+
+  /**
+   * Update the config for a preset (e.g. change material or shape).
+   */
+  updatePresetConfig(presetId: number, updates: Partial<BuildConfig>): void {
+    getState().updatePresetConfig(presetId, updates);
   }
 
   /**

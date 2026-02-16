@@ -22,6 +22,8 @@ export type BuildPlaceCallback = () => void;
 export class Controls {
   private keys = new Set<string>();
   private isPointerLocked = false;
+  /** When true, the next pointer lock exit was caused by the build menu opening */
+  private buildMenuCausedUnlock = false;
 
   public yaw = 0;
   public pitch = 0;
@@ -35,6 +37,7 @@ export class Controls {
     window.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('contextmenu', this.onContextMenu);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
@@ -75,6 +78,19 @@ export class Controls {
       storeBridge.toggleBuildSnapPoint();
       return;
     }
+
+    // Tab key: toggle build menu
+    if (e.code === 'Tab') {
+      e.preventDefault();
+      if (storeBridge.gameMode === GameMode.Playing) {
+        if (storeBridge.buildMenuOpen) {
+          this.closeBuildMenu();
+        } else {
+          this.openBuildMenu();
+        }
+      }
+      return;
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
@@ -99,6 +115,17 @@ export class Controls {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
+    // Right-click: toggle build menu (works both locked and unlocked while Playing)
+    if (e.button === 2 && storeBridge.gameMode === GameMode.Playing) {
+      e.preventDefault();
+      if (storeBridge.buildMenuOpen) {
+        this.closeBuildMenu();
+      } else if (this.isPointerLocked) {
+        this.openBuildMenu();
+      }
+      return;
+    }
+
     if (!this.isPointerLocked) return;
     
     // Left click to place build
@@ -110,10 +137,40 @@ export class Controls {
   private onPointerLockChange = (): void => {
     this.isPointerLocked = document.pointerLockElement !== null;
     if (!this.isPointerLocked) {
-      // Exit to main menu (show start screen)
-      storeBridge.setGameMode(GameMode.MainMenu);
+      if (this.buildMenuCausedUnlock) {
+        // Build menu opened — stay in Playing mode
+        this.buildMenuCausedUnlock = false;
+      } else {
+        // Normal pointer lock exit — close build menu if open, go to main menu
+        if (storeBridge.buildMenuOpen) {
+          storeBridge.setBuildMenuOpen(false);
+        }
+        storeBridge.setGameMode(GameMode.MainMenu);
+      }
     }
   };
+
+  /** Prevent browser context menu while playing */
+  private onContextMenu = (e: MouseEvent): void => {
+    if (storeBridge.gameMode === GameMode.Playing) {
+      e.preventDefault();
+    }
+  };
+
+  /** Open the build menu overlay (releases pointer lock for cursor) */
+  private openBuildMenu(): void {
+    this.buildMenuCausedUnlock = true;
+    storeBridge.setBuildMenuOpen(true);
+    document.exitPointerLock();
+  }
+
+  /** Close the build menu overlay (re-locks pointer) */
+  private closeBuildMenu(): void {
+    storeBridge.setBuildMenuOpen(false);
+    requestAnimationFrame(() => {
+      document.body.requestPointerLock();
+    });
+  }
 
   requestPointerLock(): void {
     document.body.requestPointerLock();
@@ -136,6 +193,7 @@ export class Controls {
     window.removeEventListener('mousemove', this.onMouseMove);
     window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
   }
 }

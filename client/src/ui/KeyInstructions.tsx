@@ -55,6 +55,7 @@ export const GAME_KEY_ROWS: KeyGroup[][] = [
   [
     { keys: ['G'], label: 'Grid snap' },
     { keys: ['T'], label: 'Point snap' },
+    { keys: ['Tab'], label: 'Build menu' },
     { keys: ['M'], label: 'Map' },
     { keys: ['Esc'], label: 'Menu' },
   ],
