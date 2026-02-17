@@ -45,6 +45,10 @@ export function setRendererRef(r: THREE.WebGLRenderer): void {
   rendererRef = r;
 }
 
+export function getRendererRef(): THREE.WebGLRenderer | null {
+  return rendererRef;
+}
+
 export function setVisibilityRadiusCallback(cb: (radius: number) => void): void {
   visibilityRadiusCallback = cb;
 }

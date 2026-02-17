@@ -16,6 +16,7 @@ import {
   type BuildConfig,
   type PresetSlotMeta,
 } from '@worldify/shared';
+import { usePresetThumbnail } from './usePresetThumbnail';
 
 // ============== Constants ==============
 
@@ -220,6 +221,9 @@ export function BuildConfigTab({
   const { shape, mode, size, thickness, closed, arcSweep } = config;
   const { align, snapShape, autoRotateY, baseRotation } = meta;
 
+  // Live thumbnail preview of current config
+  const thumbnailUrl = usePresetThumbnail(config, meta.baseRotation);
+
   // Whether closed (open-ended) applies – only when there's a non-zero thickness
   const supportsClosed = (thickness ?? 0) > 0;
 
@@ -265,6 +269,18 @@ export function BuildConfigTab({
 
   return (
     <div className="overflow-y-auto pr-1 scrollbar-thin space-y-3">
+      {/* Live shape preview */}
+      {thumbnailUrl && (
+        <div className="flex justify-center">
+          <img
+            src={thumbnailUrl}
+            alt="Shape preview"
+            className="w-32 h-32 rounded-lg border border-white/10 object-cover"
+            draggable={false}
+          />
+        </div>
+      )}
+
       {/* Shape */}
       <div>
         <SectionHeader>Shape</SectionHeader>

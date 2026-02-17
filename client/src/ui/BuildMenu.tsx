@@ -9,143 +9,126 @@
  * Closes on Tab, right-click, or Escape.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useGameStore } from '../state/store';
 import {
   NONE_PRESET_ID,
   MATERIAL_NAMES,
-  MATERIAL_COLORS,
   GameMode,
   PRESET_TEMPLATES,
-  PresetCategory,
   BuildMode,
-  type MaterialName,
+  BuildShape,
+  type BuildConfig,
 } from '@worldify/shared';
-import { useMaterialThumbnails } from './useMaterialThumbnails';
+import { usePresetThumbnail } from './usePresetThumbnail';
 import { BuildConfigTab } from './BuildConfigTab';
 
 // ============== Constants ==============
-
-/** Format material name for display */
-function formatName(name: string): string {
-  return name.replace(/_/g, ' ').replace(/\d+$/, m => ` ${m}`);
-}
-
-/** Mode badge colors */
-const MODE_BADGE_COLORS: Record<BuildMode, string> = {
-  [BuildMode.ADD]: 'bg-green-600',
-  [BuildMode.SUBTRACT]: 'bg-red-600',
-  [BuildMode.PAINT]: 'bg-blue-600',
-  [BuildMode.FILL]: 'bg-yellow-600',
-};
-
-/** Shape unicode icons */
-const SHAPE_ICONS: Record<string, string> = {
-  cube: '◼',
-  sphere: '●',
-  cylinder: '▮',
-  prism: '◣',
-};
-
-/** All categories in display order */
-const CATEGORIES = [
-  PresetCategory.WALLS,
-  PresetCategory.FLOORS,
-  PresetCategory.STAIRS,
-  PresetCategory.STRUCTURAL,
-  PresetCategory.TERRAIN,
-];
 
 /** Menu tab */
 type MenuTab = 'presets' | 'materials' | 'config';
 
 // ============== Sub-components ==============
 
-/** Material swatch in the grid */
-function MaterialSwatch({
-  name,
-  color,
-  thumbnailUrl,
+/** Material cube thumbnail — renders a 4×4×4 cube with the given material */
+function MaterialCubeThumb({
+  materialId,
   isActive,
   onSelect,
 }: {
-  name: MaterialName;
-  color: string;
-  thumbnailUrl?: string;
+  materialId: number;
   isActive: boolean;
   onSelect: () => void;
 }) {
+  const config = useMemo<BuildConfig>(() => ({
+    shape: BuildShape.CUBE,
+    mode: BuildMode.ADD,
+    size: { x: 4, y: 4, z: 4 },
+    material: materialId,
+  }), [materialId]);
+  const thumbnailUrl = usePresetThumbnail(config);
+
   return (
     <button
       onClick={onSelect}
       className={`
-        group relative w-10 h-10 rounded-lg border-2 transition-all overflow-hidden
+        relative flex items-center justify-center
+        w-24 h-24 rounded-2xl transition-all snap-start
+        bg-black/60 backdrop-blur-sm
         ${isActive
-          ? 'border-cyan-400 shadow-lg shadow-cyan-400/30 scale-110 z-10'
-          : 'border-transparent hover:border-white/40 hover:scale-105'
+          ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
+          : 'hover:bg-white/10'
         }
       `}
-      style={{ backgroundColor: color }}
-      title={formatName(name)}
     >
-      {thumbnailUrl && (
+      {thumbnailUrl ? (
         <img
           src={thumbnailUrl}
-          alt={name}
-          className="absolute inset-0 w-full h-full object-cover"
+          alt=""
+          className="w-[88px] h-[88px] object-contain"
           draggable={false}
         />
+      ) : (
+        <span className="text-3xl text-white/70">◼</span>
       )}
-      {/* Tooltip on hover */}
-      <div className="
-        absolute -top-8 left-1/2 -translate-x-1/2 
-        px-2 py-0.5 bg-black/90 rounded text-xs text-white/90 whitespace-nowrap
-        opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20
-      ">
-        {formatName(name)}
-      </div>
     </button>
   );
 }
 
-/** Preset template button */
+/** Preset template button — thumbnail-only, matches toolbar slot sizing */
 function PresetButton({
-  name,
-  mode,
-  shape,
+  thumbnailUrl,
   isActive,
   onSelect,
 }: {
-  name: string;
-  mode: BuildMode;
-  shape: string;
+  thumbnailUrl?: string | null;
   isActive: boolean;
   onSelect: () => void;
 }) {
-  const modeColor = MODE_BADGE_COLORS[mode] || 'bg-gray-600';
-  const icon = SHAPE_ICONS[shape] || '◼';
-
   return (
     <button
       onClick={onSelect}
       className={`
-        group relative flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-left
+        relative flex items-center justify-center
+        w-24 h-24 rounded-2xl transition-all snap-start
+        bg-black/60 backdrop-blur-sm
         ${isActive
-          ? 'border-cyan-400 bg-cyan-400/15 shadow-lg shadow-cyan-400/20'
-          : 'border-white/10 bg-white/5 hover:border-white/30 hover:bg-white/10'
+          ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
+          : 'hover:bg-white/10'
         }
       `}
-      title={name}
     >
-      {/* Mode color indicator */}
-      <div className={`w-2 h-2 rounded-full ${modeColor} shrink-0`} />
-      {/* Shape icon */}
-      <span className="text-sm text-white/70">{icon}</span>
-      {/* Name */}
-      <span className={`text-sm truncate ${isActive ? 'text-white' : 'text-white/80'}`}>
-        {name}
-      </span>
+      {thumbnailUrl ? (
+        <img
+          src={thumbnailUrl}
+          alt=""
+          className="w-[88px] h-[88px] object-contain"
+          draggable={false}
+        />
+      ) : (
+        <span className="text-3xl text-white/70">◼</span>
+      )}
     </button>
+  );
+}
+
+/** Wrapper that pairs a PresetButton with its thumbnail hook */
+function PresetButtonWithThumb({
+  template,
+  isActive,
+  onSelect,
+}: {
+  template: { config: import('@worldify/shared').BuildConfig; baseRotation?: import('@worldify/shared').Quat; idx: number };
+  isActive: boolean;
+  onSelect: () => void;
+}) {
+  const thumbnailUrl = usePresetThumbnail(template.config, template.baseRotation);
+  return (
+    <PresetButton
+      thumbnailUrl={thumbnailUrl}
+      isActive={isActive}
+      onSelect={onSelect}
+    />
   );
 }
 
@@ -170,9 +153,6 @@ export function BuildMenu() {
 
   // Tab state
   const [activeTab, setActiveTab] = useState<MenuTab>('presets');
-
-  // Material texture thumbnails (loaded once from albedo.bin)
-  const thumbnails = useMaterialThumbnails();
 
   const handleClose = useCallback(() => {
     setBuildMenuOpen(false);
@@ -215,52 +195,53 @@ export function BuildMenu() {
 
       {/* Menu panel — same width as hotbar, sits directly above it */}
       <div
-        className="relative z-[100] w-full flex flex-col max-h-[60vh] bg-black/75 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-sm"
+        className="relative z-[100] w-full flex flex-col max-h-[60vh]"
         onMouseDown={(e) => e.stopPropagation()}
         onContextMenu={handleContextMenu}
       >
-        {/* Tab bar */}
-        <div className="flex border-b border-white/10 shrink-0">
+        {/* Tab bar — own background, spaced from content */}
+        <div className="flex gap-1.5 shrink-0 mb-2">
           <button
             onClick={() => setActiveTab('presets')}
-            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors backdrop-blur-sm
               ${activeTab === 'presets'
-                ? 'text-cyan-400 border-b-2 border-cyan-400'
-                : 'text-white/50 hover:text-white/70'
+                ? 'bg-cyan-400/20 text-cyan-400'
+                : 'bg-black/60 text-white/50 hover:text-white/70 hover:bg-black/80'
               }`}
           >
             Presets
           </button>
           <button
             onClick={() => setActiveTab('materials')}
-            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors backdrop-blur-sm
               ${activeTab === 'materials'
-                ? 'text-cyan-400 border-b-2 border-cyan-400'
-                : 'text-white/50 hover:text-white/70'
+                ? 'bg-cyan-400/20 text-cyan-400'
+                : 'bg-black/60 text-white/50 hover:text-white/70 hover:bg-black/80'
               }`}
           >
             Materials
           </button>
           <button
             onClick={() => setActiveTab('config')}
-            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors backdrop-blur-sm
               ${activeTab === 'config'
-                ? 'text-cyan-400 border-b-2 border-cyan-400'
-                : 'text-white/50 hover:text-white/70'
+                ? 'bg-cyan-400/20 text-cyan-400'
+                : 'bg-black/60 text-white/50 hover:text-white/70 hover:bg-black/80'
               }`}
           >
             Config
           </button>
         </div>
 
-        <div className="flex flex-col gap-2 p-4 flex-1 min-h-0">
+        <div className="flex flex-col flex-1 min-h-0 mb-2">
           {isNonePreset ? (
-            <div className="flex items-center justify-center h-32 text-white/40 text-sm">
+            <div className="flex items-center justify-center h-32 text-white/40 text-sm p-4 bg-black/60 rounded-2xl backdrop-blur-sm">
               Select a build slot (keys 2-9, 0) to configure it
             </div>
           ) : activeTab === 'config' ? (
             /* ---- Config Tab ---- */
-            currentConfig && currentMeta ? (
+            <div className="p-4 bg-black/60 rounded-2xl backdrop-blur-sm">
+            {currentConfig && currentMeta ? (
               <BuildConfigTab
                 config={currentConfig}
                 meta={currentMeta}
@@ -272,84 +253,35 @@ export function BuildMenu() {
               <div className="flex items-center justify-center h-32 text-white/40 text-sm">
                 No preset selected
               </div>
-            )
+            )}
+            </div>
           ) : activeTab === 'presets' ? (
             /* ---- Presets Tab ---- */
-            <div className="overflow-y-auto pr-1 scrollbar-thin">
-              {CATEGORIES.map((category) => {
-                const templates = PRESET_TEMPLATES
-                  .map((t, idx) => ({ ...t, idx }))
-                  .filter((t) => t.category === category);
-                if (templates.length === 0) return null;
-
-                return (
-                  <div key={category} className="mb-3">
-                    <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-1.5">
-                      {category}
-                    </h3>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {templates.map((t) => (
-                        <PresetButton
-                          key={t.idx}
-                          name={t.name}
-                          mode={t.config.mode}
-                          shape={t.config.shape}
-                          isActive={currentTemplateName === t.name}
-                          onSelect={() => handleSelectTemplate(t.idx)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="overflow-y-auto -mr-[20px] max-h-[300px] snap-y snap-mandatory scrollbar-glass">
+              <div className="flex flex-wrap gap-1.5">
+                {PRESET_TEMPLATES.map((t, idx) => (
+                  <PresetButtonWithThumb
+                    key={idx}
+                    template={{ ...t, idx }}
+                    isActive={currentTemplateName === t.name}
+                    onSelect={() => handleSelectTemplate(idx)}
+                  />
+                ))}
+              </div>
             </div>
           ) : (
             /* ---- Materials Tab ---- */
-            <>
-              <div className="overflow-y-auto pr-1 scrollbar-thin">
-                <div className="grid grid-cols-10 gap-1.5">
-                  {MATERIAL_NAMES.map((name, id) => (
-                    <MaterialSwatch
-                      key={id}
-                      name={name}
-                      color={MATERIAL_COLORS[id] ?? '#888'}
-                      thumbnailUrl={thumbnails?.[id]}
-                      isActive={currentMaterial === id}
-                      onSelect={() => handleSelectMaterial(id)}
-                    />
-                  ))}
-                </div>
+            <div className="overflow-y-auto -mr-[20px] max-h-[300px] snap-y snap-mandatory scrollbar-glass">
+              <div className="flex flex-wrap gap-1.5">
+                {MATERIAL_NAMES.map((_name, id) => (
+                  <MaterialCubeThumb
+                    key={id}
+                    materialId={id}
+                    isActive={currentMaterial === id}
+                    onSelect={() => handleSelectMaterial(id)}
+                  />
+                ))}
               </div>
-
-              {/* Current material info */}
-              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/10">
-                <div
-                  className="w-8 h-8 rounded border border-white/20 overflow-hidden"
-                  style={{ backgroundColor: MATERIAL_COLORS[currentMaterial] ?? '#888' }}
-                >
-                  {thumbnails?.[currentMaterial] && (
-                    <img src={thumbnails[currentMaterial]} alt="" className="w-full h-full object-cover" />
-                  )}
-                </div>
-                <div>
-                  <div className="text-sm text-white/80">
-                    {formatName(MATERIAL_NAMES[currentMaterial] ?? 'unknown')}
-                  </div>
-                  <div className="text-xs text-white/40">Material #{currentMaterial}</div>
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Current slot summary */}
-          {!isNonePreset && (
-            <div className="flex items-center gap-2 pt-2 border-t border-white/10 shrink-0">
-              <div className={`w-2.5 h-2.5 rounded-full ${MODE_BADGE_COLORS[currentConfig?.mode] || 'bg-gray-600'}`} />
-              <span className="text-xs text-white/60">
-                Slot {presetId}: <span className="text-white/80">{currentTemplateName || 'Custom'}</span>
-                {' · '}
-                <span className="text-white/60">{formatName(MATERIAL_NAMES[currentMaterial] ?? 'unknown')}</span>
-              </span>
             </div>
           )}
         </div>

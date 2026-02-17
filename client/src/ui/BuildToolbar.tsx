@@ -12,24 +12,69 @@
 
 import { useGameStore } from '../state/store';
 import type { BuildState } from '../state/store';
-import { DEFAULT_BUILD_PRESETS, BuildMode, GameMode, NONE_PRESET_ID, MATERIAL_COLORS } from '@worldify/shared';
+import { DEFAULT_BUILD_PRESETS, GameMode, NONE_PRESET_ID, type BuildConfig, type Quat } from '@worldify/shared';
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 import { BuildMenu } from './BuildMenu';
+import { usePresetThumbnail } from './usePresetThumbnail';
 
-/** Mode colors for visual distinction */
-const MODE_COLORS: Record<BuildMode, string> = {
-  [BuildMode.ADD]: 'bg-green-600/80',
-  [BuildMode.SUBTRACT]: 'bg-red-600/80',
-  [BuildMode.PAINT]: 'bg-blue-600/80',
-  [BuildMode.FILL]: 'bg-yellow-600/80',
-};
 
-/** Shape icons (simple unicode shapes) */
-const SHAPE_ICONS: Record<string, string> = {
-  cube: '◼',
-  sphere: '●',
-  cylinder: '▮',
-};
+/** Single hotbar slot — uses hook for thumbnail */
+function HotbarSlot({
+  presetId,
+  config,
+  rotation,
+  isActive,
+  isNone,
+  onSelect,
+}: {
+  presetId: number;
+  config: BuildConfig;
+  rotation?: Quat;
+  isActive: boolean;
+  isNone: boolean;
+  onSelect?: () => void;
+}) {
+  const thumbnailUrl = usePresetThumbnail(isNone ? undefined : config, rotation);
+  const keyLabel = `${presetId}`;
+
+  return (
+    <div
+      onClick={onSelect}
+      className={`
+        relative flex items-center justify-center
+        w-24 h-24 rounded-2xl cursor-pointer transition-all
+        bg-black/60 backdrop-blur-sm
+        ${isActive
+          ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
+          : 'hover:bg-white/10'
+        }
+      `}
+    >
+      {/* Key number badge */}
+      <div className={`
+        absolute top-1 left-1.5 z-10
+        text-xs font-bold drop-shadow-md
+        ${isActive ? 'text-cyan-400' : 'text-white/70'}
+      `}>
+        {keyLabel}
+      </div>
+
+      {/* Thumbnail or fallback */}
+      {thumbnailUrl ? (
+        <img
+          src={thumbnailUrl}
+          alt=""
+          className="w-[88px] h-[88px] object-contain"
+          draggable={false}
+        />
+      ) : (
+        <div className={`text-3xl ${isNone ? 'text-white/30' : 'text-white/90'}`}>
+          {isNone ? '✕' : '◼'}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Reusable hotbar strip — renders the 10 preset slots */
 export function HotbarStrip({
@@ -40,62 +85,21 @@ export function HotbarStrip({
   onSelect?: (presetId: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-1 p-1.5 bg-black/75 rounded-2xl backdrop-blur-sm">
+    <div className="flex items-center gap-1.5">
       {[...DEFAULT_BUILD_PRESETS.slice(1), DEFAULT_BUILD_PRESETS[0]].map((preset) => {
-        const isActive = build.presetId === preset.id;
         const config = build.presetConfigs[preset.id];
         const meta = build.presetMeta[preset.id];
-        const mode = config.mode;
-        const modeColor = MODE_COLORS[mode] || 'bg-gray-600/80';
-        const shapeIcon = SHAPE_ICONS[config.shape] || '◼';
         const isNone = preset.id === NONE_PRESET_ID;
-        const keyLabel = `${preset.id}`;
-        const materialColor = MATERIAL_COLORS[config.material] ?? '#888';
-        const displayName = meta?.templateName || preset.name;
-
         return (
-          <div
+          <HotbarSlot
             key={preset.id}
-            onClick={() => onSelect?.(preset.id)}
-            className={`
-              relative flex flex-col items-center justify-center
-              w-14 h-14 rounded-xl cursor-pointer transition-all
-              ${isActive
-                ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
-                : 'hover:bg-white/10'
-              }
-              ${isNone ? 'bg-white/5' : modeColor}
-            `}
-            title={displayName}
-          >
-            {/* Key number badge */}
-            <div className={`
-              absolute -top-1 -left-1 w-5 h-5 rounded-md
-              flex items-center justify-center
-              text-xs font-bold
-              ${isActive ? 'bg-cyan-400 text-black' : 'bg-white/20 text-white/80'}
-            `}>
-              {keyLabel}
-            </div>
-
-            {/* Material color dot */}
-            {!isNone && (
-              <div
-                className="absolute -top-1 -right-1 w-4 h-4 rounded-full border border-black/30"
-                style={{ backgroundColor: materialColor }}
-              />
-            )}
-
-            {/* Shape icon or X for none */}
-            <div className={`text-2xl ${isNone ? 'text-white/30' : 'text-white/90'}`}>
-              {isNone ? '✕' : shapeIcon}
-            </div>
-
-            {/* Preset name (abbreviated) */}
-            <div className="text-[9px] text-white/70 mt-0.5 truncate max-w-[52px]">
-              {displayName}
-            </div>
-          </div>
+            presetId={preset.id}
+            config={config}
+            rotation={meta?.baseRotation}
+            isActive={build.presetId === preset.id}
+            isNone={isNone}
+            onSelect={() => onSelect?.(preset.id)}
+          />
         );
       })}
     </div>
