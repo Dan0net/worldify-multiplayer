@@ -1,24 +1,33 @@
 /**
  * Spectator overlay - shown when player first joins
- * Shows game info and a "Start" button to enter FPS mode
+ * Shows game info with map background and a "Play" button to enter FPS mode
  */
 
 import { useGameStore } from '../state/store';
 import { controls } from '../game/player/controls';
 import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
 import { getCamera } from '../game/scene/camera';
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
+import { MapRenderer } from '../game/maptile/MapRenderer';
+import { getMapTileCache } from './MapOverlay';
+import { CHUNK_SIZE, VOXEL_SCALE, MAP_TILE_SIZE } from '@worldify/shared';
+
+// Map panel dimensions
+const MAP_PANEL_W = 400;
+const MAP_PANEL_H = 280;
+// Fixed scale so map always fills the panel (show ~12 tiles across regardless of view distance)
+const SPECTATOR_TILES_ACROSS = 12;
+const SPECTATOR_MAP_SCALE = MAP_PANEL_W / (SPECTATOR_TILES_ACROSS * MAP_TILE_SIZE);
 
 export function SpectatorOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   const playerCount = useGameStore((s) => s.playerCount);
-  const roomId = useGameStore((s) => s.roomId);
   const spawnReady = useGameStore((s) => s.spawnReady);
   const setGameMode = useGameStore((s) => s.setGameMode);
   const textureState = useGameStore((s) => s.textureState);
@@ -28,10 +37,45 @@ export function SpectatorOverlay() {
   const fov = useGameStore((s) => s.fov);
   
   const [hdCached, setHdCached] = useState<boolean | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRendererRef = useRef<MapRenderer | null>(null);
+  const animFrameRef = useRef<number>(0);
 
   // Check if HD textures are cached on mount
   useEffect(() => {
     materialManager.checkHighResAvailable().then(setHdCached);
+  }, []);
+
+  // Map renderer for the room panel background
+  const renderMap = useCallback(() => {
+    if (!mapRendererRef.current) return;
+    const cache = getMapTileCache();
+    const { x, z } = storeBridge.mapPlayerPosition;
+    const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
+    const centerTz = Math.floor(z / (CHUNK_SIZE * VOXEL_SCALE));
+    mapRendererRef.current.setPlayerPosition(x, z);
+    mapRendererRef.current.render(cache.getAll(), centerTx, centerTz);
+    animFrameRef.current = requestAnimationFrame(renderMap);
+  }, []);
+
+  useEffect(() => {
+    if (gameMode !== GameMode.MainMenu || !mapContainerRef.current) return;
+    if (!mapRendererRef.current) {
+      mapRendererRef.current = new MapRenderer(mapContainerRef.current, { scale: SPECTATOR_MAP_SCALE });
+      mapRendererRef.current.setViewportSize(MAP_PANEL_W, MAP_PANEL_H);
+    }
+    animFrameRef.current = requestAnimationFrame(renderMap);
+    return () => {
+      cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [gameMode, renderMap]);
+
+  // Cleanup renderer on unmount
+  useEffect(() => {
+    return () => {
+      cancelAnimationFrame(animFrameRef.current);
+      mapRendererRef.current = null;
+    };
   }, []);
 
   // Only show in MainMenu mode
@@ -43,12 +87,11 @@ export function SpectatorOverlay() {
   const canStart = isConnected && spawnReady;
   const isLoadingHD = textureState === 'loading-high';
   const hasHD = textureState === 'high';
+  const isLoadingTextures = isLoadingHD || textureState === 'loading-low';
 
   const handleStart = () => {
     if (!canStart) return;
-    // Switch to Playing mode
     setGameMode(GameMode.Playing);
-    // Lock pointer for FPS controls
     controls.requestPointerLock();
   };
 
@@ -61,176 +104,184 @@ export function SpectatorOverlay() {
     }
   };
 
-  // Determine the label text for HD toggle
   const getHDLabel = () => {
     const progress = Math.round(textureProgress * 100);
-    if (isLoadingHD) {
-      // Check if loading from cache or downloading
-      if (hdCached) {
-        return `Loading from cache ${progress}%`;
-      }
-      return `Downloading ${progress}%`;
-    }
-    if (textureState === 'loading-low') {
-      return `Loading ${progress}%`;
-    }
-    if (hasHD) {
-      return 'HD textures';
-    }
-    return 'HD textures (~540MB)';
+    if (isLoadingHD) return hdCached ? `Cache ${progress}%` : `Download ${progress}%`;
+    if (textureState === 'loading-low') return `Loading ${progress}%`;
+    if (hasHD) return 'HD On';
+    return 'HD Off (~540MB)';
   };
 
   return (
-    <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/30 z-50 pointer-events-none">
-      {/* Game title and info */}
-      <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-16 mb-4" />
+    <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/40 z-50 pointer-events-none">
+      {/* Logo */}
+      <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-28 mb-8" />
 
-      {/* Room info / connection status */}
-      <div className="mb-8 py-4 px-8 bg-black/70 rounded-lg text-white text-center whitespace-nowrap">
-        {isConnected ? (
-          <>
-            <div className="text-sm opacity-70 mb-1">
-              Room: {roomId}
-            </div>
-            <div className="text-lg">
-              {playerCount} player{playerCount !== 1 ? 's' : ''} in game
-            </div>
-            {!spawnReady && (
-              <div className="text-sm text-yellow-400 mt-2">
-                Loading terrain...
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="text-lg opacity-80">Connecting...</div>
-        )}
-      </div>
+      {/* ===== Room Panel with Map Background ===== */}
+      <div
+        onClick={canStart ? handleStart : undefined}
+        className={`group relative rounded-2xl overflow-hidden shadow-[0_0_30px_rgba(34,197,94,0.4),0_8px_32px_rgba(0,0,0,0.6)] border-2 border-white transition-all duration-200 pointer-events-auto ${
+          canStart
+            ? 'cursor-pointer hover:scale-[1.03] hover:shadow-[0_0_50px_rgba(34,197,94,0.6),0_12px_48px_rgba(34,197,94,0.4)] hover:border-green-400'
+            : ''
+        }`}
+        style={{ width: MAP_PANEL_W, height: MAP_PANEL_H }}
+      >
+        {/* Solid background before map loads */}
+        <div className="absolute inset-0 bg-gray-900" />
 
-      {/* Start button - only show when connected, enable when spawn ready */}
-      {isConnected && (
-        <button
-          onClick={handleStart}
-          disabled={!spawnReady}
-          className={`py-6 px-16 text-2xl text-white border-none rounded-xl pointer-events-auto shadow-[0_4px_20px_rgba(79,70,229,0.5)] transition-all duration-100 ${
-            spawnReady
-              ? 'bg-indigo-600 cursor-pointer hover:bg-indigo-500 hover:scale-105'
-              : 'bg-gray-600 cursor-not-allowed opacity-50'
-          }`}
-        >
-          {spawnReady ? '▶ Start' : '⏳ Loading...'}
-        </button>
-      )}
+        {/* Map canvas background */}
+        <div
+          ref={mapContainerRef}
+          className="absolute inset-0"
+          style={{ width: MAP_PANEL_W, height: MAP_PANEL_H }}
+        />
 
-      {/* HD Textures toggle - always show when connected */}
-      {isConnected && (
-        <button
-          onClick={handleToggleHD}
-          disabled={isLoadingHD || textureState === 'loading-low'}
-          className={`mt-4 py-2 px-4 text-xs rounded pointer-events-auto transition-all duration-100 flex items-center gap-2 ${
-            isLoadingHD || textureState === 'loading-low'
-              ? 'text-yellow-400 bg-yellow-900/30 cursor-wait'
-              : hasHD
-                ? 'text-green-400 bg-green-900/30 hover:bg-green-900/50 cursor-pointer'
-                : 'text-gray-400 bg-gray-900/30 hover:bg-gray-900/50 cursor-pointer'
-          }`}
-        >
-          <span 
-            className={`inline-block w-9 h-5 rounded-full relative transition-colors ${
-              isLoadingHD || textureState === 'loading-low'
-                ? 'bg-yellow-600/50' 
-                : hasHD 
-                  ? 'bg-green-600' 
-                  : 'bg-gray-600'
-            }`}
-          >
-            <span 
-              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 flex items-center justify-center ${
-                hasHD || isLoadingHD ? 'translate-x-4' : 'translate-x-0'
-              }`}
-            >
-              {(isLoadingHD || textureState === 'loading-low') && (
-                <svg className="animate-spin w-3 h-3 text-yellow-600" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-              )}
-            </span>
+        {/* Top-left mode pill */}
+        <div className="absolute top-3 left-3 z-10">
+          <span className="bg-black/60 backdrop-blur-sm text-white text-xs font-bold tracking-widest uppercase px-3 py-1.5 rounded-lg border border-white/10">
+            MULTIPLAYER CREATIVE
           </span>
-          <span>{getHDLabel()}</span>
-        </button>
-      )}
+        </div>
 
-      {/* Quality preset select */}
-      {isConnected && (
-        <div className="mt-3 flex items-center gap-2 pointer-events-auto">
-          <span className="text-white text-xs opacity-70">Quality:</span>
-          <div className="flex gap-1">
-            {QUALITY_LEVELS.map((level) => (
-              <button
-                key={level}
-                onClick={() => {
-                  syncQualityToStore(level, visibilityRadius);
-                }}
-                className={`py-1 px-3 text-xs rounded transition-all duration-100 ${
-                  qualityLevel === level
-                    ? 'text-white bg-indigo-600'
-                    : 'text-gray-400 bg-gray-900/30 hover:bg-gray-900/50'
+        {/* Bottom bar with player count and play button */}
+        <div className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm px-4 py-3 flex items-center justify-between">
+          {isConnected ? (
+            <>
+              {/* Player count */}
+              <div className="flex items-center gap-2 text-white">
+                <svg className="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                </svg>
+                <span className="text-sm font-medium">
+                  {playerCount}<span className="text-white/50"> / 20</span>
+                </span>
+              </div>
+
+              {/* Play button - lights up on panel hover */}
+              <span
+                className={`py-2 px-8 text-base font-semibold text-white rounded-lg shadow-[0_2px_12px_rgba(79,70,229,0.5)] transition-all duration-200 ${
+                  spawnReady
+                    ? 'bg-indigo-600 group-hover:bg-green-500 group-hover:shadow-[0_4px_20px_rgba(34,197,94,0.6)] group-hover:scale-110'
+                    : 'bg-gray-600/80 opacity-60'
                 }`}
               >
-                {QUALITY_LABELS[level]}
-              </button>
-            ))}
+                {spawnReady ? '▶  Play' : '⏳  Loading...'}
+              </span>
+            </>
+          ) : (
+            <div className="text-white/80 text-sm w-full text-center">Connecting...</div>
+          )}
+        </div>
+      </div>
+
+      {/* ===== Settings Panel ===== */}
+      {isConnected && (
+        <div
+          className="mt-3 rounded-2xl bg-black/70 border border-white/10 backdrop-blur-sm pointer-events-auto py-4 px-5 flex flex-col gap-3"
+          style={{ width: MAP_PANEL_W }}
+        >
+          {/* HD Textures toggle */}
+          <div className="flex items-center justify-between">
+            <span className="text-white/70 text-sm">HD Textures</span>
+            <button
+              onClick={handleToggleHD}
+              disabled={isLoadingTextures}
+              className="flex items-center gap-2 cursor-pointer"
+            >
+              <span className={`text-xs ${hasHD ? 'text-green-400' : isLoadingTextures ? 'text-yellow-400' : 'text-white/50'}`}>
+                {getHDLabel()}
+              </span>
+              <span
+                className={`inline-block w-10 h-5 rounded-full relative transition-colors ${
+                  isLoadingTextures ? 'bg-yellow-600/50' : hasHD ? 'bg-indigo-600' : 'bg-white/20'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 flex items-center justify-center ${
+                    hasHD || isLoadingHD ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                >
+                  {isLoadingTextures && (
+                    <svg className="animate-spin w-3 h-3 text-yellow-600" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  )}
+                </span>
+              </span>
+            </button>
+          </div>
+
+          {/* Quality preset */}
+          <div className="flex items-center justify-between">
+            <span className="text-white/70 text-sm">Quality</span>
+            <div className="flex gap-1">
+              {QUALITY_LEVELS.map((level) => (
+                <button
+                  key={level}
+                  onClick={() => syncQualityToStore(level, visibilityRadius)}
+                  className={`py-1 px-3 text-xs rounded-lg transition-all duration-100 cursor-pointer ${
+                    qualityLevel === level
+                      ? 'text-white bg-indigo-600'
+                      : 'text-white/50 bg-white/10 hover:bg-white/20'
+                  }`}
+                >
+                  {QUALITY_LABELS[level]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* View Distance slider */}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-white/70 text-sm whitespace-nowrap">View Distance</span>
+            <div className="flex items-center gap-2 flex-1 justify-end">
+              <input
+                type="range"
+                min={2}
+                max={10}
+                step={1}
+                value={visibilityRadius}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  storeBridge.setVisibilityRadius(val);
+                  applyVisibilityRadius(val);
+                }}
+                className="w-28 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+              />
+              <span className="text-white/60 text-xs w-4 text-right">{visibilityRadius}</span>
+            </div>
+          </div>
+
+          {/* FoV slider */}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-white/70 text-sm whitespace-nowrap">Field of View</span>
+            <div className="flex items-center gap-2 flex-1 justify-end">
+              <input
+                type="range"
+                min={75}
+                max={120}
+                step={1}
+                value={fov}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  storeBridge.setFov(val);
+                  const cam = getCamera();
+                  if (cam) {
+                    cam.fov = val;
+                    cam.updateProjectionMatrix();
+                  }
+                }}
+                className="w-28 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+              />
+              <span className="text-white/60 text-xs w-6 text-right">{fov}°</span>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Visibility radius slider */}
-      {isConnected && (
-        <div className="mt-2 flex items-center gap-2 pointer-events-auto">
-          <span className="text-white text-xs opacity-70 whitespace-nowrap">View Dist:</span>
-          <input
-            type="range"
-            min={2}
-            max={10}
-            step={1}
-            value={visibilityRadius}
-            onChange={(e) => {
-              const val = parseInt(e.target.value, 10);
-              storeBridge.setVisibilityRadius(val);
-              applyVisibilityRadius(val);
-            }}
-            className="w-24 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-          />
-          <span className="text-white text-xs opacity-70">{visibilityRadius}</span>
-        </div>
-      )}
-
-      {/* FoV slider */}
-      {isConnected && (
-        <div className="mt-2 flex items-center gap-2 pointer-events-auto">
-          <span className="text-white text-xs opacity-70 whitespace-nowrap">FoV:</span>
-          <input
-            type="range"
-            min={75}
-            max={120}
-            step={1}
-            value={fov}
-            onChange={(e) => {
-              const val = parseInt(e.target.value, 10);
-              storeBridge.setFov(val);
-              const cam = getCamera();
-              if (cam) {
-                cam.fov = val;
-                cam.updateProjectionMatrix();
-              }
-            }}
-            className="w-24 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-          />
-          <span className="text-white text-xs opacity-70">{fov}°</span>
-        </div>
-      )}
-
-      {/* Controls hint - fixed at bottom of screen */}
+      {/* Controls hint at bottom */}
       {isConnected && (
         <div className="fixed bottom-4 left-0 right-0 flex justify-center pointer-events-none">
           <KeyInstructions rows={GAME_KEY_ROWS} />
