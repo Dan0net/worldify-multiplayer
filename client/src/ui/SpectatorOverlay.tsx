@@ -221,7 +221,7 @@ export function SpectatorOverlay() {
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm whitespace-nowrap">View Dist</span>
             <div className="flex gap-1" style={{ width: 268 }}>
-              {([{ label: 'Near', value: 4 }, { label: 'Close', value: 8 }, { label: 'Far', value: 12 }, { label: 'Max', value: 16 }] as const).map((opt) => (
+              {([{ label: 'Near', value: 4 }, { label: 'Close', value: 8 }, { label: 'Far', value: 10 }, { label: 'Max', value: 12 }] as const).map((opt) => (
                 <button
                   key={opt.value}
                   onClick={() => {

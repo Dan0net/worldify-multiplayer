@@ -12,7 +12,7 @@
 
 import { useGameStore } from '../state/store';
 import type { BuildState } from '../state/store';
-import { DEFAULT_BUILD_PRESETS, GameMode, NONE_PRESET_ID, type BuildConfig, type Quat } from '@worldify/shared';
+import { DEFAULT_BUILD_PRESETS, NONE_PRESET_ID, type BuildConfig, type Quat } from '@worldify/shared';
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 import { BuildMenu } from './BuildMenu';
 import { usePresetThumbnail } from './usePresetThumbnail';
@@ -108,12 +108,6 @@ export function HotbarStrip({
 
 export function BuildToolbar() {
   const build = useGameStore((s) => s.build);
-  const gameMode = useGameStore((s) => s.gameMode);
-
-  // Hide when not playing
-  if (gameMode !== GameMode.Playing) {
-    return null;
-  }
 
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50">

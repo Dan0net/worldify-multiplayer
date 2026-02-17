@@ -1,6 +1,6 @@
 
 import { useGameStore } from '../state/store';
-import { GameMode, NONE_PRESET_ID } from '@worldify/shared';
+import { NONE_PRESET_ID } from '@worldify/shared';
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 
 /**
@@ -16,13 +16,8 @@ function useCrosshairColor(): string {
 }
 
 export function Hud() {
-  const { playerCount, roomId, gameMode } = useGameStore();
+  const { playerCount, roomId } = useGameStore();
   const crosshairColor = useCrosshairColor();
-
-  // Hide HUD when not playing
-  if (gameMode !== GameMode.Playing) {
-    return null;
-  }
 
   return (
     <>
