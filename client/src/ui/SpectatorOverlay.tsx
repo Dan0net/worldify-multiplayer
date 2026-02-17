@@ -7,7 +7,7 @@ import { useGameStore } from '../state/store';
 import { controls } from '../game/player/controls';
 import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
@@ -36,15 +36,9 @@ export function SpectatorOverlay() {
   const visibilityRadius = useGameStore((s) => s.visibilityRadius);
   const fov = useGameStore((s) => s.fov);
   
-  const [hdCached, setHdCached] = useState<boolean | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRendererRef = useRef<MapRenderer | null>(null);
   const animFrameRef = useRef<number>(0);
-
-  // Check if HD textures are cached on mount
-  useEffect(() => {
-    materialManager.checkHighResAvailable().then(setHdCached);
-  }, []);
 
   // Map renderer for the room panel background
   const renderMap = useCallback(() => {
@@ -87,7 +81,6 @@ export function SpectatorOverlay() {
   const canStart = isConnected && spawnReady;
   const isLoadingHD = textureState === 'loading-high';
   const hasHD = textureState === 'high';
-  const isLoadingTextures = isLoadingHD || textureState === 'loading-low';
 
   const handleStart = () => {
     if (!canStart) return;
@@ -102,14 +95,6 @@ export function SpectatorOverlay() {
     } else {
       materialManager.upgradeToHighResolution();
     }
-  };
-
-  const getHDLabel = () => {
-    const progress = Math.round(textureProgress * 100);
-    if (isLoadingHD) return hdCached ? `Cache ${progress}%` : `Download ${progress}%`;
-    if (textureState === 'loading-low') return `Loading ${progress}%`;
-    if (hasHD) return 'HD On';
-    return 'HD Off (~540MB)';
   };
 
   return (
@@ -181,47 +166,46 @@ export function SpectatorOverlay() {
           className="mt-3 rounded-2xl bg-black/70 border border-white/10 backdrop-blur-sm pointer-events-auto py-4 px-5 flex flex-col gap-3"
           style={{ width: MAP_PANEL_W }}
         >
-          {/* HD Textures toggle */}
+          {/* Textures - two button toggle */}
           <div className="flex items-center justify-between">
-            <span className="text-white/70 text-sm">HD Textures</span>
-            <button
-              onClick={handleToggleHD}
-              disabled={isLoadingTextures}
-              className="flex items-center gap-2 cursor-pointer"
-            >
-              <span className={`text-xs ${hasHD ? 'text-green-400' : isLoadingTextures ? 'text-yellow-400' : 'text-white/50'}`}>
-                {getHDLabel()}
-              </span>
-              <span
-                className={`inline-block w-10 h-5 rounded-full relative transition-colors ${
-                  isLoadingTextures ? 'bg-yellow-600/50' : hasHD ? 'bg-indigo-600' : 'bg-white/20'
+            <span className="text-white/70 text-sm">Textures</span>
+            <div className="flex gap-1" style={{ width: 268 }}>
+              <button
+                onClick={() => { if (hasHD) handleToggleHD(); }}
+                disabled={textureState === 'loading-low'}
+                className={`py-1 flex-1 text-xs rounded-lg transition-all duration-100 cursor-pointer text-center ${
+                  !hasHD && !isLoadingHD
+                    ? 'text-white bg-indigo-600'
+                    : 'text-white/50 bg-white/10 hover:bg-white/20'
                 }`}
               >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 flex items-center justify-center ${
-                    hasHD || isLoadingHD ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                >
-                  {isLoadingTextures && (
-                    <svg className="animate-spin w-3 h-3 text-yellow-600" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                  )}
-                </span>
-              </span>
-            </button>
+                {textureState === 'loading-low' ? `${Math.round(textureProgress * 100)}%` : 'Low'}
+              </button>
+              <button
+                onClick={() => { if (!hasHD) handleToggleHD(); }}
+                disabled={isLoadingHD}
+                className={`py-1 flex-1 text-xs rounded-lg transition-all duration-100 cursor-pointer text-center ${
+                  hasHD
+                    ? 'text-white bg-indigo-600'
+                    : isLoadingHD
+                      ? 'text-yellow-400 bg-yellow-900/30'
+                      : 'text-white/50 bg-white/10 hover:bg-white/20'
+                }`}
+              >
+                {isLoadingHD ? `${Math.round(textureProgress * 100)}%` : 'High (~540MB)'}
+              </button>
+            </div>
           </div>
 
           {/* Quality preset */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm">Quality</span>
-            <div className="flex gap-1">
+            <div className="flex gap-1" style={{ width: 268 }}>
               {QUALITY_LEVELS.map((level) => (
                 <button
                   key={level}
                   onClick={() => syncQualityToStore(level, visibilityRadius)}
-                  className={`py-1 px-3 text-xs rounded-lg transition-all duration-100 cursor-pointer ${
+                  className={`py-1 flex-1 text-xs rounded-lg transition-all duration-100 cursor-pointer text-center ${
                     qualityLevel === level
                       ? 'text-white bg-indigo-600'
                       : 'text-white/50 bg-white/10 hover:bg-white/20'
@@ -233,31 +217,33 @@ export function SpectatorOverlay() {
             </div>
           </div>
 
-          {/* View Distance slider */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-white/70 text-sm whitespace-nowrap">View Distance</span>
-            <div className="flex items-center gap-2 flex-1 justify-end">
-              <input
-                type="range"
-                min={2}
-                max={10}
-                step={1}
-                value={visibilityRadius}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  storeBridge.setVisibilityRadius(val);
-                  applyVisibilityRadius(val);
-                }}
-                className="w-28 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-              />
-              <span className="text-white/60 text-xs w-4 text-right">{visibilityRadius}</span>
+          {/* View Distance - 4 button toggle */}
+          <div className="flex items-center justify-between">
+            <span className="text-white/70 text-sm whitespace-nowrap">View Dist</span>
+            <div className="flex gap-1" style={{ width: 268 }}>
+              {([{ label: 'Near', value: 4 }, { label: 'Close', value: 8 }, { label: 'Far', value: 12 }, { label: 'Max', value: 16 }] as const).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => {
+                    storeBridge.setVisibilityRadius(opt.value);
+                    applyVisibilityRadius(opt.value);
+                  }}
+                  className={`py-1 flex-1 text-xs rounded-lg transition-all duration-100 cursor-pointer text-center ${
+                    visibilityRadius === opt.value
+                      ? 'text-white bg-indigo-600'
+                      : 'text-white/50 bg-white/10 hover:bg-white/20'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
 
           {/* FoV slider */}
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm whitespace-nowrap">Field of View</span>
-            <div className="flex items-center gap-2 flex-1 justify-end">
+            <div className="flex items-center gap-2" style={{ width: 268 }}>
               <input
                 type="range"
                 min={75}
@@ -273,7 +259,7 @@ export function SpectatorOverlay() {
                     cam.updateProjectionMatrix();
                   }
                 }}
-                className="w-28 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
               />
               <span className="text-white/60 text-xs w-6 text-right">{fov}°</span>
             </div>

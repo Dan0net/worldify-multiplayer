@@ -13,7 +13,7 @@
 
 export type QualityLevel = 'ultra' | 'high' | 'medium' | 'low';
 
-export const QUALITY_LEVELS: QualityLevel[] = ['ultra', 'high', 'medium', 'low'];
+export const QUALITY_LEVELS: QualityLevel[] = ['low', 'medium', 'high', 'ultra'];
 
 export const QUALITY_LABELS: Record<QualityLevel, string> = {
   ultra: 'Ultra',
