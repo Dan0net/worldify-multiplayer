@@ -22,6 +22,7 @@ import {
   type MaterialName,
 } from '@worldify/shared';
 import { useMaterialThumbnails } from './useMaterialThumbnails';
+import { BuildConfigTab } from './BuildConfigTab';
 
 // ============== Constants ==============
 
@@ -56,7 +57,7 @@ const CATEGORIES = [
 ];
 
 /** Menu tab */
-type MenuTab = 'presets' | 'materials';
+type MenuTab = 'presets' | 'materials' | 'config';
 
 // ============== Sub-components ==============
 
@@ -155,6 +156,7 @@ export function BuildMenu() {
   const gameMode = useGameStore((s) => s.gameMode);
   const setBuildMenuOpen = useGameStore((s) => s.setBuildMenuOpen);
   const updatePresetConfig = useGameStore((s) => s.updatePresetConfig);
+  const updatePresetMeta = useGameStore((s) => s.updatePresetMeta);
   const applyPresetTemplate = useGameStore((s) => s.applyPresetTemplate);
 
   const { presetId, menuOpen, presetConfigs, presetMeta } = build;
@@ -239,6 +241,16 @@ export function BuildMenu() {
           >
             Materials
           </button>
+          <button
+            onClick={() => setActiveTab('config')}
+            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors
+              ${activeTab === 'config'
+                ? 'text-cyan-400 border-b-2 border-cyan-400'
+                : 'text-white/50 hover:text-white/70'
+              }`}
+          >
+            Config
+          </button>
         </div>
 
         <div className="flex flex-col gap-2 p-4 flex-1 min-h-0">
@@ -246,6 +258,21 @@ export function BuildMenu() {
             <div className="flex items-center justify-center h-32 text-white/40 text-sm">
               Select a build slot (keys 2-9, 0) to configure it
             </div>
+          ) : activeTab === 'config' ? (
+            /* ---- Config Tab ---- */
+            currentConfig && currentMeta ? (
+              <BuildConfigTab
+                config={currentConfig}
+                meta={currentMeta}
+                presetId={presetId}
+                onUpdateConfig={updatePresetConfig}
+                onUpdateMeta={updatePresetMeta}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-32 text-white/40 text-sm">
+                No preset selected
+              </div>
+            )
           ) : activeTab === 'presets' ? (
             /* ---- Presets Tab ---- */
             <div className="overflow-y-auto pr-1 scrollbar-thin">

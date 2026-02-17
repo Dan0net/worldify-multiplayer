@@ -11,7 +11,7 @@
  */
 
 import { useGameStore, ConnectionStatus, VoxelStats, VoxelDebugToggles, BuildState, TextureLoadingState, MaterialSettings, WaterSettings, PerfSnapshot } from './store';
-import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode, NONE_PRESET_ID, type BuildConfig } from '@worldify/shared';
+import { getPreset, BuildPreset, BUILD_ROTATION_STEP, BUILD_ROTATION_STEPS, GameMode, NONE_PRESET_ID, type BuildConfig, type PresetSlotMeta } from '@worldify/shared';
 import { applyMaterialSettings as applyMaterialSettingsToShaders } from '../game/material/TerrainMaterial';
 import { applyWaterSettings as applyWaterSettingsToShaders } from '../game/material/WaterMaterial';
 import type { QualityLevel } from '../game/quality/QualityPresets';
@@ -242,6 +242,13 @@ class StoreBridge {
    */
   updatePresetConfig(presetId: number, updates: Partial<BuildConfig>): void {
     getState().updatePresetConfig(presetId, updates);
+  }
+
+  /**
+   * Update the metadata for a preset (align, snap, rotation etc.).
+   */
+  updatePresetMeta(presetId: number, updates: Partial<PresetSlotMeta>): void {
+    getState().updatePresetMeta(presetId, updates);
   }
 
   /**

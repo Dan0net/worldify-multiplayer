@@ -408,6 +408,7 @@ export interface GameState {
   setBuildMenuOpen: (open: boolean) => void;
   toggleBuildMenu: () => void;
   updatePresetConfig: (presetId: number, updates: Partial<BuildConfig>) => void;
+  updatePresetMeta: (presetId: number, updates: Partial<PresetSlotMeta>) => void;
   applyPresetTemplate: (slotId: number, templateIndex: number) => void;
   
   // Material/texture actions
@@ -629,6 +630,11 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     const configs = [...state.build.presetConfigs];
     configs[presetId] = { ...configs[presetId], ...updates };
     return { build: { ...state.build, presetConfigs: configs } };
+  }),
+  updatePresetMeta: (presetId, updates) => set((state) => {
+    const metas = [...state.build.presetMeta];
+    metas[presetId] = { ...metas[presetId], ...updates };
+    return { build: { ...state.build, presetMeta: metas } };
   }),
   applyPresetTemplate: (slotId, templateIndex) => set((state) => {
     const template = PRESET_TEMPLATES[templateIndex];
