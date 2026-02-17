@@ -341,7 +341,7 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Brick Cylinder',
     category: PresetCategory.STRUCTURAL,
-    config: { shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(4, 4, 0), material: 6, thickness: 1 },
+    config: { shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(4, 4, 1), material: 6, thickness: 1 },
     align: BuildPresetAlign.BASE,
     snapShape: BuildPresetSnapShape.CYLINDER,
   },
@@ -386,7 +386,7 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Flatten',
     category: PresetCategory.TERRAIN,
-    config: { shape: BuildShape.CYLINDER, mode: BuildMode.SUBTRACT, size: size(8, 4, 0), material: 1 },
+    config: { shape: BuildShape.CYLINDER, mode: BuildMode.SUBTRACT, size: size(8, 4, 1), material: 1 },
     align: BuildPresetAlign.BASE,
     snapShape: BuildPresetSnapShape.CYLINDER,
   },

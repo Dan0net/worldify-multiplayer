@@ -13,6 +13,7 @@ import {
   VoxelBuildCommit,
   VoxelChunkRequest,
   BuildResult,
+  BuildShape,
   encodeVoxelBuildCommit,
   encodeVoxelChunkData,
   MAX_BUILD_DISTANCE,
@@ -67,11 +68,13 @@ function isWithinRange(
 
 /**
  * Validate build configuration.
+ * CYLINDER and SPHERE shapes don't use size.z, so allow it to be 0.
  */
 function isValidConfig(intent: VoxelBuildIntent): boolean {
-  const { size } = intent.config;
+  const { size, shape } = intent.config;
+  const needsZ = shape !== BuildShape.CYLINDER && shape !== BuildShape.SPHERE;
   return (
-    size.x > 0 && size.y > 0 && size.z > 0 &&
+    size.x > 0 && size.y > 0 && (!needsZ || size.z > 0) &&
     size.x <= 20 && size.y <= 20 && size.z <= 20
   );
 }
