@@ -230,9 +230,9 @@ export function SpectatorOverlay() {
         </div>
       )}
 
-      {/* Controls hint - only show when connected */}
+      {/* Controls hint - fixed at bottom of screen */}
       {isConnected && (
-        <div className="mt-8">
+        <div className="fixed bottom-4 left-0 right-0 flex justify-center pointer-events-none">
           <KeyInstructions rows={GAME_KEY_ROWS} />
         </div>
       )}

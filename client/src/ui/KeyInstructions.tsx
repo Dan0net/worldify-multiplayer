@@ -39,22 +39,16 @@ export function KeyInstructions({ rows, className = '' }: KeyInstructionsProps) 
   );
 }
 
-/** Standard key instruction rows for in-game (movement + build + utility) */
+/** Standard key instructions for in-game – single line (movement + build + utility) */
 export const GAME_KEY_ROWS: KeyGroup[][] = [
   [
     { keys: ['W', 'A', 'S', 'D'], label: 'Move' },
     { keys: ['Space'], label: 'Jump' },
     { keys: ['Shift'], label: 'Sprint' },
-  ],
-  [
     { keys: ['1-9'], label: 'Build tools' },
     { keys: ['Click'], label: 'Place' },
     { keys: ['Q', 'E'], label: 'Rotate' },
-    { keys: ['Scroll'], label: 'Rotate' },
-  ],
-  [
     { keys: ['G'], label: 'Grid snap' },
-    { keys: ['T'], label: 'Point snap' },
     { keys: ['Tab'], label: 'Build menu' },
     { keys: ['M'], label: 'Map' },
     { keys: ['Esc'], label: 'Menu' },

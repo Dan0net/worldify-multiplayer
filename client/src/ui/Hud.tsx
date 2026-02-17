@@ -1,6 +1,7 @@
 
 import { useGameStore } from '../state/store';
 import { GameMode, NONE_PRESET_ID } from '@worldify/shared';
+import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 
 /**
  * Get crosshair color based on build state.
@@ -34,6 +35,11 @@ export function Hud() {
       {/* Room info - positioned below map overlay */}
       <div className="fixed top-[230px] right-5 py-2 px-3 bg-black/60 text-white rounded-lg text-xs z-50 whitespace-nowrap">
         {roomId} • {playerCount} player{playerCount !== 1 ? 's' : ''}
+      </div>
+
+      {/* Key instructions at bottom */}
+      <div className="fixed bottom-4 left-0 right-0 flex justify-center pointer-events-none z-50">
+        <KeyInstructions rows={GAME_KEY_ROWS} />
       </div>
     </>
   );
