@@ -105,7 +105,7 @@ export function SpectatorOverlay() {
       {/* ===== Room Panel with Map Background ===== */}
       <div
         onClick={canStart ? handleStart : undefined}
-        className={`group relative rounded-2xl overflow-hidden shadow-[0_0_30px_rgba(34,197,94,0.4),0_8px_32px_rgba(0,0,0,0.6)] border-2 border-white transition-all duration-200 pointer-events-auto ${
+        className={`group relative rounded-2xl overflow-hidden shadow-[0_0_30px_rgba(34,197,94,0.4),0_8px_32px_rgba(0,0,0,0.6)] border-2 border-indigo-600 transition-all duration-200 pointer-events-auto ${
           canStart
             ? 'cursor-pointer hover:scale-[1.03] hover:shadow-[0_0_50px_rgba(34,197,94,0.6),0_12px_48px_rgba(34,197,94,0.4)] hover:border-green-400'
             : ''
@@ -192,7 +192,7 @@ export function SpectatorOverlay() {
                       : 'text-white/50 bg-white/10 hover:bg-white/20'
                 }`}
               >
-                {isLoadingHD ? `${Math.round(textureProgress * 100)}%` : 'High (~540MB)'}
+                {isLoadingHD ? `${Math.round(textureProgress * 100)}%` : hasHD ? 'High' : 'High (~540MB)'}
               </button>
             </div>
           </div>
