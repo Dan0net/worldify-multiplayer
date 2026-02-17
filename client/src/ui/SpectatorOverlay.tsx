@@ -15,7 +15,8 @@ import { getCamera } from '../game/scene/camera';
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 import { MapRenderer } from '../game/maptile/MapRenderer';
 import { getMapTileCache } from './MapOverlay';
-import { CHUNK_SIZE, VOXEL_SCALE, MAP_TILE_SIZE } from '@worldify/shared';
+import { CHUNK_SIZE, VOXEL_SCALE, MAP_TILE_SIZE, encodeMapTileRequest } from '@worldify/shared';
+import { sendBinary } from '../net/netClient';
 
 // Map panel dimensions
 const MAP_PANEL_W = 400;
@@ -63,6 +64,29 @@ export function SpectatorOverlay() {
       cancelAnimationFrame(animFrameRef.current);
     };
   }, [gameMode, renderMap]);
+
+  // Request tiles to fill the spectator map panel (independent of view distance)
+  useEffect(() => {
+    if (gameMode !== GameMode.MainMenu || connectionStatus !== 'connected') return;
+    const HALF = Math.ceil(SPECTATOR_TILES_ACROSS / 2) + 1;
+    const interval = setInterval(() => {
+      const cache = getMapTileCache();
+      const { x, z } = storeBridge.mapPlayerPosition;
+      const tileWorldSize = CHUNK_SIZE * VOXEL_SCALE; // 8m per tile
+      const centerTx = Math.floor(x / tileWorldSize);
+      const centerTz = Math.floor(z / tileWorldSize);
+      for (let dz = -HALF; dz <= HALF; dz++) {
+        for (let dx = -HALF; dx <= HALF; dx++) {
+          const tx = centerTx + dx;
+          const tz = centerTz + dz;
+          if (!cache.has(tx, tz)) {
+            sendBinary(encodeMapTileRequest({ tx, tz }));
+          }
+        }
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [gameMode, connectionStatus]);
 
   // Cleanup renderer on unmount
   useEffect(() => {

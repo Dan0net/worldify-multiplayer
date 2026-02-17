@@ -158,7 +158,6 @@ export class MapRenderer {
       const bgImage = element.style.backgroundImage;
       element.style.cssText = `
         position: absolute;
-        image-rendering: pixelated;
         pointer-events: none;
         background-size: 100% 100%;
         background-image: ${bgImage};
@@ -272,7 +271,6 @@ export class MapRenderer {
       const top = tz * tileScreenSize;
       element.style.cssText = `
         position: absolute;
-        image-rendering: pixelated;
         pointer-events: none;
         background-size: 100% 100%;
         background-image: url(${cached.dataUrl});
