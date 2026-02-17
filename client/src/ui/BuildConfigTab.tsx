@@ -220,12 +220,8 @@ export function BuildConfigTab({
   const { shape, mode, size, thickness, closed, arcSweep } = config;
   const { align, snapShape, autoRotateY, baseRotation } = meta;
 
-  // Whether the shape supports hollow/thickness
-  const supportsHollow = shape === BuildShape.CUBE || shape === BuildShape.CYLINDER;
-  // Whether the shape supports arc sweep (partial cylinders)
-  const supportsArc = shape === BuildShape.CYLINDER;
-  // Whether closed (open-ended) applies
-  const supportsClosed = supportsHollow && (thickness ?? 0) > 0;
+  // Whether closed (open-ended) applies – only when there's a non-zero thickness
+  const supportsClosed = (thickness ?? 0) > 0;
 
   // Decompose baseRotation into Euler angles for the UI
   const euler = useMemo(() => {
@@ -436,8 +432,7 @@ export function BuildConfigTab({
       </div>
 
       {/* Hollow / Thickness */}
-      {supportsHollow && (
-        <div>
+      <div>
           <SectionHeader>Hollow</SectionHeader>
           <div className="space-y-2">
             <div className="flex items-center gap-2">
@@ -472,11 +467,9 @@ export function BuildConfigTab({
             )}
           </div>
         </div>
-      )}
 
-      {/* Arc Sweep (cylinders only) */}
-      {supportsArc && (
-        <div>
+      {/* Arc Sweep */}
+      <div>
           <SectionHeader>Arc Sweep</SectionHeader>
           <div className="flex items-center gap-2">
             <input
@@ -500,7 +493,6 @@ export function BuildConfigTab({
             </span>
           </div>
         </div>
-      )}
     </div>
   );
 }

@@ -462,7 +462,7 @@ export class BuildPreview {
     const px = Math.round(c.x * 100);
     const py = Math.round(c.y * 100);
     const pz = Math.round(c.z * 100);
-    return `${px},${py},${pz}|${r.y.toFixed(3)}|${cfg.shape}|${cfg.mode}|${cfg.size.x},${cfg.size.y},${cfg.size.z}|${cfg.material}`;
+    return `${px},${py},${pz}|${r.x.toFixed(3)},${r.y.toFixed(3)},${r.z.toFixed(3)},${r.w.toFixed(3)}|${cfg.shape}|${cfg.mode}|${cfg.size.x},${cfg.size.y},${cfg.size.z}|${cfg.material}|${cfg.thickness ?? ''}|${cfg.arcSweep ?? ''}|${cfg.closed ?? ''}`;
   }
 
   /**
