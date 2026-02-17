@@ -44,7 +44,7 @@ function Section({ title, isOpen, onToggle, children, color = 'green' }: Section
     <div className="mt-2">
       <button
         onClick={onToggle}
-        className={`w-full flex items-center justify-between py-1 px-0 text-left ${colorClasses[color] || colorClasses.green} transition-colors`}
+        className={`w-full flex items-center justify-between py-1 px-0 text-left cursor-pointer ${colorClasses[color] || colorClasses.green} transition-colors`}
       >
         <span className="font-bold">{title}</span>
         <span className="text-xs">{isOpen ? '▼' : '▶'}</span>
@@ -362,9 +362,36 @@ export function DebugPanel() {
     { label: '4x', value: 4 },
   ];
 
+  const debugPanelExpanded = useGameStore((s) => s.debugPanelExpanded);
+  const toggleDebugPanelExpanded = useGameStore((s) => s.toggleDebugPanelExpanded);
+
+  // Compact mode: just FPS with expand button
+  if (!debugPanelExpanded) {
+    return (
+      <div
+        className="fixed top-5 left-5 py-1.5 px-3 bg-black/80 text-green-500 font-mono text-xs rounded-lg z-50 cursor-pointer hover:bg-black/90 transition-colors select-none"
+        onClick={toggleDebugPanelExpanded}
+        title="Click to expand debug panel"
+      >
+        <span className={fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}>{fps} FPS</span>
+        <span className="ml-2 text-green-500/50">▶</span>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg z-50 max-h-[90vh] overflow-y-auto min-w-[200px]">
       
+      {/* Collapse button */}
+      <button
+        onClick={toggleDebugPanelExpanded}
+        className="w-full flex items-center justify-between mb-1 cursor-pointer text-green-500 hover:text-green-300 transition-colors"
+        title="Collapse debug panel"
+      >
+        <span className={`font-bold ${fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}`}>{fps} FPS</span>
+        <span className="text-xs">▼</span>
+      </button>
+
       {/* ============== STATS SECTION ============== */}
       <Section
         title="📊 Stats"
@@ -374,7 +401,6 @@ export function DebugPanel() {
         <div>Status: {connectionStatus}</div>
         <div>Players: {playerCount}</div>
         <div>Ping: {ping}ms</div>
-        <div>FPS: {fps}</div>
         <div>Tick: {tickMs.toFixed(1)}ms</div>
         <div>Server: {serverTick}</div>
         

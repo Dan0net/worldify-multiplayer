@@ -433,6 +433,8 @@ export interface GameState {
   resetWaterSettings: () => void;
   
   // Debug panel actions
+  debugPanelExpanded: boolean;
+  toggleDebugPanelExpanded: () => void;
   toggleDebugSection: (section: keyof DebugPanelSections) => void;
   
   // Map overlay actions
@@ -504,7 +506,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Quality initial state (auto-detect will override on first load)
   qualityLevel: 'ultra' as QualityLevel,
   visibilityRadius: 8,
-  fov: 75,
+  fov: 90,
   ssaoEnabled: true,
   bloomEnabled: true,
   colorCorrectionEnabled: true,
@@ -529,6 +531,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   
   // Water settings initial state
   waterSettings: { ...DEFAULT_WATER_SETTINGS },
+  
+  // Debug panel starts compact (FPS only)
+  debugPanelExpanded: false,
   
   // Debug panel sections (all expanded by default)
   debugPanelSections: {
@@ -684,6 +689,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   }),
   
   // Debug panel actions
+  toggleDebugPanelExpanded: () => set((state) => ({
+    debugPanelExpanded: !state.debugPanelExpanded,
+  })),
   toggleDebugSection: (section) => set((state) => ({
     debugPanelSections: {
       ...state.debugPanelSections,
