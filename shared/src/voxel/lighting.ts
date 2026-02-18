@@ -12,7 +12,7 @@
 
 import { CHUNK_SIZE, LIGHT_MASK, LIGHT_MAX, MATERIAL_SHIFT, MATERIAL_MASK, VOXELS_PER_CHUNK } from './constants.js';
 import { isVoxelSolid } from './voxelData.js';
-import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
+import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID, MATERIAL_EMISSION_LUT } from '../materials/Materials.js';
 
 /** Stride constants for flat index = x + y*CHUNK_SIZE + z*CHUNK_SIZE² */
 const Y_STRIDE = CHUNK_SIZE;
@@ -227,7 +227,16 @@ export function propagateLight(data: Uint16Array): void {
   let head = 0;
   let tail = 0;
 
-  // Seed: only frontier voxels (adjacent to a lower-light neighbor)
+  // Pass 1: Stamp emitting voxels (e.g. lava) into the light field
+  for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
+    const voxel = data[i];
+    const emission = MATERIAL_EMISSION_LUT[(voxel >> MATERIAL_SHIFT) & MATERIAL_MASK];
+    if (emission > 0 && emission > (voxel & LIGHT_MASK)) {
+      data[i] = (voxel & LIGHT_CLEAR) | emission;
+    }
+  }
+
+  // Pass 2: Seed frontier voxels (adjacent to a lower-light neighbor)
   for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
     const light = data[i] & LIGHT_MASK;
     if (light <= 1) continue;

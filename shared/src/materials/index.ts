@@ -21,6 +21,7 @@ export {
   MAT_TYPE_TRANSPARENT,
   MAT_TYPE_LIQUID,
   MATERIAL_TYPE_LUT,
+  MATERIAL_EMISSION_LUT,
   // Type utilities
   isLiquid,
   isTransparent,
