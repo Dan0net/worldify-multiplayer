@@ -327,12 +327,14 @@ export const terrainNormalFragment = /* glsl */ `
 
 // ============== Voxel Light Attenuation ==============
 
-/** Applied right before opaque_fragment — scales entire PBR output by voxel light.
- *  Voxel light controls overall scene brightness. Shadows, specular, and all PBR
- *  effects are preserved but scaled down in dark areas. At vLight=1 → full PBR,
- *  at vLight=0 → black. */
+/** Applied right before opaque_fragment — voxel light controls brightness.
+ *  PBR is scaled by voxel light (shadows/specular preserved), plus an additive
+ *  fill term so caves aren't pitch black despite PBR shadow darkness. */
 export const terrainLightFragment = /* glsl */ `
+  // Scale PBR by voxel light (preserves shadows + specular)
   outgoingLight *= vLightLevel;
+  // Additive fill: albedo × voxel light bypasses PBR shadow darkness
+  outgoingLight += diffuseColor.rgb * pow(vLightLevel, 2.0) * 0.15;
 
   #ifdef OPAQUE
   diffuseColor.a = 1.0;
