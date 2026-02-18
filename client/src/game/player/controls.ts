@@ -126,7 +126,14 @@ export class Controls {
       return;
     }
 
-    if (!this.isPointerLocked) return;
+    // In Playing mode without pointer lock, re-request it on any left click
+    // (handles case where requestPointerLock silently fails after Escape exit)
+    if (!this.isPointerLocked) {
+      if (e.button === 0 && storeBridge.gameMode === GameMode.Playing) {
+        this.requestPointerLock();
+      }
+      return;
+    }
     
     // Left click to place build
     if (e.button === 0 && storeBridge.buildIsEnabled && this.onBuildPlace) {
