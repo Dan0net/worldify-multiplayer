@@ -513,8 +513,9 @@ export class GameCore {
       perfStats.end('voxelUpdate');
     }
     
-    // Update spawn detection
-    if (this.spawnManager) {
+    // Update spawn detection (only needed before first spawn; after that, player
+    // respawns at their last position so terrain raycast is unnecessary)
+    if (this.spawnManager && !this.hasSpawnedPlayer) {
       this.spawnManager.update();
       
       // Update spawn ready state in store
@@ -522,6 +523,9 @@ export class GameCore {
       if (spawnReady !== storeBridge.spawnReady) {
         storeBridge.setSpawnReady(spawnReady);
       }
+    } else if (this.hasSpawnedPlayer && !storeBridge.spawnReady) {
+      // Already spawned before — always ready to respawn
+      storeBridge.setSpawnReady(true);
     }
   }
 
