@@ -40,7 +40,7 @@ import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime } from './material';
-import { getMapTileCache } from '../ui/MapOverlay';
+import { getMapTileCache } from './maptile/mapTileCacheSingleton';
 import { perfStats } from './debug/PerformanceStats';
 
 export class GameCore {

@@ -5,17 +5,16 @@
 
 import { useGameStore } from '../state/store';
 import { controls } from '../game/player/controls';
-import { GameMode } from '@worldify/shared';
+import { GameMode, CHUNK_SIZE, VOXEL_SCALE, MAP_TILE_SIZE, encodeMapTileRequest } from '@worldify/shared';
 import { materialManager } from '../game/material';
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect } from 'react';
 import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
 import { getCamera } from '../game/scene/camera';
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
-import { MapRenderer } from '../game/maptile/MapRenderer';
-import { getMapTileCache } from './MapOverlay';
-import { CHUNK_SIZE, VOXEL_SCALE, MAP_TILE_SIZE, encodeMapTileRequest } from '@worldify/shared';
+import { MapPanel } from './MapPanel';
+import { getMapTileCache } from '../game/maptile/mapTileCacheSingleton';
 import { sendBinary } from '../net/netClient';
 
 // Map panel dimensions
@@ -38,40 +37,6 @@ export function SpectatorOverlay() {
   const qualityLevel = useGameStore((s) => s.qualityLevel);
   const visibilityRadius = useGameStore((s) => s.visibilityRadius);
   const fov = useGameStore((s) => s.fov);
-  
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRendererRef = useRef<MapRenderer | null>(null);
-  const animFrameRef = useRef<number>(0);
-
-  // Map renderer for the room panel background
-  const renderMap = useCallback(() => {
-    if (!mapRendererRef.current) return;
-    const cache = getMapTileCache();
-    const { x, z } = storeBridge.mapPlayerPosition;
-    const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
-    const centerTz = Math.floor(z / (CHUNK_SIZE * VOXEL_SCALE));
-    mapRendererRef.current.setPlayerPosition(x, z);
-    mapRendererRef.current.render(cache.getAll(), centerTx, centerTz);
-    animFrameRef.current = requestAnimationFrame(renderMap);
-  }, []);
-
-  useEffect(() => {
-    if (gameMode !== GameMode.MainMenu || !mapContainerRef.current) return;
-    if (!mapRendererRef.current) {
-      mapRendererRef.current = new MapRenderer(mapContainerRef.current, { scale: SPECTATOR_MAP_SCALE });
-      mapRendererRef.current.setViewportSize(MAP_PANEL_W, MAP_PANEL_H);
-    }
-    animFrameRef.current = requestAnimationFrame(renderMap);
-    return () => {
-      cancelAnimationFrame(animFrameRef.current);
-      // Dispose old renderer so a fresh one is created when we return to MainMenu
-      // (the container div is removed from DOM when the component returns null during Playing)
-      if (mapRendererRef.current) {
-        mapRendererRef.current.dispose();
-        mapRendererRef.current = null;
-      }
-    };
-  }, [gameMode, renderMap]);
 
   // Request tiles to fill the spectator map panel (independent of view distance)
   // Requests are throttled to MAX_TILES_PER_TICK per interval and prioritized center-outward
@@ -106,14 +71,6 @@ export function SpectatorOverlay() {
     }, 500);
     return () => clearInterval(interval);
   }, [gameMode, connectionStatus]);
-
-  // Cleanup renderer on unmount
-  useEffect(() => {
-    return () => {
-      cancelAnimationFrame(animFrameRef.current);
-      mapRendererRef.current = null;
-    };
-  }, []);
 
   // Only show in MainMenu mode
   if (gameMode !== GameMode.MainMenu) {
@@ -158,11 +115,13 @@ export function SpectatorOverlay() {
         {/* Solid background before map loads */}
         <div className="absolute inset-0 bg-gray-900" />
 
-        {/* Map canvas background */}
-        <div
-          ref={mapContainerRef}
+        {/* Map with player markers */}
+        <MapPanel
+          width={MAP_PANEL_W}
+          height={MAP_PANEL_H}
+          scale={SPECTATOR_MAP_SCALE}
+          showMarkers
           className="absolute inset-0"
-          style={{ width: MAP_PANEL_W, height: MAP_PANEL_H }}
         />
 
         {/* Top-left mode pill */}
