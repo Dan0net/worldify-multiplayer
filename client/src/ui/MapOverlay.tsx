@@ -123,6 +123,12 @@ export function MapOverlay() {
     
     return () => {
       cancelAnimationFrame(animationRef.current);
+      // Dispose renderer so a fresh one is created for the new container div
+      // (the container is removed from DOM when the component unmounts)
+      if (mapRenderer) {
+        mapRenderer.dispose();
+        mapRenderer = null;
+      }
     };
   }, [showMapOverlay, zoomIndex]);
 
