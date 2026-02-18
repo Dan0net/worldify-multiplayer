@@ -7,6 +7,7 @@ import {
   VISIBILITY_RADIUS,
   VISIBILITY_UNLOAD_BUFFER,
   CHUNK_WORLD_SIZE,
+  CHUNK_SIZE,
   worldToChunk,
   chunkKey,
   parseChunkKey,
@@ -21,6 +22,8 @@ import {
   MapTileResponse,
   computeVisibility,
   getChunkRangeFromHeights,
+  isVoxelSolid,
+  voxelIndex,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
@@ -245,17 +248,109 @@ export class VoxelWorld implements ChunkProvider {
     console.log(`[VoxelWorld] Requested initial surface column (${tx}, ${tz})`);
   }
 
+  /** Face neighbor offsets: [dx, dy, dz] for +X, -X, +Y, -Y, +Z, -Z */
+  private static readonly FACE_OFFSETS = [
+    [1, 0, 0], [-1, 0, 0],
+    [0, 1, 0], [0, -1, 0],
+    [0, 0, 1], [0, 0, -1],
+  ] as const;
+
+  /**
+   * Check if a chunk has any non-solid (air/empty) voxels on a specific boundary face.
+   * If so, a surface crossing may exist near that boundary and the neighbor chunk
+   * is needed for correct margin data during meshing.
+   */
+  private static hasSurfaceNearFace(data: Uint16Array, faceIndex: number): boolean {
+    const CS = CHUNK_SIZE;
+    // Check the 2-deep boundary slice on the given face for any non-solid voxels.
+    // If the entire slice is solid, no surface crossing can occur at that boundary.
+    switch (faceIndex) {
+      case 0: // +X: x = CS-2 .. CS-1
+        for (let z = 0; z < CS; z++)
+          for (let y = 0; y < CS; y++)
+            for (let x = CS - 2; x < CS; x++)
+              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
+        return false;
+      case 1: // -X: x = 0 .. 1
+        for (let z = 0; z < CS; z++)
+          for (let y = 0; y < CS; y++)
+            for (let x = 0; x < 2; x++)
+              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
+        return false;
+      case 2: // +Y: y = CS-2 .. CS-1
+        for (let z = 0; z < CS; z++)
+          for (let y = CS - 2; y < CS; y++)
+            for (let x = 0; x < CS; x++)
+              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
+        return false;
+      case 3: // -Y: y = 0 .. 1
+        for (let z = 0; z < CS; z++)
+          for (let y = 0; y < 2; y++)
+            for (let x = 0; x < CS; x++)
+              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
+        return false;
+      case 4: // +Z: z = CS-2 .. CS-1
+        for (let z = CS - 2; z < CS; z++)
+          for (let y = 0; y < CS; y++)
+            for (let x = 0; x < CS; x++)
+              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
+        return false;
+      case 5: // -Z: z = 0 .. 1
+        for (let z = 0; z < 2; z++)
+          for (let y = 0; y < CS; y++)
+            for (let x = 0; x < CS; x++)
+              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Find face-neighbor chunks needed for stitching that BFS may have missed.
+   * For each loaded chunk, if it has surface data near a boundary face and the
+   * neighbor on that face is not loaded/pending/already requested, add it.
+   */
+  private getMarginNeighborRequests(bfsRequested: Set<string>): Set<string> {
+    const extra = new Set<string>();
+    for (const [, chunk] of this.chunks) {
+      for (let face = 0; face < 6; face++) {
+        const [dx, dy, dz] = VoxelWorld.FACE_OFFSETS[face];
+        const nx = chunk.cx + dx;
+        const ny = chunk.cy + dy;
+        const nz = chunk.cz + dz;
+        const nKey = chunkKey(nx, ny, nz);
+        
+        // Skip if already loaded, pending, or queued by BFS
+        if (this.chunks.has(nKey) || this.pendingChunks.has(nKey) || bfsRequested.has(nKey)) continue;
+        
+        // Only request if this chunk has surface near that face
+        if (VoxelWorld.hasSurfaceNearFace(chunk.data, face)) {
+          extra.add(nKey);
+        }
+      }
+    }
+    return extra;
+  }
+
   /**
    * Request visible chunks using two-phase approach:
    * Phase 1: Request tiles for columns we don't know about yet
    * Phase 2: Request individual chunks for columns where we have tile data
+   * Phase 3: Request margin neighbors needed for stitching that BFS missed
    * 
-   * Chunks above the tile's maxCy are skipped (air).
+   * Chunks above the tile's maxCy + 1 are skipped (air, +1 for top-face margin).
    */
   private requestVisibleChunks(toRequest: Set<string>): void {
     // Limit concurrent requests
     const MAX_PENDING_TILES = 4;
     const MAX_PENDING_CHUNKS = 4;
+
+    // Phase 0: Add margin neighbor requests for stitching
+    const marginNeighbors = this.getMarginNeighborRequests(toRequest);
+    for (const key of marginNeighbors) {
+      toRequest.add(key);
+    }
 
     // Phase 1: Identify columns that need tiles
     const columnsNeedingTiles = new Set<string>();
@@ -288,8 +383,8 @@ export class VoxelWorld implements ChunkProvider {
       // Don't request chunks for columns without tile data yet
       if (!info) continue;
       
-      // Skip chunks above the surface (air)
-      if (cy > info.maxCy) continue;
+      // Skip chunks above the surface (+1 for top-face margin stitching)
+      if (cy > info.maxCy + 1) continue;
       
       this.requestChunkFromServer(cx, cy, cz);
       chunkRequests++;
