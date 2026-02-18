@@ -24,6 +24,8 @@ const MAP_PANEL_H = 280;
 // Fixed scale so map always fills the panel (show ~12 tiles across regardless of view distance)
 const SPECTATOR_TILES_ACROSS = 12;
 const SPECTATOR_MAP_SCALE = MAP_PANEL_W / (SPECTATOR_TILES_ACROSS * MAP_TILE_SIZE);
+// Max tile requests to send per interval tick (throttle to avoid server flood)
+const MAX_TILES_PER_TICK = 8;
 
 export function SpectatorOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
@@ -66,25 +68,36 @@ export function SpectatorOverlay() {
   }, [gameMode, renderMap]);
 
   // Request tiles to fill the spectator map panel (independent of view distance)
+  // Requests are throttled to MAX_TILES_PER_TICK per interval and prioritized center-outward
   useEffect(() => {
     if (gameMode !== GameMode.MainMenu || connectionStatus !== 'connected') return;
     const HALF = Math.ceil(SPECTATOR_TILES_ACROSS / 2) + 1;
+    // Pre-build spiral order sorted by distance from center
+    const offsets: { dx: number; dz: number }[] = [];
+    for (let dz = -HALF; dz <= HALF; dz++) {
+      for (let dx = -HALF; dx <= HALF; dx++) {
+        offsets.push({ dx, dz });
+      }
+    }
+    offsets.sort((a, b) => (a.dx * a.dx + a.dz * a.dz) - (b.dx * b.dx + b.dz * b.dz));
+
     const interval = setInterval(() => {
       const cache = getMapTileCache();
       const { x, z } = storeBridge.mapPlayerPosition;
       const tileWorldSize = CHUNK_SIZE * VOXEL_SCALE; // 8m per tile
       const centerTx = Math.floor(x / tileWorldSize);
       const centerTz = Math.floor(z / tileWorldSize);
-      for (let dz = -HALF; dz <= HALF; dz++) {
-        for (let dx = -HALF; dx <= HALF; dx++) {
-          const tx = centerTx + dx;
-          const tz = centerTz + dz;
-          if (!cache.has(tx, tz)) {
-            sendBinary(encodeMapTileRequest({ tx, tz }));
-          }
+      let sent = 0;
+      for (const { dx, dz } of offsets) {
+        if (sent >= MAX_TILES_PER_TICK) break;
+        const tx = centerTx + dx;
+        const tz = centerTz + dz;
+        if (!cache.has(tx, tz)) {
+          sendBinary(encodeMapTileRequest({ tx, tz }));
+          sent++;
         }
       }
-    }, 1000);
+    }, 500);
     return () => clearInterval(interval);
   }, [gameMode, connectionStatus]);
 
