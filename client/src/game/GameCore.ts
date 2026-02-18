@@ -394,6 +394,11 @@ export class GameCore {
     this.playerManager.updateRemotePlayers(deltaMs);
     perfStats.end('players');
 
+    // Update map overlay positions (all modes so spectator map shows players)
+    const mapCenter = gameMode === GameMode.Playing ? localPlayer.position : this.spectatorCenter;
+    storeBridge.updateMapPlayerPosition(mapCenter.x, mapCenter.z, localPlayer.yaw, this.playerManager.getLocalPlayerColor());
+    storeBridge.updateMapOtherPlayers(this.playerManager.getRemotePlayerPositions());
+
     // Update wind animation for foliage
     updateWindTime(elapsedTime);
 
@@ -557,9 +562,6 @@ export class GameCore {
       perfStats.end('buildPreview');
     }
 
-    // Update player position for map overlay (via storeBridge, not window global)
-    storeBridge.updateMapPlayerPosition(localPlayer.position.x, localPlayer.position.z, localPlayer.yaw, this.playerManager.getLocalPlayerColor());
-    storeBridge.updateMapOtherPlayers(this.playerManager.getRemotePlayerPositions());
   }
 
   private onResize = (): void => {
