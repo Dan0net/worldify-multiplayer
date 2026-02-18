@@ -28,7 +28,7 @@ import {
   handleChunkRequest, 
   broadcastBuildCommit 
 } from '../rooms/BuildHandler.js';
-import { getSurfaceColumnProvider, getMapTileProvider } from '../storage/StorageManager.js';
+import { getSurfaceColumnProvider } from '../storage/StorageManager.js';
 
 /**
  * Decode and dispatch an incoming binary message.
@@ -136,10 +136,10 @@ function handleMapTileRequest(roomId: string, playerId: number, reader: ByteRead
   
   const request = decodeMapTileRequest(reader);
   
-  // Use cheap terrain-only tile path (no chunk generation)
-  // Full chunk data is captured when the player streams surface columns
-  getMapTileProvider().getOrCreateAsync(request.tx, request.tz)
-    .then((tile) => {
+  // Generate surface chunks for accurate tile heights (captures trees/stamps),
+  // but only return the tile data (chunks are cached for later individual requests)
+  getSurfaceColumnProvider().getColumn(request.tx, request.tz)
+    .then(({ tile }) => {
       const data = encodeMapTileData(tile);
       ws.send(data);
     })
