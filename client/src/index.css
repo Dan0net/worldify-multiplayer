@@ -8,6 +8,8 @@ body {
   overflow: hidden;
   background: #000;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  cursor: default;
+  user-select: none;
 }
 
 #root {
@@ -22,6 +24,7 @@ body {
   width: 100%;
   height: 100%;
   z-index: 0;
+  user-select: none;
 }
 
 /* Glass-themed scrollbar */
