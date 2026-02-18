@@ -57,12 +57,14 @@ export interface LoadedTextures {
 
 /**
  * Load texture binary data, using cache if available.
+ * Supports per-file download progress via ReadableStream.
  */
 async function loadTextureData(
   resolution: TextureResolution,
   mapType: string,
   version: string,
-  baseUrl: string
+  baseUrl: string,
+  onFileProgress?: (received: number, total: number) => void
 ): Promise<ArrayBuffer> {
   let arrayBuffer = await textureCache.getTexture(resolution, mapType, version);
   
@@ -77,7 +79,33 @@ async function loadTextureData(
       throw new Error(`Failed to fetch ${resolution}/${mapType}: ${response.status}`);
     }
     
-    arrayBuffer = await response.arrayBuffer();
+    // Use ReadableStream for per-file download progress
+    const contentLength = parseInt(response.headers.get('Content-Length') || '0', 10);
+    if (contentLength > 0 && response.body && onFileProgress) {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+      
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        receivedBytes += value.length;
+        onFileProgress(receivedBytes, contentLength);
+      }
+      
+      // Combine chunks into a single ArrayBuffer
+      const combined = new Uint8Array(receivedBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+      arrayBuffer = combined.buffer;
+    } else {
+      arrayBuffer = await response.arrayBuffer();
+    }
+    
     await textureCache.saveTexture(resolution, mapType, arrayBuffer, version);
     
     const sizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(2);
@@ -148,7 +176,8 @@ export async function loadDataArrayTextures(
   const baseUrl = await textureCache.getLatestMaterialUrl();
   
   const textures: Partial<LoadedTextures> = {};
-  let loaded = 0;
+  let completed = 0;
+  const total = mapTypes.length;
   
   for (const mapType of mapTypes) {
     const meta = pallet.maps[resolution][mapType];
@@ -156,7 +185,11 @@ export async function loadDataArrayTextures(
       throw new Error(`Missing metadata for ${resolution}/${mapType}`);
     }
     
-    const arrayBuffer = await loadTextureData(resolution, mapType, version, baseUrl);
+    const arrayBuffer = await loadTextureData(resolution, mapType, version, baseUrl, (received, fileTotal) => {
+      // Smooth progress: completed maps + fraction of current file
+      const fileProgress = fileTotal > 0 ? received / fileTotal : 0;
+      onProgress?.(completed + fileProgress, total);
+    });
     textures[mapType] = createDataArrayTexture(
       new Uint8Array(arrayBuffer),
       meta.width,
@@ -167,8 +200,8 @@ export async function loadDataArrayTextures(
       mapType
     );
     
-    loaded++;
-    onProgress?.(loaded, mapTypes.length);
+    completed++;
+    onProgress?.(completed, total);
   }
   
   return textures as LoadedTextures;

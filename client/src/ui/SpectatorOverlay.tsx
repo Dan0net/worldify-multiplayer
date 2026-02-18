@@ -203,7 +203,7 @@ export function SpectatorOverlay() {
                     : 'text-white/50 bg-white/10 hover:bg-white/20'
                 }`}
               >
-                {textureState === 'loading-low' ? `${Math.round(textureProgress * 100)}%` : 'Low'}
+                {textureState === 'loading-low' ? `Downloading ${Math.round(textureProgress * 100)}%` : 'Low'}
               </button>
               <button
                 onClick={() => { if (!hasHD) handleToggleHD(); }}
@@ -216,7 +216,7 @@ export function SpectatorOverlay() {
                       : 'text-white/50 bg-white/10 hover:bg-white/20'
                 }`}
               >
-                {isLoadingHD ? `${Math.round(textureProgress * 100)}%` : hasHD ? 'High' : 'High (~540MB)'}
+                {isLoadingHD ? `Downloading ${Math.round(textureProgress * 100)}%` : hasHD ? 'High' : 'High (~540MB)'}
               </button>
             </div>
           </div>
