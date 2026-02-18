@@ -74,8 +74,73 @@ const _size = new THREE.Vector3();
 const _tempV = new THREE.Vector3();
 const _tempQ = new THREE.Quaternion();
 
-/** Cache: config hash → blob URL */
+/** Cache: config hash → blob URL (in-memory, backed by IndexedDB) */
 const thumbnailCache = new Map<string, string>();
+
+// ============== IndexedDB Persistence ==============
+
+const THUMB_DB_NAME = 'worldify-thumbnail-cache';
+/** Bump this when material textures change to invalidate all cached thumbnails */
+const THUMB_DB_VERSION = 1;
+const THUMB_STORE = 'thumbnails';
+
+let thumbDbPromise: Promise<IDBDatabase> | null = null;
+/** Set of hashes currently being loaded from IDB (prevent duplicate reads) */
+const idbLoadingSet = new Set<string>();
+
+function openThumbDB(): Promise<IDBDatabase> {
+  if (thumbDbPromise) return thumbDbPromise;
+  thumbDbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(THUMB_DB_NAME, THUMB_DB_VERSION);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onupgradeneeded = (e) => {
+      const db = (e.target as IDBOpenDBRequest).result;
+      // Delete old stores on version bump (full invalidation)
+      if (db.objectStoreNames.contains(THUMB_STORE)) {
+        db.deleteObjectStore(THUMB_STORE);
+      }
+      db.createObjectStore(THUMB_STORE);
+    };
+  });
+  return thumbDbPromise;
+}
+
+/** Load a thumbnail blob from IndexedDB, create a blob URL, and populate the in-memory cache. */
+async function loadFromIDB(hash: string): Promise<string | null> {
+  try {
+    const db = await openThumbDB();
+    const blob: Blob | undefined = await new Promise((resolve, reject) => {
+      const tx = db.transaction(THUMB_STORE, 'readonly');
+      const req = tx.objectStore(THUMB_STORE).get(hash);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve(req.result ?? undefined);
+    });
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    thumbnailCache.set(hash, url);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist a thumbnail blob to IndexedDB (fire-and-forget). */
+function saveToIDB(hash: string, blob: Blob): void {
+  openThumbDB().then(db => {
+    const tx = db.transaction(THUMB_STORE, 'readwrite');
+    tx.objectStore(THUMB_STORE).put(blob, hash);
+  }).catch(() => { /* IndexedDB write failed — non-critical */ });
+}
+
+/** Clear all IndexedDB thumbnail entries. */
+async function clearIDB(): Promise<void> {
+  try {
+    const db = await openThumbDB();
+    const tx = db.transaction(THUMB_STORE, 'readwrite');
+    tx.objectStore(THUMB_STORE).clear();
+  } catch { /* non-critical */ }
+}
 
 // ============== Render Queue ==============
 
@@ -86,9 +151,13 @@ interface PendingRender {
   callbacks: Array<(url: string | null) => void>;
 }
 
-const pendingQueue: PendingRender[] = [];
+/** Urgent queue: hook-triggered renders, processed via rAF */
+const urgentQueue: PendingRender[] = [];
+/** Idle queue: prewarm renders, processed via requestIdleCallback */
+const idleQueue: PendingRender[] = [];
 const pendingByHash = new Map<string, PendingRender>();
 let queueRafId = 0;
+let idleCallbackId = 0;
 
 // ============== Setup ==============
 
@@ -230,12 +299,13 @@ function renderAndReadbackImageData(renderer: THREE.WebGLRenderer): ImageData {
  * Async PNG encoding via OffscreenCanvas.convertToBlob().
  * Returns a blob URL (must be revoked on cache clear).
  */
-async function encodeImageDataToUrl(imageData: ImageData): Promise<string> {
+async function encodeImageDataToBlobAndUrl(imageData: ImageData): Promise<{ url: string; blob: Blob }> {
   const osc = new OffscreenCanvas(THUMB_SIZE, THUMB_SIZE);
   const ctx = osc.getContext('2d')!;
   ctx.putImageData(imageData, 0, 0);
   const blob = await osc.convertToBlob({ type: 'image/png' });
-  return URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  return { url, blob };
 }
 
 // ============== Voxel Grid Generation ==============
@@ -406,56 +476,95 @@ function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefi
 
 // ============== Queue Processing ==============
 
+/** Render a single queued entry. Returns true if actual GPU work was done. */
+function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): boolean {
+  pendingByHash.delete(entry.hash);
+
+  // Check in-memory cache (might have been loaded from IDB since queuing)
+  const cached = thumbnailCache.get(entry.hash);
+  if (cached) {
+    for (const cb of entry.callbacks) cb(cached);
+    return false; // No GPU work
+  }
+
+  const imageData = renderThumbnailToImageData(entry.config, entry.rotation, renderer);
+  if (!imageData) {
+    for (const cb of entry.callbacks) cb(null);
+    return true;
+  }
+
+  // Async PNG encode + persist to IndexedDB
+  const callbacks = entry.callbacks;
+  const hash = entry.hash;
+  encodeImageDataToBlobAndUrl(imageData).then(({ url, blob }) => {
+    thumbnailCache.set(hash, url);
+    saveToIDB(hash, blob);
+    for (const cb of callbacks) cb(url);
+  });
+  return true;
+}
+
 /**
- * Process up to MAX_RENDERS_PER_FRAME queued thumbnail requests per frame.
- * Synchronous GPU work (SDF + SurfaceNet + WebGL render + readback) is done here,
- * then async PNG encoding fires in the background.
+ * Process urgent queue items via rAF (max MAX_RENDERS_PER_FRAME per frame).
+ * These are hook-triggered and user-visible, so they get priority.
  */
-function processRenderQueue(): void {
+function processUrgentQueue(): void {
   queueRafId = 0;
 
   const renderer = getRendererRef();
   if (!renderer) {
-    // Renderer not ready yet, retry next frame
-    if (pendingQueue.length > 0) {
-      queueRafId = requestAnimationFrame(processRenderQueue);
+    if (urgentQueue.length > 0) {
+      queueRafId = requestAnimationFrame(processUrgentQueue);
     }
     return;
   }
 
   let rendered = 0;
-  while (rendered < MAX_RENDERS_PER_FRAME && pendingQueue.length > 0) {
-    const entry = pendingQueue.shift()!;
-    pendingByHash.delete(entry.hash);
-
-    // Check cache again (might have been rendered since queuing)
-    const cached = thumbnailCache.get(entry.hash);
-    if (cached) {
-      for (const cb of entry.callbacks) cb(cached);
-      continue; // Don't count against per-frame limit
-    }
-
-    const imageData = renderThumbnailToImageData(entry.config, entry.rotation, renderer);
-    if (!imageData) {
-      for (const cb of entry.callbacks) cb(null);
-      rendered++;
-      continue;
-    }
-
-    // Async PNG encode (doesn't block main thread)
-    const callbacks = entry.callbacks;
-    const hash = entry.hash;
-    encodeImageDataToUrl(imageData).then(url => {
-      thumbnailCache.set(hash, url);
-      for (const cb of callbacks) cb(url);
-    });
-
-    rendered++;
+  while (rendered < MAX_RENDERS_PER_FRAME && urgentQueue.length > 0) {
+    const entry = urgentQueue.shift()!;
+    if (processEntry(entry, renderer)) rendered++;
   }
 
-  // Continue processing if more items remain
-  if (pendingQueue.length > 0) {
-    queueRafId = requestAnimationFrame(processRenderQueue);
+  if (urgentQueue.length > 0) {
+    queueRafId = requestAnimationFrame(processUrgentQueue);
+  }
+}
+
+/**
+ * Process idle queue items via requestIdleCallback (1 per idle period).
+ * Used for pre-warming — only runs when the browser has spare time.
+ */
+function processIdleQueue(deadline: IdleDeadline): void {
+  idleCallbackId = 0;
+
+  const renderer = getRendererRef();
+  if (!renderer) {
+    if (idleQueue.length > 0) {
+      idleCallbackId = requestIdleCallback(processIdleQueue);
+    }
+    return;
+  }
+
+  // Process one item per idle callback (each render is expensive)
+  if (idleQueue.length > 0 && deadline.timeRemaining() > 5) {
+    const entry = idleQueue.shift()!;
+    processEntry(entry, renderer);
+  }
+
+  if (idleQueue.length > 0) {
+    idleCallbackId = requestIdleCallback(processIdleQueue);
+  }
+}
+
+function scheduleUrgentQueue(): void {
+  if (!queueRafId) {
+    queueRafId = requestAnimationFrame(processUrgentQueue);
+  }
+}
+
+function scheduleIdleQueue(): void {
+  if (!idleCallbackId) {
+    idleCallbackId = requestIdleCallback(processIdleQueue);
   }
 }
 
@@ -472,7 +581,7 @@ export function queueThumbnailRender(
 ): void {
   const hash = configHash(config, rotation);
 
-  // Already cached?
+  // Already in memory?
   const cached = thumbnailCache.get(hash);
   if (cached) { callback(cached); return; }
 
@@ -480,13 +589,35 @@ export function queueThumbnailRender(
   const existing = pendingByHash.get(hash);
   if (existing) { existing.callbacks.push(callback); return; }
 
-  const entry: PendingRender = { config, rotation, hash, callbacks: [callback] };
-  pendingQueue.push(entry);
-  pendingByHash.set(hash, entry);
-
-  if (!queueRafId) {
-    queueRafId = requestAnimationFrame(processRenderQueue);
+  // Try loading from IndexedDB first (async, non-blocking)
+  if (!idbLoadingSet.has(hash)) {
+    idbLoadingSet.add(hash);
+    loadFromIDB(hash).then(url => {
+      idbLoadingSet.delete(hash);
+      if (url) {
+        // Found in IDB — resolve any waiting callbacks and remove from queue
+        const pending = pendingByHash.get(hash);
+        if (pending) {
+          pendingByHash.delete(hash);
+          const urgIdx = urgentQueue.indexOf(pending);
+          if (urgIdx >= 0) urgentQueue.splice(urgIdx, 1);
+          const idlIdx = idleQueue.indexOf(pending);
+          if (idlIdx >= 0) idleQueue.splice(idlIdx, 1);
+          for (const cb of pending.callbacks) cb(url);
+        }
+        // Also fire callback for this call (if not already in pending)
+        callback(url);
+        return;
+      }
+      // Not in IDB — entry is already in the urgent queue, will be GPU-rendered
+    });
   }
+
+  // Queue for GPU render (will be skipped if IDB load wins the race)
+  const entry: PendingRender = { config, rotation, hash, callbacks: [callback] };
+  urgentQueue.push(entry);
+  pendingByHash.set(hash, entry);
+  scheduleUrgentQueue();
 }
 
 /**
@@ -503,9 +634,32 @@ export function getCachedThumbnail(config: BuildConfig, rotation?: Quat): string
 export function prewarmPresetThumbnails(): void {
   for (const preset of DEFAULT_BUILD_PRESETS) {
     const hash = configHash(preset.config, preset.baseRotation);
-    if (thumbnailCache.has(hash)) continue;
-    queueThumbnailRender(preset.config, preset.baseRotation, () => {});
+    if (thumbnailCache.has(hash) || pendingByHash.has(hash)) continue;
+
+    // Try IDB first; only queue GPU render if not persisted
+    if (!idbLoadingSet.has(hash)) {
+      idbLoadingSet.add(hash);
+      loadFromIDB(hash).then(url => {
+        idbLoadingSet.delete(hash);
+        if (url) {
+          // Loaded from IDB — remove from idle queue if still pending
+          const pending = pendingByHash.get(hash);
+          if (pending) {
+            pendingByHash.delete(hash);
+            const idx = idleQueue.indexOf(pending);
+            if (idx >= 0) idleQueue.splice(idx, 1);
+          }
+          return;
+        }
+        // Not in IDB — entry stays in idle queue for GPU render
+      });
+    }
+
+    const entry: PendingRender = { config: preset.config, rotation: preset.baseRotation, hash, callbacks: [] };
+    idleQueue.push(entry);
+    pendingByHash.set(hash, entry);
   }
+  scheduleIdleQueue();
 }
 
 /** Invalidate all cached thumbnails (e.g. when textures reload). */
@@ -514,15 +668,21 @@ export function clearThumbnailCache(): void {
     if (url.startsWith('blob:')) URL.revokeObjectURL(url);
   }
   thumbnailCache.clear();
+  clearIDB();
 }
 
 /** Cancel all pending queue entries. */
 export function cancelPendingThumbnails(): void {
-  pendingQueue.length = 0;
+  urgentQueue.length = 0;
+  idleQueue.length = 0;
   pendingByHash.clear();
   if (queueRafId) {
     cancelAnimationFrame(queueRafId);
     queueRafId = 0;
+  }
+  if (idleCallbackId) {
+    cancelIdleCallback(idleCallbackId);
+    idleCallbackId = 0;
   }
 }
 
