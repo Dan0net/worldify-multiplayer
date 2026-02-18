@@ -6,7 +6,7 @@ Minecraft-style voxel lighting using the existing 5-bit light field (0-31). Sunl
 ## Key Decisions
 - **5 packed bits** (existing `LLLLL` field), range 0-31
 - **Max sampling** at vertices — SurfaceNet takes max light of non-solid 2x2x2 corners
-- **Attenuation every 2 voxels** — internal BFS uses doubled values (0-62), stores `value >> 1`
+- **Attenuation by 1 per voxel step** — simple decrement, no doubling
 - **Client-side compute before meshing** — light runs in `ingestChunkData()`, before remesh queue
 - **Only on committed builds** — preview meshes skip light recalculation
 - **Unknown chunk above?** If `cy >= maxCy` (from tile data), assume full sunlight from above. Otherwise assume dark, relight downward when chunk above loads.
@@ -33,13 +33,13 @@ Fill sky-exposed air voxels with light=31.
 2. `VoxelWorld.ts` — Call `computeSunlightColumn()` in `ingestChunkData()` before remesh queue. When a new chunk loads, re-light the chunk below and mark it for remesh.
 
 ## Phase 3: Sunlight Horizontal BFS
-Light spreads sideways into overhangs/caves with attenuation.
+Light spreads sideways from lit voxels into adjacent non-opaque voxels, attenuating by 1 per step.
 
-1. `shared/src/voxel/lighting.ts` — `propagateLight(chunk, neighbors?)`:
-   - BFS from all voxels with light>0 into adjacent non-opaque voxels
-   - Internal value = light*2, decrement by 1 per step, store `internal >> 1`
-   - At chunk boundaries: propagate into neighbor if loaded, mark neighbor light-dirty
-2. `VoxelWorld.ts` — Light-dirty queue (runs before remesh queue). Neighbor cascade.
+1. `shared/src/voxel/lighting.ts` — `propagateLight(data)`:
+   - Single-chunk BFS from all voxels with light>0 into 6-face-adjacent non-opaque voxels
+   - Each step decrements light by 1; only updates if new value > existing
+   - No cross-chunk propagation yet (keeps it simple)
+2. `VoxelWorld.ts` — Call `propagateLight()` after `computeSunlightColumns()` in `computeChunkSunlight()`.
 
 ## Phase 4: Lava Light Emission
 1. `shared/src/materials/` — `isEmitting(id)`, lava(50) emits level ~24

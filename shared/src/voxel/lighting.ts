@@ -1,15 +1,16 @@
 /**
- * Voxel lighting — sunlight column propagation
+ * Voxel lighting — sunlight column propagation + horizontal BFS spread
  *
- * Scans each (x,z) column top-down. Sky-exposed non-solid voxels get full sunlight.
- * Opaque solid voxels stop the column. Transparent/liquid solids attenuate by 1.
- * Light is written directly into the packed 16-bit data using bit ops
- * (light occupies the bottom 5 bits).
+ * Two passes, both operating on packed 16-bit voxel data in-place:
+ * 1. Column pass: top-down per (x,z) column. Air gets full light, opaque stops,
+ *    transparent/liquid attenuates by 1.
+ * 2. BFS pass: spreads light from all lit voxels into 6-face neighbors,
+ *    decrementing by 1 per step. Only updates if new > existing.
  *
  * This runs client-side before meshing — server sends light=0.
  */
 
-import { CHUNK_SIZE, LIGHT_MASK, LIGHT_MAX, MATERIAL_SHIFT, MATERIAL_MASK } from './constants.js';
+import { CHUNK_SIZE, LIGHT_MASK, LIGHT_MAX, MATERIAL_SHIFT, MATERIAL_MASK, VOXELS_PER_CHUNK } from './constants.js';
 import { isVoxelSolid } from './voxelData.js';
 import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
 
@@ -116,4 +117,84 @@ export function getSunlitAbove(
     }
   }
   return result;
+}
+
+// ============== BFS Light Propagation ==============
+
+/** Flat index neighbor deltas: +X, -X, +Y, -Y, +Z, -Z */
+const NEIGHBOR_DELTAS = new Int32Array([1, -1, Y_STRIDE, -Y_STRIDE, Z_STRIDE, -Z_STRIDE]);
+
+/** Per-voxel valid neighbor mask (6 bits). Pre-computed once at module load. */
+const VALID_NEIGHBORS = new Uint8Array(VOXELS_PER_CHUNK);
+(function initValidNeighbors() {
+  const MAX = CHUNK_SIZE - 1;
+  for (let z = 0; z < CHUNK_SIZE; z++) {
+    for (let y = 0; y < CHUNK_SIZE; y++) {
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        let mask = 0x3F; // all 6 valid
+        if (x === MAX) mask &= ~1;   // no +X
+        if (x === 0)   mask &= ~2;   // no -X
+        if (y === MAX) mask &= ~4;   // no +Y
+        if (y === 0)   mask &= ~8;   // no -Y
+        if (z === MAX) mask &= ~16;  // no +Z
+        if (z === 0)   mask &= ~32;  // no -Z
+        VALID_NEIGHBORS[x + y * Y_STRIDE + z * Z_STRIDE] = mask;
+      }
+    }
+  }
+})();
+
+/** Pre-allocated BFS queue — reused across calls (single-threaded main thread). */
+const bfsQueue = new Uint16Array(VOXELS_PER_CHUNK);
+
+/**
+ * Propagate light via BFS within a single chunk (in-place).
+ *
+ * Seeds from all voxels that already have light > 1 (set by column pass).
+ * Spreads to 6-face neighbors: each step decrements by 1.
+ * Only updates a voxel if the new light > its current light.
+ * Opaque solid voxels block propagation.
+ *
+ * @param data The chunk's Uint16Array (CHUNK_SIZE³ entries), modified in-place
+ */
+export function propagateLight(data: Uint16Array): void {
+  let head = 0;
+  let tail = 0;
+
+  // Seed: all voxels with light > 1 (light=1 can't spread further after -1)
+  for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
+    if ((data[i] & LIGHT_MASK) > 1) {
+      bfsQueue[tail++] = i;
+    }
+  }
+
+  // BFS — process queue in-place (no double-buffering needed:
+  // each enqueued voxel carries its light in the data array)
+  while (head < tail) {
+    const idx = bfsQueue[head++];
+    const srcLight = data[idx] & LIGHT_MASK;
+    if (srcLight <= 1) continue;
+
+    const newLight = srcLight - 1;
+    const validDirs = VALID_NEIGHBORS[idx];
+
+    for (let d = 0; d < 6; d++) {
+      if (!(validDirs & (1 << d))) continue;
+
+      const nIdx = idx + NEIGHBOR_DELTAS[d];
+      const nVoxel = data[nIdx];
+
+      // Skip opaque solid voxels
+      if (isVoxelSolid(nVoxel)) {
+        const matType = MATERIAL_TYPE_LUT[(nVoxel >> MATERIAL_SHIFT) & MATERIAL_MASK];
+        if (matType === MAT_TYPE_SOLID) continue;
+      }
+
+      // Only update if new light > existing
+      if (newLight > (nVoxel & LIGHT_MASK)) {
+        data[nIdx] = (nVoxel & LIGHT_CLEAR) | newLight;
+        bfsQueue[tail++] = nIdx;
+      }
+    }
+  }
 }

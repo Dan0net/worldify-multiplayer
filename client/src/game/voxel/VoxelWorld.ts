@@ -26,6 +26,7 @@ import {
   voxelIndex,
   computeSunlightColumns,
   getSunlitAbove,
+  propagateLight,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
@@ -590,6 +591,7 @@ export class VoxelWorld implements ChunkProvider {
     );
     
     computeSunlightColumns(data, isSunlitAbove);
+    propagateLight(data);
   }
 
   /**
