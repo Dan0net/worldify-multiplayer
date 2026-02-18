@@ -530,11 +530,22 @@ export class VoxelWorld implements ChunkProvider {
     this.chunks.delete(key);
   }
 
-  /** Neighbor offsets for 6 face-adjacent chunks */
+  /** Neighbor offsets for all 26 adjacent chunks (6 face + 12 edge + 8 corner).
+   *  Full 26-neighborhood is needed because margin voxels at chunk edges/corners
+   *  sample diagonal neighbors via getVoxelWithMargin. Without remeshing diagonal
+   *  neighbors, stale extrapolated data causes seam cracks at multi-chunk junctions. */
   private static readonly NEIGHBOR_OFFSETS = [
+    // 6 face neighbors
     [-1, 0, 0], [1, 0, 0],
     [0, -1, 0], [0, 1, 0],
     [0, 0, -1], [0, 0, 1],
+    // 12 edge neighbors
+    [-1, -1, 0], [-1, 1, 0], [1, -1, 0], [1, 1, 0],
+    [-1, 0, -1], [-1, 0, 1], [1, 0, -1], [1, 0, 1],
+    [0, -1, -1], [0, -1, 1], [0, 1, -1], [0, 1, 1],
+    // 8 corner neighbors
+    [-1, -1, -1], [-1, -1, 1], [-1, 1, -1], [-1, 1, 1],
+    [1, -1, -1], [1, -1, 1], [1, 1, -1], [1, 1, 1],
   ] as const;
 
   /**
@@ -587,7 +598,7 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Check if any of the chunk's 6 face neighbors are still pending from server.
+   * Check if any of the chunk's 26 neighbors are still pending from server.
    * If so, we should delay meshing to avoid stitching artifacts.
    */
   private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
