@@ -8,8 +8,11 @@
  * Uses the game's existing renderer (same GL context) so all shaders,
  * textures, and materials work identically to in-game rendering.
  *
- * Performance: reusable buffers for voxel grid, pixel readback, ImageData,
- * and bbox corner vectors prevent per-call allocations.
+ * Performance:
+ * - Queue-based rendering: MAX_RENDERS_PER_FRAME thumbnails per rAF
+ * - Async PNG encoding via OffscreenCanvas.convertToBlob()
+ * - Reusable buffers for voxel grid, pixel readback, ImageData
+ * - Pre-warm support for spectator mode
  */
 
 import * as THREE from 'three';
@@ -23,6 +26,7 @@ import {
   invertQuat,
   BuildMode,
   BuildShape,
+  DEFAULT_BUILD_PRESETS,
   type BuildConfig,
   type Quat,
 } from '@worldify/shared';
@@ -38,6 +42,8 @@ const THUMB_SIZE = 256;
 const GRID_SIZE = CHUNK_SIZE + 2;
 const GRID_VOXELS = GRID_SIZE * GRID_SIZE * GRID_SIZE;
 const PIXEL_BYTES = THUMB_SIZE * THUMB_SIZE * 4;
+/** Max synchronous thumbnail renders per animation frame */
+const MAX_RENDERS_PER_FRAME = 2;
 
 // ============== Reusable Three.js Objects ==============
 
@@ -54,10 +60,6 @@ let thumbWireframe: THREE.LineSegments | null = null;
 /** Persistent wireframe material (reused across SUBTRACT renders) */
 let wireframeMat: THREE.LineBasicMaterial | null = null;
 
-/** Offscreen canvas for pixel readback → data URL conversion */
-let readbackCanvas: HTMLCanvasElement | null = null;
-let readbackCtx: CanvasRenderingContext2D | null = null;
-
 // ============== Reusable Buffers (avoid per-call allocation) ==============
 
 let voxelGrid: Uint16Array | null = null;
@@ -72,8 +74,21 @@ const _size = new THREE.Vector3();
 const _tempV = new THREE.Vector3();
 const _tempQ = new THREE.Quaternion();
 
-/** Cache: config hash → data URL */
+/** Cache: config hash → blob URL */
 const thumbnailCache = new Map<string, string>();
+
+// ============== Render Queue ==============
+
+interface PendingRender {
+  config: BuildConfig;
+  rotation?: Quat;
+  hash: string;
+  callbacks: Array<(url: string | null) => void>;
+}
+
+const pendingQueue: PendingRender[] = [];
+const pendingByHash = new Map<string, PendingRender>();
+let queueRafId = 0;
 
 // ============== Setup ==============
 
@@ -101,15 +116,10 @@ function ensureSetup(): void {
     opacity: 0.9,
   });
 
-  readbackCanvas = document.createElement('canvas');
-  readbackCanvas.width = THUMB_SIZE;
-  readbackCanvas.height = THUMB_SIZE;
-  readbackCtx = readbackCanvas.getContext('2d')!;
-
   // Pre-allocate reusable buffers
   voxelGrid = new Uint16Array(GRID_VOXELS);
   pixelBuf = new Uint8Array(PIXEL_BYTES);
-  imageDataBuf = readbackCtx.createImageData(THUMB_SIZE, THUMB_SIZE);
+  imageDataBuf = new ImageData(THUMB_SIZE, THUMB_SIZE);
 }
 
 // ============== Helpers ==============
@@ -177,10 +187,11 @@ function fitCameraToBox(bbox: THREE.Box3, meshOffset: THREE.Vector3): void {
 }
 
 /**
- * Render the thumbnail scene, read pixels back, flip Y, and return a data URL.
- * Temporarily disables tone mapping (ACES compresses brightness too much).
+ * Render the thumbnail scene and read pixels back into a new ImageData.
+ * Temporarily disables tone mapping. Returns a fresh ImageData copy
+ * (safe to pass to async encoding since the shared buffer is reused).
  */
-function renderAndReadback(renderer: THREE.WebGLRenderer): string {
+function renderAndReadbackImageData(renderer: THREE.WebGLRenderer): ImageData {
   const prevTarget = renderer.getRenderTarget();
   const prevAutoClear = renderer.autoClear;
   const prevToneMapping = renderer.toneMapping;
@@ -210,8 +221,21 @@ function renderAndReadback(renderer: THREE.WebGLRenderer): string {
     const dstRow = y * THUMB_SIZE * 4;
     dst.set(src.subarray(srcRow, srcRow + THUMB_SIZE * 4), dstRow);
   }
-  readbackCtx!.putImageData(imageDataBuf!, 0, 0);
-  return readbackCanvas!.toDataURL('image/png');
+
+  // Return a copy (shared imageDataBuf is reused across renders)
+  return new ImageData(new Uint8ClampedArray(dst), THUMB_SIZE, THUMB_SIZE);
+}
+
+/**
+ * Async PNG encoding via OffscreenCanvas.convertToBlob().
+ * Returns a blob URL (must be revoked on cache clear).
+ */
+async function encodeImageDataToUrl(imageData: ImageData): Promise<string> {
+  const osc = new OffscreenCanvas(THUMB_SIZE, THUMB_SIZE);
+  const ctx = osc.getContext('2d')!;
+  ctx.putImageData(imageData, 0, 0);
+  const blob = await osc.convertToBlob({ type: 'image/png' });
+  return URL.createObjectURL(blob);
 }
 
 // ============== Voxel Grid Generation ==============
@@ -314,19 +338,13 @@ function buildWireframe(config: BuildConfig, rotation?: Quat): THREE.LineSegment
 // ============== Main Render Function ==============
 
 /**
- * Render a thumbnail for a BuildConfig.
- * Returns a cached data URL, or null if renderer isn't ready.
+ * Synchronously render a thumbnail for a BuildConfig and return ImageData.
+ * Returns null if renderer isn't ready or mesh is empty.
+ * Does NOT do PNG encoding (that's async via the queue).
  */
-export function renderPresetThumbnail(config: BuildConfig, rotation?: Quat): string | null {
-  const hash = configHash(config, rotation);
-  const cached = thumbnailCache.get(hash);
-  if (cached) return cached;
-
-  const renderer = getRendererRef();
-  if (!renderer) return null;
-
+function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefined, renderer: THREE.WebGLRenderer): ImageData | null {
   ensureSetup();
-  if (!thumbScene || !thumbCamera || !renderTarget || !readbackCtx) return null;
+  if (!thumbScene || !thumbCamera || !renderTarget) return null;
 
   clearMeshes();
 
@@ -339,9 +357,7 @@ export function renderPresetThumbnail(config: BuildConfig, rotation?: Quat): str
     _center.set(0, 0, 0);
     fitCameraToBox(_bbox, _center);
 
-    const url = renderAndReadback(renderer);
-    thumbnailCache.set(hash, url);
-    return url;
+    return renderAndReadbackImageData(renderer);
   }
 
   // ---- ADD / PAINT / FILL: SurfaceNet terrain mesh ----
@@ -385,29 +401,141 @@ export function renderPresetThumbnail(config: BuildConfig, rotation?: Quat): str
   _tempV.set(ox, oy, oz);
   fitCameraToBox(_bbox, _tempV);
 
-  const url = renderAndReadback(renderer);
-  thumbnailCache.set(hash, url);
-  return url;
+  return renderAndReadbackImageData(renderer);
+}
+
+// ============== Queue Processing ==============
+
+/**
+ * Process up to MAX_RENDERS_PER_FRAME queued thumbnail requests per frame.
+ * Synchronous GPU work (SDF + SurfaceNet + WebGL render + readback) is done here,
+ * then async PNG encoding fires in the background.
+ */
+function processRenderQueue(): void {
+  queueRafId = 0;
+
+  const renderer = getRendererRef();
+  if (!renderer) {
+    // Renderer not ready yet, retry next frame
+    if (pendingQueue.length > 0) {
+      queueRafId = requestAnimationFrame(processRenderQueue);
+    }
+    return;
+  }
+
+  let rendered = 0;
+  while (rendered < MAX_RENDERS_PER_FRAME && pendingQueue.length > 0) {
+    const entry = pendingQueue.shift()!;
+    pendingByHash.delete(entry.hash);
+
+    // Check cache again (might have been rendered since queuing)
+    const cached = thumbnailCache.get(entry.hash);
+    if (cached) {
+      for (const cb of entry.callbacks) cb(cached);
+      continue; // Don't count against per-frame limit
+    }
+
+    const imageData = renderThumbnailToImageData(entry.config, entry.rotation, renderer);
+    if (!imageData) {
+      for (const cb of entry.callbacks) cb(null);
+      rendered++;
+      continue;
+    }
+
+    // Async PNG encode (doesn't block main thread)
+    const callbacks = entry.callbacks;
+    const hash = entry.hash;
+    encodeImageDataToUrl(imageData).then(url => {
+      thumbnailCache.set(hash, url);
+      for (const cb of callbacks) cb(url);
+    });
+
+    rendered++;
+  }
+
+  // Continue processing if more items remain
+  if (pendingQueue.length > 0) {
+    queueRafId = requestAnimationFrame(processRenderQueue);
+  }
 }
 
 // ============== Public API ==============
 
+/**
+ * Queue a thumbnail render for a BuildConfig. The callback fires
+ * when the blob URL is ready (may be immediate if cached).
+ */
+export function queueThumbnailRender(
+  config: BuildConfig,
+  rotation: Quat | undefined,
+  callback: (url: string | null) => void,
+): void {
+  const hash = configHash(config, rotation);
+
+  // Already cached?
+  const cached = thumbnailCache.get(hash);
+  if (cached) { callback(cached); return; }
+
+  // Already queued? Piggy-back on existing request
+  const existing = pendingByHash.get(hash);
+  if (existing) { existing.callbacks.push(callback); return; }
+
+  const entry: PendingRender = { config, rotation, hash, callbacks: [callback] };
+  pendingQueue.push(entry);
+  pendingByHash.set(hash, entry);
+
+  if (!queueRafId) {
+    queueRafId = requestAnimationFrame(processRenderQueue);
+  }
+}
+
+/**
+ * Check if a thumbnail is already cached. Returns the URL or undefined.
+ */
+export function getCachedThumbnail(config: BuildConfig, rotation?: Quat): string | undefined {
+  return thumbnailCache.get(configHash(config, rotation));
+}
+
+/**
+ * Pre-warm the thumbnail cache with all default hotbar presets.
+ * Call during spectator mode so thumbnails are ready when Play is clicked.
+ */
+export function prewarmPresetThumbnails(): void {
+  for (const preset of DEFAULT_BUILD_PRESETS) {
+    const hash = configHash(preset.config, preset.baseRotation);
+    if (thumbnailCache.has(hash)) continue;
+    queueThumbnailRender(preset.config, preset.baseRotation, () => {});
+  }
+}
+
 /** Invalidate all cached thumbnails (e.g. when textures reload). */
 export function clearThumbnailCache(): void {
+  for (const url of thumbnailCache.values()) {
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+  }
   thumbnailCache.clear();
+}
+
+/** Cancel all pending queue entries. */
+export function cancelPendingThumbnails(): void {
+  pendingQueue.length = 0;
+  pendingByHash.clear();
+  if (queueRafId) {
+    cancelAnimationFrame(queueRafId);
+    queueRafId = 0;
+  }
 }
 
 /** Dispose all Three.js resources used by the thumbnail renderer. */
 export function disposeThumbnailRenderer(): void {
+  cancelPendingThumbnails();
   clearMeshes();
   if (wireframeMat) { wireframeMat.dispose(); wireframeMat = null; }
   if (renderTarget) { renderTarget.dispose(); renderTarget = null; }
   thumbScene = null;
   thumbCamera = null;
-  readbackCanvas = null;
-  readbackCtx = null;
   voxelGrid = null;
   pixelBuf = null;
   imageDataBuf = null;
-  thumbnailCache.clear();
+  clearThumbnailCache();
 }
