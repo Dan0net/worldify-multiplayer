@@ -327,11 +327,17 @@ export const terrainNormalFragment = /* glsl */ `
 
 // ============== Voxel Light Attenuation ==============
 
-/** Applied right before opaque_fragment — dims PBR output in unlit areas. */
+/** Applied right before opaque_fragment — gates directional light behind voxel light.
+ *  Full directional at vLightLevel=1.0, rapid transition to ambient-only
+ *  at slightly below max, then ambient dims smoothly toward 0. */
 export const terrainLightFragment = /* glsl */ `
-  // Voxel light attenuation: outdoor (1.0) unchanged, caves dim toward 0.
-  // Smoothstep gives a softer falloff than linear.
-  outgoingLight *= smoothstep(0.0, 1.0, vLightLevel);
+  // Ambient-only baseline: indirect diffuse + indirect specular (hemisphere/env)
+  vec3 ambientOnly = reflectedLight.indirectDiffuse + reflectedLight.indirectSpecular;
+  // Directional contribution fades sharply: full sun at 1.0, ambient-only by ~0.85
+  float directFade = smoothstep(0.8, 1.0, vLightLevel);
+  // Ambient dims smoothly across the full light range
+  float ambientFade = smoothstep(0.0, 1.0, vLightLevel);
+  outgoingLight = mix(ambientOnly * ambientFade, outgoingLight, directFade);
 
   #ifdef OPAQUE
   diffuseColor.a = 1.0;
