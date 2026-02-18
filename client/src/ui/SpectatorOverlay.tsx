@@ -64,6 +64,12 @@ export function SpectatorOverlay() {
     animFrameRef.current = requestAnimationFrame(renderMap);
     return () => {
       cancelAnimationFrame(animFrameRef.current);
+      // Dispose old renderer so a fresh one is created when we return to MainMenu
+      // (the container div is removed from DOM when the component returns null during Playing)
+      if (mapRendererRef.current) {
+        mapRendererRef.current.dispose();
+        mapRendererRef.current = null;
+      }
     };
   }, [gameMode, renderMap]);
 
