@@ -65,56 +65,60 @@ async function loadTextureData(
   version: string,
   baseUrl: string,
   onFileProgress?: (received: number, total: number) => void
-): Promise<ArrayBuffer> {
-  let arrayBuffer = await textureCache.getTexture(resolution, mapType, version);
+): Promise<Uint8Array> {
+  const cached = await textureCache.getTexture(resolution, mapType, version);
   
-  if (!arrayBuffer) {
-    console.log(`Cache miss: Fetching ${resolution}/${mapType} from network`);
-    
-    const response = await fetch(`${baseUrl}/${resolution}/${mapType}.bin`, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to fetch ${resolution}/${mapType}: ${response.status}`);
-    }
-    
-    // Use ReadableStream for per-file download progress
-    const contentLength = parseInt(response.headers.get('Content-Length') || '0', 10);
-    if (contentLength > 0 && response.body && onFileProgress) {
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let receivedBytes = 0;
-      
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        receivedBytes += value.length;
-        onFileProgress(receivedBytes, contentLength);
-      }
-      
-      // Combine chunks into a single ArrayBuffer
-      const combined = new Uint8Array(receivedBytes);
-      let offset = 0;
-      for (const chunk of chunks) {
-        combined.set(chunk, offset);
-        offset += chunk.length;
-      }
-      arrayBuffer = combined.buffer;
-    } else {
-      arrayBuffer = await response.arrayBuffer();
-    }
-    
-    await textureCache.saveTexture(resolution, mapType, arrayBuffer, version);
-    
-    const sizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(2);
-    console.log(`Cached ${resolution}/${mapType} (${sizeMB} MB) [${version}]`);
-  } else {
+  if (cached) {
     console.log(`Cache hit: Loaded ${resolution}/${mapType} from IndexedDB [${version}]`);
+    return new Uint8Array(cached);
+  }
+
+  console.log(`Cache miss: Fetching ${resolution}/${mapType} from network`);
+  
+  const response = await fetch(`${baseUrl}/${resolution}/${mapType}.bin`, {
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${resolution}/${mapType}: ${response.status}`);
   }
   
-  return arrayBuffer;
+  let result: Uint8Array;
+  
+  // Use ReadableStream for per-file download progress
+  const contentLength = parseInt(response.headers.get('Content-Length') || '0', 10);
+  if (contentLength > 0 && response.body && onFileProgress) {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let receivedBytes = 0;
+    
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      receivedBytes += value.length;
+      onFileProgress(receivedBytes, contentLength);
+    }
+    
+    // Combine chunks into a single Uint8Array
+    result = new Uint8Array(receivedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+  } else {
+    result = new Uint8Array(await response.arrayBuffer());
+  }
+  
+  // Fire-and-forget: don't block texture creation on IndexedDB write
+  const sizeMB = (result.byteLength / (1024 * 1024)).toFixed(2);
+  textureCache.saveTexture(resolution, mapType, result.buffer as ArrayBuffer, version).then(
+    () => console.log(`Cached ${resolution}/${mapType} (${sizeMB} MB) [${version}]`),
+    (err) => console.warn(`Failed to cache ${resolution}/${mapType}:`, err)
+  );
+  
+  return result;
 }
 
 /**
@@ -185,13 +189,13 @@ export async function loadDataArrayTextures(
       throw new Error(`Missing metadata for ${resolution}/${mapType}`);
     }
     
-    const arrayBuffer = await loadTextureData(resolution, mapType, version, baseUrl, (received, fileTotal) => {
+    const textureData = await loadTextureData(resolution, mapType, version, baseUrl, (received, fileTotal) => {
       // Smooth progress: completed maps + fraction of current file
       const fileProgress = fileTotal > 0 ? received / fileTotal : 0;
       onProgress?.(completed + fileProgress, total);
     });
     textures[mapType] = createDataArrayTexture(
-      new Uint8Array(arrayBuffer),
+      textureData,
       meta.width,
       meta.height,
       meta.layers,
