@@ -5,7 +5,6 @@
  * Use material names in code (e.g., 'moss2', 'rock') and look up IDs at runtime.
  */
 
-import { LIGHT_MAX } from '../voxel/constants';
 import pallet from './pallet.json' with { type: 'json' };
 
 // Export the raw pallet for client use
@@ -148,7 +147,7 @@ for (const id of pallet.types.liquid) {
 export const MATERIAL_EMISSION_LUT = new Uint8Array(128);
 
 // Lava (ID 50) emits light level 24
-MATERIAL_EMISSION_LUT[50] = LIGHT_MAX;
+MATERIAL_EMISSION_LUT[50] = 27;
 
 /**
  * Get material type as numeric constant (fast, for mesh generation).
