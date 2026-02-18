@@ -32,7 +32,7 @@ import {
 import { setRendererRef, setVisibilityRadiusCallback, syncQualityToStore } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, updateTileFromChunk, createMapTile } from '@worldify/shared';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, updateTileFromChunk, updateTileHash, createMapTile } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -329,6 +329,9 @@ export class GameCore {
           updateTileFromChunk(tile, chunk);
         }
       }
+
+      // Recompute hash after all chunk updates for this tile
+      updateTileHash(tile);
     }
   }
 

@@ -2,10 +2,10 @@
  * MapRenderer - Renders map tiles using DOM elements for GPU-accelerated transforms
  * 
  * Architecture:
- * - Each tile is a separate <img> element positioned absolutely
+ * - Each tile is a separate <canvas> element positioned absolutely
  * - All tiles are inside a container that moves via CSS transform
  * - Player movement only updates the container transform (no re-rendering)
- * - Tile images only update when tile data changes (hash-based dirty check)
+ * - Tile images come from the shared MapTileImageCache (async, staggered)
  * 
  * This approach uses the browser's compositor for smooth scrolling without
  * any per-frame canvas operations.
@@ -14,49 +14,24 @@
 import {
   MapTileData,
   MAP_TILE_SIZE,
-  tilePixelIndex,
-  Materials,
 } from '@worldify/shared';
+
+import { getTileBitmap } from './MapTileImageCache';
 
 /** Configuration for map renderer */
 export interface MapRendererConfig {
   /** Pixels per map tile pixel (zoom level) */
   scale: number;
-  /** Show height shading (grayscale overlay) */
-  showHeightShading: boolean;
-  /** Height range for shading normalization */
-  heightRange: { min: number; max: number };
 }
 
 const DEFAULT_CONFIG: MapRendererConfig = {
   scale: 1,
-  showHeightShading: true,
-  heightRange: { min: -32, max: 64 },
 };
-
-/** Pre-computed RGB colors for all materials */
-const MATERIAL_RGB_CACHE: [number, number, number][] = [];
-
-// Initialize RGB cache on module load
-function initColorCache(): void {
-  if (MATERIAL_RGB_CACHE.length > 0) return;
-  for (let i = 0; i < Materials.count; i++) {
-    MATERIAL_RGB_CACHE[i] = Materials.getColorRGB(i);
-  }
-  // Default fallback
-  MATERIAL_RGB_CACHE[255] = [255, 255, 255];
-}
-
-/** Cached tile info */
-interface CachedTile {
-  /** Data URL of the rendered tile image */
-  dataUrl: string;
-  /** Hash of tile data for dirty checking */
-  dataHash: number;
-}
 
 /**
  * DOM-based map renderer using CSS transforms for smooth scrolling.
+ * Tile images are produced by the shared MapTileImageCache singleton
+ * (async, staggered, and shared across all MapRenderer instances).
  */
 export class MapRenderer {
   private container: HTMLDivElement;
@@ -69,22 +44,15 @@ export class MapRenderer {
   private playerX = 0;
   private playerZ = 0;
 
-  // Tile data cache (keyed by "tx,tz")
-  private tileDataCache = new Map<string, CachedTile>();
-  
   // DOM element cache (keyed by "tx,tz")
-  private tileElements = new Map<string, HTMLDivElement>();
-
-  // Offscreen canvas for tile rendering
-  private offscreenCanvas: HTMLCanvasElement;
-  private offscreenCtx: CanvasRenderingContext2D;
+  private tileElements = new Map<string, HTMLCanvasElement>();
+  
+  // Track which hash is currently painted on each element to avoid redundant draws
+  private paintedHashes = new Map<string, number>();
 
   constructor(container: HTMLDivElement, config: Partial<MapRendererConfig> = {}) {
     this.container = container;
     this.config = { ...DEFAULT_CONFIG, ...config };
-    
-    // Initialize color cache
-    initColorCache();
     
     // Create tiles container (this will be transformed)
     this.tilesContainer = document.createElement('div');
@@ -94,14 +62,6 @@ export class MapRenderer {
       transform-origin: 0 0;
     `;
     this.container.appendChild(this.tilesContainer);
-    
-    // Create offscreen canvas for tile rendering
-    this.offscreenCanvas = document.createElement('canvas');
-    this.offscreenCanvas.width = MAP_TILE_SIZE;
-    this.offscreenCanvas.height = MAP_TILE_SIZE;
-    const offCtx = this.offscreenCanvas.getContext('2d');
-    if (!offCtx) throw new Error('Failed to get offscreen 2D context');
-    this.offscreenCtx = offCtx;
   }
 
   /**
@@ -125,14 +85,8 @@ export class MapRenderer {
    */
   setConfig(config: Partial<MapRendererConfig>): void {
     const scaleChanged = 'scale' in config && config.scale !== this.config.scale;
-    const shadingChanged = 'showHeightShading' in config || 'heightRange' in config;
     
     this.config = { ...this.config, ...config };
-    
-    // Clear data cache if shading settings changed (need to re-render tiles)
-    if (shadingChanged) {
-      this.tileDataCache.clear();
-    }
     
     // Update all tile sizes if scale changed
     if (scaleChanged) {
@@ -147,25 +101,15 @@ export class MapRenderer {
     const { scale } = this.config;
     const tileScreenSize = MAP_TILE_SIZE * scale;
     
-    for (const [key, element] of this.tileElements) {
+    for (const [key, canvas] of this.tileElements) {
       const [txStr, tzStr] = key.split(',');
       const tx = parseInt(txStr, 10);
       const tz = parseInt(tzStr, 10);
       
-      const left = tx * tileScreenSize;
-      const top = tz * tileScreenSize;
-      // Preserve the background-image when updating size
-      const bgImage = element.style.backgroundImage;
-      element.style.cssText = `
-        position: absolute;
-        pointer-events: none;
-        background-size: 100% 100%;
-        background-image: ${bgImage};
-        left: ${left}px;
-        top: ${top}px;
-        width: ${tileScreenSize}px;
-        height: ${tileScreenSize}px;
-      `;
+      canvas.style.left = `${tx * tileScreenSize}px`;
+      canvas.style.top = `${tz * tileScreenSize}px`;
+      canvas.style.width = `${tileScreenSize}px`;
+      canvas.style.height = `${tileScreenSize}px`;
     }
   }
 
@@ -201,15 +145,16 @@ export class MapRenderer {
         visibleKeys.add(key);
         
         const tile = tiles.get(key);
-        this.updateTileElement(tx, tz, key, tile);
+        this.updateTileElement(tx, tz, key, tile, tileScreenSize);
       }
     }
     
     // Remove tile elements that are no longer visible
-    for (const [key, element] of this.tileElements) {
+    for (const [key, canvas] of this.tileElements) {
       if (!visibleKeys.has(key)) {
-        element.remove();
+        canvas.remove();
         this.tileElements.delete(key);
+        this.paintedHashes.delete(key);
       }
     }
     
@@ -243,141 +188,70 @@ export class MapRenderer {
   /**
    * Update or create a tile element.
    */
-  private updateTileElement(tx: number, tz: number, key: string, tile: MapTileData | undefined): void {
-    const { scale } = this.config;
-    const tileScreenSize = MAP_TILE_SIZE * scale;
-    
-    let element = this.tileElements.get(key);
+  private updateTileElement(
+    tx: number,
+    tz: number,
+    key: string,
+    tile: MapTileData | undefined,
+    tileScreenSize: number,
+  ): void {
+    let canvas = this.tileElements.get(key);
     
     if (tile) {
-      // Get or create cached tile data
-      const cached = this.getCachedTile(tile, key);
+      // Ask the shared image cache for a bitmap
+      const cached = getTileBitmap(key, tile);
       
-      if (!element) {
-        // Create new tile element (use div with background-image for reliable sizing)
-        element = document.createElement('div');
-        this.tilesContainer.appendChild(element);
-        this.tileElements.set(key, element);
+      if (!canvas) {
+        // Create a small canvas element sized to MAP_TILE_SIZE (32×32)
+        canvas = document.createElement('canvas');
+        canvas.width = MAP_TILE_SIZE;
+        canvas.height = MAP_TILE_SIZE;
+        canvas.style.cssText = `
+          position: absolute;
+          pointer-events: none;
+          image-rendering: pixelated;
+          left: ${tx * tileScreenSize}px;
+          top: ${tz * tileScreenSize}px;
+          width: ${tileScreenSize}px;
+          height: ${tileScreenSize}px;
+        `;
+        this.tilesContainer.appendChild(canvas);
+        this.tileElements.set(key, canvas);
       }
       
-      // Update image if data changed
-      if (element.dataset.hash !== String(cached.dataHash)) {
-        element.style.backgroundImage = `url(${cached.dataUrl})`;
-        element.dataset.hash = String(cached.dataHash);
-      }
-      
-      // Update all styles together to avoid partial updates
-      const left = tx * tileScreenSize;
-      const top = tz * tileScreenSize;
-      element.style.cssText = `
-        position: absolute;
-        pointer-events: none;
-        background-size: 100% 100%;
-        background-image: url(${cached.dataUrl});
-        left: ${left}px;
-        top: ${top}px;
-        width: ${tileScreenSize}px;
-        height: ${tileScreenSize}px;
-      `;
-    } else {
-      // No tile data - show placeholder or remove
-      if (element) {
-        element.remove();
-        this.tileElements.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Get or create cached tile data.
-   */
-  private getCachedTile(tile: MapTileData, key: string): CachedTile {
-    const dataHash = this.computeTileHash(tile);
-    
-    let cached = this.tileDataCache.get(key);
-    if (cached && cached.dataHash === dataHash) {
-      return cached;
-    }
-    
-    // Render tile to canvas and get data URL
-    this.renderTileToCanvas(tile);
-    const dataUrl = this.offscreenCanvas.toDataURL();
-    
-    cached = { dataUrl, dataHash };
-    this.tileDataCache.set(key, cached);
-    
-    return cached;
-  }
-
-  /**
-   * Compute a simple hash of tile data for dirty checking.
-   */
-  private computeTileHash(tile: MapTileData): number {
-    let hash = 0;
-    for (let i = 0; i < tile.heights.length; i++) {
-      hash = ((hash << 5) - hash + tile.heights[i]) | 0;
-      hash = ((hash << 5) - hash + tile.materials[i]) | 0;
-    }
-    return hash;
-  }
-
-  /**
-   * Render tile to offscreen canvas.
-   */
-  private renderTileToCanvas(tile: MapTileData): void {
-    const { showHeightShading, heightRange } = this.config;
-    const imageData = this.offscreenCtx.createImageData(MAP_TILE_SIZE, MAP_TILE_SIZE);
-    const data = imageData.data;
-    
-    for (let lz = 0; lz < MAP_TILE_SIZE; lz++) {
-      for (let lx = 0; lx < MAP_TILE_SIZE; lx++) {
-        const tileIndex = tilePixelIndex(lx, lz);
-        const height = tile.heights[tileIndex];
-        const material = tile.materials[tileIndex];
-        
-        // Get base RGB color from cache
-        const rgb = MATERIAL_RGB_CACHE[material] ?? MATERIAL_RGB_CACHE[255];
-        let r = rgb[0];
-        let g = rgb[1];
-        let b = rgb[2];
-        
-        // Apply height shading if enabled
-        if (showHeightShading) {
-          const heightNorm = (height - heightRange.min) / (heightRange.max - heightRange.min);
-          const brightness = Math.max(0.3, Math.min(1.0, 0.5 + heightNorm * 0.5));
-          r = Math.round(r * brightness);
-          g = Math.round(g * brightness);
-          b = Math.round(b * brightness);
+      // Paint bitmap if available and hash changed
+      if (cached && this.paintedHashes.get(key) !== cached.dataHash) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(cached.bitmap, 0, 0);
+          this.paintedHashes.set(key, cached.dataHash);
         }
-        
-        // Write to ImageData (RGBA)
-        const pixelIndex = (lz * MAP_TILE_SIZE + lx) * 4;
-        data[pixelIndex] = r;
-        data[pixelIndex + 1] = g;
-        data[pixelIndex + 2] = b;
-        data[pixelIndex + 3] = 255;
+      }
+      
+      // Ensure position is up-to-date
+      canvas.style.left = `${tx * tileScreenSize}px`;
+      canvas.style.top = `${tz * tileScreenSize}px`;
+      canvas.style.width = `${tileScreenSize}px`;
+      canvas.style.height = `${tileScreenSize}px`;
+    } else {
+      // No tile data — remove element if it exists
+      if (canvas) {
+        canvas.remove();
+        this.tileElements.delete(key);
+        this.paintedHashes.delete(key);
       }
     }
-    
-    this.offscreenCtx.putImageData(imageData, 0, 0);
   }
 
   /**
-   * Invalidate cached tile (call when tile data changes).
-   */
-  invalidateTile(tx: number, tz: number): void {
-    this.tileDataCache.delete(`${tx},${tz}`);
-  }
-
-  /**
-   * Clear all cached tiles and DOM elements.
+   * Clear all DOM elements.
    */
   clearCache(): void {
-    this.tileDataCache.clear();
-    for (const element of this.tileElements.values()) {
-      element.remove();
+    for (const canvas of this.tileElements.values()) {
+      canvas.remove();
     }
     this.tileElements.clear();
+    this.paintedHashes.clear();
   }
 
   /**

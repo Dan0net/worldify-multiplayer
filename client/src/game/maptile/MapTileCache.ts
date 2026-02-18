@@ -9,6 +9,7 @@ import {
   MapTileData,
   mapTileKey,
   createMapTile,
+  updateTileHash,
   tilePixelIndex,
   MAP_TILE_SIZE,
   CHUNK_SIZE,
@@ -70,6 +71,7 @@ export class MapTileCache {
     const tile = createMapTile(tx, tz);
     tile.heights.set(heights);
     tile.materials.set(materials);
+    updateTileHash(tile);
     this.set(tx, tz, tile);
   }
 

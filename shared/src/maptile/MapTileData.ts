@@ -19,6 +19,8 @@ export interface MapTileData {
   heights: Int16Array;
   /** Material ID per pixel (surface material) */
   materials: Uint8Array;
+  /** Pre-computed content hash (set when tile data changes, avoids per-frame recomputation) */
+  _hash: number;
 }
 
 /**
@@ -30,7 +32,28 @@ export function createMapTile(tx: number, tz: number): MapTileData {
     tz,
     heights: new Int16Array(MAP_TILE_PIXELS),
     materials: new Uint8Array(MAP_TILE_PIXELS),
+    _hash: 0,
   };
+}
+
+/**
+ * Compute a content hash from tile height + material data.
+ * Call this after modifying tile arrays to update the cached hash.
+ */
+export function computeTileHash(tile: MapTileData): number {
+  let hash = 0;
+  for (let i = 0; i < tile.heights.length; i++) {
+    hash = ((hash << 5) - hash + tile.heights[i]) | 0;
+    hash = ((hash << 5) - hash + tile.materials[i]) | 0;
+  }
+  return hash;
+}
+
+/**
+ * Update a tile's cached _hash from its current data.
+ */
+export function updateTileHash(tile: MapTileData): void {
+  tile._hash = computeTileHash(tile);
 }
 
 /**
@@ -103,5 +126,6 @@ export function cloneMapTile(tile: MapTileData): MapTileData {
     tz: tile.tz,
     heights: new Int16Array(tile.heights),
     materials: new Uint8Array(tile.materials),
+    _hash: tile._hash,
   };
 }
