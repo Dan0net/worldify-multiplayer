@@ -494,7 +494,7 @@ export function queueThumbnailRender(
   const existing = pendingByHash.get(hash);
   if (existing) { existing.callbacks.push(callback); return; }
 
-  // 3. Try IndexedDB, fall back to GPU queue
+  // 3. Try IndexedDB first, fall back to GPU queue on miss
   const entry: PendingRender = { config, rotation, hash, callbacks: [callback] };
   pendingByHash.set(hash, entry);
 
@@ -502,21 +502,13 @@ export function queueThumbnailRender(
     if (url) {
       // Found in IDB — resolve callbacks, skip GPU render
       pendingByHash.delete(hash);
-      const idx = renderQueue.indexOf(entry);
-      if (idx >= 0) renderQueue.splice(idx, 1);
       for (const cb of entry.callbacks) cb(url);
       return;
     }
-    // Not in IDB — ensure it's queued for GPU render
-    if (!renderQueue.includes(entry)) {
-      renderQueue.push(entry);
-      scheduleQueue();
-    }
+    // Not in IDB — queue for GPU render
+    renderQueue.push(entry);
+    scheduleQueue();
   });
-
-  // Optimistically queue for GPU render (will be removed if IDB wins the race)
-  renderQueue.push(entry);
-  scheduleQueue();
 }
 
 /** Invalidate all cached thumbnails (e.g. when textures reload). */
