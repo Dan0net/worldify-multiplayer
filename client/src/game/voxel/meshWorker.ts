@@ -60,8 +60,6 @@ self.onmessage = (e: MessageEvent<MeshWorkerRequest>) => {
         slot.positions.buffer as ArrayBuffer,
         slot.normals.buffer as ArrayBuffer,
         slot.materialIds.buffer as ArrayBuffer,
-        slot.materialWeights.buffer as ArrayBuffer,
-        slot.indices.buffer as ArrayBuffer,
       );
     }
   }
