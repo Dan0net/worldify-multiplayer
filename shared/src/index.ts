@@ -31,6 +31,7 @@ export * from './voxel/buildPresets.js';
 export * from './voxel/snapPoints.js';
 export * from './voxel/shapes.js';
 export * from './voxel/drawing.js';
+export * from './voxel/lighting.js';
 
 // Map tiles
 export * from './maptile/index.js';

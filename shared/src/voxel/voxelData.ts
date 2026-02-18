@@ -164,29 +164,29 @@ export function isVoxelSurface(packed: number): boolean {
 
 /**
  * Create a new packed voxel with updated weight, preserving material and light.
+ * Uses bit ops — clears weight bits and sets new ones without touching material/light.
  */
 export function setWeight(packed: number, weight: number): number {
-  const material = getMaterial(packed);
-  const light = getLight(packed);
-  return packVoxel(weight, material, light);
+  const normalizedWeight = (weight - WEIGHT_MIN) / WEIGHT_RANGE;
+  const packedWeight = Math.max(0, Math.min(WEIGHT_MAX_PACKED, Math.round(normalizedWeight * WEIGHT_MAX_PACKED)));
+  return (packed & ~(WEIGHT_MASK << WEIGHT_SHIFT)) | (packedWeight << WEIGHT_SHIFT);
 }
 
 /**
  * Create a new packed voxel with updated material, preserving weight and light.
+ * Uses bit ops — clears material bits and sets new ones without touching weight/light.
  */
 export function setMaterial(packed: number, material: number): number {
-  const weight = getWeight(packed);
-  const light = getLight(packed);
-  return packVoxel(weight, material, light);
+  const clampedMat = Math.max(0, Math.min(MATERIAL_MAX, material | 0));
+  return (packed & ~(MATERIAL_MASK << MATERIAL_SHIFT)) | (clampedMat << MATERIAL_SHIFT);
 }
 
 /**
  * Create a new packed voxel with updated light, preserving weight and material.
+ * Uses bit ops — light occupies the bottom 5 bits so no unpack/repack needed.
  */
 export function setLight(packed: number, light: number): number {
-  const weight = getWeight(packed);
-  const material = getMaterial(packed);
-  return packVoxel(weight, material, light);
+  return (packed & ~LIGHT_MASK) | (Math.max(0, Math.min(LIGHT_MAX, light | 0)));
 }
 
 // ============== Coordinate Conversions ==============

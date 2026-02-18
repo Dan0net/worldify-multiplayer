@@ -24,6 +24,8 @@ import {
   getChunkRangeFromHeights,
   isVoxelSolid,
   voxelIndex,
+  computeSunlightColumns,
+  getSunlitAbove,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
@@ -543,8 +545,11 @@ export class VoxelWorld implements ChunkProvider {
     chunk.dirty = true;
     chunk.lastBuildSeq = lastBuildSeq;
     
+    // Sunlight column propagation (before visibility + remesh)
+    this.computeChunkSunlight(cx, cy, cz, chunk.data);
+    
     // Compute visibility graph for this chunk
-    chunk.visibilityBits = computeVisibility(voxelData);
+    chunk.visibilityBits = computeVisibility(chunk.data);
     
     // Queue for remeshing
     this.remeshQueue.add(key);
@@ -552,9 +557,39 @@ export class VoxelWorld implements ChunkProvider {
     // Invalidate BFS cache when new chunks load (they may open visibility paths)
     if (isNewChunk) {
       this.lastBFSChunk = null;
+      
+      // Relight the chunk below — it may now receive (or lose) sunlight from us
+      const belowKey = chunkKey(cx, cy - 1, cz);
+      const belowChunk = this.chunks.get(belowKey);
+      if (belowChunk) {
+        this.computeChunkSunlight(cx, cy - 1, cz, belowChunk.data);
+        belowChunk.dirty = true;
+        this.remeshQueue.add(belowKey);
+      }
     }
     
     return chunk;
+  }
+
+  /**
+   * Compute sunlight columns for a chunk in-place.
+   * Looks up chunk-above data and maxCy from columnInfo to determine sky exposure.
+   */
+  private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint16Array): void {
+    // Get maxCy for this column (cx,cz maps to tile tx,tz)
+    const colInfo = this.columnInfo.get(`${cx},${cz}`);
+    const maxCy = colInfo ? colInfo.maxCy : cy; // fallback: treat current as top
+    
+    // Check chunk above for sunlight state
+    const aboveKey = chunkKey(cx, cy + 1, cz);
+    const aboveChunk = this.chunks.get(aboveKey);
+    const isSunlitAbove = getSunlitAbove(
+      aboveChunk?.data,
+      cy,
+      maxCy,
+    );
+    
+    computeSunlightColumns(data, isSunlitAbove);
   }
 
   /**
