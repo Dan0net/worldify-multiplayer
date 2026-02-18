@@ -248,6 +248,9 @@ export class VoxelIntegration implements TerrainRaycaster {
         if (chunkMesh.transparentMesh) {
           meshes.push(chunkMesh.transparentMesh);
         }
+        if (chunkMesh.liquidMesh) {
+          meshes.push(chunkMesh.liquidMesh);
+        }
       }
     }
     return meshes;
