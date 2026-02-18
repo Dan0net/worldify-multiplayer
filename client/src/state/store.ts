@@ -27,7 +27,7 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 export type TextureLoadingState = 'none' | 'loading-low' | 'low' | 'loading-high' | 'high';
 
 /** Terrain shader debug modes */
-export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Albedo', 'Normal', 'AO', 'Roughness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'Metalness', 'MetalFinal', 'MatHue'] as const;
+export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'VoxelLight', 'Albedo', 'Normal', 'AO', 'Roughness', 'Metalness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'MatHue'] as const;
 export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
 
 /** Voxel debug visualization toggles */

@@ -11,17 +11,20 @@
 export const materialAttributesVertex = /* glsl */ `
   attribute vec3 materialIds;
   attribute vec3 materialWeights;
+  attribute float lightLevel;
   
   flat varying vec3 vMaterialIds;
   varying vec3 vMaterialWeights;
   varying vec3 vWorldPosition;
   varying vec3 vWorldNormal;
+  varying float vLightLevel;
 `;
 
 /** Material varying assignments (vertex suffix) */
 export const materialVaryingsSuffix = /* glsl */ `
   vMaterialIds = materialIds;
   vMaterialWeights = materialWeights;
+  vLightLevel = lightLevel;
   vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
   vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
 `;
@@ -52,6 +55,7 @@ const fragmentVaryings = /* glsl */ `
   varying vec3 vMaterialWeights;
   varying vec3 vWorldPosition;
   varying vec3 vWorldNormal;
+  varying float vLightLevel;
 `;
 
 /** Tri-planar and material blending core functions */
@@ -252,8 +256,6 @@ export const terrainRoughnessFragment = /* glsl */ `
   #else
     float roughnessFactor = roughnessMultiplier;
   #endif
-  // Debug mode 17: force max roughness to isolate roughness as culprit
-  if (debugMode == 17) roughnessFactor = 1.0;
 `;
 
 export const terrainMetalnessFragment = /* glsl */ `
@@ -262,8 +264,6 @@ export const terrainMetalnessFragment = /* glsl */ `
   #else
     float metalnessFactor = 0.0;
   #endif
-  // Debug mode 16: force zero metalness to isolate metalness as culprit
-  if (debugMode == 16) metalnessFactor = 0.0;
 `;
 
 export const terrainAoFragment = /* glsl */ `
@@ -273,8 +273,6 @@ export const terrainAoFragment = /* glsl */ `
   #else
     float ambientOcclusion = 1.0;
   #endif
-  // Debug mode 18: force no AO to isolate AO as culprit
-  if (debugMode == 18) ambientOcclusion = 1.0;
   reflectedLight.indirectDiffuse *= ambientOcclusion;
 `;
 
@@ -324,8 +322,6 @@ export const terrainNormalFragment = /* glsl */ `
     // Normal maps disabled by quality setting - use geometry normal
     normal = normalize(vNormal);
     #endif
-    // Debug mode 19: force geometry normals to isolate normal map as culprit
-    if (debugMode == 19) normal = normalize(vNormal);
   #endif
 `;
 
@@ -334,20 +330,24 @@ export const terrainDebugFragment = /* glsl */ `
   
   if (debugMode > 0) {
     if (debugMode == 1) {
-      // Apply sRGB to linear conversion like normal rendering mode
-      gl_FragColor = vec4(sRGBToLinear(sampleMaterialBlend(mapArray).rgb), 1.0);
+      // VOXEL_LIGHT: Visualize per-vertex voxel light level as grayscale
+      gl_FragColor = vec4(vec3(vLightLevel), 1.0);
     } else if (debugMode == 2) {
-      vec3 nSample = sampleMaterialBlend(normalArray).xyz;
-      gl_FragColor = vec4(nSample, 1.0);
+      gl_FragColor = vec4(sRGBToLinear(sampleMaterialBlend(mapArray).rgb), 1.0);
     } else if (debugMode == 3) {
+      gl_FragColor = vec4(sampleMaterialBlend(normalArray).xyz, 1.0);
+    } else if (debugMode == 4) {
       float ao = sampleMaterialBlend(aoArray).r;
       gl_FragColor = vec4(ao, ao, ao, 1.0);
-    } else if (debugMode == 4) {
+    } else if (debugMode == 5) {
       float r = sampleMaterialBlend(roughnessArray).r;
       gl_FragColor = vec4(r, r, r, 1.0);
-    } else if (debugMode == 5) {
-      gl_FragColor = vec4(gTriBlend, 1.0);
     } else if (debugMode == 6) {
+      float m = sampleMaterialBlend(metalnessArray).r;
+      gl_FragColor = vec4(m, m, m, 1.0);
+    } else if (debugMode == 7) {
+      gl_FragColor = vec4(gTriBlend, 1.0);
+    } else if (debugMode == 8) {
       float primaryId = vMaterialIds.x;
       vec3 hue = vec3(
         sin(primaryId * 0.4) * 0.5 + 0.5,
@@ -355,48 +355,11 @@ export const terrainDebugFragment = /* glsl */ `
         sin(primaryId * 0.4 + 4.188) * 0.5 + 0.5
       );
       gl_FragColor = vec4(hue, 1.0);
-    } else if (debugMode == 7) {
-      gl_FragColor = vec4(gMatBlend, 1.0);
-    } else if (debugMode == 8) {
-      gl_FragColor = vec4(vWorldNormal * 0.5 + 0.5, 1.0);
     } else if (debugMode == 9) {
-      // Metalness debug - shows raw metalness texture value
-      float m = sampleMaterialBlend(metalnessArray).r;
-      gl_FragColor = vec4(m, m, m, 1.0);
+      gl_FragColor = vec4(gMatBlend, 1.0);
     } else if (debugMode == 10) {
-      // Metalness with multiplier applied (what's actually used)
-      float mFinal = sampleMaterialBlend(metalnessArray).r * metalnessMultiplier;
-      gl_FragColor = vec4(mFinal, mFinal, mFinal, 1.0);
-    } else if (debugMode == 12) {
-      // LAYER_ZERO_RAW: Force-sample layer 0, no sRGB, no material blend
-      // If this looks correct, the texture data is fine and the bug is in blending/conversion
-      vec4 raw0 = sampleTriPlanarMat(mapArray, 0.0, gTriUV_zy_m0, gTriUV_xz_m0, gTriUV_xy_m0);
-      gl_FragColor = vec4(raw0.rgb, 1.0);
-    } else if (debugMode == 13) {
-      // LAYER_ZERO_SRGB: Force-sample layer 0 WITH sRGB conversion
-      // Compare with mode 12 - if this looks wrong but 12 looks right, sRGB is the issue
-      vec4 raw0 = sampleTriPlanarMat(mapArray, 0.0, gTriUV_zy_m0, gTriUV_xz_m0, gTriUV_xy_m0);
-      gl_FragColor = vec4(sRGBToLinear(raw0.rgb), 1.0);
-    } else if (debugMode == 14) {
-      // PRIMARY_ONLY: Sample only the primary material (m0) with sRGB, ignoring blend
-      // This isolates whether the blending math causes the issue
-      vec4 m0raw = sampleTriPlanarMat(mapArray, vMaterialIds.x, gTriUV_zy_m0, gTriUV_xz_m0, gTriUV_xy_m0);
-      gl_FragColor = vec4(sRGBToLinear(m0raw.rgb), 1.0);
-    } else if (debugMode == 15) {
-      // ALBEDO_NO_SRGB: Normal material blend but WITHOUT sRGB conversion
-      // Compare with mode 1 (which HAS sRGB) - reveals double-conversion
-      gl_FragColor = vec4(sampleMaterialBlend(mapArray).rgb, 1.0);
-    } else if (debugMode == 20) {
-      // OUTGOING_LIGHT: Show pre-tonemapping light output
-      // Reveals what PBR computed before tone mapping changes it
-      gl_FragColor = vec4(outgoingLight, 1.0);
-    } else if (debugMode == 21) {
-      // EFFECTIVE_DIFFUSE: Show diffuseColor * (1 - metalness)
-      // This is what PBR uses as diffuse - if moss2 is dark here, metalness is too high
-      vec3 effDiffuse = diffuseColor.rgb * (1.0 - metalnessFactor);
-      gl_FragColor = vec4(effDiffuse, 1.0);
+      gl_FragColor = vec4(vWorldNormal * 0.5 + 0.5, 1.0);
     }
-    // Modes 16-19 don't write gl_FragColor - they override PBR inputs and let normal rendering proceed
   }
 `;
 

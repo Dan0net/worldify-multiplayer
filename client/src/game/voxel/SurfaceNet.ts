@@ -27,6 +27,8 @@ import {
   WEIGHT_MIN,
   MATERIAL_SHIFT,
   MATERIAL_MASK,
+  LIGHT_MASK,
+  LIGHT_MAX,
   INV_WEIGHT_MAX_PACKED,
   hasSurfaceCrossing,
 } from '@worldify/shared';
@@ -55,6 +57,8 @@ export interface SurfaceNetOutput {
   indices: Uint32Array;
   /** Material ID per vertex */
   materials: Uint8Array;
+  /** Light level per vertex (0.0-1.0, max of non-solid corners in 2x2x2 cell) */
+  lights: Float32Array;
   /** Number of vertices */
   vertexCount: number;
   /** Number of triangles */
@@ -135,6 +139,7 @@ const EMPTY_OUTPUT: SurfaceNetOutput = Object.freeze({
   normals: new Float32Array(0),
   indices: new Uint32Array(0),
   materials: new Uint8Array(0),
+  lights: new Float32Array(0),
   vertexCount: 0,
   triangleCount: 0,
 }) as SurfaceNetOutput;
@@ -156,6 +161,7 @@ interface MeshPool {
   positions: Float32Array;   // 3 floats per vertex
   normals: Float32Array;     // 3 floats per vertex
   materials: Uint8Array;     // 1 byte per vertex
+  lights: Float32Array;      // 1 float per vertex (0.0-1.0)
   indices: Uint32Array;      // 3 uints per triangle
   vertCapacity: number;
   triCapacity: number;
@@ -167,6 +173,7 @@ for (let i = 0; i < MESH_COUNT; ++i) {
     positions: new Float32Array(INITIAL_VERT_CAPACITY * 3),
     normals: new Float32Array(INITIAL_VERT_CAPACITY * 3),
     materials: new Uint8Array(INITIAL_VERT_CAPACITY),
+    lights: new Float32Array(INITIAL_VERT_CAPACITY),
     indices: new Uint32Array(INITIAL_TRI_CAPACITY * 3),
     vertCapacity: INITIAL_VERT_CAPACITY,
     triCapacity: INITIAL_TRI_CAPACITY,
@@ -198,6 +205,9 @@ function ensureVertCapacity(pool: MeshPool, needed: number): void {
   const newMat = new Uint8Array(cap);
   newMat.set(pool.materials);
   pool.materials = newMat;
+  const newLights = new Float32Array(cap);
+  newLights.set(pool.lights);
+  pool.lights = newLights;
   pool.vertCapacity = cap;
 }
 
@@ -309,6 +319,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
         masks[0] = masks[1] = masks[2] = 0;
         maxWeights[0] = maxWeights[1] = maxWeights[2] = -Infinity;
         maxIdxs[0] = maxIdxs[1] = maxIdxs[2] = baseIdx;
+        let maxLight = 0;
 
         // Sample 2x2x2 grid corners using pre-computed offsets
         // Bit operations use shared constants so changes to voxel layout propagate
@@ -318,6 +329,12 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
           const weight = ((voxel >> WEIGHT_SHIFT) & WEIGHT_MASK) * INV_WEIGHT_MAX_PACKED + WEIGHT_MIN;
           const material = (voxel >> MATERIAL_SHIFT) & MATERIAL_MASK;
           const matType = MATERIAL_TYPE_LUT[material]; // 0=solid, 1=trans, 2=liquid
+          
+          // Track max light of non-solid (air) corners for vertex light
+          if (weight < 0) {
+            const light = voxel & LIGHT_MASK;
+            if (light > maxLight) maxLight = light;
+          }
           
           // For each mesh type, compute adjusted weight
           // Own type keeps original weight, other types become air if solid
@@ -415,6 +432,8 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
             pool.normals[v3 + 2] = 0;
             // Extract material using shared constants
             pool.materials[vertIdx] = (data[maxIdxs[mt]] >> MATERIAL_SHIFT) & MATERIAL_MASK;
+            // Light: max of non-solid corners, computed in the corner loop above
+            pool.lights[vertIdx] = maxLight / LIGHT_MAX;
             vertCounts[mt] = vertIdx + 1;
             
             // Generate faces
@@ -569,6 +588,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
       normals: normals.subarray(0, vc * 3),
       indices: pool.indices.subarray(0, tc * 3),
       materials: pool.materials.subarray(0, vc),
+      lights: pool.lights.subarray(0, vc),
       vertexCount: vc,
       triangleCount: tc,
     };

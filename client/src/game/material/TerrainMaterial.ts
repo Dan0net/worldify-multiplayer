@@ -440,30 +440,17 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
 
 export const TERRAIN_DEBUG_MODES = {
   OFF: 0,
-  ALBEDO: 1,
-  NORMAL: 2,
-  AO: 3,
-  ROUGHNESS: 4,
-  TRI_BLEND: 5,
-  MATERIAL_IDS: 6,
-  MATERIAL_WEIGHTS: 7,
-  WORLD_NORMAL: 8,
-  METALNESS: 9,
-  METALNESS_FINAL: 10,
+  VOXEL_LIGHT: 1,
+  ALBEDO: 2,
+  NORMAL: 3,
+  AO: 4,
+  ROUGHNESS: 5,
+  METALNESS: 6,
+  TRI_BLEND: 7,
+  MATERIAL_IDS: 8,
+  MATERIAL_WEIGHTS: 9,
+  WORLD_NORMAL: 10,
   MATERIAL_HUE: 11,
-  // Investigation modes for index-0 brightness bug
-  LAYER_ZERO_RAW: 12,      // Sample only layer 0 of albedo, NO sRGB conversion
-  LAYER_ZERO_SRGB: 13,     // Sample only layer 0 of albedo, WITH sRGB conversion
-  PRIMARY_ONLY: 14,         // Sample only m0 (primary material), with sRGB, no blend
-  ALBEDO_NO_SRGB: 15,      // Normal material blend but skip sRGB conversion
-  // PBR pass-through modes: full PBR pipeline but override one input
-  PBR_NO_METALNESS: 16,    // Force metalness=0 (isolate metalness as culprit)
-  PBR_NO_ROUGHNESS: 17,    // Force roughness=1.0 (isolate roughness as culprit)
-  PBR_NO_AO: 18,           // Force AO=1.0 (isolate AO as culprit)
-  PBR_NO_NORMALMAP: 19,    // Force geometry normals (isolate normal map as culprit)
-  // Post-PBR value inspection
-  OUTGOING_LIGHT: 20,      // Show outgoingLight before tone mapping
-  EFFECTIVE_DIFFUSE: 21,    // Show diffuseColor * (1-metalness) — what PBR actually lights
 } as const;
 
 export type TerrainDebugMode = typeof TERRAIN_DEBUG_MODES[keyof typeof TERRAIN_DEBUG_MODES];
@@ -628,9 +615,6 @@ export function setTerrainDebugMode(mode: TerrainDebugMode): void {
   getTerrainMaterial().setDebugMode(mode);
   getTransparentTerrainMaterial().setDebugMode(mode);
   getLiquidTerrainMaterial().setDebugMode(mode);
-  
-  const modeNames = ['OFF', 'ALBEDO', 'NORMAL', 'AO', 'ROUGHNESS', 'TRI_BLEND', 'MATERIAL_IDS', 'MATERIAL_WEIGHTS', 'WORLD_NORMAL'];
-  console.log(`Terrain debug mode: ${modeNames[mode] || mode}`);
 }
 
 /**
@@ -876,30 +860,20 @@ if (typeof window !== 'undefined') {
     modes: TERRAIN_DEBUG_MODES,
     set: setTerrainDebugMode,
     off: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.OFF),
+    voxelLight: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.VOXEL_LIGHT),
     albedo: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.ALBEDO),
     normal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.NORMAL),
     ao: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.AO),
     roughness: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.ROUGHNESS),
+    metalness: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.METALNESS),
     triBlend: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.TRI_BLEND),
     materialIds: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_IDS),
     materialWeights: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_WEIGHTS),
     worldNormal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.WORLD_NORMAL),
-    // Investigation tools for index-0 bug
-    layerZeroRaw: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.LAYER_ZERO_RAW),
-    layerZeroSrgb: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.LAYER_ZERO_SRGB),
-    primaryOnly: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PRIMARY_ONLY),
-    albedoNoSrgb: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.ALBEDO_NO_SRGB),
-    // PBR isolation: renders normally but overrides one PBR input
-    pbrNoMetal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_METALNESS),
-    pbrNoRough: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_ROUGHNESS),
-    pbrNoAo: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_AO),
-    pbrNoNormal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.PBR_NO_NORMALMAP),
-    outgoingLight: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.OUTGOING_LIGHT),
-    effectiveDiffuse: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.EFFECTIVE_DIFFUSE),
+    materialHue: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_HUE),
     // Diagnostic tools
     diagnose: diagnoseTextures,
     forceReupload: forceReuploadTextures,
     forceRecompile,
   };
-  console.log('Terrain debug: .off() .pbrNoMetal() .pbrNoRough() .pbrNoAo() .pbrNoNormal() .effectiveDiffuse() .outgoingLight() .diagnose()');
 }

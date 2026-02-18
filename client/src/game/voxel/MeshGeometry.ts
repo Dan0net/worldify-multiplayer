@@ -29,6 +29,7 @@ export interface ExpandedMeshData {
   normals: Float32Array;
   materialIds: Float32Array;
   materialWeights: Float32Array;
+  lightLevels: Float32Array;
   indices: Uint32Array;
 }
 
@@ -49,6 +50,7 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
   const normals = new Float32Array(expandedVertexCount * 3);
   const materialIds = new Float32Array(expandedVertexCount * 3);
   const materialWeights = new Float32Array(expandedVertexCount * 3);
+  const lightLevels = new Float32Array(expandedVertexCount);
   const indices = new Uint32Array(expandedVertexCount);
   
   for (let faceIdx = 0; faceIdx < triangleCount; faceIdx++) {
@@ -100,12 +102,17 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
     materialWeights[v1 * 3] = 0; materialWeights[v1 * 3 + 1] = 1; materialWeights[v1 * 3 + 2] = 0;
     materialWeights[v2 * 3] = 0; materialWeights[v2 * 3 + 1] = 0; materialWeights[v2 * 3 + 2] = 1;
     
+    // Light levels (1 float per expanded vertex)
+    lightLevels[v0] = output.lights[i0];
+    lightLevels[v1] = output.lights[i1];
+    lightLevels[v2] = output.lights[i2];
+    
     indices[v0] = v0;
     indices[v1] = v1;
     indices[v2] = v2;
   }
   
-  return { positions, normals, materialIds, materialWeights, indices };
+  return { positions, normals, materialIds, materialWeights, lightLevels, indices };
 }
 
 /**
@@ -118,6 +125,7 @@ export function createBufferGeometry(data: ExpandedMeshData): THREE.BufferGeomet
   geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
   geometry.setAttribute('materialIds', new THREE.BufferAttribute(data.materialIds, 3));
   geometry.setAttribute('materialWeights', new THREE.BufferAttribute(data.materialWeights, 3));
+  geometry.setAttribute('lightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
   geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
