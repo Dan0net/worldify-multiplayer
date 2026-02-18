@@ -558,7 +558,8 @@ export class GameCore {
     }
 
     // Update player position for map overlay (via storeBridge, not window global)
-    storeBridge.updateMapPlayerPosition(localPlayer.position.x, localPlayer.position.z, localPlayer.yaw);
+    storeBridge.updateMapPlayerPosition(localPlayer.position.x, localPlayer.position.z, localPlayer.yaw, this.playerManager.getLocalPlayerColor());
+    storeBridge.updateMapOtherPlayers(this.playerManager.getRemotePlayerPositions());
   }
 
   private onResize = (): void => {

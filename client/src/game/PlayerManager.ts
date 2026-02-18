@@ -10,7 +10,7 @@
 
 import * as THREE from 'three';
 import { PlayerLocal, RespawnCallback } from './player/playerLocal';
-import { PlayerRemote } from './player/playerRemote';
+import { PlayerRemote, getPlayerColor, playerColorToHex } from './player/playerRemote';
 import { Controls, controls } from './player/controls';
 import { sendBinary } from '../net/netClient';
 import { CLIENT_INPUT_HZ, RoomSnapshot, encodeInput, SPAWN_FALLBACK_HEIGHT } from '@worldify/shared';
@@ -54,6 +54,13 @@ export class PlayerManager {
    */
   getLocalPlayerId(): number | null {
     return this.localPlayerId;
+  }
+
+  /**
+   * Get the local player's skin color as a CSS hex string
+   */
+  getLocalPlayerColor(): string {
+    return playerColorToHex(getPlayerColor(this.localPlayerId ?? 0));
   }
 
   /**
@@ -195,6 +202,22 @@ export class PlayerManager {
         this.remotePlayers.delete(playerId);
       }
     }
+  }
+
+  /**
+   * Get positions of all remote players for map overlay.
+   */
+  getRemotePlayerPositions(): Array<{ x: number; z: number; rotation: number; color: string }> {
+    const positions: Array<{ x: number; z: number; rotation: number; color: string }> = [];
+    for (const remote of this.remotePlayers.values()) {
+      positions.push({
+        x: remote.mesh.position.x,
+        z: remote.mesh.position.z,
+        rotation: remote.yaw,
+        color: playerColorToHex(getPlayerColor(remote.playerId)),
+      });
+    }
+    return positions;
   }
 
   /**

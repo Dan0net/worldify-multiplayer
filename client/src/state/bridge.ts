@@ -27,7 +27,10 @@ class StoreBridge {
   private clearChunksCallback: (() => void) | null = null;
 
   // Map player position (high-frequency, not in Zustand to avoid re-renders)
-  private _mapPlayerPosition = { x: 0, z: 0, rotation: 0 };
+  private _mapPlayerPosition = { x: 0, z: 0, rotation: 0, color: '#45b7d1' };
+
+  // Other players' positions for map overlay (high-frequency)
+  private _mapOtherPlayers: Array<{ x: number; z: number; rotation: number; color: string }> = [];
 
   // ============== READS (game code reads state here) ==============
 
@@ -35,8 +38,16 @@ class StoreBridge {
    * Get current player position for map overlay.
    * Updated every frame by GameCore, read by MapOverlay.
    */
-  get mapPlayerPosition(): { x: number; z: number; rotation: number } {
+  get mapPlayerPosition(): { x: number; z: number; rotation: number; color: string } {
     return this._mapPlayerPosition;
+  }
+
+  /**
+   * Get other players' positions for map overlay.
+   * Updated every frame by GameCore, read by MapOverlay.
+   */
+  get mapOtherPlayers(): Array<{ x: number; z: number; rotation: number; color: string }> {
+    return this._mapOtherPlayers;
   }
 
   get connectionStatus(): ConnectionStatus {
@@ -117,10 +128,19 @@ class StoreBridge {
    * Update player position for map overlay.
    * Called every frame by GameCore. Does not trigger React re-renders.
    */
-  updateMapPlayerPosition(x: number, z: number, rotation: number): void {
+  updateMapPlayerPosition(x: number, z: number, rotation: number, color: string): void {
     this._mapPlayerPosition.x = x;
     this._mapPlayerPosition.z = z;
     this._mapPlayerPosition.rotation = rotation;
+    this._mapPlayerPosition.color = color;
+  }
+
+  /**
+   * Update other players' positions for map overlay.
+   * Called every frame by GameCore. Does not trigger React re-renders.
+   */
+  updateMapOtherPlayers(players: Array<{ x: number; z: number; rotation: number; color: string }>): void {
+    this._mapOtherPlayers = players;
   }
 
   updateConnectionStatus(status: ConnectionStatus): void {

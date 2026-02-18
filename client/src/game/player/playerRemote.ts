@@ -6,6 +6,28 @@
 import * as THREE from 'three';
 import { PlayerSnapshot } from '@worldify/shared';
 
+/** Player skin color palette - consistent color per player ID */
+const PLAYER_COLORS = [
+  0xff6b6b, // Red
+  0x4ecdc4, // Teal
+  0xffe66d, // Yellow
+  0x95e1d3, // Mint
+  0xf38181, // Coral
+  0xaa96da, // Purple
+  0x45b7d1, // Blue
+  0xf9ca24, // Gold
+];
+
+/** Get a consistent color (as 0xRRGGBB) for a player based on their ID */
+export function getPlayerColor(playerId: number): number {
+  return PLAYER_COLORS[playerId % PLAYER_COLORS.length];
+}
+
+/** Convert a 0xRRGGBB number to a CSS hex string like '#ff6b6b' */
+export function playerColorToHex(color: number): string {
+  return '#' + color.toString(16).padStart(6, '0');
+}
+
 export class PlayerRemote {
   public readonly playerId: number;
   public readonly mesh: THREE.Group;
@@ -14,6 +36,11 @@ export class PlayerRemote {
   private targetYaw = 0;
   private currentYaw = 0;
 
+  /** Current interpolated yaw for map overlay */
+  get yaw(): number {
+    return this.currentYaw;
+  }
+
   constructor(playerId: number) {
     this.playerId = playerId;
 
@@ -21,7 +48,7 @@ export class PlayerRemote {
     // Note: Server sends eye position (1.6m from ground), so we offset mesh down
     this.mesh = new THREE.Group();
 
-    const playerColor = this.getPlayerColor(playerId);
+    const playerColor = getPlayerColor(playerId);
 
     // Body (rounded capsule) - friendly blob shape
     const bodyGeo = new THREE.CapsuleGeometry(0.35, 0.8, 8, 16);
@@ -123,20 +150,7 @@ export class PlayerRemote {
     this.mesh.add(brim);
   }
 
-  private getPlayerColor(playerId: number): number {
-    // Generate a consistent color based on player ID
-    const colors = [
-      0xff6b6b, // Red
-      0x4ecdc4, // Teal
-      0xffe66d, // Yellow
-      0x95e1d3, // Mint
-      0xf38181, // Coral
-      0xaa96da, // Purple
-      0x45b7d1, // Blue
-      0xf9ca24, // Gold
-    ];
-    return colors[playerId % colors.length];
-  }
+
 
   applySnapshot(snapshot: PlayerSnapshot): void {
     this.targetPosition.set(snapshot.x, snapshot.y, snapshot.z);

@@ -45,7 +45,7 @@ export function getMapTileCache(): MapTileCache {
  * Player marker SVG component.
  * Uses a ref for rotation updates to avoid React re-renders.
  */
-function PlayerMarker({ markerRef }: { markerRef: React.RefObject<SVGSVGElement> }) {
+function PlayerMarker({ markerRef, color = '#4488ff' }: { markerRef: React.RefObject<SVGSVGElement>; color?: string }) {
   return (
     <svg
       ref={markerRef as React.LegacyRef<SVGSVGElement>}
@@ -64,7 +64,7 @@ function PlayerMarker({ markerRef }: { markerRef: React.RefObject<SVGSVGElement>
       {/* Arrow pointing up (will be rotated) */}
       <path
         d="M12 2 L5 18 L12 14 L19 18 Z"
-        fill="#ff4444"
+        fill={color}
         stroke="#ffffff"
         strokeWidth="1.5"
         strokeLinejoin="round"
@@ -79,6 +79,7 @@ export function MapOverlay() {
   
   const containerRef = useRef<HTMLDivElement>(null);
   const markerRef = useRef<SVGSVGElement>(null);
+  const remoteMarkersRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number>(0);
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
 
@@ -139,7 +140,7 @@ export function MapOverlay() {
     const cache = getMapTileCache();
     
     // Read player position from storeBridge (updated by GameCore)
-    const { x, z, rotation } = storeBridge.mapPlayerPosition;
+    const { x, z, rotation, color: localColor } = storeBridge.mapPlayerPosition;
     
     // Calculate center tile
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
@@ -149,16 +150,65 @@ export function MapOverlay() {
     mapRenderer.setPlayerPosition(x, z);
     mapRenderer.render(cache.getAll(), centerTx, centerTz);
     
-    // Update marker rotation imperatively (no React re-render)
+    // Update marker rotation and color imperatively (no React re-render)
     if (markerRef.current) {
       // Convert from game rotation (radians, 0 = +Z) to SVG rotation (degrees, 0 = up)
       // Negate because game yaw increases counter-clockwise, CSS rotates clockwise
       const rotationDeg = (-rotation * 180) / Math.PI;
       markerRef.current.style.transform = `rotate(${rotationDeg}deg)`;
+      // Update color to match player skin
+      const path = markerRef.current.querySelector('path');
+      if (path) path.setAttribute('fill', localColor);
+    }
+
+    // Update remote player markers
+    if (remoteMarkersRef.current) {
+      const otherPlayers = storeBridge.mapOtherPlayers;
+      const container = remoteMarkersRef.current;
+      const tileWorldSize = MAP_TILE_SIZE * 0.25; // VOXEL_SCALE
+      const scale = ZOOM_LEVELS[zoomIndex];
+
+      // Ensure we have the right number of marker elements
+      while (container.children.length < otherPlayers.length) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.style.cssText = 'position:absolute;width:18px;height:18px;pointer-events:none;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5))';
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M12 2 L5 18 L12 14 L19 18 Z');
+        path.setAttribute('fill', '#ff4444');
+        path.setAttribute('stroke', '#ffffff');
+        path.setAttribute('stroke-width', '1.5');
+        path.setAttribute('stroke-linejoin', 'round');
+        svg.appendChild(path);
+        container.appendChild(svg);
+      }
+      while (container.children.length > otherPlayers.length) {
+        container.removeChild(container.lastChild!);
+      }
+
+      // Position each remote marker relative to local player (map center)
+      for (let i = 0; i < otherPlayers.length; i++) {
+        const p = otherPlayers[i];
+        const dx = (p.x - x) / tileWorldSize * MAP_TILE_SIZE * scale;
+        const dz = (p.z - z) / tileWorldSize * MAP_TILE_SIZE * scale;
+        const rDeg = (-p.rotation * 180) / Math.PI;
+        const el = container.children[i] as SVGSVGElement;
+        // Center of map is MAP_VIEWPORT_SIZE/2; offset by -9 (half of 18px icon)
+        const half = MAP_VIEWPORT_SIZE / 2;
+        el.style.left = `${half + dx - 9}px`;
+        el.style.top = `${half + dz - 9}px`;
+        el.style.transform = `rotate(${rDeg}deg)`;
+        // Update color to match player skin
+        const path = el.querySelector('path');
+        if (path) path.setAttribute('fill', p.color);
+        // Hide if outside viewport
+        const visible = Math.abs(dx) < half && Math.abs(dz) < half;
+        el.style.display = visible ? '' : 'none';
+      }
     }
     
     animationRef.current = requestAnimationFrame(render);
-  }, [showMapOverlay]);
+  }, [showMapOverlay, zoomIndex]);
 
   // Start render loop when visible
   useEffect(() => {
@@ -178,7 +228,9 @@ export function MapOverlay() {
           className="rounded overflow-hidden"
           style={{ width: MAP_VIEWPORT_SIZE, height: MAP_VIEWPORT_SIZE, position: 'relative' }}
         />
-        <PlayerMarker markerRef={markerRef} />
+        <PlayerMarker markerRef={markerRef} color="#4488ff" />
+        {/* Container for remote player markers (imperatively managed) */}
+        <div ref={remoteMarkersRef} className="absolute inset-0 pointer-events-none" />
       </div>
     </div>
   );
