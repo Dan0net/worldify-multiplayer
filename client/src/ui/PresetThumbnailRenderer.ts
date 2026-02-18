@@ -8,11 +8,7 @@
  * Uses the game's existing renderer (same GL context) so all shaders,
  * textures, and materials work identically to in-game rendering.
  *
- * Performance:
- * - Queue-based rendering: MAX_RENDERS_PER_FRAME thumbnails per rAF
- * - Async PNG encoding via OffscreenCanvas.convertToBlob()
- * - Reusable buffers for voxel grid, pixel readback, ImageData
- * - Pre-warm support for spectator mode
+ * Cache strategy: IndexedDB → in-memory map → GPU render queue (rAF, max 2/frame).
  */
 
 import * as THREE from 'three';
@@ -26,7 +22,6 @@ import {
   invertQuat,
   BuildMode,
   BuildShape,
-  DEFAULT_BUILD_PRESETS,
   type BuildConfig,
   type Quat,
 } from '@worldify/shared';
@@ -38,11 +33,9 @@ import { getRendererRef } from '../game/quality/QualityManager';
 // ============== Constants ==============
 
 const THUMB_SIZE = 256;
-/** Must match SurfaceNet's hardcoded cornerOffsets (CHUNK_SIZE + 2 = 34). */
 const GRID_SIZE = CHUNK_SIZE + 2;
 const GRID_VOXELS = GRID_SIZE * GRID_SIZE * GRID_SIZE;
 const PIXEL_BYTES = THUMB_SIZE * THUMB_SIZE * 4;
-/** Max synchronous thumbnail renders per animation frame */
 const MAX_RENDERS_PER_FRAME = 2;
 
 // ============== Reusable Three.js Objects ==============
@@ -51,22 +44,18 @@ let thumbScene: THREE.Scene | null = null;
 let thumbCamera: THREE.OrthographicCamera | null = null;
 let renderTarget: THREE.WebGLRenderTarget | null = null;
 
-/** Persistent mesh slots (swapped per render, geometry disposed each time) */
 let thumbMesh: THREE.Mesh | null = null;
 let thumbTransMesh: THREE.Mesh | null = null;
 let thumbLiquidMesh: THREE.Mesh | null = null;
 let thumbWireframe: THREE.LineSegments | null = null;
-
-/** Persistent wireframe material (reused across SUBTRACT renders) */
 let wireframeMat: THREE.LineBasicMaterial | null = null;
 
-// ============== Reusable Buffers (avoid per-call allocation) ==============
+// ============== Reusable Buffers ==============
 
 let voxelGrid: Uint16Array | null = null;
 let pixelBuf: Uint8Array | null = null;
 let imageDataBuf: ImageData | null = null;
 
-/** 8 reusable Vector3s for bbox corner projection */
 const corners: THREE.Vector3[] = Array.from({ length: 8 }, () => new THREE.Vector3());
 const _bbox = new THREE.Box3();
 const _center = new THREE.Vector3();
@@ -74,7 +63,9 @@ const _size = new THREE.Vector3();
 const _tempV = new THREE.Vector3();
 const _tempQ = new THREE.Quaternion();
 
-/** Cache: config hash → blob URL (in-memory, backed by IndexedDB) */
+// ============== Cache ==============
+
+/** In-memory cache: config hash → blob URL */
 const thumbnailCache = new Map<string, string>();
 
 // ============== IndexedDB Persistence ==============
@@ -85,8 +76,6 @@ const THUMB_DB_VERSION = 1;
 const THUMB_STORE = 'thumbnails';
 
 let thumbDbPromise: Promise<IDBDatabase> | null = null;
-/** Set of hashes currently being loaded from IDB (prevent duplicate reads) */
-const idbLoadingSet = new Set<string>();
 
 function openThumbDB(): Promise<IDBDatabase> {
   if (thumbDbPromise) return thumbDbPromise;
@@ -96,7 +85,6 @@ function openThumbDB(): Promise<IDBDatabase> {
     req.onsuccess = () => resolve(req.result);
     req.onupgradeneeded = (e) => {
       const db = (e.target as IDBOpenDBRequest).result;
-      // Delete old stores on version bump (full invalidation)
       if (db.objectStoreNames.contains(THUMB_STORE)) {
         db.deleteObjectStore(THUMB_STORE);
       }
@@ -106,7 +94,6 @@ function openThumbDB(): Promise<IDBDatabase> {
   return thumbDbPromise;
 }
 
-/** Load a thumbnail blob from IndexedDB, create a blob URL, and populate the in-memory cache. */
 async function loadFromIDB(hash: string): Promise<string | null> {
   try {
     const db = await openThumbDB();
@@ -125,15 +112,13 @@ async function loadFromIDB(hash: string): Promise<string | null> {
   }
 }
 
-/** Persist a thumbnail blob to IndexedDB (fire-and-forget). */
 function saveToIDB(hash: string, blob: Blob): void {
   openThumbDB().then(db => {
     const tx = db.transaction(THUMB_STORE, 'readwrite');
     tx.objectStore(THUMB_STORE).put(blob, hash);
-  }).catch(() => { /* IndexedDB write failed — non-critical */ });
+  }).catch(() => { /* non-critical */ });
 }
 
-/** Clear all IndexedDB thumbnail entries. */
 async function clearIDB(): Promise<void> {
   try {
     const db = await openThumbDB();
@@ -151,13 +136,9 @@ interface PendingRender {
   callbacks: Array<(url: string | null) => void>;
 }
 
-/** Urgent queue: hook-triggered renders, processed via rAF */
-const urgentQueue: PendingRender[] = [];
-/** Idle queue: prewarm renders, processed via requestIdleCallback */
-const idleQueue: PendingRender[] = [];
+const renderQueue: PendingRender[] = [];
 const pendingByHash = new Map<string, PendingRender>();
 let queueRafId = 0;
-let idleCallbackId = 0;
 
 // ============== Setup ==============
 
@@ -185,7 +166,6 @@ function ensureSetup(): void {
     opacity: 0.9,
   });
 
-  // Pre-allocate reusable buffers
   voxelGrid = new Uint16Array(GRID_VOXELS);
   pixelBuf = new Uint8Array(PIXEL_BYTES);
   imageDataBuf = new ImageData(THUMB_SIZE, THUMB_SIZE);
@@ -193,7 +173,6 @@ function ensureSetup(): void {
 
 // ============== Helpers ==============
 
-/** Remove and dispose all active scene meshes. */
 function clearMeshes(): void {
   if (!thumbScene) return;
   if (thumbMesh) { thumbScene.remove(thumbMesh); thumbMesh.geometry.dispose(); thumbMesh = null; }
@@ -202,10 +181,6 @@ function clearMeshes(): void {
   if (thumbWireframe) { thumbScene.remove(thumbWireframe); thumbWireframe.geometry.dispose(); thumbWireframe = null; }
 }
 
-/**
- * Position the ortho camera and fit its frustum tightly around a world-space AABB.
- * Corners are projected into camera-local space with 10% padding.
- */
 function fitCameraToBox(bbox: THREE.Box3, meshOffset: THREE.Vector3): void {
   if (!thumbCamera) return;
 
@@ -218,7 +193,6 @@ function fitCameraToBox(bbox: THREE.Box3, meshOffset: THREE.Vector3): void {
   thumbCamera.lookAt(0, 0, 0);
   thumbCamera.updateMatrixWorld();
 
-  // Build 8 bbox corners in reusable vectors
   const mn = bbox.min, mx = bbox.max;
   corners[0].set(mn.x, mn.y, mn.z);
   corners[1].set(mx.x, mn.y, mn.z);
@@ -242,7 +216,6 @@ function fitCameraToBox(bbox: THREE.Box3, meshOffset: THREE.Vector3): void {
     if (c.z < minZ) minZ = c.z; if (c.z > maxZ) maxZ = c.z;
   }
 
-  // Square frustum + 10% padding
   const padX = (maxX - minX) * 0.1;
   const padY = (maxY - minY) * 0.1;
   const halfW = Math.max(maxX - minX + padX * 2, maxY - minY + padY * 2) / 2;
@@ -255,11 +228,6 @@ function fitCameraToBox(bbox: THREE.Box3, meshOffset: THREE.Vector3): void {
   thumbCamera.updateProjectionMatrix();
 }
 
-/**
- * Render the thumbnail scene and read pixels back into a new ImageData.
- * Temporarily disables tone mapping. Returns a fresh ImageData copy
- * (safe to pass to async encoding since the shared buffer is reused).
- */
 function renderAndReadbackImageData(renderer: THREE.WebGLRenderer): ImageData {
   const prevTarget = renderer.getRenderTarget();
   const prevAutoClear = renderer.autoClear;
@@ -275,14 +243,13 @@ function renderAndReadbackImageData(renderer: THREE.WebGLRenderer): ImageData {
 
   renderer.readRenderTargetPixels(renderTarget!, 0, 0, THUMB_SIZE, THUMB_SIZE, pixelBuf!);
 
-  // Restore renderer state
   renderer.setRenderTarget(prevTarget);
   renderer.autoClear = prevAutoClear;
   renderer.toneMapping = prevToneMapping;
   renderer.toneMappingExposure = prevExposure;
   renderer.setClearColor(0x87ceeb, 1);
 
-  // Flip Y (WebGL reads bottom-up) into reusable ImageData
+  // Flip Y (WebGL reads bottom-up)
   const src = pixelBuf!;
   const dst = imageDataBuf!.data;
   for (let y = 0; y < THUMB_SIZE; y++) {
@@ -291,14 +258,9 @@ function renderAndReadbackImageData(renderer: THREE.WebGLRenderer): ImageData {
     dst.set(src.subarray(srcRow, srcRow + THUMB_SIZE * 4), dstRow);
   }
 
-  // Return a copy (shared imageDataBuf is reused across renders)
   return new ImageData(new Uint8ClampedArray(dst), THUMB_SIZE, THUMB_SIZE);
 }
 
-/**
- * Async PNG encoding via OffscreenCanvas.convertToBlob().
- * Returns a blob URL (must be revoked on cache clear).
- */
 async function encodeImageDataToBlobAndUrl(imageData: ImageData): Promise<{ url: string; blob: Blob }> {
   const osc = new OffscreenCanvas(THUMB_SIZE, THUMB_SIZE);
   const ctx = osc.getContext('2d')!;
@@ -310,10 +272,6 @@ async function encodeImageDataToBlobAndUrl(imageData: ImageData): Promise<{ url:
 
 // ============== Voxel Grid Generation ==============
 
-/**
- * Fill the reusable voxel grid from a BuildConfig SDF.
- * Grid is centered on the shape; rotation is inverse-applied to sample positions.
- */
 function fillVoxelGrid(config: BuildConfig, rotation?: Quat): void {
   const data = voxelGrid!;
   data.fill(0);
@@ -368,7 +326,6 @@ function createPrismGeometry(w: number, h: number, d: number): THREE.BufferGeome
   return geo;
 }
 
-/** Build wireframe geometry for a config, compute its rotated AABB in _bbox. */
 function buildWireframe(config: BuildConfig, rotation?: Quat): THREE.LineSegments {
   const { x: sx, y: sy, z: sz } = config.size;
   const hx = sx * VOXEL_SCALE, hy = sy * VOXEL_SCALE, hz = sz * VOXEL_SCALE;
@@ -388,7 +345,6 @@ function buildWireframe(config: BuildConfig, rotation?: Quat): THREE.LineSegment
   const wf = new THREE.LineSegments(edges, wireframeMat!);
   if (rotation) wf.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
 
-  // Compute rotated AABB
   _bbox.makeEmpty();
   if (rotation) {
     _tempQ.set(rotation.x, rotation.y, rotation.z, rotation.w);
@@ -407,37 +363,26 @@ function buildWireframe(config: BuildConfig, rotation?: Quat): THREE.LineSegment
 
 // ============== Main Render Function ==============
 
-/**
- * Synchronously render a thumbnail for a BuildConfig and return ImageData.
- * Returns null if renderer isn't ready or mesh is empty.
- * Does NOT do PNG encoding (that's async via the queue).
- */
 function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefined, renderer: THREE.WebGLRenderer): ImageData | null {
   ensureSetup();
   if (!thumbScene || !thumbCamera || !renderTarget) return null;
 
   clearMeshes();
 
-  // ---- SUBTRACT: red wireframe (no SurfaceNet needed) ----
   if (config.mode === BuildMode.SUBTRACT) {
     thumbWireframe = buildWireframe(config, rotation);
     thumbScene.add(thumbWireframe);
-
-    // _bbox already set by buildWireframe; meshOffset = zero (wireframe centered at origin)
     _center.set(0, 0, 0);
     fitCameraToBox(_bbox, _center);
-
     return renderAndReadbackImageData(renderer);
   }
 
-  // ---- ADD / PAINT / FILL: SurfaceNet terrain mesh ----
   fillVoxelGrid(config, rotation);
 
   const meshOutput = meshVoxelsSplit({ dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], data: voxelGrid! });
   const { solid, transparent, liquid } = meshOutput;
   if (solid.vertexCount === 0 && transparent.vertexCount === 0 && liquid.vertexCount === 0) return null;
 
-  // Build geometries and accumulate combined AABB
   _bbox.makeEmpty();
   const solidGeo = solid.vertexCount > 0 ? createGeometryFromSurfaceNet(solid) : null;
   const transGeo = transparent.vertexCount > 0 ? createGeometryFromSurfaceNet(transparent) : null;
@@ -467,7 +412,6 @@ function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefi
     thumbScene.add(thumbLiquidMesh);
   }
 
-  // meshOffset = -center (applied to corners during projection)
   _tempV.set(ox, oy, oz);
   fitCameraToBox(_bbox, _tempV);
 
@@ -476,15 +420,14 @@ function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefi
 
 // ============== Queue Processing ==============
 
-/** Render a single queued entry. Returns true if actual GPU work was done. */
 function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): boolean {
   pendingByHash.delete(entry.hash);
 
-  // Check in-memory cache (might have been loaded from IDB since queuing)
+  // May have been loaded from IDB since queuing
   const cached = thumbnailCache.get(entry.hash);
   if (cached) {
     for (const cb of entry.callbacks) cb(cached);
-    return false; // No GPU work
+    return false;
   }
 
   const imageData = renderThumbnailToImageData(entry.config, entry.rotation, renderer);
@@ -493,9 +436,7 @@ function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): bool
     return true;
   }
 
-  // Async PNG encode + persist to IndexedDB
-  const callbacks = entry.callbacks;
-  const hash = entry.hash;
+  const { callbacks, hash } = entry;
   encodeImageDataToBlobAndUrl(imageData).then(({ url, blob }) => {
     thumbnailCache.set(hash, url);
     saveToIDB(hash, blob);
@@ -504,75 +445,39 @@ function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): bool
   return true;
 }
 
-/**
- * Process urgent queue items via rAF (max MAX_RENDERS_PER_FRAME per frame).
- * These are hook-triggered and user-visible, so they get priority.
- */
-function processUrgentQueue(): void {
+function processQueue(): void {
   queueRafId = 0;
 
   const renderer = getRendererRef();
   if (!renderer) {
-    if (urgentQueue.length > 0) {
-      queueRafId = requestAnimationFrame(processUrgentQueue);
+    if (renderQueue.length > 0) {
+      queueRafId = requestAnimationFrame(processQueue);
     }
     return;
   }
 
   let rendered = 0;
-  while (rendered < MAX_RENDERS_PER_FRAME && urgentQueue.length > 0) {
-    const entry = urgentQueue.shift()!;
+  while (rendered < MAX_RENDERS_PER_FRAME && renderQueue.length > 0) {
+    const entry = renderQueue.shift()!;
     if (processEntry(entry, renderer)) rendered++;
   }
 
-  if (urgentQueue.length > 0) {
-    queueRafId = requestAnimationFrame(processUrgentQueue);
+  if (renderQueue.length > 0) {
+    queueRafId = requestAnimationFrame(processQueue);
   }
 }
 
-/**
- * Process idle queue items via requestIdleCallback (1 per idle period).
- * Used for pre-warming — only runs when the browser has spare time.
- */
-function processIdleQueue(deadline: IdleDeadline): void {
-  idleCallbackId = 0;
-
-  const renderer = getRendererRef();
-  if (!renderer) {
-    if (idleQueue.length > 0) {
-      idleCallbackId = requestIdleCallback(processIdleQueue);
-    }
-    return;
-  }
-
-  // Process one item per idle callback (each render is expensive)
-  if (idleQueue.length > 0 && deadline.timeRemaining() > 5) {
-    const entry = idleQueue.shift()!;
-    processEntry(entry, renderer);
-  }
-
-  if (idleQueue.length > 0) {
-    idleCallbackId = requestIdleCallback(processIdleQueue);
-  }
-}
-
-function scheduleUrgentQueue(): void {
+function scheduleQueue(): void {
   if (!queueRafId) {
-    queueRafId = requestAnimationFrame(processUrgentQueue);
-  }
-}
-
-function scheduleIdleQueue(): void {
-  if (!idleCallbackId) {
-    idleCallbackId = requestIdleCallback(processIdleQueue);
+    queueRafId = requestAnimationFrame(processQueue);
   }
 }
 
 // ============== Public API ==============
 
 /**
- * Queue a thumbnail render for a BuildConfig. The callback fires
- * when the blob URL is ready (may be immediate if cached).
+ * Get a thumbnail for a BuildConfig. Checks in-memory cache, then IndexedDB,
+ * then falls back to queued GPU rendering. Callback fires with the blob URL.
  */
 export function queueThumbnailRender(
   config: BuildConfig,
@@ -581,85 +486,37 @@ export function queueThumbnailRender(
 ): void {
   const hash = configHash(config, rotation);
 
-  // Already in memory?
+  // 1. In-memory cache — instant
   const cached = thumbnailCache.get(hash);
   if (cached) { callback(cached); return; }
 
-  // Already queued? Piggy-back on existing request
+  // 2. Already queued — piggyback
   const existing = pendingByHash.get(hash);
   if (existing) { existing.callbacks.push(callback); return; }
 
-  // Try loading from IndexedDB first (async, non-blocking)
-  if (!idbLoadingSet.has(hash)) {
-    idbLoadingSet.add(hash);
-    loadFromIDB(hash).then(url => {
-      idbLoadingSet.delete(hash);
-      if (url) {
-        // Found in IDB — resolve any waiting callbacks and remove from queue
-        const pending = pendingByHash.get(hash);
-        if (pending) {
-          pendingByHash.delete(hash);
-          const urgIdx = urgentQueue.indexOf(pending);
-          if (urgIdx >= 0) urgentQueue.splice(urgIdx, 1);
-          const idlIdx = idleQueue.indexOf(pending);
-          if (idlIdx >= 0) idleQueue.splice(idlIdx, 1);
-          for (const cb of pending.callbacks) cb(url);
-        }
-        // Also fire callback for this call (if not already in pending)
-        callback(url);
-        return;
-      }
-      // Not in IDB — entry is already in the urgent queue, will be GPU-rendered
-    });
-  }
-
-  // Queue for GPU render (will be skipped if IDB load wins the race)
+  // 3. Try IndexedDB, fall back to GPU queue
   const entry: PendingRender = { config, rotation, hash, callbacks: [callback] };
-  urgentQueue.push(entry);
   pendingByHash.set(hash, entry);
-  scheduleUrgentQueue();
-}
 
-/**
- * Check if a thumbnail is already cached. Returns the URL or undefined.
- */
-export function getCachedThumbnail(config: BuildConfig, rotation?: Quat): string | undefined {
-  return thumbnailCache.get(configHash(config, rotation));
-}
-
-/**
- * Pre-warm the thumbnail cache with all default hotbar presets.
- * Call during spectator mode so thumbnails are ready when Play is clicked.
- */
-export function prewarmPresetThumbnails(): void {
-  for (const preset of DEFAULT_BUILD_PRESETS) {
-    const hash = configHash(preset.config, preset.baseRotation);
-    if (thumbnailCache.has(hash) || pendingByHash.has(hash)) continue;
-
-    // Try IDB first; only queue GPU render if not persisted
-    if (!idbLoadingSet.has(hash)) {
-      idbLoadingSet.add(hash);
-      loadFromIDB(hash).then(url => {
-        idbLoadingSet.delete(hash);
-        if (url) {
-          // Loaded from IDB — remove from idle queue if still pending
-          const pending = pendingByHash.get(hash);
-          if (pending) {
-            pendingByHash.delete(hash);
-            const idx = idleQueue.indexOf(pending);
-            if (idx >= 0) idleQueue.splice(idx, 1);
-          }
-          return;
-        }
-        // Not in IDB — entry stays in idle queue for GPU render
-      });
+  loadFromIDB(hash).then(url => {
+    if (url) {
+      // Found in IDB — resolve callbacks, skip GPU render
+      pendingByHash.delete(hash);
+      const idx = renderQueue.indexOf(entry);
+      if (idx >= 0) renderQueue.splice(idx, 1);
+      for (const cb of entry.callbacks) cb(url);
+      return;
     }
+    // Not in IDB — ensure it's queued for GPU render
+    if (!renderQueue.includes(entry)) {
+      renderQueue.push(entry);
+      scheduleQueue();
+    }
+  });
 
-    const entry: PendingRender = { config: preset.config, rotation: preset.baseRotation, hash, callbacks: [] };
-    idleQueue.push(entry);
-    pendingByHash.set(hash, entry);
-  }
-  scheduleIdleQueue();
+  // Optimistically queue for GPU render (will be removed if IDB wins the race)
+  renderQueue.push(entry);
+  scheduleQueue();
 }
 
 /** Invalidate all cached thumbnails (e.g. when textures reload). */
@@ -671,24 +528,16 @@ export function clearThumbnailCache(): void {
   clearIDB();
 }
 
-/** Cancel all pending queue entries. */
-export function cancelPendingThumbnails(): void {
-  urgentQueue.length = 0;
-  idleQueue.length = 0;
+/** Dispose all Three.js resources used by the thumbnail renderer. */
+export function disposeThumbnailRenderer(): void {
+  // Cancel pending
+  renderQueue.length = 0;
   pendingByHash.clear();
   if (queueRafId) {
     cancelAnimationFrame(queueRafId);
     queueRafId = 0;
   }
-  if (idleCallbackId) {
-    cancelIdleCallback(idleCallbackId);
-    idleCallbackId = 0;
-  }
-}
 
-/** Dispose all Three.js resources used by the thumbnail renderer. */
-export function disposeThumbnailRenderer(): void {
-  cancelPendingThumbnails();
   clearMeshes();
   if (wireframeMat) { wireframeMat.dispose(); wireframeMat = null; }
   if (renderTarget) { renderTarget.dispose(); renderTarget = null; }

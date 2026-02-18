@@ -42,7 +42,6 @@ import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime } from './material';
 import { getMapTileCache } from '../ui/MapOverlay';
 import { perfStats } from './debug/PerformanceStats';
-import { prewarmPresetThumbnails } from '../ui/PresetThumbnailRenderer';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -522,10 +521,6 @@ export class GameCore {
       const spawnReady = this.spawnManager.isSpawnReady();
       if (spawnReady !== storeBridge.spawnReady) {
         storeBridge.setSpawnReady(spawnReady);
-        // Pre-warm build preset thumbnails once terrain is ready
-        if (spawnReady) {
-          prewarmPresetThumbnails();
-        }
       }
     }
   }
