@@ -1,15 +1,17 @@
 /**
  * Voxel lighting — sunlight column propagation
  *
- * Scans each (x,z) column top-down. Sky-exposed non-solid voxels get LIGHT_MAX (31).
- * Solid voxels stop the column. Light is written directly into the packed 16-bit data
- * using bit ops (light occupies the bottom 5 bits).
+ * Scans each (x,z) column top-down. Sky-exposed non-solid voxels get full sunlight.
+ * Opaque solid voxels stop the column. Transparent/liquid solids attenuate by 1.
+ * Light is written directly into the packed 16-bit data using bit ops
+ * (light occupies the bottom 5 bits).
  *
  * This runs client-side before meshing — server sends light=0.
  */
 
-import { CHUNK_SIZE, LIGHT_MASK, LIGHT_MAX } from './constants.js';
+import { CHUNK_SIZE, LIGHT_MASK, LIGHT_MAX, MATERIAL_SHIFT, MATERIAL_MASK } from './constants.js';
 import { isVoxelSolid } from './voxelData.js';
+import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
 
 /** Stride constants for flat index = x + y*CHUNK_SIZE + z*CHUNK_SIZE² */
 const Y_STRIDE = CHUNK_SIZE;
@@ -21,67 +23,73 @@ const LIGHT_CLEAR = ~LIGHT_MASK;
 /**
  * Propagate sunlight columns through a chunk's voxel data (in-place).
  *
- * For each (lx, lz) column, determines whether sunlight enters from above,
- * then scans downward: non-solid voxels receive LIGHT_MAX, solid voxels stop
- * the column.
+ * For each (lx, lz) column, determines the incoming light level from above,
+ * then scans downward: air passes light through, transparent/liquid attenuate by 1,
+ * opaque solids stop the column.
  *
  * @param data          The chunk's Uint16Array (CHUNK_SIZE³ entries), modified in-place
- * @param isSunlitAbove Per-column boolean: whether sunlight enters the top of this chunk.
+ * @param lightFromAbove Per-column light level entering the top of this chunk (0-31).
  *                      Flat array of CHUNK_SIZE² values indexed as [lx + lz * CHUNK_SIZE].
- *                      If null, every column is assumed sunlit from above.
- * @returns             Per-column boolean: whether sunlight exits the bottom of this chunk.
- *                      Same layout as isSunlitAbove. Caller uses this to propagate to chunk below.
+ *                      If null, every column starts at LIGHT_MAX.
+ * @returns             Per-column light level exiting the bottom of this chunk (0-31).
+ *                      Same layout as lightFromAbove. Caller uses this to propagate to chunk below.
  */
 export function computeSunlightColumns(
   data: Uint16Array,
-  isSunlitAbove: Uint8Array | null,
+  lightFromAbove: Uint8Array | null,
 ): Uint8Array {
-  const sunlitBelow = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+  const lightBelow = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
 
   for (let lz = 0; lz < CHUNK_SIZE; lz++) {
     const zOff = lz * Z_STRIDE;
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      const colIdx = lx + lz * CHUNK_SIZE;
       const colBase = lx + zOff;
-      let lit = isSunlitAbove ? isSunlitAbove[lx + lz * CHUNK_SIZE] !== 0 : true;
+      let light = lightFromAbove ? lightFromAbove[colIdx] : LIGHT_MAX;
 
       // Scan top (ly=31) down to bottom (ly=0)
       for (let ly = CHUNK_SIZE - 1; ly >= 0; ly--) {
         const idx = colBase + ly * Y_STRIDE;
         const voxel = data[idx];
 
-        if (lit && !isVoxelSolid(voxel)) {
-          // Set light to LIGHT_MAX — clear old light bits, OR in max
-          data[idx] = (voxel & LIGHT_CLEAR) | LIGHT_MAX;
-        } else {
-          if (isVoxelSolid(voxel)) {
-            lit = false;
+        if (isVoxelSolid(voxel)) {
+          const matType = MATERIAL_TYPE_LUT[(voxel >> MATERIAL_SHIFT) & MATERIAL_MASK];
+          if (matType !== MAT_TYPE_SOLID) {
+            // Transparent/liquid: attenuate by 1, write current light
+            data[idx] = (voxel & LIGHT_CLEAR) | light;
+            if (light > 0) light--;
+          } else {
+            // Opaque solid: stop column
+            data[idx] = voxel & LIGHT_CLEAR;
+            light = 0;
           }
-          // Clear light for non-sunlit voxels
-          data[idx] = voxel & LIGHT_CLEAR;
+        } else {
+          // Air: full sunlight passthrough
+          data[idx] = (voxel & LIGHT_CLEAR) | light;
         }
       }
 
-      sunlitBelow[lx + lz * CHUNK_SIZE] = lit ? 1 : 0;
+      lightBelow[colIdx] = light;
     }
   }
 
-  return sunlitBelow;
+  return lightBelow;
 }
 
 /**
- * Build the isSunlitAbove array for a chunk by checking the chunk directly above.
+ * Build the lightFromAbove array for a chunk by checking the chunk directly above.
  *
  * If there is no chunk above:
- *   - cy >= maxCy → assume full sunlight (return null, meaning all-sunlit)
+ *   - cy >= maxCy → assume full sunlight (return null, meaning all LIGHT_MAX)
  *   - cy < maxCy  → assume dark (return all-zero array)
  *
  * If there IS a chunk above, scan its bottom row (ly=0) per column:
- *   sunlit if the bottom voxel is non-solid AND has light == LIGHT_MAX.
+ *   light level = that voxel's light value (if non-solid), else 0.
  *
  * @param chunkAboveData  Voxel data of the chunk at (cx, cy+1, cz), or undefined
  * @param cy              This chunk's Y coordinate
  * @param maxCy           The highest chunk Y that contains terrain in this column
- * @returns               Uint8Array(CHUNK_SIZE²) or null (null = all sunlit)
+ * @returns               Uint8Array(CHUNK_SIZE²) with light levels, or null (null = all LIGHT_MAX)
  */
 export function getSunlitAbove(
   chunkAboveData: Uint16Array | undefined,
@@ -103,10 +111,8 @@ export function getSunlitAbove(
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       const idx = lx + zOff; // ly=0, so no Y offset
       const voxel = chunkAboveData[idx];
-      // Sunlit if non-solid and has full light
-      if (!isVoxelSolid(voxel) && (voxel & LIGHT_MASK) === LIGHT_MAX) {
-        result[lx + lz * CHUNK_SIZE] = 1;
-      }
+      // Pass through the light level from the bottom of the chunk above
+      result[lx + lz * CHUNK_SIZE] = voxel & LIGHT_MASK;
     }
   }
   return result;
