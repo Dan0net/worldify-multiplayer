@@ -21,6 +21,67 @@ const Z_STRIDE = CHUNK_SIZE * CHUNK_SIZE;
 /** Inverse light mask for clearing light bits: ~0b11111 */
 const LIGHT_CLEAR = ~LIGHT_MASK;
 
+const MAX = CHUNK_SIZE - 1;
+
+/**
+ * Face descriptors for border light injection.
+ * Each entry: [ourFixedOffset, nbrFixedOffset, stride1, stride2]
+ * Order: +X, -X, +Y, -Y, +Z, -Z (matches NEIGHBOR_DELTAS)
+ */
+const FACE_DESC = [
+  [MAX,             0,               Y_STRIDE, Z_STRIDE], // +X: our x=31, nbr x=0
+  [0,               MAX,             Y_STRIDE, Z_STRIDE], // -X: our x=0,  nbr x=31
+  [MAX * Y_STRIDE,  0,               1,        Z_STRIDE], // +Y: our y=31, nbr y=0
+  [0,               MAX * Y_STRIDE,  1,        Z_STRIDE], // -Y: our y=0,  nbr y=31
+  [MAX * Z_STRIDE,  0,               1,        Y_STRIDE], // +Z: our z=31, nbr z=0
+  [0,               MAX * Z_STRIDE,  1,        Y_STRIDE], // -Z: our z=0,  nbr z=31
+] as const;
+
+/**
+ * Inject light from neighbor chunk boundaries into this chunk's edge voxels.
+ *
+ * For each loaded neighbor face, reads the neighbor's boundary voxel light,
+ * decrements by 1, and writes it into our facing edge voxel if it exceeds
+ * the current value. This seeds the subsequent BFS to spread light inward.
+ *
+ * @param data       This chunk's Uint16Array, modified in-place
+ * @param neighbors  Array of 6 neighbor data arrays (+X, -X, +Y, -Y, +Z, -Z), null if not loaded
+ */
+export function injectBorderLight(
+  data: Uint16Array,
+  neighbors: (Uint16Array | null)[],
+): void {
+  for (let face = 0; face < 6; face++) {
+    const nData = neighbors[face];
+    if (!nData) continue;
+
+    const [ourBase, nbrBase, s1, s2] = FACE_DESC[face];
+
+    for (let a = 0; a < CHUNK_SIZE; a++) {
+      const aOff = a * s1;
+      for (let b = 0; b < CHUNK_SIZE; b++) {
+        const nbrIdx = nbrBase + aOff + b * s2;
+        const nbrLight = nData[nbrIdx] & LIGHT_MASK;
+        if (nbrLight <= 1) continue;
+
+        const ourIdx = ourBase + aOff + b * s2;
+        const ourVoxel = data[ourIdx];
+
+        // Skip opaque solid voxels
+        if (isVoxelSolid(ourVoxel)) {
+          const matType = MATERIAL_TYPE_LUT[(ourVoxel >> MATERIAL_SHIFT) & MATERIAL_MASK];
+          if (matType === MAT_TYPE_SOLID) continue;
+        }
+
+        const newLight = nbrLight - 1;
+        if (newLight > (ourVoxel & LIGHT_MASK)) {
+          data[ourIdx] = (ourVoxel & LIGHT_CLEAR) | newLight;
+        }
+      }
+    }
+  }
+}
+
 /**
  * Propagate sunlight columns through a chunk's voxel data (in-place).
  *
@@ -144,13 +205,18 @@ const VALID_NEIGHBORS = new Uint8Array(VOXELS_PER_CHUNK);
   }
 })();
 
-/** Pre-allocated BFS queue — reused across calls (single-threaded main thread). */
-const bfsQueue = new Uint16Array(VOXELS_PER_CHUNK);
+/** Pre-allocated BFS queue — reused across calls (single-threaded main thread).
+ *  Sized 2× chunk volume: frontier seeding keeps seeds small, but BFS propagation
+ *  can enqueue voxels multiple times (from different sources with increasing light). */
+const bfsQueue = new Uint32Array(VOXELS_PER_CHUNK * 2);
 
 /**
  * Propagate light via BFS within a single chunk (in-place).
  *
- * Seeds from all voxels that already have light > 1 (set by column pass).
+ * Seeds only *frontier* voxels — those with light > 1 that have at least one
+ * valid neighbor with light < (srcLight - 1). This avoids seeding the vast
+ * uniformly-lit sky interior and prevents queue overflow.
+ *
  * Spreads to 6-face neighbors: each step decrements by 1.
  * Only updates a voxel if the new light > its current light.
  * Opaque solid voxels block propagation.
@@ -161,9 +227,22 @@ export function propagateLight(data: Uint16Array): void {
   let head = 0;
   let tail = 0;
 
-  // Seed: all voxels with light > 1 (light=1 can't spread further after -1)
+  // Seed: only frontier voxels (adjacent to a lower-light neighbor)
   for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
-    if ((data[i] & LIGHT_MASK) > 1) {
+    const light = data[i] & LIGHT_MASK;
+    if (light <= 1) continue;
+
+    const threshold = light - 1;
+    const validDirs = VALID_NEIGHBORS[i];
+    let frontier = false;
+    for (let d = 0; d < 6; d++) {
+      if (!(validDirs & (1 << d))) continue;
+      if ((data[i + NEIGHBOR_DELTAS[d]] & LIGHT_MASK) < threshold) {
+        frontier = true;
+        break;
+      }
+    }
+    if (frontier) {
       bfsQueue[tail++] = i;
     }
   }

@@ -27,6 +27,7 @@ import {
   computeSunlightColumns,
   getSunlitAbove,
   propagateLight,
+  injectBorderLight,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
@@ -567,6 +568,15 @@ export class VoxelWorld implements ChunkProvider {
         belowChunk.dirty = true;
         this.remeshQueue.add(belowKey);
       }
+
+      // Relight the chunk above — it may now receive light from us via border inject
+      const aboveKey = chunkKey(cx, cy + 1, cz);
+      const aboveChunk = this.chunks.get(aboveKey);
+      if (aboveChunk) {
+        this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
+        aboveChunk.dirty = true;
+        this.remeshQueue.add(aboveKey);
+      }
     }
     
     return chunk;
@@ -575,6 +585,7 @@ export class VoxelWorld implements ChunkProvider {
   /**
    * Compute sunlight columns for a chunk in-place.
    * Looks up chunk-above data and maxCy from columnInfo to determine sky exposure.
+   * Then injects border light from face-adjacent neighbors and runs BFS.
    */
   private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint16Array): void {
     // Get maxCy for this column (cx,cz maps to tile tx,tz)
@@ -591,6 +602,13 @@ export class VoxelWorld implements ChunkProvider {
     );
     
     computeSunlightColumns(data, isSunlitAbove);
+
+    // Inject light from face-adjacent neighbor boundaries before BFS
+    const neighbors: (Uint16Array | null)[] = VoxelWorld.FACE_OFFSETS.map(
+      ([dx, dy, dz]) => this.chunks.get(chunkKey(cx + dx, cy + dy, cz + dz))?.data ?? null,
+    );
+    injectBorderLight(data, neighbors);
+
     propagateLight(data);
   }
 
@@ -936,6 +954,41 @@ export class VoxelWorld implements ChunkProvider {
         // Recompute visibility for modified chunk
         chunk.visibilityBits = computeVisibility(chunk.data);
         
+        // Relight this chunk (column pass overwrites all light, border inject + BFS re-spreads)
+        this.computeChunkSunlight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
+
+        // Cascade relighting downward — sunlight may now pass (or be blocked)
+        let belowCy = chunk.cy - 1;
+        while (true) {
+          const belowKey = chunkKey(chunk.cx, belowCy, chunk.cz);
+          const belowChunk = this.chunks.get(belowKey);
+          if (!belowChunk) break;
+          this.computeChunkSunlight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
+          belowChunk.dirty = true;
+          this.remeshQueue.add(belowKey);
+          belowCy--;
+        }
+
+        // Cascade relighting upward — removing a floor lets light enter from below
+        const aboveKey = chunkKey(chunk.cx, chunk.cy + 1, chunk.cz);
+        const aboveChunk = this.chunks.get(aboveKey);
+        if (aboveChunk) {
+          this.computeChunkSunlight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
+          aboveChunk.dirty = true;
+          this.remeshQueue.add(aboveKey);
+        }
+
+        // Relight face-adjacent horizontal neighbors so their border light updates
+        for (const [dx, dy, dz] of VoxelWorld.FACE_OFFSETS) {
+          if (dy !== 0) continue; // vertical already handled above
+          const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
+          const nChunk = this.chunks.get(nKey);
+          if (!nChunk) continue;
+          this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+          nChunk.dirty = true;
+          this.remeshQueue.add(nKey);
+        }
+
         // Also queue neighbors for seamless boundary updates
         this.queueNeighborRemesh(chunk.cx, chunk.cy, chunk.cz);
       }
