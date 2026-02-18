@@ -28,6 +28,7 @@ import {
   terrainMetalnessFragment,
   terrainAoFragment,
   terrainNormalFragment,
+  terrainLightFragment,
   terrainDebugFragment,
   depthVertexPrefix,
   depthVertexSuffix,
@@ -348,6 +349,10 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <normal_fragment_maps>',
         terrainNormalFragment
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <opaque_fragment>',
+        terrainLightFragment
       );
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <dithering_fragment>',

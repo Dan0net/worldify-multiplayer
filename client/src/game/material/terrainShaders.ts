@@ -325,6 +325,27 @@ export const terrainNormalFragment = /* glsl */ `
   #endif
 `;
 
+// ============== Voxel Light Attenuation ==============
+
+/** Applied right before opaque_fragment — dims PBR output in unlit areas. */
+export const terrainLightFragment = /* glsl */ `
+  // Voxel light attenuation: outdoor (1.0) unchanged, caves dim toward 0.
+  // Smoothstep gives a softer falloff than linear.
+  outgoingLight *= smoothstep(0.0, 1.0, vLightLevel);
+
+  #ifdef OPAQUE
+  diffuseColor.a = 1.0;
+  #endif
+
+  #ifdef USE_TRANSMISSION
+  diffuseColor.a *= material.transmissionAlpha;
+  #endif
+
+  gl_FragColor = vec4( outgoingLight, diffuseColor.a );
+`;
+
+// ============== Debug Modes ==============
+
 export const terrainDebugFragment = /* glsl */ `
   #include <dithering_fragment>
   
