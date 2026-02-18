@@ -41,6 +41,8 @@ export interface SurfaceColumn {
 export class SurfaceColumnProvider {
   private readonly chunkProvider: ChunkProvider;
   private readonly tileProvider: MapTileProvider;
+  /** Dedup map: prevents the same column from being generated concurrently */
+  private readonly inFlight = new Map<string, Promise<SurfaceColumn>>();
 
   constructor(chunkProvider: ChunkProvider, tileProvider: MapTileProvider) {
     this.chunkProvider = chunkProvider;
@@ -49,14 +51,31 @@ export class SurfaceColumnProvider {
 
   /**
    * Get a surface column asynchronously.
-   * 
+   * Deduplicates concurrent requests for the same column.
+   */
+  async getColumn(tx: number, tz: number): Promise<SurfaceColumn> {
+    const columnKey = `${tx},${tz}`;
+
+    // Dedup: reuse in-flight promise for the same column
+    const existing = this.inFlight.get(columnKey);
+    if (existing) return existing;
+
+    const promise = this.generateColumn(tx, tz);
+    this.inFlight.set(columnKey, promise);
+    promise.finally(() => this.inFlight.delete(columnKey));
+    return promise;
+  }
+
+  /**
+   * Generate a surface column.
+   *
    * Process:
    * 1. Get base tile to find terrain surface range
    * 2. Generate chunks from bottom up, stop when we hit empty sky
    * 3. Update tile from actual chunk surfaces (captures trees/buildings)
    * 4. Return bundled data
    */
-  async getColumn(tx: number, tz: number): Promise<SurfaceColumn> {
+  private async generateColumn(tx: number, tz: number): Promise<SurfaceColumn> {
     console.log(`[SurfaceColumn] Getting column (${tx}, ${tz})`);
     
     // Step 1: Get initial tile (terrain-only heights)

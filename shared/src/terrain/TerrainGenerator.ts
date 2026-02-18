@@ -394,7 +394,9 @@ export class TerrainGenerator implements HeightSampler {
 
   /**
    * Get how far "into" the path a position is (0 = edge, 1 = center)
-   * Used for gradual dipping effect
+   * Used for gradual dipping effect.
+   * Uses 4 cardinal directions with coarse stepping (~4 noise calls per direction)
+   * instead of 8 directions × 15 fine steps.
    * @param worldX - World X coordinate in meters
    * @param worldZ - World Z coordinate in meters
    * @returns 0-1 depth factor, or 0 if not on path
@@ -411,25 +413,19 @@ export class TerrainGenerator implements HeightSampler {
     const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
     const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
     
-    // Binary search to find distance to nearest cell edge
-    // Start from center position and check at increasing distances
     const eps = 0.001;
-    let minEdgeDist = halfWidth; // Start assuming we're at center
+    let minEdgeDist = halfWidth;
     
-    // Check multiple sample points to find closest edge
-    const sampleCount = 8;
-    for (let i = 0; i < sampleCount; i++) {
-      const angle = (i / sampleCount) * Math.PI * 2;
-      const dx = Math.cos(angle);
-      const dz = Math.sin(angle);
-      
-      // Sample at increasing distances to find where cell changes
-      for (let dist = 0.1; dist <= halfWidth; dist += 0.2) {
+    // 4 cardinal directions with coarse step size (~4 samples per direction)
+    const step = Math.max(0.3, halfWidth / 4);
+    const directions: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    
+    for (const [dx, dz] of directions) {
+      for (let dist = step; dist <= halfWidth; dist += step) {
         const [wx, wz] = this.applyPathwayWarp(worldX + dx * dist, worldZ + dz * dist);
         const cell = this.pathwayCellular.GetNoise(wx, wz);
         
         if (Math.abs(centerCell - cell) > eps) {
-          // Found edge at this distance
           minEdgeDist = Math.min(minEdgeDist, dist);
           break;
         }
@@ -437,10 +433,9 @@ export class TerrainGenerator implements HeightSampler {
     }
     
     // Convert distance to cell boundary into depth factor
-    // minEdgeDist is SMALL at center (near cell boundary), LARGE at path edge
+    // minEdgeDist is SMALL near edge, LARGE at center
     // We want depth factor to be 1 at center, 0 at edge, so invert
     const t = 1 - Math.min(1, minEdgeDist / halfWidth);
-    // Smoothstep for nice easing
     return smoothstep(0, 1, t);
   }
 

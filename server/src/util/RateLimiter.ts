@@ -1,8 +1,8 @@
 /**
- * RateLimiter - Generic rate limiting for player actions
+ * RateLimiter & ConcurrencyLimiter - Generic rate/concurrency control
  * 
- * Single Responsibility: Only handles rate limiting logic.
- * Dependency Inversion: Can be injected into handlers that need rate limiting.
+ * Single Responsibility: Only handles rate/concurrency limiting logic.
+ * Dependency Inversion: Can be injected into handlers that need limiting.
  */
 
 /**
@@ -60,5 +60,40 @@ export class RateLimiter {
    */
   clear(): void {
     this.lastActionTime.clear();
+  }
+}
+
+/**
+ * Limits the number of concurrent in-flight operations per key.
+ * Use tryAcquire() before starting work; release() when done.
+ */
+export class ConcurrencyLimiter {
+  private readonly counts = new Map<string, number>();
+  private readonly max: number;
+
+  constructor(max: number) {
+    this.max = max;
+  }
+
+  /** Returns true if a slot was acquired, false if at limit. */
+  tryAcquire(key: string): boolean {
+    const current = this.counts.get(key) ?? 0;
+    if (current >= this.max) return false;
+    this.counts.set(key, current + 1);
+    return true;
+  }
+
+  /** Release one slot for the key. */
+  release(key: string): void {
+    const current = this.counts.get(key) ?? 0;
+    if (current <= 1) this.counts.delete(key);
+    else this.counts.set(key, current - 1);
+  }
+
+  /** Remove all counts for keys starting with prefix. */
+  removeByPrefix(prefix: string): void {
+    for (const key of this.counts.keys()) {
+      if (key.startsWith(prefix)) this.counts.delete(key);
+    }
   }
 }

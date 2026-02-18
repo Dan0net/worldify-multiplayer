@@ -29,6 +29,12 @@ import {
   broadcastBuildCommit 
 } from '../rooms/BuildHandler.js';
 import { getSurfaceColumnProvider } from '../storage/StorageManager.js';
+import { ConcurrencyLimiter } from '../util/RateLimiter.js';
+
+// Per-player concurrency limiters (prevent flooding)
+const chunkLimiter = new ConcurrencyLimiter(8);
+const tileLimiter = new ConcurrencyLimiter(6);
+const columnLimiter = new ConcurrencyLimiter(2);
 
 /**
  * Decode and dispatch an incoming binary message.
@@ -102,29 +108,23 @@ function handleVoxelBuildIntent(roomId: string, playerId: number, reader: ByteRe
 }
 
 function handleVoxelChunkRequest(roomId: string, playerId: number, reader: ByteReader): void {
-  console.log(`[decode] Chunk request from player ${playerId} in room ${roomId}`);
-  
   const room = roomManager.getRoom(roomId);
-  if (!room) {
-    console.log(`[decode] Room ${roomId} not found`);
-    return;
-  }
+  if (!room) return;
   
   const ws = room.connections.get(playerId);
-  if (!ws) {
-    console.log(`[decode] Player ${playerId} connection not found`);
-    return;
-  }
+  if (!ws) return;
   
-  // Decode the chunk request
   const request = decodeVoxelChunkRequest(reader);
-  console.log(`[decode] Requesting chunk ${request.chunkX},${request.chunkY},${request.chunkZ}`);
+
+  // Per-player concurrency limit
+  const playerKey = `${roomId}:${playerId}`;
+  if (!chunkLimiter.tryAcquire(playerKey)) return;
   
-  // Handle the request async (sends chunk data to the player)
-  // Fire and forget - errors are logged but don't crash the handler
-  handleChunkRequest(room, playerId, request, ws).catch((err) => {
-    console.error('[decode] Error handling chunk request:', err);
-  });
+  handleChunkRequest(room, playerId, request, ws)
+    .finally(() => chunkLimiter.release(playerKey))
+    .catch((err) => {
+      console.error('[decode] Error handling chunk request:', err);
+    });
 }
 
 function handleMapTileRequest(roomId: string, playerId: number, reader: ByteReader): void {
@@ -135,9 +135,11 @@ function handleMapTileRequest(roomId: string, playerId: number, reader: ByteRead
   if (!ws) return;
   
   const request = decodeMapTileRequest(reader);
+
+  // Per-player concurrency limit
+  const playerKey = `${roomId}:${playerId}`;
+  if (!tileLimiter.tryAcquire(playerKey)) return;
   
-  // Generate surface chunks for accurate tile heights (captures trees/stamps),
-  // but only return the tile data (chunks are cached for later individual requests)
   getSurfaceColumnProvider().getColumn(request.tx, request.tz)
     .then(({ tile }) => {
       const data = encodeMapTileData(tile);
@@ -145,7 +147,8 @@ function handleMapTileRequest(roomId: string, playerId: number, reader: ByteRead
     })
     .catch((err) => {
       console.error('[decode] Error handling map tile request:', err);
-    });
+    })
+    .finally(() => tileLimiter.release(playerKey));
 }
 
 function handleSurfaceColumnRequest(roomId: string, playerId: number, reader: ByteReader): void {
@@ -156,18 +159,20 @@ function handleSurfaceColumnRequest(roomId: string, playerId: number, reader: By
   if (!ws) return;
   
   const request = decodeSurfaceColumnRequest(reader);
-  console.log(`[decode] Surface column request from player ${playerId}: (${request.tx}, ${request.tz})`);
+
+  // Per-player concurrency limit
+  const playerKey = `${roomId}:${playerId}`;
+  if (!columnLimiter.tryAcquire(playerKey)) return;
   
-  // Get surface column (tile + chunks) async
   getSurfaceColumnProvider().getColumn(request.tx, request.tz)
     .then(({ tile, chunks }) => {
       const data = encodeSurfaceColumnData(tile, chunks);
       ws.send(data);
-      console.log(`[decode] Sent surface column (${request.tx}, ${request.tz}) with ${chunks.length} chunks to player ${playerId}`);
     })
     .catch((err) => {
       console.error('[decode] Error handling surface column request:', err);
-    });
+    })
+    .finally(() => columnLimiter.release(playerKey));
 }
 
 // Register all message handlers

@@ -25,15 +25,32 @@ export interface ChunkStore {
 }
 
 /**
+ * Async chunk generation function signature.
+ * Injected by StorageManager when a worker pool is available.
+ */
+export type AsyncChunkGenerator = (cx: number, cy: number, cz: number) => Promise<Uint16Array>;
+
+/**
  * Provides chunks for a room, creating them on demand with terrain generation.
  */
 export class ChunkProvider {
   private readonly store: ChunkStore;
   private readonly terrainGenerator: TerrainGenerator;
+  private asyncGenerator: AsyncChunkGenerator | null = null;
+  /** Dedup map: prevents the same chunk from being generated concurrently */
+  private readonly inFlight = new Map<string, Promise<ChunkData>>();
 
   constructor(store: ChunkStore, seed: number = 12345) {
     this.store = store;
     this.terrainGenerator = new TerrainGenerator({ seed });
+  }
+
+  /**
+   * Set an async chunk generator (e.g., worker pool).
+   * When set, getOrCreateAsync uses this instead of the local TerrainGenerator.
+   */
+  setAsyncGenerator(generator: AsyncChunkGenerator): void {
+    this.asyncGenerator = generator;
   }
 
   /**
@@ -57,36 +74,53 @@ export class ChunkProvider {
   /**
    * Get a chunk asynchronously, loading from disk if available.
    * Creates with terrain generation if not found anywhere.
+   * Deduplicates concurrent requests for the same chunk.
    * @param forceRegen - If true, skip cache/disk and regenerate chunk
    */
   async getOrCreateAsync(cx: number, cy: number, cz: number, forceRegen: boolean = false): Promise<ChunkData> {
     const key = chunkKey(cx, cy, cz);
-    
+
     if (!forceRegen) {
       // Try cache first
-      let chunk = this.store.get(key);
-      if (chunk) {
-        console.log(`[chunk] ${key} from cache`);
-        return chunk;
-      }
+      const cached = this.store.get(key);
+      if (cached) return cached;
 
-      // Try async load from disk if supported
-      if (this.store.getAsync) {
-        chunk = await this.store.getAsync(key);
-        if (chunk) {
-          console.log(`[chunk] ${key} loaded from disk`);
-          return chunk;
-        }
-      }
+      // Dedup: if this chunk is already being loaded/generated, reuse that promise
+      const existing = this.inFlight.get(key);
+      if (existing) return existing;
     }
 
-    // Generate new chunk (or force regenerate)
-    console.log(`[chunk] ${key} generated${forceRegen ? ' (force regen)' : ' (not on disk)'}`);
+    // Create a single promise for loading + generating this chunk
+    const promise = this.loadOrGenerate(cx, cy, cz, forceRegen);
+
+    if (!forceRegen) {
+      this.inFlight.set(key, promise);
+      promise.finally(() => this.inFlight.delete(key));
+    }
+
+    return promise;
+  }
+
+  /**
+   * Load from disk or generate a chunk. Uses async generator (worker pool)
+   * when available, otherwise falls back to synchronous TerrainGenerator.
+   */
+  private async loadOrGenerate(cx: number, cy: number, cz: number, forceRegen: boolean): Promise<ChunkData> {
+    const key = chunkKey(cx, cy, cz);
+
+    // Try disk load first (unless force-regenerating)
+    if (!forceRegen && this.store.getAsync) {
+      const diskChunk = await this.store.getAsync(key);
+      if (diskChunk) return diskChunk;
+    }
+
+    // Generate via worker pool or local generator
     const chunk = new ChunkData(cx, cy, cz);
-    const generatedData = this.terrainGenerator.generateChunk(cx, cy, cz);
+    const generatedData = this.asyncGenerator
+      ? await this.asyncGenerator(cx, cy, cz)
+      : this.terrainGenerator.generateChunk(cx, cy, cz);
     chunk.data.set(generatedData);
-    
-    // Only persist if not in force regenerate mode
+
     if (!forceRegen) {
       this.store.set(key, chunk);
     }

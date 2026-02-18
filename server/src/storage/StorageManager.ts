@@ -5,12 +5,14 @@
  * Provides access to ChunkProvider and PersistentChunkStore instances.
  */
 
+import os from 'node:os';
 import { PersistentChunkStore } from './PersistentChunkStore.js';
 import { MapTileStore } from './MapTileStore.js';
 import { WorldStorage } from './WorldStorage.js';
 import { ChunkProvider } from '../voxel/ChunkProvider.js';
 import { MapTileProvider } from '../voxel/MapTileProvider.js';
 import { SurfaceColumnProvider } from '../voxel/SurfaceColumnProvider.js';
+import { ChunkGeneratorPool } from '../workers/ChunkGeneratorPool.js';
 import { TerrainGenerator } from '@worldify/shared';
 
 /** Global persistent chunk store (shared across all rooms) */
@@ -31,6 +33,9 @@ let globalSurfaceColumnProvider: SurfaceColumnProvider | null = null;
 /** Global terrain generator (shared for map tile generation) */
 let globalTerrainGenerator: TerrainGenerator | null = null;
 
+/** Global worker thread pool for chunk generation */
+let globalPool: ChunkGeneratorPool | null = null;
+
 /**
  * Initialize the global chunk storage. Must be called before handling any builds.
  */
@@ -40,6 +45,11 @@ export async function initChunkStorage(): Promise<void> {
   
   globalChunkStore = new PersistentChunkStore(storage);
   globalChunkProvider = new ChunkProvider(globalChunkStore, storage.seed);
+
+  // Create worker pool and wire into chunk provider
+  const workerCount = parseInt(process.env.CHUNK_WORKERS ?? '') || Math.max(1, Math.min(os.cpus().length - 1, 2));
+  globalPool = new ChunkGeneratorPool(workerCount, storage.seed);
+  globalChunkProvider.setAsyncGenerator((cx, cy, cz) => globalPool!.generateChunk(cx, cy, cz));
   
   // Initialize map tile system
   globalTerrainGenerator = new TerrainGenerator({ seed: storage.seed });
@@ -74,6 +84,10 @@ export async function flushChunkStorage(): Promise<void> {
  * Shutdown chunk storage gracefully.
  */
 export async function shutdownChunkStorage(): Promise<void> {
+  if (globalPool) {
+    await globalPool.shutdown();
+    globalPool = null;
+  }
   if (globalChunkStore) {
     await globalChunkStore.flush();
   }
@@ -103,10 +117,19 @@ export async function clearChunkStorage(): Promise<void> {
     globalMapTileStore.clearCache();
   }
   
+  // Shutdown old pool
+  if (globalPool) {
+    await globalPool.shutdown();
+    globalPool = null;
+  }
+  
   // Reinitialize providers with new seed
   globalTerrainGenerator = new TerrainGenerator({ seed: storage.seed });
   if (globalChunkStore) {
     globalChunkProvider = new ChunkProvider(globalChunkStore, storage.seed);
+    const workerCount = parseInt(process.env.CHUNK_WORKERS ?? '') || Math.max(1, Math.min(os.cpus().length - 1, 2));
+    globalPool = new ChunkGeneratorPool(workerCount, storage.seed);
+    globalChunkProvider.setAsyncGenerator((cx, cy, cz) => globalPool!.generateChunk(cx, cy, cz));
   }
   if (globalMapTileStore && globalTerrainGenerator && globalChunkProvider && globalMapTileProvider) {
     globalMapTileProvider = new MapTileProvider(
