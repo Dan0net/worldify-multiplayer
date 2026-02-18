@@ -227,9 +227,12 @@ export function propagateLight(data: Uint16Array): void {
   let head = 0;
   let tail = 0;
 
-  // Pass 1: Stamp emitting voxels (e.g. lava) into the light field
+  // Pass 1: Stamp emitting voxels (e.g. lava) into the light field.
+  // Check isVoxelSolid: air-side voxels (weight >= 0) can retain a non-zero
+  // material ID as a leftover — only actual solid/liquid bodies should emit.
   for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
     const voxel = data[i];
+    if (!isVoxelSolid(voxel)) continue;
     const emission = MATERIAL_EMISSION_LUT[(voxel >> MATERIAL_SHIFT) & MATERIAL_MASK];
     if (emission > 0 && emission > (voxel & LIGHT_MASK)) {
       data[i] = (voxel & LIGHT_CLEAR) | emission;
