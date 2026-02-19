@@ -22,6 +22,7 @@
 import {
   CHUNK_SIZE,
   MATERIAL_TYPE_LUT,
+  MAT_TYPE_SOLID,
   WEIGHT_SHIFT,
   WEIGHT_MASK,
   WEIGHT_MIN,
@@ -330,8 +331,10 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
           const material = (voxel >> MATERIAL_SHIFT) & MATERIAL_MASK;
           const matType = MATERIAL_TYPE_LUT[material]; // 0=solid, 1=trans, 2=liquid
           
-          // Track max light of non-solid (air) corners for vertex light
-          if (weight < 0) {
+          // Track max light from non-opaque corners for vertex light.
+          // Include air (weight < 0) AND liquid/transparent voxels (weight > 0
+          // but matType != solid) so terrain under water isn't pitch black.
+          if (weight < 0 || matType !== MAT_TYPE_SOLID) {
             const light = voxel & LIGHT_MASK;
             if (light > maxLight) maxLight = light;
           }
