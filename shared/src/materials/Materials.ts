@@ -5,7 +5,7 @@
  * Use material names in code (e.g., 'moss2', 'rock') and look up IDs at runtime.
  */
 
-import { LIGHT_MAX } from '../voxel/constants';
+import { LIGHT_MAX } from '../voxel/constants.js';
 import pallet from './pallet.json' with { type: 'json' };
 
 // Export the raw pallet for client use
