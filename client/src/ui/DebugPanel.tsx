@@ -1,7 +1,7 @@
 import { useEffect, useState, ReactNode } from 'react';
 import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
-import { setTerrainDebugMode as setShaderDebugMode } from '../game/material/TerrainMaterial';
+import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings } from '../game/material/TerrainMaterial';
 import { updatePostProcessing } from '../game/scene/postprocessing';
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
@@ -271,6 +271,11 @@ export function DebugPanel() {
         'bloomIntensity' in updates || 'bloomThreshold' in updates || 'bloomRadius' in updates ||
         'saturation' in updates) {
       updatePostProcessing(updates);
+    }
+    
+    // Apply light fill changes to terrain materials
+    if ('lightFillPower' in updates || 'lightFillIntensity' in updates) {
+      applyLightFillSettings(updates);
     }
   };
 
@@ -1305,6 +1310,27 @@ export function DebugPanel() {
             max={2}
             step={0.05}
             onChange={(v) => handleEnvironmentChange({ saturation: v })}
+          />
+        </div>
+        
+        {/* Voxel Light Fill */}
+        <div className="mb-3">
+          <div className="text-green-400 text-xs mb-1">Voxel Light Fill</div>
+          <Slider
+            label="Fill Power"
+            value={environment.lightFillPower}
+            min={0.1}
+            max={10}
+            step={0.1}
+            onChange={(v) => handleEnvironmentChange({ lightFillPower: v })}
+          />
+          <Slider
+            label="Fill Intensity"
+            value={environment.lightFillIntensity}
+            min={0}
+            max={10}
+            step={0.1}
+            onChange={(v) => handleEnvironmentChange({ lightFillIntensity: v })}
           />
         </div>
       </Section>

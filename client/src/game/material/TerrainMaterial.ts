@@ -291,6 +291,10 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.normalStrength = { value: MATERIAL_NORMAL_STRENGTH };
       shader.uniforms.blendSharpness = { value: 8.0 };
       
+      // Voxel light fill uniforms
+      shader.uniforms.lightFillPower = { value: 2.0 };
+      shader.uniforms.lightFillIntensity = { value: 0.15 };
+      
       // Quality-driven shader defines
       // CRITICAL: shader.defines is a direct reference to material.defines.
       // We must explicitly DELETE defines when they should be off, otherwise
@@ -409,6 +413,18 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
   setAoIntensity(value: number): void {
     if (this._shader) {
       this._shader.uniforms.aoIntensity.value = value;
+    }
+  }
+  
+  setLightFillPower(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.lightFillPower.value = value;
+    }
+  }
+  
+  setLightFillIntensity(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.lightFillIntensity.value = value;
     }
   }
   
@@ -705,6 +721,18 @@ export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
   }
   
   // Water material has its own settings - wind settings don't apply
+}
+
+/**
+ * Apply voxel light fill settings to all terrain materials.
+ */
+export function applyLightFillSettings(settings: { lightFillPower?: number; lightFillIntensity?: number }): void {
+  const materials = [solidMaterial, transparentMaterial];
+  for (const mat of materials) {
+    if (!mat) continue;
+    if (settings.lightFillPower !== undefined) mat.setLightFillPower(settings.lightFillPower);
+    if (settings.lightFillIntensity !== undefined) mat.setLightFillIntensity(settings.lightFillIntensity);
+  }
 }
 
 /**

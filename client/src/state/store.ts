@@ -154,6 +154,10 @@ export interface EnvironmentSettings {
   
   // Color correction
   saturation: number;           // 0-2, 1.0 = no change
+  
+  // Voxel light fill
+  lightFillPower: number;       // 0.5-5, exponent for fill light curve
+  lightFillIntensity: number;   // 0-1, strength of additive fill light
 }
 
 /** Material shader settings for debug/tweaking */
@@ -271,6 +275,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   bloomThreshold: 0.8,
   bloomRadius: 1,
   saturation: 1.2,  // Slightly boosted for more vivid colors
+  lightFillPower: 2.0,
+  lightFillIntensity: 2.0,
 };
 
 /** Debug panel section collapse state */

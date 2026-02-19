@@ -149,6 +149,10 @@ export const terrainFragmentPrefix = /* glsl */ `
   uniform float normalStrength;
   uniform float blendSharpness;
   
+  // Voxel light fill uniforms
+  uniform float lightFillPower;
+  uniform float lightFillIntensity;
+  
   ${fragmentVaryings}
   
   // Precomputed blend weights - set once in main(), reused everywhere
@@ -333,8 +337,11 @@ export const terrainNormalFragment = /* glsl */ `
 export const terrainLightFragment = /* glsl */ `
   // Scale PBR by voxel light (preserves shadows + specular)
   outgoingLight *= vLightLevel;
-  // Additive fill: albedo × voxel light bypasses PBR shadow darkness
-  outgoingLight += diffuseColor.rgb * pow(vLightLevel, 2.0) * 0.15;
+  // Shadow fill: brighten only dark areas — weight by (1 - vLightLevel) so
+  // fully lit surfaces are unaffected while caves/shadows get lifted.
+  // Guard pow() — pow(0, uniform) is undefined in GLSL and returns NaN on some GPUs
+  float fillLight = pow(max(vLightLevel, 0.001), lightFillPower);
+  outgoingLight += diffuseColor.rgb * fillLight * (1.0 - vLightLevel) * lightFillIntensity;
 
   #ifdef OPAQUE
   diffuseColor.a = 1.0;
