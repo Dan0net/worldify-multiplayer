@@ -79,19 +79,19 @@ export interface PostProcessingOptions {
   // SSAO options
   /** Enable/disable SSAO independently */
   ssaoEnabled?: boolean;
-  /** SSAO kernel radius (default: 12) - based on worldify-app */
+  /** SSAO kernel radius (default: 1) */
   ssaoKernelRadius?: number;
-  /** SSAO min distance (default: 0.002) - based on worldify-app */
+  /** SSAO min distance (default: 0.002) */
   ssaoMinDistance?: number;
   
   // Bloom options
   /** Enable bloom effect (default: true) */
   bloomEnabled?: boolean;
-  /** Bloom intensity/strength (default: 0.3) - based on worldify-app */
+  /** Bloom intensity/strength (default: 0.5) */
   bloomIntensity?: number;
-  /** Bloom luminance threshold (default: 0.85) - based on worldify-app */
+  /** Bloom luminance threshold (default: 0.8) */
   bloomThreshold?: number;
-  /** Bloom radius/smoothing (default: 0.4) - based on worldify-app */
+  /** Bloom radius/smoothing (default: 1) */
   bloomRadius?: number;
   
   // Color correction options
@@ -107,13 +107,13 @@ const defaultOptions: Required<PostProcessingOptions> = {
   msaaSamples: 4,
   // SSAO defaults from worldify-app
   ssaoEnabled: true,
-  ssaoKernelRadius: 12,
+  ssaoKernelRadius: 0.5,
   ssaoMinDistance: 0.002,
-  // Bloom defaults from worldify-app
+  // Bloom defaults
   bloomEnabled: true,
-  bloomIntensity: 0.3,
-  bloomThreshold: 0.85,
-  bloomRadius: 0.4,
+  bloomIntensity: 0.5,
+  bloomThreshold: 0.8,
+  bloomRadius: 1,
   // Color correction defaults
   colorCorrectionEnabled: true,
   saturation: 1.2,  // Slightly boosted for more vivid colors

@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
-  MATERIAL_METALNESS_MULTIPLIER,
+  MATERIAL_METALNESS_OFFSET,
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
   MATERIAL_REPEAT_SCALES,
@@ -286,7 +286,7 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       
       // Material adjustment uniforms - use shared constants for pallet viewer consistency
       shader.uniforms.roughnessMultiplier = { value: MATERIAL_ROUGHNESS_MULTIPLIER };
-      shader.uniforms.metalnessMultiplier = { value: MATERIAL_METALNESS_MULTIPLIER };
+      shader.uniforms.metalnessOffset = { value: MATERIAL_METALNESS_OFFSET };
       shader.uniforms.aoIntensity = { value: MATERIAL_AO_INTENSITY };
       shader.uniforms.normalStrength = { value: MATERIAL_NORMAL_STRENGTH };
       shader.uniforms.blendSharpness = { value: 8.0 };
@@ -400,9 +400,9 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
     }
   }
   
-  setMetalnessMultiplier(value: number): void {
+  setMetalnessOffset(value: number): void {
     if (this._shader) {
-      this._shader.uniforms.metalnessMultiplier.value = value;
+      this._shader.uniforms.metalnessOffset.value = value;
     }
   }
   
@@ -655,7 +655,7 @@ export function setTerrainEnvMapIntensity(intensity: number): void {
 /** Material settings interface matching store */
 export interface MaterialSettingsUpdate {
   roughnessMultiplier?: number;
-  metalnessMultiplier?: number;
+  metalnessOffset?: number;
   aoIntensity?: number;
   normalStrength?: number;
   blendSharpness?: number;
@@ -678,8 +678,8 @@ export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
     if (settings.roughnessMultiplier !== undefined) {
       mat.setRoughnessMultiplier(settings.roughnessMultiplier);
     }
-    if (settings.metalnessMultiplier !== undefined) {
-      mat.setMetalnessMultiplier(settings.metalnessMultiplier);
+    if (settings.metalnessOffset !== undefined) {
+      mat.setMetalnessOffset(settings.metalnessOffset);
     }
     if (settings.aoIntensity !== undefined) {
       mat.setAoIntensity(settings.aoIntensity);

@@ -8,10 +8,10 @@
 // ============== Material Shader Defaults ==============
 
 /** Default roughness multiplier - applied to roughness texture values */
-export const MATERIAL_ROUGHNESS_MULTIPLIER = 1.0;
+export const MATERIAL_ROUGHNESS_MULTIPLIER = 0.8;
 
-/** Default metalness multiplier - applied to metalness texture values */
-export const MATERIAL_METALNESS_MULTIPLIER = 1.0;
+/** Default metalness offset - added to metalness texture values */
+export const MATERIAL_METALNESS_OFFSET = 0.1;
 
 /** Default AO intensity - 0 = no AO effect, 1 = full effect */
 export const MATERIAL_AO_INTENSITY = 1.0;

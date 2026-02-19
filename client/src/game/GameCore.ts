@@ -121,13 +121,13 @@ export class GameCore {
       initPostProcessing(this.renderer, scene, camera, {
         enabled: true,
         // SSAO settings from worldify-app
-        ssaoKernelRadius: 12,
+        ssaoKernelRadius: 0.5,
         ssaoMinDistance: 0.002,
-        // Bloom settings from worldify-app
+        // Bloom settings
         bloomEnabled: true,
-        bloomIntensity: 0.3,
-        bloomThreshold: 0.85,
-        bloomRadius: 0.4,
+        bloomIntensity: 0.5,
+        bloomThreshold: 0.8,
+        bloomRadius: 1,
       });
     }
 

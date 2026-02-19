@@ -3,7 +3,7 @@
  *
  * Two passes, both operating on packed 16-bit voxel data in-place:
  * 1. Column pass: top-down per (x,z) column. Air gets full light, opaque stops,
- *    transparent/liquid attenuates by 1.
+ *    transparent/liquid pass light through (like air).
  * 2. BFS pass: spreads light from all lit voxels into 6-face neighbors,
  *    decrementing by 1 per step. Only updates if new > existing.
  *
@@ -86,7 +86,7 @@ export function injectBorderLight(
  * Propagate sunlight columns through a chunk's voxel data (in-place).
  *
  * For each (lx, lz) column, determines the incoming light level from above,
- * then scans downward: air passes light through, transparent/liquid attenuate by 1,
+ * then scans downward: air and transparent/liquid pass light through,
  * opaque solids stop the column.
  *
  * @param data          The chunk's Uint16Array (CHUNK_SIZE³ entries), modified in-place
@@ -116,14 +116,13 @@ export function computeSunlightColumns(
 
         if (isVoxelSolid(voxel)) {
           const matType = MATERIAL_TYPE_LUT[(voxel >> MATERIAL_SHIFT) & MATERIAL_MASK];
-          if (matType !== MAT_TYPE_SOLID) {
-            // Transparent/liquid: attenuate by 1, write current light
-            data[idx] = (voxel & LIGHT_CLEAR) | light;
-            if (light > 0) light--;
-          } else {
+          if (matType === MAT_TYPE_SOLID) {
             // Opaque solid: stop column
             data[idx] = voxel & LIGHT_CLEAR;
             light = 0;
+          } else {
+            // Transparent/liquid: pass light through (like air)
+            data[idx] = (voxel & LIGHT_CLEAR) | light;
           }
         } else {
           // Air: full sunlight passthrough

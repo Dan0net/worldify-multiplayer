@@ -746,12 +746,12 @@ export function DebugPanel() {
             onChange={(v) => handleMaterialChange({ roughnessMultiplier: v })}
           />
           <Slider
-            label="Metalness"
-            value={materialSettings.metalnessMultiplier}
+            label="Metalness Offset"
+            value={materialSettings.metalnessOffset}
             min={0}
-            max={2}
-            step={0.05}
-            onChange={(v) => handleMaterialChange({ metalnessMultiplier: v })}
+            max={1}
+            step={0.01}
+            onChange={(v) => handleMaterialChange({ metalnessOffset: v })}
           />
           <Slider
             label="AO Intensity"
@@ -1262,7 +1262,7 @@ export function DebugPanel() {
             value={environment.ssaoKernelRadius}
             min={0}
             max={32}
-            step={1}
+            step={0.1}
             onChange={(v) => handleEnvironmentChange({ ssaoKernelRadius: v })}
           />
           <Slider
@@ -1271,6 +1271,7 @@ export function DebugPanel() {
             min={0.001}
             max={0.02}
             step={0.001}
+            formatValue={(v) => v.toFixed(3)}
             onChange={(v) => handleEnvironmentChange({ ssaoMinDistance: v })}
           />
           <Slider
@@ -1293,7 +1294,7 @@ export function DebugPanel() {
             label="Bloom Radius"
             value={environment.bloomRadius}
             min={0}
-            max={1}
+            max={3}
             step={0.01}
             onChange={(v) => handleEnvironmentChange({ bloomRadius: v })}
           />

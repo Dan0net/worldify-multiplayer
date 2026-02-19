@@ -3,7 +3,7 @@ import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID, DEFAULT_BUILD_PR
 import type { QualityLevel } from '../game/quality/QualityPresets';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
-  MATERIAL_METALNESS_MULTIPLIER,
+  MATERIAL_METALNESS_OFFSET,
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
   ENVIRONMENT_INTENSITY,
@@ -150,7 +150,7 @@ export interface EnvironmentSettings {
   ssaoMinDistance: number;      // 0.001-0.02
   bloomIntensity: number;       // 0-3
   bloomThreshold: number;       // 0-1
-  bloomRadius: number;          // 0-1
+  bloomRadius: number;          // 0-3
   
   // Color correction
   saturation: number;           // 0-2, 1.0 = no change
@@ -160,7 +160,7 @@ export interface EnvironmentSettings {
 export interface MaterialSettings {
   // Texture multipliers (applied in shader)
   roughnessMultiplier: number;    // 0-2, multiplied with texture value
-  metalnessMultiplier: number;    // 0-2, multiplied with texture value
+  metalnessOffset: number;        // 0-1, added to metalness texture value
   aoIntensity: number;            // 0-2, AO effect strength
   normalStrength: number;         // 0-2, normal map intensity
   
@@ -192,7 +192,7 @@ export interface WaterSettings {
 /** Default material settings - uses shared constants for consistency with pallet viewer */
 export const DEFAULT_MATERIAL_SETTINGS: MaterialSettings = {
   roughnessMultiplier: MATERIAL_ROUGHNESS_MULTIPLIER,
-  metalnessMultiplier: MATERIAL_METALNESS_MULTIPLIER,
+  metalnessOffset: MATERIAL_METALNESS_OFFSET,
   aoIntensity: MATERIAL_AO_INTENSITY,
   normalStrength: MATERIAL_NORMAL_STRENGTH,
   blendSharpness: 8.0,
@@ -265,11 +265,11 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   toneMapping: THREE.ACESFilmicToneMapping,
   toneMappingExposure: 1.0,
   
-  ssaoKernelRadius: 12,
+  ssaoKernelRadius: 0.5,
   ssaoMinDistance: 0.002,
-  bloomIntensity: 0.3,
-  bloomThreshold: 0.85,
-  bloomRadius: 0.4,
+  bloomIntensity: 0.5,
+  bloomThreshold: 0.8,
+  bloomRadius: 1,
   saturation: 1.2,  // Slightly boosted for more vivid colors
 };
 

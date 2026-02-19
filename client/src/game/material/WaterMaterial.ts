@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import {
-  MATERIAL_METALNESS_MULTIPLIER,
+  MATERIAL_METALNESS_OFFSET,
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
   MATERIAL_REPEAT_SCALES,
@@ -86,7 +86,7 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
       
       // Material adjustment uniforms
       shader.uniforms.roughnessMultiplier = { value: 0.0 }; // Water is smooth
-      shader.uniforms.metalnessMultiplier = { value: MATERIAL_METALNESS_MULTIPLIER };
+      shader.uniforms.metalnessOffset = { value: MATERIAL_METALNESS_OFFSET };
       shader.uniforms.aoIntensity = { value: MATERIAL_AO_INTENSITY };
       shader.uniforms.normalStrength = { value: MATERIAL_NORMAL_STRENGTH };
       shader.uniforms.blendSharpness = { value: 8.0 };
@@ -143,7 +143,7 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
         uniform int debugMode;
         
         uniform float roughnessMultiplier;
-        uniform float metalnessMultiplier;
+        uniform float metalnessOffset;
         uniform float aoIntensity;
         uniform float normalStrength;
         uniform float blendSharpness;

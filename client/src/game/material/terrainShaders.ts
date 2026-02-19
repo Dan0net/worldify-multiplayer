@@ -144,7 +144,7 @@ export const terrainFragmentPrefix = /* glsl */ `
   
   // Material adjustment uniforms
   uniform float roughnessMultiplier;
-  uniform float metalnessMultiplier;
+  uniform float metalnessOffset;
   uniform float aoIntensity;
   uniform float normalStrength;
   uniform float blendSharpness;
@@ -260,7 +260,7 @@ export const terrainRoughnessFragment = /* glsl */ `
 
 export const terrainMetalnessFragment = /* glsl */ `
   #ifdef QUALITY_METALNESS_MAPS
-    float metalnessFactor = sampleMaterialBlend(metalnessArray).r * metalnessMultiplier;
+    float metalnessFactor = clamp(sampleMaterialBlend(metalnessArray).r + metalnessOffset, 0.0, 1.0);
   #else
     float metalnessFactor = 0.0;
   #endif

@@ -12,7 +12,7 @@ import {
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
   MATERIAL_ROUGHNESS_MULTIPLIER,
-  MATERIAL_METALNESS_MULTIPLIER,
+  MATERIAL_METALNESS_OFFSET,
 } from './PreviewScene';
 
 interface MapConfig {
@@ -173,7 +173,7 @@ function LoadedMaterial({
       roughnessMap={(processedTextures.roughness ?? null) as any}
       roughness={MATERIAL_ROUGHNESS_MULTIPLIER}
       metalnessMap={(processedTextures.metalness ?? null) as any}
-      metalness={MATERIAL_METALNESS_MULTIPLIER}
+      metalness={MATERIAL_METALNESS_OFFSET}
       envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
       transparent={hasAlpha}
       alphaTest={hasAlpha ? 0.5 : 0}

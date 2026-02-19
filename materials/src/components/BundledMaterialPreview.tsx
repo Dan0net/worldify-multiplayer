@@ -20,7 +20,7 @@ import {
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
   MATERIAL_ROUGHNESS_MULTIPLIER,
-  MATERIAL_METALNESS_MULTIPLIER,
+  MATERIAL_METALNESS_OFFSET,
 } from './PreviewScene';
 
 export type Resolution = 'low' | 'high';
@@ -138,7 +138,7 @@ function BundledMaterialMesh({
         roughnessMap={textures.roughness as any}
         roughness={MATERIAL_ROUGHNESS_MULTIPLIER}
         metalnessMap={textures.metalness as any}
-        metalness={MATERIAL_METALNESS_MULTIPLIER}
+        metalness={MATERIAL_METALNESS_OFFSET}
         envMapIntensity={envMapEnabled ? ENVIRONMENT_INTENSITY : 0}
         transparent={hasAlpha}
         alphaTest={hasAlpha ? 0.5 : 0}
