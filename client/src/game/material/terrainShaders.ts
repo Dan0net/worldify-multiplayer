@@ -336,12 +336,10 @@ export const terrainNormalFragment = /* glsl */ `
  *  fill term so caves aren't pitch black despite PBR shadow darkness. */
 export const terrainLightFragment = /* glsl */ `
   // Scale PBR by voxel light (preserves shadows + specular)
-  outgoingLight *= vLightLevel;
-  // Shadow fill: brighten only dark areas — weight by (1 - vLightLevel) so
-  // fully lit surfaces are unaffected while caves/shadows get lifted.
+  outgoingLight *= pow(max(vLightLevel, 0.001), lightFillPower);
+  // Additive fill: albedo × voxel light bypasses PBR shadow darkness
   // Guard pow() — pow(0, uniform) is undefined in GLSL and returns NaN on some GPUs
-  float fillLight = pow(max(vLightLevel, 0.001), lightFillPower);
-  outgoingLight += diffuseColor.rgb * fillLight * (1.0 - vLightLevel) * lightFillIntensity;
+  // outgoingLight += diffuseColor.rgb * pow(max(vLightLevel, 0.001), lightFillPower) * lightFillIntensity;
 
   #ifdef OPAQUE
   diffuseColor.a = 1.0;

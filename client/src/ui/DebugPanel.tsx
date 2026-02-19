@@ -1190,7 +1190,7 @@ export function DebugPanel() {
                 label="Intensity"
                 value={environment.hemisphereIntensity ?? 1.0}
                 min={0}
-                max={3}
+                max={10}
                 step={0.1}
                 onChange={(v) => handleEnvironmentChange({ hemisphereIntensity: v, autoHemisphereIntensity: false })}
               />

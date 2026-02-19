@@ -275,7 +275,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   bloomThreshold: 0.8,
   bloomRadius: 1,
   saturation: 1.2,  // Slightly boosted for more vivid colors
-  lightFillPower: 2.0,
+  lightFillPower: 0.5,
   lightFillIntensity: 2.0,
 };
 

@@ -292,8 +292,8 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.blendSharpness = { value: 8.0 };
       
       // Voxel light fill uniforms
-      shader.uniforms.lightFillPower = { value: 2.0 };
-      shader.uniforms.lightFillIntensity = { value: 0.15 };
+      shader.uniforms.lightFillPower = { value: 0.5 };
+      shader.uniforms.lightFillIntensity = { value: 2.0 };
       
       // Quality-driven shader defines
       // CRITICAL: shader.defines is a direct reference to material.defines.
