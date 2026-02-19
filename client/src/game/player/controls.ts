@@ -128,8 +128,9 @@ export class Controls {
 
     // In Playing mode without pointer lock, re-request it on any left click
     // (handles case where requestPointerLock silently fails after Escape exit)
+    // But NOT when the build menu is open — allow UI clicks (debug panel, etc.)
     if (!this.isPointerLocked) {
-      if (e.button === 0 && storeBridge.gameMode === GameMode.Playing) {
+      if (e.button === 0 && storeBridge.gameMode === GameMode.Playing && !storeBridge.buildMenuOpen) {
         this.requestPointerLock();
       }
       return;

@@ -49,7 +49,6 @@ Light spreads sideways from lit voxels into adjacent non-opaque voxels, attenuat
 ## Phase 5: Shader Integration
 Use `vLightLevel` to attenuate scene lighting in the PBR output.
 - `totalIrradiance *= vLightLevel` — dims sun/hemisphere in caves
-- Emitter light adds additive warm ambient term
 - Outdoor terrain renders identically to current (lightLevel=1.0)
 
 ## Phase 6: Build-Triggered Relighting
