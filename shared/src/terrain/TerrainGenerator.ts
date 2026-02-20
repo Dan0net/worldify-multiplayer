@@ -634,13 +634,13 @@ export class TerrainGenerator implements HeightSampler {
     // Determine surface material
     let material: number;
     
-    // Check for water on path first
+    // Determine surface material.
+    // Height stays at the dipped terrain floor — liquid/transparent fills
+    // (water) sit above it but shouldn't raise the reported height, otherwise
+    // getChunkRangeFromHeights may skip the chunk containing the actual solid surface.
     const waterConfig = this.config.pathwayConfig;
     if (waterConfig.waterEnabled && isPath && pathDipAmount > 0) {
-      // Water fills the dip, so the visible surface is water
       material = waterConfig.waterMaterial;
-      // Return the water surface height (original height minus water depth)
-      height = originalHeight - waterConfig.waterDepth;
     } else if (isPath) {
       material = this.getPathwayMaterial(worldX, worldZ);
     } else if (this.isOnPathwayBorder(worldX, worldZ)) {
