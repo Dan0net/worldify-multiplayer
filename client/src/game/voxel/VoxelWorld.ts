@@ -577,6 +577,18 @@ export class VoxelWorld implements ChunkProvider {
         aboveChunk.dirty = true;
         this.remeshQueue.add(aboveKey);
       }
+
+      // Relight horizontal face-adjacent neighbors so their border light
+      // picks up the light values from this newly-arrived chunk.
+      for (const [dx, dy, dz] of VoxelWorld.FACE_OFFSETS) {
+        if (dy !== 0) continue; // vertical already handled above
+        const nKey = chunkKey(cx + dx, cy + dy, cz + dz);
+        const nChunk = this.chunks.get(nKey);
+        if (!nChunk) continue;
+        this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+        nChunk.dirty = true;
+        this.remeshQueue.add(nKey);
+      }
     }
     
     return chunk;
@@ -647,9 +659,10 @@ export class VoxelWorld implements ChunkProvider {
       this.onTileReceived(tx, tz, heights, materials);
     }
     
-    // Process each chunk in the column
-    for (const chunkInfo of chunks) {
-      const { chunkY, lastBuildSeq, voxelData } = chunkInfo;
+    // Process chunks top-down so sunlight propagates correctly from sky to ground.
+    // Server sends them bottom-up, so reverse the order.
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const { chunkY, lastBuildSeq, voxelData } = chunks[i];
       this.ingestChunkData(tx, chunkY, tz, voxelData, lastBuildSeq);
     }
     
