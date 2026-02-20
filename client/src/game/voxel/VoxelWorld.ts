@@ -388,7 +388,7 @@ export class VoxelWorld implements ChunkProvider {
       if (!info) continue;
       
       // Skip chunks above the surface (+1 for top-face margin stitching)
-      if (cy > info.maxCy + 1) continue;
+      if (cy > info.maxCy) continue;
       
       this.requestChunkFromServer(cx, cy, cz);
       chunkRequests++;
