@@ -140,29 +140,23 @@ export function computeSunlightColumns(
 /**
  * Build the lightFromAbove array for a chunk by checking the chunk directly above.
  *
- * If there is no chunk above:
- *   - cy >= maxCy → assume full sunlight (return null, meaning all LIGHT_MAX)
- *   - cy < maxCy  → assume dark (return all-zero array)
+ * If there is no chunk above loaded, assume full sunlight (return null).
+ * When the chunk above eventually loads, it will relight this chunk with
+ * the correct propagated values via ingestChunkData's neighbor relighting.
  *
  * If there IS a chunk above, scan its bottom row (ly=0) per column:
  *   light level = that voxel's light value (if non-solid), else 0.
  *
  * @param chunkAboveData  Voxel data of the chunk at (cx, cy+1, cz), or undefined
- * @param cy              This chunk's Y coordinate
- * @param maxCy           The highest chunk Y that contains terrain in this column
  * @returns               Uint8Array(CHUNK_SIZE²) with light levels, or null (null = all LIGHT_MAX)
  */
 export function getSunlitAbove(
   chunkAboveData: Uint16Array | undefined,
-  cy: number,
-  maxCy: number,
 ): Uint8Array | null {
-  // No chunk above
+  // No chunk above loaded → assume full sky exposure.
+  // When the chunk above loads later, it will relight this chunk correctly.
   if (!chunkAboveData) {
-    // At or above the terrain ceiling → full sky exposure
-    if (cy >= maxCy) return null;
-    // Below terrain ceiling but chunk not loaded → assume dark
-    return new Uint8Array(CHUNK_SIZE * CHUNK_SIZE); // all zeros
+    return null;
   }
 
   // Chunk above exists — check its bottom row (ly=0) per column
