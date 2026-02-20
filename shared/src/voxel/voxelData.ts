@@ -18,6 +18,7 @@ import {
   LIGHT_MAX,
   SURFACE_PACKED_THRESHOLD,
 } from './constants.js';
+import { MATERIAL_TYPE_LUT } from '../materials/Materials.js';
 
 // ============== Types ==============
 
@@ -117,11 +118,14 @@ export function isVoxelSolid(packed: number): boolean {
 
 /**
  * Fast check whether a packed voxel data array contains any surface crossings.
- * A surface exists only when there are both "inside" (packedWeight > threshold)
- * and "outside" (packedWeight <= threshold) voxels in the grid.
+ * A surface exists when:
+ *  1. There are both "inside" (solid) and "outside" (air) voxels, OR
+ *  2. Solid voxels have mixed material types (solid/transparent/liquid),
+ *     because the SurfaceNet's material-type splitting creates surfaces
+ *     between different material types (e.g. terrain vs water).
  * 
  * Uses raw bit operations on the packed data — no float conversion.
- * Short-circuits as soon as both sides are found.
+ * Short-circuits as soon as a crossing is detected.
  * 
  * @param data Flat packed voxel data (Uint16Array)
  * @returns true if a surface crossing exists in the data
@@ -129,11 +133,22 @@ export function isVoxelSolid(packed: number): boolean {
 export function hasSurfaceCrossing(data: Uint16Array): boolean {
   let hasInside = false;
   let hasOutside = false;
+  // Track first material type seen among solid voxels (-1 = none yet)
+  let solidMatType = -1;
   const len = data.length;
   for (let i = 0; i < len; ++i) {
-    if (((data[i] >> WEIGHT_SHIFT) & WEIGHT_MASK) > SURFACE_PACKED_THRESHOLD) {
+    const v = data[i];
+    if (((v >> WEIGHT_SHIFT) & WEIGHT_MASK) > SURFACE_PACKED_THRESHOLD) {
       hasInside = true;
       if (hasOutside) return true;
+      // Check for mixed material types among solid voxels
+      const matId = (v >> MATERIAL_SHIFT) & MATERIAL_MASK;
+      const mt = MATERIAL_TYPE_LUT[matId];
+      if (solidMatType === -1) {
+        solidMatType = mt;
+      } else if (mt !== solidMatType) {
+        return true; // Mixed material types → surface between them
+      }
     } else {
       hasOutside = true;
       if (hasInside) return true;
