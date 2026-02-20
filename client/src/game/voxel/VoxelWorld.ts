@@ -596,22 +596,14 @@ export class VoxelWorld implements ChunkProvider {
 
   /**
    * Compute sunlight columns for a chunk in-place.
-   * Looks up chunk-above data and maxCy from columnInfo to determine sky exposure.
+   * Checks chunk-above data to determine sky exposure.
    * Then injects border light from face-adjacent neighbors and runs BFS.
    */
   private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint16Array): void {
-    // Get maxCy for this column (cx,cz maps to tile tx,tz)
-    const colInfo = this.columnInfo.get(`${cx},${cz}`);
-    const maxCy = colInfo ? colInfo.maxCy : cy; // fallback: treat current as top
-    
     // Check chunk above for sunlight state
     const aboveKey = chunkKey(cx, cy + 1, cz);
     const aboveChunk = this.chunks.get(aboveKey);
-    const isSunlitAbove = getSunlitAbove(
-      aboveChunk?.data,
-      cy,
-      maxCy,
-    );
+    const isSunlitAbove = getSunlitAbove(aboveChunk?.data);
     
     computeSunlightColumns(data, isSunlitAbove);
 
