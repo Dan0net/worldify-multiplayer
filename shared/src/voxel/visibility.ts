@@ -18,18 +18,30 @@ import {
   CHUNK_FACE_COUNT,
   VISIBILITY_ALL,
   VISIBILITY_NONE,
+  WEIGHT_SHIFT,
+  WEIGHT_MASK,
+  WEIGHT_MAX_PACKED,
 } from './constants.js';
-import { isVoxelSolid, getMaterial } from './voxelData.js';
-import { isVoxelOpaque as isVoxelOpaqueMat } from '../materials/index.js';
+import { getMaterial } from './voxelData.js';
+import { isLiquid, isTransparent } from '../materials/index.js';
 
 // ============== Visibility Helpers ==============
 
 /**
- * Check if a packed voxel blocks visibility.
- * Wraps the material module function with voxelData helpers.
+ * Check if a packed voxel blocks visibility for chunk culling.
+ *
+ * Uses a RELAXED threshold: only fully-solid voxels (packed weight = max)
+ * block the flood fill.  Any voxel with weight < 0.5 could produce a
+ * surface face when paired with an air voxel in a neighbor chunk, so
+ * visibility must propagate through it to ensure that neighbor gets loaded.
  */
 function isVoxelOpaque(packed: number): boolean {
-  return isVoxelOpaqueMat(packed, isVoxelSolid, getMaterial);
+  const packedWeight = (packed >> WEIGHT_SHIFT) & WEIGHT_MASK;
+  if (packedWeight < WEIGHT_MAX_PACKED) return false; // not fully solid — allow visibility
+  // Fully solid — check material (liquid/transparent still allow visibility)
+  const material = getMaterial(packed);
+  if (isLiquid(material) || isTransparent(material)) return false;
+  return true;
 }
 
 // ============== Pre-allocated Buffers ==============
