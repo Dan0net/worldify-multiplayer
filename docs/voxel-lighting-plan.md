@@ -1,55 +1,64 @@
 # Voxel Lighting Implementation Plan
 
 ## Overview
-Minecraft-style voxel lighting using the existing 5-bit light field (0-31). Sunlight propagates down from sky, lava emits block light. Single channel: `max(sun, block)`. Client-side only — server sends light=0.
+Two-channel Minecraft-style voxel lighting. **Sky light** (sun exposure) and **block light** (emitters like lava/torches) are computed separately client-side into temp buffers, then combined in the shader with a time-of-day uniform so underground block light stays consistent across the day/night cycle.
 
 ## Key Decisions
-- **5 packed bits** (existing `LLLLL` field), range 0-31
-- **Max sampling** at vertices — SurfaceNet takes max light of non-solid 2x2x2 corners
-- **Attenuation by 1 per voxel step** — simple decrement, no doubling
+- **Light is NOT packed into the 16-bit voxel** — server sends `WWWW MMMMMMM 00000` (5 light bits unused on wire, reserved for future use)
+- **Sky light**: single `Uint8Array(32³)` per chunk, range 0–31
+- **Block light**: three `Uint8Array(32³)` per chunk — `blockR`, `blockG`, `blockB`, range 0–31 each. Three independent BFS passes, one per channel.
+- **Vertex attributes**: `float skyLight` + `vec3 blockLightColor` (RGB, 0–1)
+- **Shader combines**: `vec3 light = max(vec3(vSkyLight * skyBrightness), vBlockLightColor)` where `skyBrightness` is driven by day/night (1.0 noon → 0.15 midnight)
+- **Attenuation by 1 per voxel step** per channel — red/green/blue attenuate independently, preserving emitter hue while dimming intensity
 - **Client-side compute before meshing** — light runs in `ingestChunkData()`, before remesh queue
 - **Only on committed builds** — preview meshes skip light recalculation
 - **Unknown chunk above?** If `cy >= maxCy` (from tile data), assume full sunlight from above. Otherwise assume dark, relight downward when chunk above loads.
 
+## Block Light Color
+Emitters define RGB emission in `pallet.json`: e.g. torch `[24, 20, 12]`, lava `[24, 18, 5]`, blue crystal `[4, 8, 24]`.
+Three independent BFS passes (one per R/G/B channel) propagate each component separately, decrementing by 1 per step. This naturally preserves hue while dimming — a torch `[24,20,12]` at 10 voxels out becomes `[14,10,2]`, still warm but dimmer. Temp memory: 3 × 32KB = 96KB per chunk, freed after meshing.
+
 ## Phase 1: Light Attribute Pipeline + Debug View
 Pipe light from voxel data → vertex attribute → shader debug mode.
 
-1. `SurfaceNet.ts` — Add `lights: Float32Array` to output. For each vertex, max light of non-solid corners in 2x2x2 cell.
-2. `MeshGeometry.ts` — Add `lightLevels: Float32Array` (1 per vertex) to `ExpandedMeshData`, flow through `expandGeometry()`.
-3. `meshWorker.ts` + `MeshWorkerPool.ts` — Transfer `lightLevels` buffer.
-4. `ChunkMesh.ts` — Set `lightLevel` attribute on `BufferGeometry`.
-5. `terrainShaders.ts` — `attribute float lightLevel` / `varying float vLightLevel`. Debug mode: `gl_FragColor = vec4(vec3(vLightLevel), 1.0)`.
-6. `store.ts` — Add 'VoxelLight' to `TERRAIN_DEBUG_MODE_NAMES`, bump cycle modulus.
+1. `SurfaceNet.ts` — Output `skyLights: Float32Array` (1/vertex) + `blockLightColors: Float32Array` (3/vertex RGB). Max of non-solid 2x2x2 corners per channel.
+2. `MeshGeometry.ts` — Add both to `ExpandedMeshData`, flow through `expandGeometry()`.
+3. `meshWorker.ts` + `MeshWorkerPool.ts` — Transfer both buffers.
+4. `ChunkMesh.ts` — Set `skyLight` (float) and `blockLightColor` (vec3) attributes.
+5. `terrainShaders.ts` — `uniform float skyBrightness`. Combine: `vec3 light = max(vec3(vSkyLight * skyBrightness), vBlockLightColor)`.
+6. `store.ts` — Debug modes for sky light and block light color separately.
 
 ## Phase 2: Sunlight Column Propagation
-Fill sky-exposed air voxels with light=31.
+Fill sky-exposed air voxels with skyLight=31 into the temp `Uint8Array`.
 
-1. **NEW** `shared/src/voxel/lighting.ts` — `computeSunlightColumn(chunk, chunkAboveData?, isAboveSkyExposed?)`:
+1. **`shared/src/voxel/lighting.ts`** — `computeSunlightColumns()` writes to a separate `skyLight` buffer (not packed voxel data).
    - Per (lx,lz) column scan from ly=31 downward
-   - If chunk above loaded: continue sunlight if bottom voxel of chunk above was sunlit
-   - If chunk above NOT loaded AND `cy >= maxCy`: assume sunlit from above
-   - If chunk above NOT loaded AND `cy < maxCy`: assume dark from above
-   - Non-opaque voxel → light=31, opaque → stop column
-2. `VoxelWorld.ts` — Call `computeSunlightColumn()` in `ingestChunkData()` before remesh queue. When a new chunk loads, re-light the chunk below and mark it for remesh.
+   - Non-opaque → skyLight=31, opaque → stop column
+   - Uses `lightFromAbove` from chunk above (or null = full sun)
+2. `VoxelWorld.ts` — Call in `ingestChunkData()` before remesh. Re-light chunk below when new chunk loads.
 
 ## Phase 3: Sunlight Horizontal BFS
-Light spreads sideways from lit voxels into adjacent non-opaque voxels, attenuating by 1 per step.
+Sky light spreads sideways from lit voxels, attenuating by 1 per step.
 
-1. `shared/src/voxel/lighting.ts` — `propagateLight(data)`:
-   - Single-chunk BFS from all voxels with light>0 into 6-face-adjacent non-opaque voxels
-   - Each step decrements light by 1; only updates if new value > existing
-   - No cross-chunk propagation yet (keeps it simple)
-2. `VoxelWorld.ts` — Call `propagateLight()` after `computeSunlightColumns()` in `computeChunkSunlight()`.
+1. `shared/src/voxel/lighting.ts` — `propagateSkyLight(data, skyLight)`: BFS on the `skyLight` buffer only.
+2. Runs after `computeSunlightColumns()`.
 
-## Phase 4: Lava Light Emission
-1. `shared/src/materials/` — `isEmitting(id)`, lava(50) emits level ~24
-2. `pallet.json` — Add `"emitting": { "50": 24 }`
-3. `lighting.ts` — Seed BFS from emitting voxels alongside sunlight
+## Phase 4: Block Light RGB Emission + BFS
+Three independent BFS passes for colored block light.
+
+1. `pallet.json` — Per-material `"emission": [R, G, B]` (0–31 per channel).
+2. `shared/src/materials/` — `MATERIAL_EMISSION_RGB_LUT: Uint8Array(128*3)`.
+3. `lighting.ts` — `computeBlockLightRGB(data): {blockR, blockG, blockB}` (three `Uint8Array(32³)`). Seed emitters with their R/G/B values, run BFS per channel (reuse same propagation logic), decrement by 1 per step.
+4. SurfaceNet reads all three buffers, outputs `vec3 blockLightColor` per vertex.
 
 ## Phase 5: Shader Integration
-Use `vLightLevel` to attenuate scene lighting in the PBR output.
-- `totalIrradiance *= vLightLevel` — dims sun/hemisphere in caves
-- Outdoor terrain renders identically to current (lightLevel=1.0)
+- `vec3 light = max(vec3(vSkyLight * skyBrightness), vBlockLightColor); outgoingLight *= light;`
+- Outdoor terrain: skyLight=1.0 at noon, block light negligible
+- Underground: block light RGB dominates, consistent across day/night
+- `DayNightCycle.ts` pushes `skyBrightness` uniform (1.0 noon → 0.15 midnight)
 
 ## Phase 6: Build-Triggered Relighting
-In `applyBuildCommit()` (not preview): clear light in affected chunks, re-run column + BFS, remesh.
+In `applyBuildCommit()` (not preview): clear sky + blockRGB buffers in affected chunks, re-run columns + BFS, remesh.
+
+## Phase 7: Remove Light Bits from Voxel Packing (Optional)
+Reclaim the 5 `LLLLL` bits from the 16-bit packed voxel for more weight or material precision. Requires updating `packVoxel()`/`unpackVoxel()`, constants, and all consumers.
