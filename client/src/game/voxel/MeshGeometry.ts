@@ -19,7 +19,6 @@
 import * as THREE from 'three';
 import { VOXEL_SCALE } from '@worldify/shared';
 import { SurfaceNetOutput } from './SurfaceNet.js';
-
 /**
  * Raw expanded mesh data - plain typed arrays, no Three.js dependency.
  * This is what gets transferred between worker and main thread.
@@ -118,6 +117,7 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
 /**
  * Wrap raw expanded mesh data into a THREE.BufferGeometry.
  * Main thread only — lightweight, just setAttribute calls.
+ * Attribute layout must match TERRAIN_ATTRS in LayerConfig.ts.
  */
 export function createBufferGeometry(data: ExpandedMeshData): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();

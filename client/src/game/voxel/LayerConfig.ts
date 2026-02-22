@@ -58,6 +58,27 @@ const LAYER_CONFIGS: readonly MeshLayerConfig[] = [
   },
 ];
 
+// ============== Vertex Attribute Layout ==============
+
+/** Definition of a single vertex attribute (name + component count). */
+export interface AttrDef {
+  name: string;
+  itemSize: number;
+}
+
+/**
+ * Canonical vertex attribute layout for terrain meshes.
+ * Must match MeshGeometry.createBufferGeometry / expandGeometry.
+ * Used by TerrainBatch for geometry merging.
+ */
+export const TERRAIN_ATTRS: readonly AttrDef[] = [
+  { name: 'position', itemSize: 3 },
+  { name: 'normal', itemSize: 3 },
+  { name: 'materialIds', itemSize: 3 },
+  { name: 'materialWeights', itemSize: 3 },
+  { name: 'lightLevel', itemSize: 1 },
+];
+
 // ============== Factory ==============
 
 /**

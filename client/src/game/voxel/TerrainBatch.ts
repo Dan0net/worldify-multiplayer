@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import { createLayerMesh, LAYER_LIQUID, LAYER_COUNT } from './LayerConfig.js';
+import { createLayerMesh, LAYER_LIQUID, LAYER_COUNT, TERRAIN_ATTRS } from './LayerConfig.js';
 import { getShadowRadius } from '../quality/QualityManager.js';
 
 // ---- Constants ----
@@ -26,22 +26,6 @@ const BUFFER_GROWTH = 1.5;
 
 /** Maximum number of groups to rebuild per frame to avoid spikes */
 const MAX_REBUILDS_PER_FRAME = 4;
-
-// ---- Attribute layout ----
-
-interface AttrDef {
-  name: string;
-  itemSize: number;
-}
-
-/** Vertex attributes to merge — must match MeshGeometry.createBufferGeometry */
-const ATTRS: readonly AttrDef[] = [
-  { name: 'position', itemSize: 3 },
-  { name: 'normal', itemSize: 3 },
-  { name: 'materialIds', itemSize: 3 },
-  { name: 'materialWeights', itemSize: 3 },
-  { name: 'lightLevel', itemSize: 1 },
-];
 
 // ---- Interfaces ----
 
@@ -597,7 +581,7 @@ export class TerrainBatch {
         const idxCap = lb ? Math.ceil(totalIndices * BUFFER_GROWTH) : totalIndices;
 
         merged = new THREE.BufferGeometry();
-        for (const attr of ATTRS) {
+        for (const attr of TERRAIN_ATTRS) {
           merged.setAttribute(
             attr.name,
             new THREE.BufferAttribute(new Float32Array(vertCap * attr.itemSize), attr.itemSize),
@@ -610,7 +594,7 @@ export class TerrainBatch {
 
       // ---- Fill attribute data (shared by both paths) ----
 
-      for (const attr of ATTRS) {
+      for (const attr of TERRAIN_ATTRS) {
         const dstAttr = merged.getAttribute(attr.name) as THREE.BufferAttribute;
         const arr = dstAttr.array as Float32Array;
         let vertOffset = 0;
