@@ -258,24 +258,31 @@ export class VoxelDebugManager {
    * @param meshes All chunk meshes
    */
   update(chunks: Map<string, Chunk>, meshes: Map<string, ChunkMesh>): void {
-    // Remove debug objects for unloaded chunks
-    const loadedKeys = new Set(chunks.keys());
-    const keysToRemove: string[] = [];
-    
-    for (const [objKey, obj] of this.debugObjects) {
-      const chunkKey = obj.userData.chunkKey;
-      if (!loadedKeys.has(chunkKey)) {
-        keysToRemove.push(objKey);
+    const anyFlagOn = this.state.showChunkBounds || this.state.showEmptyChunks
+      || this.state.showCollisionMesh || this.state.showChunkCoords;
+
+    // Fast path: nothing to create or clean up
+    if (!anyFlagOn && this.debugObjects.size === 0) return;
+
+    // Remove debug objects for unloaded chunks (use chunks.has() directly — no Set allocation)
+    if (this.debugObjects.size > 0) {
+      const keysToRemove: string[] = [];
+      for (const [objKey, obj] of this.debugObjects) {
+        if (!chunks.has(obj.userData.chunkKey)) {
+          keysToRemove.push(objKey);
+        }
+      }
+      for (const key of keysToRemove) {
+        const obj = this.debugObjects.get(key);
+        if (obj) {
+          this.disposeObject(obj);
+          this.debugObjects.delete(key);
+        }
       }
     }
-    
-    for (const key of keysToRemove) {
-      const obj = this.debugObjects.get(key);
-      if (obj) {
-        this.disposeObject(obj);
-        this.debugObjects.delete(key);
-      }
-    }
+
+    // Nothing to add if no debug flags are on
+    if (!anyFlagOn) return;
     
     // Add/update debug objects for loaded chunks
     for (const [chunkKey, chunk] of chunks) {
