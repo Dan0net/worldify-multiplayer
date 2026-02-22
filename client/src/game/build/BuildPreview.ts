@@ -67,6 +67,9 @@ export class BuildPreview {
     config: BuildConfig;
   } | null = null;
 
+  /** Set of group keys currently suppressed for preview */
+  private suppressedGroups: Set<string> = new Set();
+
   /** Chunks with preview still visible after commit, waiting for remesh to replace them */
   private pendingCommitChunks: Set<string> = new Set();
 
@@ -231,6 +234,9 @@ export class BuildPreview {
       this.cancelBatch = null;
       this.batchInFlight = false;
 
+      // Restore previously suppressed groups before changing preview state
+      this.restoreAllSuppressedGroups();
+
       // Atomic: clear stale chunks + apply new results in the same frame
       for (const key of chunksToRemove) {
         this.clearChunkPreview(key);
@@ -244,6 +250,9 @@ export class BuildPreview {
         );
         chunkMesh.setPreviewActive(true, scene);
       }
+
+      // Suppress groups that contain preview chunks
+      this.suppressGroupsForActivePreview();
 
       // Check if aim moved while we were working — dispatch pending if so
       this.processPending();
@@ -289,6 +298,10 @@ export class BuildPreview {
   private endPreview(): void {
     this.cancelInFlightBatch();
 
+    // DON'T restore suppressed groups here — preview meshes stay visible
+    // until onChunkRemeshed replaces them. Groups will be restored per-chunk
+    // as each remesh arrives.
+
     for (const key of this.activePreviewChunks) {
       const chunk = this.world?.chunks.get(key);
       if (chunk) chunk.discardTemp();
@@ -306,6 +319,9 @@ export class BuildPreview {
     if (!this.world || !this.scene) return;
 
     this.cancelInFlightBatch();
+
+    // Restore suppressed groups before clearing preview chunks
+    this.restoreAllSuppressedGroups();
 
     for (const key of this.activePreviewChunks) {
       this.clearChunkPreview(key);
@@ -355,6 +371,13 @@ export class BuildPreview {
     const chunkMesh = this.world.meshes.get(chunkKey);
     if (chunkMesh) {
       chunkMesh.setPreviewActive(false, this.scene);
+    }
+
+    // Restore group only if no other pending commit chunks remain in it
+    const gk = this.world.terrainBatchGroupKey(chunkKey);
+    if (gk && !this.hasRemainingPendingInGroup(gk)) {
+      this.world.restoreGroupsFromPreview(new Set([chunkKey]));
+      this.suppressedGroups.delete(gk);
     }
   }
 
@@ -426,6 +449,39 @@ export class BuildPreview {
     this.lastCenter.z = NaN;
     this.lastRotation = { x: NaN, y: NaN, z: NaN, w: NaN };
     this.lastConfig = null;
+  }
+
+  // ---- Preview group suppression ----
+
+  /** Suppress terrain batch groups for all currently active preview chunks. */
+  private suppressGroupsForActivePreview(): void {
+    if (!this.world || this.activePreviewChunks.size === 0) return;
+    this.world.suppressGroupsForPreview(this.activePreviewChunks);
+    // Track suppressed group keys for fast restore
+    for (const key of this.activePreviewChunks) {
+      const gk = this.world.terrainBatchGroupKey(key);
+      if (gk) this.suppressedGroups.add(gk);
+    }
+  }
+
+  /** Restore all currently suppressed terrain batch groups. */
+  private restoreAllSuppressedGroups(): void {
+    if (!this.world || this.suppressedGroups.size === 0) return;
+    // Collect all chunk keys from active previews + pending commits to restore their groups
+    const allPreviewKeys = new Set<string>();
+    for (const key of this.activePreviewChunks) allPreviewKeys.add(key);
+    for (const key of this.pendingCommitChunks) allPreviewKeys.add(key);
+    this.world.restoreGroupsFromPreview(allPreviewKeys);
+    this.suppressedGroups.clear();
+  }
+
+  /** Check if any pending commit chunks remain in the given group. */
+  private hasRemainingPendingInGroup(gk: string): boolean {
+    if (!this.world) return false;
+    for (const key of this.pendingCommitChunks) {
+      if (this.world.terrainBatchGroupKey(key) === gk) return true;
+    }
+    return false;
   }
 
   /**

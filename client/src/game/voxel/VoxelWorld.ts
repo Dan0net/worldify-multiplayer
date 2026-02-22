@@ -198,6 +198,52 @@ export class VoxelWorld implements ChunkProvider {
     return this._visibilityRadius;
   }
 
+  // ---- Build preview suppression (delegates to TerrainBatch) ----
+
+  /**
+   * Suppress terrain batch groups that contain preview chunks.
+   * Hides merged meshes and shows standalones for non-preview chunks.
+   * Call when preview meshes are applied.
+   */
+  suppressGroupsForPreview(previewChunkKeys: Set<string>): void {
+    // Group preview chunks by their group key
+    const groupPreviewChunks = new Map<string, Set<string>>();
+    for (const key of previewChunkKeys) {
+      const gk = this.terrainBatch.getGroupKey(key);
+      if (!gk) continue;
+      let set = groupPreviewChunks.get(gk);
+      if (!set) {
+        set = new Set();
+        groupPreviewChunks.set(gk, set);
+      }
+      set.add(key);
+    }
+    for (const [gk, keys] of groupPreviewChunks) {
+      this.terrainBatch.suppressForPreview(gk, keys);
+    }
+  }
+
+  /**
+   * Restore terrain batch groups after preview ends.
+   * Shows the original merged meshes without rebuilding.
+   */
+  restoreGroupsFromPreview(previewChunkKeys: Set<string>): void {
+    const restored = new Set<string>();
+    for (const key of previewChunkKeys) {
+      const gk = this.terrainBatch.getGroupKey(key);
+      if (!gk || restored.has(gk)) continue;
+      restored.add(gk);
+      this.terrainBatch.restoreFromPreview(gk);
+    }
+  }
+
+  /**
+   * Get the terrain batch group key for a chunk key.
+   */
+  terrainBatchGroupKey(chunkKey: string): string | undefined {
+    return this.terrainBatch.getGroupKey(chunkKey);
+  }
+
   /**
    * ChunkProvider interface - get a chunk by key.
    */
@@ -489,9 +535,8 @@ export class VoxelWorld implements ChunkProvider {
         continue;
       }
 
-      // Hide from merged batch if preview is active (preview meshes are in scene directly)
+      // Skip preview chunks — their groups are suppressed, don't touch visibility
       if (chunkMesh.isPreviewActive()) {
-        this.terrainBatch.setVisible(key, false);
         continue;
       }
 

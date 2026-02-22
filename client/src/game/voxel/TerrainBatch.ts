@@ -97,6 +97,11 @@ interface MergedGroup {
   centerCz: number;
   /** Per-layer capacity tracking for buffer reuse */
   layerBuffers: (LayerBuffers | null)[];
+  /** When true, group is suppressed for build preview — merged mesh hidden,
+   *  standalones shown for non-preview chunks. No dirty/rebuild triggered. */
+  previewSuppressed: boolean;
+  /** Chunk keys that are in preview while group is suppressed */
+  previewChunkKeys: Set<string>;
 }
 
 // ---- Helpers ----
@@ -201,7 +206,12 @@ export class TerrainBatch {
         const m = slot.standaloneMeshes[i];
         if (m) m.visible = visible;
       }
-      this.markGroupDirty(slot.groupKey);
+      // Don't dirty the group while it's suppressed for preview —
+      // the merged mesh is hidden and will be restored as-is.
+      const group = this.groups.get(slot.groupKey);
+      if (!group?.previewSuppressed) {
+        this.markGroupDirty(slot.groupKey);
+      }
     }
   }
 
@@ -251,6 +261,9 @@ export class TerrainBatch {
     for (const [gk, group] of this.groups) {
       if (!group.dirty) continue;
 
+      // Don't rebuild while suppressed for preview
+      if (group.previewSuppressed) continue;
+
       // Defer rebuild while any chunk in this group is still being meshed
       if (isBusy) {
         let busy = false;
@@ -283,6 +296,70 @@ export class TerrainBatch {
       group.dirty = false;
       this.rebuildGroup(gk, group, playerCx, playerCy, playerCz, shadowRadius);
     }
+  }
+
+  // ---- Public: preview suppression ----
+
+  /**
+   * Get the group key for a chunk key. Returns undefined if the chunk isn't registered.
+   */
+  getGroupKey(chunkKey: string): string | undefined {
+    return this.slots.get(chunkKey)?.groupKey;
+  }
+
+  /**
+   * Suppress a group for build preview. Hides the merged mesh and shows
+   * standalone meshes for all non-preview chunks. Does NOT mark the group
+   * dirty — the merged mesh is preserved and can be restored instantly.
+   *
+   * @param gk Group key
+   * @param previewChunkKeys Chunk keys that are in preview (their standalones will be hidden)
+   */
+  suppressForPreview(gk: string, previewChunkKeys: Set<string>): void {
+    const group = this.groups.get(gk);
+    if (!group || group.previewSuppressed) return;
+
+    group.previewSuppressed = true;
+    group.previewChunkKeys = new Set(previewChunkKeys);
+
+    // Hide merged meshes
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      const m = group.meshes[i];
+      if (m) m.visible = false;
+    }
+
+    // Show standalones for non-preview, visible chunks
+    for (const ck of group.chunkKeys) {
+      if (previewChunkKeys.has(ck)) continue;
+      const slot = this.slots.get(ck);
+      if (slot && slot.visible) {
+        this.showStandalone(slot);
+      }
+    }
+  }
+
+  /**
+   * Restore a group after build preview ends. Hides standalones and shows
+   * the original merged mesh. No rebuild needed.
+   */
+  restoreFromPreview(gk: string): void {
+    const group = this.groups.get(gk);
+    if (!group || !group.previewSuppressed) return;
+
+    group.previewSuppressed = false;
+    group.previewChunkKeys.clear();
+
+    // Remove standalones
+    this.removeGroupStandalones(group);
+
+    // Show merged meshes (only layers that have geometry)
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      const m = group.meshes[i];
+      if (m) m.visible = true;
+    }
+
+    // If the group was dirtied while suppressed (e.g. real chunk data arrived),
+    // it will be rebuilt on the next eligible rebuild() call naturally.
   }
 
   /**
@@ -320,6 +397,8 @@ export class TerrainBatch {
         centerCy: center.cy,
         centerCz: center.cz,
         layerBuffers: new Array<LayerBuffers | null>(LAYER_COUNT).fill(null),
+        previewSuppressed: false,
+        previewChunkKeys: new Set(),
       };
       this.groups.set(gk, group);
     }
