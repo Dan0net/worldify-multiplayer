@@ -57,9 +57,6 @@ export class Builder {
   /** Whether voxel preview is enabled */
   private previewEnabled: boolean = true;
 
-  /** Callback when a build is committed (for collision rebuild) */
-  onBuildCommit: ((modifiedChunks: string[]) => void) | null = null;
-
   /** Injected controls instance */
   private readonly controls: Controls;
 

@@ -49,24 +49,22 @@ export class BuildPreview {
   /** Set of chunk keys currently showing preview */
   private activePreviewChunks: Set<string> = new Set();
 
-  /** Hash of operation currently being rendered (in-flight or displayed) */
-  private renderedHash: string = '';
-
-  /** The current preview operation (stored for commitPreview) */
-  private currentOperation: BuildOperation | null = null;
-
-  /** Cancel function for in-flight batch (only used by clearPreview/commitPreview) */
+  /** Cancel function for in-flight batch */
   private cancelBatch: (() => void) | null = null;
 
   /** Whether a batch is currently in flight */
   private batchInFlight: boolean = false;
+
+  /** Last rendered operation fields for change detection (avoids string hashing) */
+  private lastCenter = { x: NaN, y: NaN, z: NaN };
+  private lastRotation: Quat = { x: NaN, y: NaN, z: NaN, w: NaN };
+  private lastConfig: BuildConfig | null = null;
 
   /** If aim moved while batch was in flight, store the new operation here */
   private pendingOperation: {
     center: THREE.Vector3;
     rotation: Quat;
     config: BuildConfig;
-    hash: string;
   } | null = null;
 
   /** Chunks with preview still visible after commit, waiting for remesh to replace them */
@@ -79,6 +77,11 @@ export class BuildPreview {
     this.world = world;
     this.scene = scene;
     this.meshPool = meshPool;
+
+    // Clean up pendingCommitChunks when chunks unload to prevent leaks
+    world.addUnloadListener((key) => {
+      this.pendingCommitChunks.delete(key);
+    });
   }
 
   /**
@@ -96,33 +99,29 @@ export class BuildPreview {
   ): void {
     if (!this.world || !this.scene || !this.meshPool) return;
 
-    // Create build operation
-    const operation = this.createOperation(center, rotation, config);
-
     // Check if operation changed (avoid redundant work)
-    const hash = this.hashOperation(operation);
-    if (hash === this.renderedHash && !this.batchInFlight && this.activePreviewChunks.size > 0) {
+    if (!this.batchInFlight && this.activePreviewChunks.size > 0 &&
+        this.isSameOperation(center, rotation, config)) {
       return; // Already displaying this exact state
     }
 
-    // Store current operation for potential commit (always tracks latest)
-    this.currentOperation = operation;
-
     // If a batch is in flight, just store as pending — don't cancel, don't dispatch
     if (this.batchInFlight) {
-      this.pendingOperation = { center: center.clone(), rotation, config, hash };
+      this.pendingOperation = { center: center.clone(), rotation, config };
       return;
     }
 
     // No batch in flight — dispatch immediately
-    this.dispatchPreviewBatch(operation, hash);
+    const operation = this.createOperation(center, rotation, config);
+    this.storeOperation(center, rotation, config);
+    this.dispatchPreviewBatch(operation);
   }
 
   /**
    * Dispatch a preview batch to workers. Sets batchInFlight = true.
    * On completion, atomically applies meshes then checks for pending.
    */
-  private dispatchPreviewBatch(operation: BuildOperation, hash: string): void {
+  private dispatchPreviewBatch(operation: BuildOperation): void {
     if (!this.world || !this.scene || !this.meshPool) return;
 
     // Get affected chunks
@@ -211,13 +210,11 @@ export class BuildPreview {
         this.clearChunkPreview(key);
         this.activePreviewChunks.delete(key);
       }
-      this.renderedHash = hash;
       return;
     }
 
     // Mark in flight
     this.batchInFlight = true;
-    this.renderedHash = hash;
 
     // Capture refs for async callback
     const world = this.world;
@@ -254,16 +251,15 @@ export class BuildPreview {
   private processPending(): void {
     if (!this.pendingOperation) return;
 
-    const { rotation, config, hash } = this.pendingOperation;
-    const center = this.pendingOperation.center;
+    const { center, rotation, config } = this.pendingOperation;
     this.pendingOperation = null;
 
-    // Skip if the pending hash matches what we just rendered
-    if (hash === this.renderedHash) return;
+    // Skip if the pending operation matches what we just rendered
+    if (this.isSameOperation(center, rotation, config)) return;
 
     const operation = this.createOperation(center, rotation, config);
-    this.currentOperation = operation;
-    this.dispatchPreviewBatch(operation, hash);
+    this.storeOperation(center, rotation, config);
+    this.dispatchPreviewBatch(operation);
   }
 
   /**
@@ -279,7 +275,7 @@ export class BuildPreview {
   }
 
   /**
-   * Shared cleanup for holdPreview / commitPreview.
+   * Shared cleanup for holdPreview.
    * Cancels in-flight batch, discards temp data, transfers active preview
    * chunks to pendingCommitChunks (so meshes stay visible until remesh),
    * and resets preview tracking state.
@@ -294,8 +290,7 @@ export class BuildPreview {
     }
 
     this.activePreviewChunks.clear();
-    this.renderedHash = '';
-    this.currentOperation = null;
+    this.clearLastOperation();
   }
 
   /**
@@ -311,8 +306,7 @@ export class BuildPreview {
     }
 
     this.activePreviewChunks.clear();
-    this.renderedHash = '';
-    this.currentOperation = null;
+    this.clearLastOperation();
   }
 
   /**
@@ -341,24 +335,6 @@ export class BuildPreview {
   holdPreview(): void {
     if (!this.world || !this.scene) return;
     this.endPreview();
-  }
-
-  /**
-   * Commit the current preview to actual voxel data.
-   * Call this when the player clicks to place.
-   * Delegates to VoxelWorld.applyBuildOperation for DRY.
-   * 
-   * @returns Array of chunk keys that need collision rebuild (modified + neighbors)
-   */
-  commitPreview(): string[] {
-    if (!this.world || !this.scene || !this.currentOperation) return [];
-
-    // Capture operation before endPreview clears it
-    const operation = this.currentOperation;
-    this.endPreview();
-
-    // Apply the operation using the shared VoxelWorld method (DRY)
-    return this.world.applyBuildOperation(operation);
   }
 
   /**
@@ -399,16 +375,51 @@ export class BuildPreview {
   }
 
   /**
-   * Create a hash string for operation change detection.
+   * Check if the given operation matches the last rendered one.
+   * Uses direct field comparison — no string allocation.
    */
-  private hashOperation(operation: BuildOperation): string {
-    const c = operation.center;
-    const r = operation.rotation;
-    const cfg = operation.config;
-    const px = Math.round(c.x * 100);
-    const py = Math.round(c.y * 100);
-    const pz = Math.round(c.z * 100);
-    return `${px},${py},${pz}|${r.x.toFixed(3)},${r.y.toFixed(3)},${r.z.toFixed(3)},${r.w.toFixed(3)}|${cfg.shape}|${cfg.mode}|${cfg.size.x},${cfg.size.y},${cfg.size.z}|${cfg.material}|${cfg.thickness ?? ''}|${cfg.arcSweep ?? ''}|${cfg.closed ?? ''}`;
+  private isSameOperation(
+    center: THREE.Vector3,
+    rotation: Quat,
+    config: BuildConfig,
+  ): boolean {
+    const lc = this.lastCenter;
+    const lr = this.lastRotation;
+    const lf = this.lastConfig;
+    if (!lf) return false;
+    // Position: round to 0.01m granularity (matches old hash precision)
+    return Math.round(center.x * 100) === Math.round(lc.x * 100) &&
+      Math.round(center.y * 100) === Math.round(lc.y * 100) &&
+      Math.round(center.z * 100) === Math.round(lc.z * 100) &&
+      rotation.x === lr.x && rotation.y === lr.y &&
+      rotation.z === lr.z && rotation.w === lr.w &&
+      config.shape === lf.shape && config.mode === lf.mode &&
+      config.size.x === lf.size.x && config.size.y === lf.size.y &&
+      config.size.z === lf.size.z && config.material === lf.material &&
+      config.thickness === lf.thickness && config.arcSweep === lf.arcSweep &&
+      config.closed === lf.closed;
+  }
+
+  /** Store last operation fields for change detection. */
+  private storeOperation(
+    center: THREE.Vector3,
+    rotation: Quat,
+    config: BuildConfig,
+  ): void {
+    this.lastCenter.x = center.x;
+    this.lastCenter.y = center.y;
+    this.lastCenter.z = center.z;
+    this.lastRotation = rotation;
+    this.lastConfig = config;
+  }
+
+  /** Clear last operation fields (e.g. after endPreview/clearPreview). */
+  private clearLastOperation(): void {
+    this.lastCenter.x = NaN;
+    this.lastCenter.y = NaN;
+    this.lastCenter.z = NaN;
+    this.lastRotation = { x: NaN, y: NaN, z: NaN, w: NaN };
+    this.lastConfig = null;
   }
 
   /**

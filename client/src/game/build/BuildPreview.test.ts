@@ -9,10 +9,10 @@ import { BuildPreview } from './BuildPreview.js';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { MeshWorkerPool } from '../voxel/MeshWorkerPool.js';
 import {
-  BUILD_RADIUS,
   BuildMode,
   BuildShape,
   BuildConfig,
+  Quat,
 } from '@worldify/shared';
 
 function createTestScene(): THREE.Scene {
@@ -37,13 +37,17 @@ function createTestPreview(): {
   return { preview, world, scene };
 }
 
-function createDefaultBuildConfig(mode: BuildMode = BuildMode.Add): BuildConfig {
+function createDefaultBuildConfig(mode: BuildMode = BuildMode.ADD): BuildConfig {
   return {
-    shape: BuildShape.Sphere,
+    shape: BuildShape.SPHERE,
     mode,
-    size: { x: BUILD_RADIUS, y: BUILD_RADIUS, z: BUILD_RADIUS },
+    size: { x: 2, y: 2, z: 2 },
     material: 1,
   };
+}
+
+function createDefaultRotation(): Quat {
+  return { x: 0, y: 0, z: 0, w: 1 };
 }
 
 describe('BuildPreview Initialization Tests', () => {
@@ -64,9 +68,10 @@ describe('Preview Update Tests', () => {
     
     const targetPos = new THREE.Vector3(0, 2, 0);
     const config = createDefaultBuildConfig();
+    const rotation = createDefaultRotation();
     
     expect(() => {
-      preview.updatePreview(targetPos, 0, config);
+      preview.updatePreview(targetPos, rotation, config);
     }).not.toThrow();
   });
 
@@ -74,10 +79,11 @@ describe('Preview Update Tests', () => {
     const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(0, 1, 0);
-    const config = createDefaultBuildConfig(BuildMode.Remove);
+    const config = createDefaultBuildConfig(BuildMode.SUBTRACT);
+    const rotation = createDefaultRotation();
     
     expect(() => {
-      preview.updatePreview(targetPos, 0, config);
+      preview.updatePreview(targetPos, rotation, config);
     }).not.toThrow();
   });
 
@@ -86,8 +92,9 @@ describe('Preview Update Tests', () => {
     
     const targetPos = new THREE.Vector3(0, 2, 0);
     const config = createDefaultBuildConfig();
+    const rotation = createDefaultRotation();
     
-    preview.updatePreview(targetPos, 0, config);
+    preview.updatePreview(targetPos, rotation, config);
     
     expect(() => {
       preview.clearPreview();
@@ -104,44 +111,49 @@ describe('Preview Update Tests', () => {
     
     const targetPos = new THREE.Vector3(0, 2, 0);
     const config = createDefaultBuildConfig();
+    const rotation = createDefaultRotation();
     
-    preview.updatePreview(targetPos, 0, config);
+    preview.updatePreview(targetPos, rotation, config);
     preview.clearPreview();
     
     expect(preview.hasActivePreview()).toBe(false);
   });
 });
 
-describe('Commit Tests', () => {
-  test('commitPreview returns array', () => {
+describe('Hold Preview Tests', () => {
+  test('holdPreview does not throw', () => {
     const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(4, 4, 4);
     const config = createDefaultBuildConfig();
+    const rotation = { x: 0, y: 0, z: 0, w: 1 };
     
-    preview.updatePreview(targetPos, 0, config);
-    const result = preview.commitPreview();
+    preview.updatePreview(targetPos, rotation, config);
     
-    expect(result).toBeInstanceOf(Array);
+    expect(() => {
+      preview.holdPreview();
+    }).not.toThrow();
   });
 
-  test('commitPreview without preview returns empty array', () => {
+  test('holdPreview without preview does not throw', () => {
     const { preview } = createTestPreview();
     
-    const result = preview.commitPreview();
-    expect(result).toEqual([]);
+    expect(() => {
+      preview.holdPreview();
+    }).not.toThrow();
   });
 
-  test('commitPreview clears state', () => {
+  test('holdPreview clears state', () => {
     const { preview } = createTestPreview();
     
     const targetPos = new THREE.Vector3(4, 4, 4);
     const config = createDefaultBuildConfig();
+    const rotation = { x: 0, y: 0, z: 0, w: 1 };
     
-    preview.updatePreview(targetPos, 0, config);
-    preview.commitPreview();
+    preview.updatePreview(targetPos, rotation, config);
+    preview.holdPreview();
     
-    // After commit, hasActivePreview should be false
+    // After hold, hasActivePreview should be false
     expect(preview.hasActivePreview()).toBe(false);
   });
 });
@@ -150,6 +162,7 @@ describe('Boundary Behavior Tests', () => {
   test('Build operations do not throw', () => {
     const { preview } = createTestPreview();
     const config = createDefaultBuildConfig();
+    const rotation = createDefaultRotation();
     
     // Test various positions
     const positions = [
@@ -161,8 +174,8 @@ describe('Boundary Behavior Tests', () => {
     
     for (const pos of positions) {
       expect(() => {
-        preview.updatePreview(pos, 0, config);
-        preview.commitPreview();
+        preview.updatePreview(pos, rotation, config);
+        preview.holdPreview();
       }).not.toThrow();
     }
   });
@@ -172,24 +185,13 @@ describe('API Consistency Tests', () => {
   test('updatePreview can be called multiple times', () => {
     const { preview } = createTestPreview();
     const config = createDefaultBuildConfig();
+    const rotation = createDefaultRotation();
     
     // Call updatePreview multiple times with different positions
     expect(() => {
-      preview.updatePreview(new THREE.Vector3(1, 1, 1), 0, config);
-      preview.updatePreview(new THREE.Vector3(2, 2, 2), 0, config);
-      preview.updatePreview(new THREE.Vector3(3, 3, 3), 0, config);
-    }).not.toThrow();
-  });
-
-  test('commitPreview can be called multiple times', () => {
-    const { preview } = createTestPreview();
-    const config = createDefaultBuildConfig();
-    
-    expect(() => {
-      preview.updatePreview(new THREE.Vector3(1, 1, 1), 0, config);
-      preview.commitPreview();
-      preview.updatePreview(new THREE.Vector3(2, 2, 2), 0, config);
-      preview.commitPreview();
+      preview.updatePreview(new THREE.Vector3(1, 1, 1), rotation, config);
+      preview.updatePreview(new THREE.Vector3(2, 2, 2), rotation, config);
+      preview.updatePreview(new THREE.Vector3(3, 3, 3), rotation, config);
     }).not.toThrow();
   });
 
@@ -208,9 +210,10 @@ describe('Rotation Tests', () => {
     
     const targetPos = new THREE.Vector3(4, 2, 4);
     const config = createDefaultBuildConfig();
+    const rotation = { x: 0, y: 0.383, z: 0, w: 0.924 }; // ~45° Y
     
     expect(() => {
-      preview.updatePreview(targetPos, Math.PI / 4, config);
+      preview.updatePreview(targetPos, rotation, config);
     }).not.toThrow();
   });
 
@@ -220,7 +223,14 @@ describe('Rotation Tests', () => {
     const targetPos = new THREE.Vector3(4, 2, 4);
     const config = createDefaultBuildConfig();
     
-    for (const rotation of [0, Math.PI / 4, Math.PI / 2, Math.PI]) {
+    const rotations: Quat[] = [
+      { x: 0, y: 0, z: 0, w: 1 },
+      { x: 0, y: 0.383, z: 0, w: 0.924 },
+      { x: 0, y: 0.707, z: 0, w: 0.707 },
+      { x: 0, y: 1, z: 0, w: 0 },
+    ];
+    
+    for (const rotation of rotations) {
       expect(() => {
         preview.updatePreview(targetPos, rotation, config);
         preview.clearPreview();
@@ -235,7 +245,8 @@ describe('Dispose Tests', () => {
     
     const targetPos = new THREE.Vector3(4, 2, 4);
     const config = createDefaultBuildConfig();
-    preview.updatePreview(targetPos, 0, config);
+    const rotation = createDefaultRotation();
+    preview.updatePreview(targetPos, rotation, config);
     
     expect(() => {
       preview.dispose();
@@ -247,7 +258,8 @@ describe('Dispose Tests', () => {
     
     const targetPos = new THREE.Vector3(4, 2, 4);
     const config = createDefaultBuildConfig();
-    preview.updatePreview(targetPos, 0, config);
+    const rotation = createDefaultRotation();
+    preview.updatePreview(targetPos, rotation, config);
     
     preview.dispose();
     expect(preview.hasActivePreview()).toBe(false);

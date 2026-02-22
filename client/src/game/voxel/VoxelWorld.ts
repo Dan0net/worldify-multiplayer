@@ -13,7 +13,6 @@ import {
   MESH_MARGIN,
   worldToChunk,
   chunkKey,
-  parseChunkKey,
   BuildOperation,
   getAffectedChunks,
   drawToChunk,
@@ -935,16 +934,8 @@ export class VoxelWorld implements ChunkProvider {
     const modifiedKeys: string[] = [];
 
     for (const key of affectedKeys) {
-      let chunk = this.chunks.get(key);
-      if (!chunk) {
-        // Chunk not loaded — create an empty one so the build can proceed.
-        // Server has the authoritative terrain; this just ensures client
-        // doesn't silently drop builds that extend into unloaded space.
-        const { cx, cy, cz } = parseChunkKey(key);
-        chunk = new Chunk(cx, cy, cz);
-        this.chunks.set(key, chunk);
-        this.lastBFSChunk = null; // invalidate BFS cache for new chunk
-      }
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue; // Skip unloaded chunks — server will send authoritative data
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {
