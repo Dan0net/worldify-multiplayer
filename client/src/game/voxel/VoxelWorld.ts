@@ -35,11 +35,11 @@ import {
 import { Chunk } from './Chunk.js';
 import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
 import { ChunkMesh } from './ChunkMesh.js';
+import { TerrainBatch } from './TerrainBatch.js';
 import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
 import { sendBinary } from '../../net/netClient.js';
 import { storeBridge } from '../../state/bridge.js';
 import { perfStats } from '../debug/PerformanceStats.js';
-import { getShadowRadius } from '../quality/QualityManager.js';
 import {
   getVisibleChunks,
   getFrustumFromCamera,
@@ -120,9 +120,13 @@ export class VoxelWorld implements ChunkProvider {
   /** Number of mesh worker threads */
   private static readonly MESH_WORKER_COUNT = 2;
 
+  /** Merges chunk geometries into spatial groups for draw-call reduction */
+  private terrainBatch: TerrainBatch;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.meshPool = new MeshWorkerPool(VoxelWorld.MESH_WORKER_COUNT);
+    this.terrainBatch = new TerrainBatch(scene);
   }
 
   /**
@@ -272,6 +276,12 @@ export class VoxelWorld implements ChunkProvider {
 
     // Always update mesh visibility (camera may have rotated)
     this.updateMeshVisibility(this.cachedReachable);
+
+    // Rebuild merged terrain groups (only dirty groups are re-merged)
+    if (this.lastPlayerChunk) {
+      const { cx, cy, cz } = this.lastPlayerChunk;
+      this.terrainBatch.rebuild(cx, cy, cz);
+    }
 
     // Unload chunks far outside reachable set (with +2 hysteresis buffer)
     this.unloadDistantChunks(this.cachedReachable);
@@ -426,12 +436,11 @@ export class VoxelWorld implements ChunkProvider {
     
     const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
     const visibilityRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
-    const shadowRadius = getShadowRadius();
 
     for (const [key, chunkMesh] of this.meshes) {
       const chunk = this.chunks.get(key);
       if (!chunk) {
-        chunkMesh.setVisible(false);
+        this.terrainBatch.setVisible(key, false);
         continue;
       }
 
@@ -443,15 +452,18 @@ export class VoxelWorld implements ChunkProvider {
       const inExtendedRadius = dx <= visibilityRadius && dy <= visibilityRadius && dz <= visibilityRadius;
 
       if (!inReachable && !inExtendedRadius) {
-        chunkMesh.setVisible(false);
+        this.terrainBatch.setVisible(key, false);
         continue;
       }
 
-      chunkMesh.setVisible(true);
+      // Hide from merged batch if preview is active (preview meshes are in scene directly)
+      if (chunkMesh.isPreviewActive()) {
+        this.terrainBatch.setVisible(key, false);
+        continue;
+      }
 
-      // Shadow distance culling: only chunks within shadow radius cast shadows
-      const inShadowRadius = dx <= shadowRadius && dy <= shadowRadius && dz <= shadowRadius;
-      chunkMesh.setShadowCasting(inShadowRadius);
+      this.terrainBatch.setVisible(key, true);
+      // Shadow culling is handled per-group in TerrainBatch.rebuild()
     }
   }
 
@@ -700,10 +712,13 @@ export class VoxelWorld implements ChunkProvider {
     // Notify listeners before cleanup
     for (const listener of this.unloadListeners) listener(key);
 
+    // Remove from terrain batch before disposing geometry
+    this.terrainBatch.removeChunk(key);
+
     // Dispose mesh
     const chunkMesh = this.meshes.get(key);
     if (chunkMesh) {
-      chunkMesh.disposeMesh(this.scene);
+      chunkMesh.disposeMeshes(this.scene);
       this.meshes.delete(key);
     }
 
@@ -748,8 +763,16 @@ export class VoxelWorld implements ChunkProvider {
     // Generate mesh with neighbor data (solid + transparent)
     const output = meshChunk(chunk, this.chunks);
 
-    // Update meshes
-    chunkMesh.updateMeshes(output, this.scene);
+    // Update meshes (no scene — TerrainBatch owns scene meshes)
+    chunkMesh.updateMeshes(output);
+
+    // Register geometry with terrain batch for merged rendering
+    const worldPos = chunk.getWorldPosition();
+    this.terrainBatch.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, [
+      chunkMesh.solidMesh?.geometry ?? null,
+      chunkMesh.transparentMesh?.geometry ?? null,
+      chunkMesh.liquidMesh?.geometry ?? null,
+    ], worldPos);
 
     // Clear dirty flag
     chunk.clearDirty();
@@ -873,8 +896,17 @@ export class VoxelWorld implements ChunkProvider {
       this.meshes.set(key, chunkMesh);
     }
 
-    chunkMesh.updateMeshesFromData(solid, transparent, liquid, this.scene);
+    // No scene param — TerrainBatch owns scene meshes
+    chunkMesh.updateMeshesFromData(solid, transparent, liquid);
     chunk.clearDirty();
+
+    // Register geometry with terrain batch for merged rendering
+    const worldPos = chunk.getWorldPosition();
+    this.terrainBatch.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, [
+      chunkMesh.solidMesh?.geometry ?? null,
+      chunkMesh.transparentMesh?.geometry ?? null,
+      chunkMesh.liquidMesh?.geometry ?? null,
+    ], worldPos);
 
     // Notify listeners (e.g. collision rebuild, BuildPreview committed preview cleanup)
     for (const listener of this.remeshListeners) listener(key);
@@ -1098,9 +1130,12 @@ export class VoxelWorld implements ChunkProvider {
       this.meshPool.dispose();
     }
 
-    // Dispose all meshes
+    // Dispose terrain batch (removes merged meshes from scene)
+    this.terrainBatch.dispose();
+
+    // Dispose all chunk mesh holders
     for (const chunkMesh of this.meshes.values()) {
-      chunkMesh.disposeMesh(this.scene);
+      chunkMesh.disposeMeshes(this.scene);
     }
     this.meshes.clear();
 
