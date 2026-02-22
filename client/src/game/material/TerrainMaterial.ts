@@ -262,7 +262,12 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
     super({
       roughness: 1.0,
       metalness: 1.0,
-      transparent: isTransparent,
+      // NOTE: Do NOT set transparent: true for alpha-tested materials.
+      // alphaTest uses a hard cutoff (discard), not blending, so fragments that
+      // survive are effectively opaque and must write to the depth buffer.
+      // transparent: true causes depthWrite: false by default in Three.js, which
+      // breaks depth ordering for large merged meshes (batched terrain groups).
+      transparent: false,
       side: isTransparent ? THREE.DoubleSide : THREE.FrontSide,
       alphaTest: isTransparent ? ALPHA_CUTOFF : 0,
       normalMap: new THREE.Texture(),
