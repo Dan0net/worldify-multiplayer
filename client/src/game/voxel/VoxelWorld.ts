@@ -9,7 +9,7 @@ import {
   CHUNK_WORLD_SIZE,
   CHUNK_SIZE,
   FACE_OFFSETS_6,
-  NEIGHBOR_OFFSETS_26,
+  POSITIVE_FACE_OFFSETS_3,
   MESH_MARGIN,
   worldToChunk,
   chunkKey,
@@ -699,11 +699,12 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Queue neighbor chunks for remeshing (for seamless boundaries).
+   * Queue face-neighbor chunks for remeshing (for seamless boundaries).
+   * Only the 6 face neighbors can share margin data with this chunk.
    * Public so build system can trigger neighbor remesh after commits.
    */
   queueNeighborRemesh(cx: number, cy: number, cz: number): void {
-    for (const [dx, dy, dz] of NEIGHBOR_OFFSETS_26) {
+    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
       const key = chunkKey(cx + dx, cy + dy, cz + dz);
       if (this.chunks.has(key)) {
         this.remeshQueue.add(key);
@@ -748,11 +749,11 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Check if any of the chunk's 26 neighbors are still pending from server.
-   * If so, we should delay meshing to avoid stitching artifacts.
+   * Check if any positive-face neighbor (+X, +Y, +Z) is still pending.
+   * Only these 3 supply margin data for this chunk's mesh.
    */
   private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
-    for (const [dx, dy, dz] of NEIGHBOR_OFFSETS_26) {
+    for (const [dx, dy, dz] of POSITIVE_FACE_OFFSETS_3) {
       if (this.pendingChunks.has(chunkKey(cx + dx, cy + dy, cz + dz))) {
         return true;
       }
@@ -978,7 +979,8 @@ export class VoxelWorld implements ChunkProvider {
           this.remeshQueue.add(aboveKey);
         }
 
-        // Relight face-adjacent horizontal neighbors so their border light updates
+        // Relight face-adjacent horizontal neighbors so their border light updates.
+        // This also covers mesh-stitch remeshing — no separate queueNeighborRemesh needed.
         for (const [dx, dy, dz] of FACE_OFFSETS_6) {
           if (dy !== 0) continue; // vertical already handled above
           const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
@@ -988,9 +990,6 @@ export class VoxelWorld implements ChunkProvider {
           nChunk.dirty = true;
           this.remeshQueue.add(nKey);
         }
-
-        // Also queue neighbors for seamless boundary updates
-        this.queueNeighborRemesh(chunk.cx, chunk.cy, chunk.cz);
       }
     }
 

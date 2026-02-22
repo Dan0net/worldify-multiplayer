@@ -23,12 +23,12 @@ import {
   getAffectedChunks,
   Quat,
   chunkKey,
-  parseChunkKey,
   CHUNK_SIZE,
+  MESH_MARGIN,
+  NEGATIVE_FACE_OFFSETS_3,
   voxelIndex,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
-import { Chunk } from '../voxel/Chunk.js';
 import { expandChunkToGrid } from '../voxel/ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from '../voxel/MeshWorkerPool.js';
 
@@ -134,13 +134,8 @@ export class BuildPreview {
     const drawnSet = new Set<string>();
 
     for (const key of affectedKeys) {
-      let chunk = this.world.chunks.get(key);
-      if (!chunk) {
-        // Chunk not loaded — create an empty one so the preview can render.
-        const { cx, cy, cz } = parseChunkKey(key);
-        chunk = new Chunk(cx, cy, cz);
-        this.world.chunks.set(key, chunk);
-      }
+      const chunk = this.world.chunks.get(key);
+      if (!chunk) continue; // Skip unloaded chunks — can't preview into empty space
 
       chunk.copyToTemp();
       if (!chunk.tempData) continue;
@@ -173,56 +168,23 @@ export class BuildPreview {
       newActiveChunks.add(key);
     }
 
-    // === Pass 2b: Include low-side neighbors whose margin reads drawn chunk data ===
-    // The mesh grid has a +2 HIGH-side margin (positions 32-33). So only the
-    // negative-direction neighbor (-X, -Y, -Z) reads from a drawn chunk's data.
-    // We only add a neighbor if the drawn chunk actually has changes in the first
-    // 2 voxel layers on that face (the margin the neighbor would sample).
+    // === Pass 2b: Include negative-face neighbors whose high-side margin reads drawn chunk data ===
     for (const key of drawnChunks) {
       const chunk = this.world.chunks.get(key)!;
       const data = chunk.data;
       const temp = chunk.tempData!;
 
-      // Check low-X face (x=0..1) → neighbor at -X
-      if (this.hasBoundaryChanges(data, temp, 'x')) {
-        const nk = chunkKey(chunk.cx - 1, chunk.cy, chunk.cz);
-        if (!newActiveChunks.has(nk)) {
-          const neighbor = this.world.chunks.get(nk);
-          if (neighbor) {
-            const grid = this.meshPool.takeGrid();
-            const skipHighBoundary = expandChunkToGrid(neighbor, this.world.chunks, grid, true);
-            batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
-            newActiveChunks.add(nk);
-          }
-        }
-      }
-
-      // Check low-Y face (y=0..1) → neighbor at -Y
-      if (this.hasBoundaryChanges(data, temp, 'y')) {
-        const nk = chunkKey(chunk.cx, chunk.cy - 1, chunk.cz);
-        if (!newActiveChunks.has(nk)) {
-          const neighbor = this.world.chunks.get(nk);
-          if (neighbor) {
-            const grid = this.meshPool.takeGrid();
-            const skipHighBoundary = expandChunkToGrid(neighbor, this.world.chunks, grid, true);
-            batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
-            newActiveChunks.add(nk);
-          }
-        }
-      }
-
-      // Check low-Z face (z=0..1) → neighbor at -Z
-      if (this.hasBoundaryChanges(data, temp, 'z')) {
-        const nk = chunkKey(chunk.cx, chunk.cy, chunk.cz - 1);
-        if (!newActiveChunks.has(nk)) {
-          const neighbor = this.world.chunks.get(nk);
-          if (neighbor) {
-            const grid = this.meshPool.takeGrid();
-            const skipHighBoundary = expandChunkToGrid(neighbor, this.world.chunks, grid, true);
-            batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
-            newActiveChunks.add(nk);
-          }
-        }
+      for (let axis = 0; axis < 3; axis++) {
+        if (!BuildPreview.hasBoundaryChanges(data, temp, axis)) continue;
+        const [dx, dy, dz] = NEGATIVE_FACE_OFFSETS_3[axis];
+        const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
+        if (newActiveChunks.has(nk)) continue;
+        const neighbor = this.world.chunks.get(nk);
+        if (!neighbor) continue;
+        const grid = this.meshPool.takeGrid();
+        const skipHighBoundary = expandChunkToGrid(neighbor, this.world.chunks, grid, true);
+        batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
+        newActiveChunks.add(nk);
       }
     }
 
@@ -462,30 +424,27 @@ export class BuildPreview {
   // ============== Boundary Change Detection ==============
 
   /**
-   * Check if the first 2 voxel layers on the low side of an axis differ
-   * between original data and tempData. The mesh grid's +2 high-side margin
-   * means only the negative-direction neighbor reads from these layers.
-   * 
+   * Check if the first MESH_MARGIN voxel layers on the low side of an axis differ
+   * between original data and tempData. The mesh grid's high-side margin means
+   * only the negative-direction neighbor reads from these layers.
+   *
+   * @param axis 0=X, 1=Y, 2=Z
    * Returns true as soon as any difference is found (early-exit).
    */
-  private hasBoundaryChanges(
+  private static hasBoundaryChanges(
     data: Uint16Array,
     temp: Uint16Array,
-    axis: 'x' | 'y' | 'z',
+    axis: number,
   ): boolean {
     const CS = CHUNK_SIZE;
-    // Check the first 2 layers (0 and 1) on the given axis
-    for (let layer = 0; layer < 2; layer++) {
+    const coords = [0, 0, 0];
+    for (let layer = 0; layer < MESH_MARGIN; layer++) {
       for (let a = 0; a < CS; a++) {
         for (let b = 0; b < CS; b++) {
-          let idx: number;
-          if (axis === 'x') {
-            idx = voxelIndex(layer, a, b);      // x=0..1, y=a, z=b
-          } else if (axis === 'y') {
-            idx = voxelIndex(a, layer, b);      // x=a, y=0..1, z=b
-          } else {
-            idx = voxelIndex(a, b, layer);      // x=a, y=b, z=0..1
-          }
+          coords[axis] = layer;
+          coords[(axis + 1) % 3] = a;
+          coords[(axis + 2) % 3] = b;
+          const idx = voxelIndex(coords[0], coords[1], coords[2]);
           if (data[idx] !== temp[idx]) return true;
         }
       }

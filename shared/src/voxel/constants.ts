@@ -144,3 +144,21 @@ export const NEIGHBOR_OFFSETS_26: readonly (readonly [number, number, number])[]
   [-1, -1, -1], [-1, -1, 1], [-1, 1, -1], [-1, 1, 1],
   [1, -1, -1], [1, -1, 1], [1, 1, -1], [1, 1, 1],
 ] as const;
+
+/**
+ * Positive-direction face offsets (+X, +Y, +Z).
+ * These are the 3 neighbors whose data appears in a chunk's high-side mesh margin.
+ * Use for: "which neighbors does MY mesh depend on?" / pending-neighbor checks.
+ */
+export const POSITIVE_FACE_OFFSETS_3: readonly (readonly [number, number, number])[] = [
+  [1, 0, 0], [0, 1, 0], [0, 0, 1],
+] as const;
+
+/**
+ * Negative-direction face offsets (-X, -Y, -Z).
+ * These are the 3 neighbors whose mesh margins read from MY data.
+ * Use for: "which neighbors' meshes are stale when I change?"
+ */
+export const NEGATIVE_FACE_OFFSETS_3: readonly (readonly [number, number, number])[] = [
+  [-1, 0, 0], [0, -1, 0], [0, 0, -1],
+] as const;
