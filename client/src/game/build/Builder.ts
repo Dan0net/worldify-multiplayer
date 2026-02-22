@@ -220,6 +220,9 @@ export class Builder {
     storeBridge.setBuildHasValidTarget(hasValidTarget);
     storeBridge.setBuildInvalidReason(invalidReason);
 
+    // Check if deferred preview can now be shown (pending group merges resolved)
+    this.preview.finalizeDeferredPreview();
+
     // Update voxel preview
     this.updateVoxelPreview();
   }

@@ -70,6 +70,12 @@ export class BuildPreview {
   /** Chunks with preview still visible after commit, waiting for remesh to replace them */
   private pendingCommitChunks: Set<string> = new Set();
 
+  /** Preview results waiting to be made visible (deferred until pending suppressions resolve) */
+  private deferredPreviewResults: MeshResult[] | null = null;
+
+  /** Chunks to remove from preview after deferred results are applied */
+  private deferredChunksToRemove: string[] | null = null;
+
   /**
    * Set the voxel world, scene, and worker pool to use for preview.
    */
@@ -234,25 +240,27 @@ export class BuildPreview {
       // Restore previously suppressed groups before changing preview state
       this.restoreAllSuppressedGroups();
 
-      // Atomic: clear stale chunks + apply new results in the same frame
+      // Remove stale chunk keys from active set BEFORE suppressing new groups.
+      // This ensures old preview chunks are treated as normal chunks during
+      // suppress (they get standalones) rather than being excluded.
       for (const key of chunksToRemove) {
-        this.clearChunkPreview(key);
         this.activePreviewChunks.delete(key);
       }
-      for (const result of results) {
-        const chunkMesh = world.meshes.get(result.chunkKey);
-        if (!chunkMesh) continue;
-        chunkMesh.updatePreviewMeshesFromData(
-          result.solid, result.transparent, result.liquid, scene
-        );
-        chunkMesh.setPreviewActive(true, scene);
+
+      // Suppress groups that contain new preview chunks
+      const allImmediate = this.suppressGroupsForActivePreview();
+
+      if (allImmediate) {
+        // All groups are already merged — safe to show preview now
+        this.applyPreviewResults(results, chunksToRemove, world, scene);
+        this.processPending();
+      } else {
+        // Some groups need to be merged first — defer preview visibility.
+        // Store results; finalizeDeferredPreview() picks them up once
+        // rebuild() finalizes the pending suppressions.
+        this.deferredPreviewResults = results;
+        this.deferredChunksToRemove = chunksToRemove;
       }
-
-      // Suppress groups that contain preview chunks
-      this.suppressGroupsForActivePreview();
-
-      // Check if aim moved while we were working — dispatch pending if so
-      this.processPending();
     });
   }
 
@@ -284,6 +292,8 @@ export class BuildPreview {
     }
     this.batchInFlight = false;
     this.pendingOperation = null;
+    this.deferredPreviewResults = null;
+    this.deferredChunksToRemove = null;
   }
 
   /**
@@ -446,16 +456,69 @@ export class BuildPreview {
 
   // ---- Preview group suppression ----
 
-  /** Suppress terrain batch groups for all currently active preview chunks. */
-  private suppressGroupsForActivePreview(): void {
-    if (!this.world || this.activePreviewChunks.size === 0) return;
-    this.world.terrainBatch.suppressGroupsForChunks(this.activePreviewChunks);
+  /**
+   * Suppress terrain batch groups for all currently active preview chunks.
+   * @returns true if all groups were suppressed immediately (safe to show preview)
+   */
+  private suppressGroupsForActivePreview(): boolean {
+    if (!this.world || this.activePreviewChunks.size === 0) return true;
+    return this.world.terrainBatch.suppressGroupsForChunks(this.activePreviewChunks);
   }
 
   /** Restore all currently suppressed terrain batch groups. */
   private restoreAllSuppressedGroups(): void {
     if (!this.world) return;
     this.world.terrainBatch.restoreAllSuppressedGroups();
+  }
+
+  // ---- Deferred preview application ----
+
+  /**
+   * Apply preview mesh results: clear stale chunks, show new preview meshes.
+   */
+  private applyPreviewResults(
+    results: MeshResult[],
+    chunksToRemove: string[],
+    world: VoxelWorld,
+    scene: THREE.Scene,
+  ): void {
+    // Clear old preview meshes (keys already removed from activePreviewChunks
+    // in the batch callback, before suppress).
+    for (const key of chunksToRemove) {
+      this.clearChunkPreview(key);
+    }
+    for (const result of results) {
+      const chunkMesh = world.meshes.get(result.chunkKey);
+      if (!chunkMesh) continue;
+      chunkMesh.updatePreviewMeshesFromData(
+        result.solid, result.transparent, result.liquid, scene,
+      );
+      chunkMesh.setPreviewActive(true, scene);
+    }
+  }
+
+  /**
+   * Check if deferred preview results can be applied.
+   * Call once per frame from the game loop (after terrainBatch.rebuild()).
+   * When pending suppressions are resolved, applies the deferred preview
+   * and continues with pending operations.
+   */
+  finalizeDeferredPreview(): void {
+    if (!this.deferredPreviewResults || !this.world || !this.scene) return;
+
+    // Still waiting for groups to be merged?
+    if (this.world.terrainBatch.hasPendingSuppressions()) return;
+
+    // All groups are now merged and suppressed — safe to show preview
+    const results = this.deferredPreviewResults;
+    const chunksToRemove = this.deferredChunksToRemove ?? [];
+    this.deferredPreviewResults = null;
+    this.deferredChunksToRemove = null;
+
+    this.applyPreviewResults(results, chunksToRemove, this.world, this.scene);
+
+    // Process any pending operation that arrived while we were waiting
+    this.processPending();
   }
 
   /**

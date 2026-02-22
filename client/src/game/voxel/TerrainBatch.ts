@@ -73,6 +73,11 @@ interface MergedGroup {
   previewSuppressed: boolean;
   /** Chunk keys that are in preview while group is suppressed */
   previewChunkKeys: Set<string>;
+  /** When true, suppression is waiting for the group to be merged first.
+   *  The group keeps its current visible state until rebuild finalizes it. */
+  suppressionPending: boolean;
+  /** Preview chunk keys saved while suppression is pending */
+  pendingPreviewChunkKeys: Set<string>;
 }
 
 // ---- Helpers ----
@@ -213,6 +218,10 @@ export class TerrainBatch {
    * to the player are rebuilt first; standalone meshes keep chunks visible
    * while their group waits.
    *
+   * Groups with suppressionPending are rebuilt with top priority (before
+   * distance sort) and bypass the isBusy check — the preview is blocked
+   * until these groups are merged, so completing them fast is critical.
+   *
    * @param isBusy Optional callback: returns true if a chunk key is still being
    *   processed (in remesh queue or in-flight on a worker). Groups with ANY busy
    *   chunk are skipped (left dirty) so we don't rebuild the same group dozens
@@ -226,7 +235,19 @@ export class TerrainBatch {
   ): void {
     const shadowRadius = getShadowRadius();
 
-    // Collect eligible dirty groups
+    // === Phase 1: Priority rebuild for groups with pending suppression ===
+    // These groups must be merged before preview can show — no frame cap, no isBusy skip.
+    for (const [gk, group] of this.groups) {
+      if (!group.suppressionPending || !group.dirty) continue;
+
+      group.dirty = false;
+      this.rebuildGroup(gk, group, playerCx, playerCy, playerCz, shadowRadius);
+
+      // Now that group is merged, finalize the deferred suppression
+      this.finalizePendingSuppression(gk, group);
+    }
+
+    // === Phase 2: Normal dirty groups (distance-sorted, capped, isBusy-gated) ===
     const eligible: { gk: string; group: MergedGroup; dist: number }[] = [];
 
     for (const [gk, group] of this.groups) {
@@ -234,6 +255,10 @@ export class TerrainBatch {
 
       // Don't rebuild while suppressed for preview
       if (group.previewSuppressed) continue;
+
+      // suppressionPending groups that are still dirty were handled in Phase 1
+      // (if they weren't dirty they don't need a rebuild)
+      if (group.suppressionPending) continue;
 
       // Defer rebuild while any chunk in this group is still being meshed
       if (isBusy) {
@@ -269,27 +294,16 @@ export class TerrainBatch {
     }
   }
 
-  // ---- Public: preview suppression ----
-
   /**
-   * Get the group key for a chunk key. Returns undefined if the chunk isn't registered.
+   * Finalize a pending suppression after the group has been rebuilt.
+   * Transitions from suppressionPending → previewSuppressed.
    */
-  getGroupKey(chunkKey: string): string | undefined {
-    return this.slots.get(chunkKey)?.groupKey;
-  }
+  private finalizePendingSuppression(_gk: string, group: MergedGroup): void {
+    const previewChunkKeys = group.pendingPreviewChunkKeys;
+    group.suppressionPending = false;
+    group.pendingPreviewChunkKeys = new Set();
 
-  /**
-   * Suppress a group for build preview. Hides the merged mesh and shows
-   * standalone meshes for all non-preview chunks. Does NOT mark the group
-   * dirty — the merged mesh is preserved and can be restored instantly.
-   *
-   * @param gk Group key
-   * @param previewChunkKeys Chunk keys that are in preview (their standalones will be hidden)
-   */
-  suppressForPreview(gk: string, previewChunkKeys: Set<string>): void {
-    const group = this.groups.get(gk);
-    if (!group || group.previewSuppressed) return;
-
+    // Now we have a merged mesh — apply the actual suppression
     group.previewSuppressed = true;
     group.previewChunkKeys = new Set(previewChunkKeys);
 
@@ -309,28 +323,114 @@ export class TerrainBatch {
     }
   }
 
+  // ---- Public: preview suppression ----
+
   /**
-   * Restore a group after build preview ends. Hides standalones and shows
-   * the original merged mesh. No rebuild needed.
+   * Get the group key for a chunk key. Returns undefined if the chunk isn't registered.
+   */
+  getGroupKey(chunkKey: string): string | undefined {
+    return this.slots.get(chunkKey)?.groupKey;
+  }
+
+  /**
+   * Suppress a group for build preview. If the group has a valid merged mesh,
+   * suppresses immediately (hides merged, shows standalones). Otherwise defers
+   * suppression until the group is rebuilt — current visible state is preserved
+   * to avoid holes.
+   *
+   * @param gk Group key
+   * @param previewChunkKeys Chunk keys that are in preview (their standalones will be hidden)
+   * @returns true if suppression was applied immediately
+   */
+  suppressForPreview(gk: string, previewChunkKeys: Set<string>): boolean {
+    const group = this.groups.get(gk);
+    if (!group || group.previewSuppressed) return true; // already suppressed
+
+    // Can suppress immediately if the group has been merged (has visible meshes to hide)
+    const hasMergedMesh = group.merged && group.meshes.some(m => m !== null);
+
+    if (hasMergedMesh) {
+      // Immediate suppression — safe because we have a merged mesh to restore later
+      group.previewSuppressed = true;
+      group.previewChunkKeys = new Set(previewChunkKeys);
+      group.suppressionPending = false;
+      group.pendingPreviewChunkKeys.clear();
+
+      // Hide merged meshes
+      for (let i = 0; i < LAYER_COUNT; i++) {
+        const m = group.meshes[i];
+        if (m) m.visible = false;
+      }
+
+      // Show standalones for non-preview, visible chunks
+      for (const ck of group.chunkKeys) {
+        if (previewChunkKeys.has(ck)) continue;
+        const slot = this.slots.get(ck);
+        if (slot && slot.visible) {
+          this.showStandalone(slot);
+        }
+      }
+      return true;
+    }
+
+    // Defer suppression — group hasn't been merged yet. Keep current
+    // visible state (standalones or nothing) to avoid holes.
+    group.suppressionPending = true;
+    group.pendingPreviewChunkKeys = new Set(previewChunkKeys);
+    // Mark dirty so rebuild() prioritizes this group
+    this.markGroupDirty(gk);
+    return false;
+  }
+
+  /**
+   * Restore a group after build preview ends. If the group has a valid merged
+   * mesh, hides standalones and shows the merged mesh. If not (never been
+   * merged), keeps standalones visible and marks dirty — the next rebuild()
+   * will merge and clean up standalones naturally.
    */
   restoreFromPreview(gk: string): void {
     const group = this.groups.get(gk);
-    if (!group || !group.previewSuppressed) return;
+    if (!group) return;
+
+    // Clear any pending suppression if it was never finalized
+    if (group.suppressionPending) {
+      group.suppressionPending = false;
+      group.pendingPreviewChunkKeys.clear();
+      // Group was never actually suppressed, nothing to restore
+      return;
+    }
+
+    if (!group.previewSuppressed) return;
 
     group.previewSuppressed = false;
     group.previewChunkKeys.clear();
 
-    // Remove standalones
-    this.removeGroupStandalones(group);
+    // Check if group has a valid merged mesh to restore
+    const hasMergedMesh = group.merged && group.meshes.some(m => m !== null);
 
-    // Show merged meshes (only layers that have geometry)
-    for (let i = 0; i < LAYER_COUNT; i++) {
-      const m = group.meshes[i];
-      if (m) m.visible = true;
+    if (hasMergedMesh && !group.dirty) {
+      // Safe: remove standalones and show merged mesh
+      this.removeGroupStandalones(group);
+
+      for (let i = 0; i < LAYER_COUNT; i++) {
+        const m = group.meshes[i];
+        if (m) m.visible = true;
+      }
+    } else {
+      // No valid merged mesh (or it's stale). Show standalones for ALL
+      // visible chunks, including former preview chunks that had no standalone
+      // while the group was suppressed. This prevents 1-frame holes when
+      // preview is cleared or moved across chunk boundaries.
+      for (const ck of group.chunkKeys) {
+        const slot = this.slots.get(ck);
+        if (slot && slot.visible) {
+          this.showStandalone(slot);
+        }
+      }
+      // Mark dirty so rebuild() merges and removes standalones naturally.
+      group.dirty = true;
+      group.merged = false;
     }
-
-    // If the group was dirtied while suppressed (e.g. real chunk data arrived),
-    // it will be rebuilt on the next eligible rebuild() call naturally.
   }
 
   // ---- Higher-level preview coordination ----
@@ -342,8 +442,9 @@ export class TerrainBatch {
    * Suppress all terrain batch groups that contain any of the given preview chunks.
    * Groups the chunks by their group key and calls suppressForPreview per group.
    * Tracks which groups are suppressed for fast restore.
+   * @returns true if ALL groups were suppressed immediately (safe to show preview)
    */
-  suppressGroupsForChunks(previewChunkKeys: Set<string>): void {
+  suppressGroupsForChunks(previewChunkKeys: Set<string>): boolean {
     const groupPreviewChunks = new Map<string, Set<string>>();
     for (const key of previewChunkKeys) {
       const gk = this.slots.get(key)?.groupKey;
@@ -355,10 +456,13 @@ export class TerrainBatch {
       }
       set.add(key);
     }
+    let allImmediate = true;
     for (const [gk, keys] of groupPreviewChunks) {
-      this.suppressForPreview(gk, keys);
+      const immediate = this.suppressForPreview(gk, keys);
+      if (!immediate) allImmediate = false;
       this.suppressedGroupKeys.add(gk);
     }
+    return allImmediate;
   }
 
   /**
@@ -387,6 +491,34 @@ export class TerrainBatch {
     this.restoreFromPreview(gk);
     this.suppressedGroupKeys.delete(gk);
     return true;
+  }
+
+  /**
+   * Whether any suppressed groups are still waiting for their initial merge.
+   * BuildPreview uses this to defer showing preview meshes until all affected
+   * groups have been safely merged (avoiding holes).
+   */
+  hasPendingSuppressions(): boolean {
+    for (const gk of this.suppressedGroupKeys) {
+      const group = this.groups.get(gk);
+      if (group?.suppressionPending) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Get chunk keys belonging to groups with pending suppression.
+   * VoxelWorld uses this to prioritize these chunks in the remesh queue.
+   */
+  getPriorityChunkKeys(): Set<string> {
+    const keys = new Set<string>();
+    for (const [, group] of this.groups) {
+      if (!group.suppressionPending) continue;
+      for (const ck of group.chunkKeys) {
+        keys.add(ck);
+      }
+    }
+    return keys;
   }
 
   /**
@@ -426,6 +558,8 @@ export class TerrainBatch {
         layerBuffers: new Array<LayerBuffers | null>(LAYER_COUNT).fill(null),
         previewSuppressed: false,
         previewChunkKeys: new Set(),
+        suppressionPending: false,
+        pendingPreviewChunkKeys: new Set(),
       };
       this.groups.set(gk, group);
     }

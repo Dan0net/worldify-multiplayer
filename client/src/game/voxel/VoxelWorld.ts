@@ -865,7 +865,7 @@ export class VoxelWorld implements ChunkProvider {
     const queueSize = this.remeshQueue.size;
     if (queueSize === 0) return;
 
-    // === Priority sort: nearest chunks first ===
+    // === Priority sort: nearest chunks first, priority chunks at front ===
     const sorted = this.remeshSortBuffer;
     sorted.length = 0;
     for (const key of this.remeshQueue) {
@@ -875,8 +875,14 @@ export class VoxelWorld implements ChunkProvider {
     const px = playerPos.x / CHUNK_WORLD_SIZE;
     const py = playerPos.y / CHUNK_WORLD_SIZE;
     const pz = playerPos.z / CHUNK_WORLD_SIZE;
+
+    // Chunks in groups with pending suppression get dispatched first
+    const priorityKeys = this.terrainBatch.getPriorityChunkKeys();
     
     sorted.sort((a, b) => {
+      const aPriority = priorityKeys.has(a) ? 0 : 1;
+      const bPriority = priorityKeys.has(b) ? 0 : 1;
+      if (aPriority !== bPriority) return aPriority - bPriority;
       const ca = this.chunks.get(a);
       const cb = this.chunks.get(b);
       if (!ca || !cb) return ca ? -1 : cb ? 1 : 0;
