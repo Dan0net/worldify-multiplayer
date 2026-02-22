@@ -29,6 +29,14 @@ export class Chunk extends ChunkData {
   /** Whether the chunk needs to be remeshed */
   dirty: boolean = true;
 
+  /**
+   * 6-bit bitmask: bit i set ⇒ face i has non-solid voxels in its margin strip,
+   * meaning a surface crossing may exist and the neighbor chunk is needed for stitching.
+   * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
+   * Default 0x3F = all faces flagged (conservative until computed).
+   */
+  faceSurfaceMask: number = 0x3F;
+
   constructor(cx: number, cy: number, cz: number) {
     super(cx, cy, cz);
   }

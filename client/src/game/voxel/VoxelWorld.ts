@@ -303,45 +303,56 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Check if a chunk has any non-solid (air/empty) voxels on a specific boundary face.
-   * If so, a surface crossing may exist near that boundary and the neighbor chunk
-   * is needed for correct margin data during meshing.
+   * Compute a 6-bit bitmask indicating which faces of a chunk have non-solid
+   * (air/empty) voxels in their margin strip. Bit i set ⇒ face i needs neighbor
+   * data for correct stitching. Called once when chunk data arrives.
    *
    * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
    */
-  private static hasSurfaceNearFace(data: Uint16Array, faceIndex: number): boolean {
+  static computeFaceSurfaceMask(data: Uint16Array): number {
     const CS = CHUNK_SIZE;
-    // Axis: 0=X, 1=Y, 2=Z.  Positive faces scan high end, negative faces scan low end.
-    const axis = faceIndex >> 1;          // 0,1→0  2,3→1  4,5→2
-    const isPositive = (faceIndex & 1) === 0;
-    const lo = isPositive ? CS - MESH_MARGIN : 0;
-    const hi = isPositive ? CS : MESH_MARGIN;
+    let mask = 0;
+    for (let face = 0; face < 6; face++) {
+      const axis = face >> 1;              // 0,1→0  2,3→1  4,5→2
+      const isPositive = (face & 1) === 0;
+      const lo = isPositive ? CS - MESH_MARGIN : 0;
+      const hi = isPositive ? CS : MESH_MARGIN;
 
-    // coords[0]=x, coords[1]=y, coords[2]=z — axis dimension iterates [lo,hi)
-    const coords = [0, 0, 0];
-    for (let a = 0; a < CS; a++) {
-      for (let b = 0; b < CS; b++) {
-        for (let c = lo; c < hi; c++) {
-          // Map (a, b, c) into (x, y, z) depending on which axis we're scanning
-          coords[axis] = c;
-          coords[(axis + 1) % 3] = a;
-          coords[(axis + 2) % 3] = b;
-          if (!isVoxelSolid(data[voxelIndex(coords[0], coords[1], coords[2])])) return true;
+      let found = false;
+      const coords = [0, 0, 0];
+      for (let a = 0; a < CS && !found; a++) {
+        for (let b = 0; b < CS && !found; b++) {
+          for (let c = lo; c < hi; c++) {
+            coords[axis] = c;
+            coords[(axis + 1) % 3] = a;
+            coords[(axis + 2) % 3] = b;
+            if (!isVoxelSolid(data[voxelIndex(coords[0], coords[1], coords[2])])) {
+              found = true;
+              break;
+            }
+          }
         }
       }
+      if (found) mask |= (1 << face);
     }
-    return false;
+    return mask;
   }
 
   /**
    * Find face-neighbor chunks needed for stitching that BFS may have missed.
-   * For each loaded chunk, if it has surface data near a boundary face and the
-   * neighbor on that face is not loaded/pending/already requested, add it.
+   * Uses the cached faceSurfaceMask bitmask on each chunk to avoid scanning
+   * voxel data every frame.
    */
   private getMarginNeighborRequests(bfsRequested: Set<string>): Set<string> {
     const extra = new Set<string>();
     for (const [, chunk] of this.chunks) {
+      // Skip fully-solid chunks (no surface on any face)
+      if (chunk.faceSurfaceMask === 0) continue;
+
       for (let face = 0; face < 6; face++) {
+        // Check cached bitmask before allocating the key string
+        if (!(chunk.faceSurfaceMask & (1 << face))) continue;
+
         const [dx, dy, dz] = FACE_OFFSETS_6[face];
         const nx = chunk.cx + dx;
         const ny = chunk.cy + dy;
@@ -351,10 +362,7 @@ export class VoxelWorld implements ChunkProvider {
         // Skip if already loaded, pending, or queued by BFS
         if (this.chunks.has(nKey) || this.pendingChunks.has(nKey) || bfsRequested.has(nKey)) continue;
         
-        // Only request if this chunk has surface near that face
-        if (VoxelWorld.hasSurfaceNearFace(chunk.data, face)) {
-          extra.add(nKey);
-        }
+        extra.add(nKey);
       }
     }
     return extra;
@@ -591,6 +599,9 @@ export class VoxelWorld implements ChunkProvider {
     
     // Compute visibility graph for this chunk
     chunk.visibilityBits = computeVisibility(chunk.data);
+
+    // Cache face-surface bitmask (avoids per-frame voxel scanning in getMarginNeighborRequests)
+    chunk.faceSurfaceMask = VoxelWorld.computeFaceSurfaceMask(chunk.data);
     
     // Queue for remeshing
     this.remeshQueue.add(key);
