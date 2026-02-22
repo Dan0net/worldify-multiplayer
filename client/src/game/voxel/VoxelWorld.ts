@@ -50,6 +50,15 @@ import {
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
+/** Fast typed-array equality check (same length assumed). */
+function arraysEqual(a: Uint16Array, b: Uint16Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /**
  * Manages the voxel world - chunk loading, unloading, and streaming.
  */
@@ -591,6 +600,11 @@ export class VoxelWorld implements ChunkProvider {
     if (!chunk) {
       chunk = new Chunk(cx, cy, cz);
       this.chunks.set(key, chunk);
+    }
+
+    // Skip re-processing if the voxel data is identical (server re-send or no-op)
+    if (!isNewChunk && arraysEqual(chunk.data, voxelData) && chunk.lastBuildSeq === lastBuildSeq) {
+      return chunk;
     }
     
     // Copy voxel data
