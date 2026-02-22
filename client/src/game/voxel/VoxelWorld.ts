@@ -13,6 +13,7 @@ import {
   MESH_MARGIN,
   worldToChunk,
   chunkKey,
+  parseChunkKey,
   BuildOperation,
   getAffectedChunks,
   drawToChunk,
@@ -568,36 +569,35 @@ export class VoxelWorld implements ChunkProvider {
     // Invalidate BFS cache when new chunks load (they may open visibility paths)
     if (isNewChunk) {
       this.lastBFSChunk = null;
-      
-      // Relight the chunk below — it may now receive (or lose) sunlight from us
-      const belowKey = chunkKey(cx, cy - 1, cz);
-      const belowChunk = this.chunks.get(belowKey);
-      if (belowChunk) {
-        this.computeChunkSunlight(cx, cy - 1, cz, belowChunk.data);
-        belowChunk.dirty = true;
-        this.remeshQueue.add(belowKey);
-      }
+    }
 
-      // Relight the chunk above — it may now receive light from us via border inject
-      const aboveKey = chunkKey(cx, cy + 1, cz);
-      const aboveChunk = this.chunks.get(aboveKey);
-      if (aboveChunk) {
-        this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
-        aboveChunk.dirty = true;
-        this.remeshQueue.add(aboveKey);
-      }
+    // Relight and re-queue face-adjacent neighbors so their border light and
+    // margin data are up to date. Runs for both new and updated chunks —
+    // updated chunks may carry build modifications that change boundary voxels.
+    const belowKey = chunkKey(cx, cy - 1, cz);
+    const belowChunk = this.chunks.get(belowKey);
+    if (belowChunk) {
+      this.computeChunkSunlight(cx, cy - 1, cz, belowChunk.data);
+      belowChunk.dirty = true;
+      this.remeshQueue.add(belowKey);
+    }
 
-      // Relight horizontal face-adjacent neighbors so their border light
-      // picks up the light values from this newly-arrived chunk.
-      for (const [dx, dy, dz] of FACE_OFFSETS_6) {
-        if (dy !== 0) continue; // vertical already handled above
-        const nKey = chunkKey(cx + dx, cy + dy, cz + dz);
-        const nChunk = this.chunks.get(nKey);
-        if (!nChunk) continue;
-        this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
-        nChunk.dirty = true;
-        this.remeshQueue.add(nKey);
-      }
+    const aboveKey = chunkKey(cx, cy + 1, cz);
+    const aboveChunk = this.chunks.get(aboveKey);
+    if (aboveChunk) {
+      this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
+      aboveChunk.dirty = true;
+      this.remeshQueue.add(aboveKey);
+    }
+
+    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
+      if (dy !== 0) continue; // vertical already handled above
+      const nKey = chunkKey(cx + dx, cy + dy, cz + dz);
+      const nChunk = this.chunks.get(nKey);
+      if (!nChunk) continue;
+      this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+      nChunk.dirty = true;
+      this.remeshQueue.add(nKey);
     }
     
     return chunk;
@@ -935,7 +935,16 @@ export class VoxelWorld implements ChunkProvider {
 
     for (const key of affectedKeys) {
       const chunk = this.chunks.get(key);
-      if (!chunk) continue; // Skip unloaded chunks — server will send authoritative data
+      if (!chunk) {
+        // Chunk not loaded — request it from the server so we get the
+        // authoritative carved data. Adding it to pendingChunks causes
+        // hasNeighborsPending to defer neighbor meshing until it arrives.
+        const { cx, cy, cz } = parseChunkKey(key);
+        if (!this.pendingChunks.has(key)) {
+          this.requestChunkFromServer(cx, cy, cz);
+        }
+        continue;
+      }
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {
