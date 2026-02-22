@@ -382,6 +382,9 @@ export class TerrainBatch {
           }
         }
 
+        // Only upload the used portion to the GPU (not the over-allocated tail)
+        dstAttr.updateRange.offset = 0;
+        dstAttr.updateRange.count = totalVerts * attr.itemSize;
         dstAttr.needsUpdate = true;
       }
 
@@ -400,6 +403,8 @@ export class TerrainBatch {
         idxOffset += srcIdx.count;
         vertBase += geo.getAttribute('position').count;
       }
+      idxAttr.updateRange.offset = 0;
+      idxAttr.updateRange.count = totalIndices;
       idxAttr.needsUpdate = true;
       merged.setDrawRange(0, totalIndices);
 
