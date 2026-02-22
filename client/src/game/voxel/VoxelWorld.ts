@@ -358,6 +358,14 @@ export class VoxelWorld implements ChunkProvider {
    */
   private getMarginNeighborRequests(bfsRequested: Set<string>): Set<string> {
     const extra = new Set<string>();
+
+    // Don't request margin neighbors that would be immediately unloaded.
+    // Without this guard, edge-of-world chunks cycle: request → load → unload → request...
+    const pcx = this.lastPlayerChunk?.cx ?? 0;
+    const pcy = this.lastPlayerChunk?.cy ?? 0;
+    const pcz = this.lastPlayerChunk?.cz ?? 0;
+    const maxDist = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
+
     for (const [, chunk] of this.chunks) {
       // Skip fully-solid chunks (no surface on any face)
       if (chunk.faceSurfaceMask === 0) continue;
@@ -370,6 +378,10 @@ export class VoxelWorld implements ChunkProvider {
         const nx = chunk.cx + dx;
         const ny = chunk.cy + dy;
         const nz = chunk.cz + dz;
+
+        // Skip neighbors that fall outside the unload radius (they'd be unloaded immediately)
+        if (Math.abs(nx - pcx) > maxDist || Math.abs(ny - pcy) > maxDist || Math.abs(nz - pcz) > maxDist) continue;
+
         const nKey = chunkKey(nx, ny, nz);
         
         // Skip if already loaded, pending, or queued by BFS
@@ -604,6 +616,7 @@ export class VoxelWorld implements ChunkProvider {
 
     // Skip re-processing if the voxel data is identical (server re-send or no-op)
     if (!isNewChunk && arraysEqual(chunk.data, voxelData) && chunk.lastBuildSeq === lastBuildSeq) {
+      console.warn(`[VoxelWorld] Received identical chunk data for (${cx}, ${cy}, ${cz}), skipping update`);
       return chunk;
     }
     
