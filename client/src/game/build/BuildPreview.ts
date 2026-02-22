@@ -127,19 +127,20 @@ export class BuildPreview {
     // Get affected chunks
     const affectedKeys = getAffectedChunks(operation);
 
+    // Skip preview entirely if any affected chunk isn't loaded yet.
+    // Request the missing ones so they arrive for the next preview cycle.
+    if (affectedKeys.some(key => !this.world!.chunks.has(key))) {
+      this.world.requestMissingChunks(affectedKeys);
+      return;
+    }
+
     // === Pass 1: Copy temp data and draw operation to ALL affected chunks ===
     // Must complete before grid expansion so boundary reads see drawn neighbors.
     const drawnChunks: string[] = [];
     const drawnSet = new Set<string>();
 
-    // Request any affected chunks that aren't loaded yet (e.g. carving into
-    // a new chunk). The data will arrive via ingestChunkData and the next
-    // preview update will include them.
-    this.world.requestMissingChunks(affectedKeys);
-
     for (const key of affectedKeys) {
-      const chunk = this.world.chunks.get(key);
-      if (!chunk) continue; // Skip unloaded chunks — can't preview into empty space
+      const chunk = this.world.chunks.get(key)!;
 
       chunk.copyToTemp();
       if (!chunk.tempData) continue;

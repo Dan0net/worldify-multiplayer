@@ -102,6 +102,9 @@ export class VoxelWorld implements ChunkProvider {
   /** Queue of chunks that need remeshing */
   private remeshQueue: Set<string> = new Set();
 
+  /** Build operations deferred until all affected chunks are loaded */
+  private deferredBuildOps: Array<{ operation: BuildOperation; affectedKeys: string[] }> = [];
+
   /** Reusable array for priority-sorted remesh processing (avoids allocation) */
   private remeshSortBuffer: string[] = [];
 
@@ -613,6 +616,9 @@ export class VoxelWorld implements ChunkProvider {
       nChunk.dirty = true;
       this.remeshQueue.add(nKey);
     }
+
+    // Execute any build operations that were waiting for this chunk
+    this.drainDeferredBuildOps();
     
     return chunk;
   }
@@ -940,21 +946,36 @@ export class VoxelWorld implements ChunkProvider {
   /**
    * Apply a build operation to the world.
    * Used when receiving build commits from the server.
+   *
+   * If any affected chunk isn't loaded yet, the ENTIRE operation is deferred
+   * until all chunks arrive (prevents holes at chunk boundaries).
+   *
    * @param operation The build operation to apply
-   * @returns Array of modified chunk keys
+   * @returns Array of modified chunk keys (empty if deferred)
    */
   applyBuildOperation(operation: BuildOperation): string[] {
     const affectedKeys = getAffectedChunks(operation);
+
+    // Check if any affected chunk is missing
+    const hasMissing = affectedKeys.some(key => !this.chunks.has(key));
+    if (hasMissing) {
+      // Request missing chunks and defer the entire operation
+      this.requestMissingChunks(affectedKeys);
+      this.deferredBuildOps.push({ operation, affectedKeys });
+      return [];
+    }
+
+    return this.executeBuildOperation(operation, affectedKeys);
+  }
+
+  /**
+   * Execute a build operation (all affected chunks must be loaded).
+   */
+  private executeBuildOperation(operation: BuildOperation, affectedKeys: string[]): string[] {
     const modifiedKeys: string[] = [];
 
-    // Request any affected chunks that aren't loaded yet so the server
-    // sends authoritative data. Also adds them to pendingChunks, which
-    // causes hasNeighborsPending to defer neighbor meshing until arrival.
-    this.requestMissingChunks(affectedKeys);
-
     for (const key of affectedKeys) {
-      const chunk = this.chunks.get(key);
-      if (!chunk) continue;
+      const chunk = this.chunks.get(key)!;
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {
@@ -1013,6 +1034,23 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Try to execute deferred build operations whose chunks have all arrived.
+   * Called from ingestChunkData whenever a new chunk becomes available.
+   */
+  private drainDeferredBuildOps(): void {
+    if (this.deferredBuildOps.length === 0) return;
+
+    // Iterate in reverse so splice doesn't shift unprocessed indices
+    for (let i = this.deferredBuildOps.length - 1; i >= 0; i--) {
+      const { operation, affectedKeys } = this.deferredBuildOps[i];
+      if (affectedKeys.every(key => this.chunks.has(key))) {
+        this.deferredBuildOps.splice(i, 1);
+        this.executeBuildOperation(operation, affectedKeys);
+      }
+    }
+  }
+
+  /**
    * Dispose of all chunks and meshes.
    * @param keepWorkers If true, workers are kept alive (for clearAndReload)
    */
@@ -1041,6 +1079,9 @@ export class VoxelWorld implements ChunkProvider {
 
     // Clear queue
     this.remeshQueue.clear();
+
+    // Clear deferred build operations
+    this.deferredBuildOps.length = 0;
 
     // Reset player chunk tracking so next update triggers chunk loading
     this.lastPlayerChunk = null;
