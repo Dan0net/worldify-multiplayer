@@ -970,9 +970,12 @@ export class VoxelWorld implements ChunkProvider {
 
   /**
    * Execute a build operation (all affected chunks must be loaded).
+   * All touched chunks are dispatched as an atomic batch so their meshes
+   * update in the same frame — prevents boundary flashes.
    */
   private executeBuildOperation(operation: BuildOperation, affectedKeys: string[]): string[] {
     const modifiedKeys: string[] = [];
+    const batchKeys = new Set<string>();
 
     for (const key of affectedKeys) {
       const chunk = this.chunks.get(key)!;
@@ -981,7 +984,7 @@ export class VoxelWorld implements ChunkProvider {
       if (changed) {
         modifiedKeys.push(key);
         chunk.dirty = true;
-        this.remeshQueue.add(key);
+        batchKeys.add(key);
         
         // Recompute visibility for modified chunk
         chunk.visibilityBits = computeVisibility(chunk.data);
@@ -997,7 +1000,7 @@ export class VoxelWorld implements ChunkProvider {
           if (!belowChunk) break;
           this.computeChunkSunlight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
           belowChunk.dirty = true;
-          this.remeshQueue.add(belowKey);
+          batchKeys.add(belowKey);
           belowCy--;
         }
 
@@ -1007,11 +1010,10 @@ export class VoxelWorld implements ChunkProvider {
         if (aboveChunk) {
           this.computeChunkSunlight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
           aboveChunk.dirty = true;
-          this.remeshQueue.add(aboveKey);
+          batchKeys.add(aboveKey);
         }
 
         // Relight face-adjacent horizontal neighbors so their border light updates.
-        // This also covers mesh-stitch remeshing — no separate queueNeighborRemesh needed.
         for (const [dx, dy, dz] of FACE_OFFSETS_6) {
           if (dy !== 0) continue; // vertical already handled above
           const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
@@ -1019,7 +1021,7 @@ export class VoxelWorld implements ChunkProvider {
           if (!nChunk) continue;
           this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
           nChunk.dirty = true;
-          this.remeshQueue.add(nKey);
+          batchKeys.add(nKey);
         }
       }
     }
@@ -1030,7 +1032,43 @@ export class VoxelWorld implements ChunkProvider {
       this.lastBFSChunk = null;
     }
 
+    // Dispatch all affected chunks as one atomic batch so every mesh
+    // updates in the same frame — no boundary flash between neighbors.
+    this.dispatchBuildBatch(batchKeys);
+
     return modifiedKeys;
+  }
+
+  /**
+   * Expand grids and dispatch a set of chunks as an atomic batch.
+   * All mesh results are applied together in one frame.
+   */
+  private dispatchBuildBatch(keys: Set<string>): void {
+    const batchItems: Array<{
+      chunkKey: string;
+      grid: Uint16Array;
+      skipHighBoundary: [boolean, boolean, boolean];
+    }> = [];
+
+    for (const key of keys) {
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue;
+
+      // Remove from remeshQueue — the batch handles it
+      this.remeshQueue.delete(key);
+
+      const grid = this.meshPool.takeGrid();
+      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
+      batchItems.push({ chunkKey: key, grid, skipHighBoundary });
+    }
+
+    if (batchItems.length === 0) return;
+
+    this.meshPool.dispatchBatch(batchItems, (results) => {
+      for (const result of results) {
+        this.applyMeshResult(result);
+      }
+    });
   }
 
   /**
