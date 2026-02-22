@@ -277,10 +277,14 @@ export class VoxelWorld implements ChunkProvider {
     // Always update mesh visibility (camera may have rotated)
     this.updateMeshVisibility(this.cachedReachable);
 
-    // Rebuild merged terrain groups (only dirty groups are re-merged)
+    // Rebuild merged terrain groups (only dirty groups are re-merged).
+    // Skip groups that still have chunks in the remesh queue or in-flight on workers
+    // to avoid rebuilding the same group dozens of times during loading.
     if (this.lastPlayerChunk) {
       const { cx, cy, cz } = this.lastPlayerChunk;
-      this.terrainBatch.rebuild(cx, cy, cz);
+      this.terrainBatch.rebuild(cx, cy, cz, (chunkKey) =>
+        this.remeshQueue.has(chunkKey) || this.meshPool.isInFlight(chunkKey),
+      );
     }
 
     // Unload chunks far outside reachable set (with +2 hysteresis buffer)

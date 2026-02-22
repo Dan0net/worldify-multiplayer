@@ -32,6 +32,9 @@ const LAYER_COUNT = 3;
 /** Growth factor when a merged buffer needs to be reallocated */
 const BUFFER_GROWTH = 1.5;
 
+/** Maximum number of groups to rebuild per frame to avoid spikes */
+const MAX_REBUILDS_PER_FRAME = 4;
+
 /** Layer indices matching ChunkMesh convention */
 const LAYER_SOLID = 0;
 const LAYER_TRANSPARENT = 1;
@@ -69,6 +72,8 @@ interface ChunkSlot {
   visible: boolean;
   /** Key into the groups map */
   groupKey: string;
+  /** Per-layer standalone scene meshes shown while the group merge is deferred */
+  standaloneMeshes: (THREE.Mesh | null)[];
 }
 
 /** Tracks pre-allocated buffer capacity per layer so we can reuse them. */
@@ -84,6 +89,8 @@ interface MergedGroup {
   chunkKeys: Set<string>;
   /** Whether the group needs rebuilding */
   dirty: boolean;
+  /** Whether the group has been successfully merged at least once since last dirty */
+  merged: boolean;
   /** Center chunk coordinates (for shadow culling distance) */
   centerCx: number;
   centerCy: number;
@@ -164,12 +171,20 @@ export class TerrainBatch {
         geometries,
         visible: true,
         groupKey: gk,
+        standaloneMeshes: [null, null, null],
       };
       this.slots.set(key, slot);
       this.addToGroup(key, gk, cx, cy, cz);
     }
 
     this.markGroupDirty(gk);
+
+    // Show individual chunk immediately via standalone meshes,
+    // but only if the group hasn't been merged yet (avoids z-fighting).
+    const group = this.groups.get(gk);
+    if (group && !group.merged) {
+      this.showStandalone(slot);
+    }
   }
 
   /**
@@ -181,6 +196,11 @@ export class TerrainBatch {
     if (!slot) return;
     if (slot.visible !== visible) {
       slot.visible = visible;
+      // Toggle standalone meshes immediately
+      for (let i = 0; i < LAYER_COUNT; i++) {
+        const m = slot.standaloneMeshes[i];
+        if (m) m.visible = visible;
+      }
       this.markGroupDirty(slot.groupKey);
     }
   }
@@ -191,6 +211,7 @@ export class TerrainBatch {
   removeChunk(key: string): void {
     const slot = this.slots.get(key);
     if (!slot) return;
+    this.removeStandalone(slot);
     const gk = slot.groupKey;
     this.slots.delete(key);
     this.removeFromGroup(key, gk);
@@ -204,13 +225,61 @@ export class TerrainBatch {
   }
 
   /**
-   * Rebuild all dirty groups. Call once per frame after updateMeshVisibility.
+   * Rebuild dirty groups. Call once per frame after updateMeshVisibility.
+   *
+   * Caps the number of rebuilds per frame (MAX_REBUILDS_PER_FRAME) to avoid
+   * a spike when all deferred groups become eligible at once. Groups closest
+   * to the player are rebuilt first; standalone meshes keep chunks visible
+   * while their group waits.
+   *
+   * @param isBusy Optional callback: returns true if a chunk key is still being
+   *   processed (in remesh queue or in-flight on a worker). Groups with ANY busy
+   *   chunk are skipped (left dirty) so we don't rebuild the same group dozens
+   *   of times while chunks stream in one at a time.
    */
-  rebuild(playerCx: number, playerCy: number, playerCz: number): void {
+  rebuild(
+    playerCx: number,
+    playerCy: number,
+    playerCz: number,
+    isBusy?: (chunkKey: string) => boolean,
+  ): void {
     const shadowRadius = getShadowRadius();
+
+    // Collect eligible dirty groups
+    const eligible: { gk: string; group: MergedGroup; dist: number }[] = [];
 
     for (const [gk, group] of this.groups) {
       if (!group.dirty) continue;
+
+      // Defer rebuild while any chunk in this group is still being meshed
+      if (isBusy) {
+        let busy = false;
+        for (const ck of group.chunkKeys) {
+          if (isBusy(ck)) {
+            busy = true;
+            break;
+          }
+        }
+        if (busy) continue; // leave dirty, retry next frame
+      }
+
+      // Distance from player to group center (Chebyshev)
+      const dx = Math.abs(group.centerCx - playerCx);
+      const dy = Math.abs(group.centerCy - playerCy);
+      const dz = Math.abs(group.centerCz - playerCz);
+      const dist = Math.max(dx, dy, dz);
+
+      eligible.push({ gk, group, dist });
+    }
+
+    // Sort by distance (closest first) and cap per frame
+    if (eligible.length > MAX_REBUILDS_PER_FRAME) {
+      eligible.sort((a, b) => a.dist - b.dist);
+    }
+
+    const limit = Math.min(eligible.length, MAX_REBUILDS_PER_FRAME);
+    for (let i = 0; i < limit; i++) {
+      const { gk, group } = eligible[i];
       group.dirty = false;
       this.rebuildGroup(gk, group, playerCx, playerCy, playerCz, shadowRadius);
     }
@@ -220,6 +289,9 @@ export class TerrainBatch {
    * Dispose everything (called from VoxelWorld.dispose).
    */
   dispose(): void {
+    for (const slot of this.slots.values()) {
+      this.removeStandalone(slot);
+    }
     for (const gk of this.groups.keys()) {
       this.disposeGroup(gk);
     }
@@ -243,6 +315,7 @@ export class TerrainBatch {
         meshes: new Array<THREE.Mesh | null>(LAYER_COUNT).fill(null),
         chunkKeys: new Set(),
         dirty: true,
+        merged: false,
         centerCx: center.cx,
         centerCy: center.cy,
         centerCz: center.cz,
@@ -260,7 +333,65 @@ export class TerrainBatch {
 
   private markGroupDirty(gk: string): void {
     const group = this.groups.get(gk);
-    if (group) group.dirty = true;
+    if (group) {
+      group.dirty = true;
+      group.merged = false;
+    }
+  }
+
+  // ---- Private: standalone mesh management ----
+
+  /** Show individual chunk meshes in the scene (shared geometry, no copy). */
+  private showStandalone(slot: ChunkSlot): void {
+    for (let layer = 0; layer < LAYER_COUNT; layer++) {
+      const geo = slot.geometries[layer];
+      const existing = slot.standaloneMeshes[layer];
+
+      if (!geo || !geo.index || geo.index.count === 0) {
+        // No geometry for this layer — remove standalone if present
+        if (existing) {
+          this.scene.remove(existing);
+          // Don't dispose geometry — it's owned by ChunkMesh
+          slot.standaloneMeshes[layer] = null;
+        }
+        continue;
+      }
+
+      if (existing) {
+        // Reuse existing standalone mesh, swap geometry
+        existing.geometry = geo;
+        existing.position.set(slot.wx, slot.wy, slot.wz);
+        existing.visible = slot.visible;
+      } else {
+        // Create new standalone mesh (shares geometry reference — no copy)
+        const mesh = this.createLayerMesh(geo, layer);
+        mesh.frustumCulled = true; // individual chunks can be frustum-culled
+        mesh.position.set(slot.wx, slot.wy, slot.wz);
+        mesh.visible = slot.visible;
+        this.scene.add(mesh);
+        slot.standaloneMeshes[layer] = mesh;
+      }
+    }
+  }
+
+  /** Remove all standalone meshes for a slot from the scene. */
+  private removeStandalone(slot: ChunkSlot): void {
+    for (let layer = 0; layer < LAYER_COUNT; layer++) {
+      const m = slot.standaloneMeshes[layer];
+      if (m) {
+        this.scene.remove(m);
+        // Don't dispose geometry — it's owned by ChunkMesh
+        slot.standaloneMeshes[layer] = null;
+      }
+    }
+  }
+
+  /** Remove standalone meshes for all chunks in a group. */
+  private removeGroupStandalones(group: MergedGroup): void {
+    for (const ck of group.chunkKeys) {
+      const slot = this.slots.get(ck);
+      if (slot) this.removeStandalone(slot);
+    }
   }
 
   private disposeGroup(gk: string): void {
@@ -288,6 +419,10 @@ export class TerrainBatch {
     playerCz: number,
     shadowRadius: number,
   ): void {
+    // Remove standalone per-chunk meshes — they'll be replaced by the merged mesh
+    this.removeGroupStandalones(group);
+    group.merged = true;
+
     // Collect visible chunk slots for this group
     const visibleSlots: ChunkSlot[] = [];
     for (const ck of group.chunkKeys) {
@@ -383,8 +518,8 @@ export class TerrainBatch {
         }
 
         // Only upload the used portion to the GPU (not the over-allocated tail)
-        dstAttr.updateRange.offset = 0;
-        dstAttr.updateRange.count = totalVerts * attr.itemSize;
+        dstAttr.clearUpdateRanges();
+        dstAttr.addUpdateRange(0, totalVerts * attr.itemSize);
         dstAttr.needsUpdate = true;
       }
 
@@ -403,8 +538,8 @@ export class TerrainBatch {
         idxOffset += srcIdx.count;
         vertBase += geo.getAttribute('position').count;
       }
-      idxAttr.updateRange.offset = 0;
-      idxAttr.updateRange.count = totalIndices;
+      idxAttr.clearUpdateRanges();
+      idxAttr.addUpdateRange(0, totalIndices);
       idxAttr.needsUpdate = true;
       merged.setDrawRange(0, totalIndices);
 
