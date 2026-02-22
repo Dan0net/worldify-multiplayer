@@ -29,6 +29,9 @@ const GROUP_GRID = 4;
 /** Number of mesh layers (solid, transparent, liquid) */
 const LAYER_COUNT = 3;
 
+/** Growth factor when a merged buffer needs to be reallocated */
+const BUFFER_GROWTH = 1.5;
+
 /** Layer indices matching ChunkMesh convention */
 const LAYER_SOLID = 0;
 const LAYER_TRANSPARENT = 1;
@@ -68,6 +71,12 @@ interface ChunkSlot {
   groupKey: string;
 }
 
+/** Tracks pre-allocated buffer capacity per layer so we can reuse them. */
+interface LayerBuffers {
+  vertexCapacity: number;
+  indexCapacity: number;
+}
+
 interface MergedGroup {
   /** Per-layer merged meshes in the scene */
   meshes: (THREE.Mesh | null)[];
@@ -79,6 +88,8 @@ interface MergedGroup {
   centerCx: number;
   centerCy: number;
   centerCz: number;
+  /** Per-layer capacity tracking for buffer reuse */
+  layerBuffers: (LayerBuffers | null)[];
 }
 
 // ---- Helpers ----
@@ -235,6 +246,7 @@ export class TerrainBatch {
         centerCx: center.cx,
         centerCy: center.cy,
         centerCz: center.cz,
+        layerBuffers: new Array<LayerBuffers | null>(LAYER_COUNT).fill(null),
       };
       this.groups.set(gk, group);
     }
@@ -261,6 +273,7 @@ export class TerrainBatch {
         m.geometry.dispose();
         group.meshes[i] = null;
       }
+      group.layerBuffers[i] = null;
     }
     this.groups.delete(gk);
   }
@@ -295,16 +308,14 @@ export class TerrainBatch {
       const existing = group.meshes[layer];
 
       if (geos.length === 0) {
-        // Nothing to render for this layer — remove mesh if present
+        // Nothing to render for this layer — hide mesh but keep buffers for reuse
         if (existing) {
-          this.scene.remove(existing);
-          existing.geometry.dispose();
-          group.meshes[layer] = null;
+          existing.visible = false;
         }
         continue;
       }
 
-      // Count totals for pre-allocation
+      // Count totals
       let totalVerts = 0;
       let totalIndices = 0;
       for (const { geo } of geos) {
@@ -312,20 +323,47 @@ export class TerrainBatch {
         totalIndices += geo.index!.count;
       }
 
-      // Merge all attributes into one BufferGeometry
-      const merged = new THREE.BufferGeometry();
+      // Determine if we can reuse existing GPU buffers (avoids allocation + GC)
+      const lb = group.layerBuffers[layer];
+      const canReuse = !!(existing && lb &&
+        totalVerts <= lb.vertexCapacity &&
+        totalIndices <= lb.indexCapacity);
+
+      let merged: THREE.BufferGeometry;
+
+      if (canReuse) {
+        // Fast path: write into existing geometry's typed arrays
+        merged = existing!.geometry;
+      } else {
+        // Slow path: allocate new buffers (with growth headroom on re-alloc)
+        const vertCap = lb ? Math.ceil(totalVerts * BUFFER_GROWTH) : totalVerts;
+        const idxCap = lb ? Math.ceil(totalIndices * BUFFER_GROWTH) : totalIndices;
+
+        merged = new THREE.BufferGeometry();
+        for (const attr of ATTRS) {
+          merged.setAttribute(
+            attr.name,
+            new THREE.BufferAttribute(new Float32Array(vertCap * attr.itemSize), attr.itemSize),
+          );
+        }
+        merged.setIndex(new THREE.BufferAttribute(new Uint32Array(idxCap), 1));
+
+        group.layerBuffers[layer] = { vertexCapacity: vertCap, indexCapacity: idxCap };
+      }
+
+      // ---- Fill attribute data (shared by both paths) ----
 
       for (const attr of ATTRS) {
-        const arr = new Float32Array(totalVerts * attr.itemSize);
+        const dstAttr = merged.getAttribute(attr.name) as THREE.BufferAttribute;
+        const arr = dstAttr.array as Float32Array;
         let vertOffset = 0;
 
-        for (const { geo, wx, wy, wz } of geos) {
-          const srcAttr = geo.getAttribute(attr.name) as THREE.BufferAttribute | undefined;
-          if (!srcAttr) continue;
-          const srcArr = srcAttr.array as Float32Array;
-
-          if (attr.name === 'position') {
-            // Bake positions into world space
+        if (attr.name === 'position') {
+          // Bake positions into world space
+          for (const { geo, wx, wy, wz } of geos) {
+            const srcAttr = geo.getAttribute(attr.name) as THREE.BufferAttribute | undefined;
+            if (!srcAttr) continue;
+            const srcArr = srcAttr.array as Float32Array;
             for (let v = 0; v < srcAttr.count; v++) {
               const sBase = v * 3;
               const dBase = (vertOffset + v) * 3;
@@ -333,18 +371,24 @@ export class TerrainBatch {
               arr[dBase + 1] = srcArr[sBase + 1] + wy;
               arr[dBase + 2] = srcArr[sBase + 2] + wz;
             }
-          } else {
-            arr.set(srcArr, vertOffset * attr.itemSize);
+            vertOffset += srcAttr.count;
           }
-
-          vertOffset += srcAttr.count;
+        } else {
+          for (const { geo } of geos) {
+            const srcAttr = geo.getAttribute(attr.name) as THREE.BufferAttribute | undefined;
+            if (!srcAttr) continue;
+            arr.set(srcAttr.array as Float32Array, vertOffset * attr.itemSize);
+            vertOffset += srcAttr.count;
+          }
         }
 
-        merged.setAttribute(attr.name, new THREE.BufferAttribute(arr, attr.itemSize));
+        dstAttr.needsUpdate = true;
       }
 
-      // Merge index buffers
-      const indices = new Uint32Array(totalIndices);
+      // ---- Fill index buffer ----
+
+      const idxAttr = merged.index!;
+      const indices = idxAttr.array as Uint32Array;
       let idxOffset = 0;
       let vertBase = 0;
       for (const { geo } of geos) {
@@ -356,19 +400,25 @@ export class TerrainBatch {
         idxOffset += srcIdx.count;
         vertBase += geo.getAttribute('position').count;
       }
-      merged.setIndex(new THREE.BufferAttribute(indices, 1));
+      idxAttr.needsUpdate = true;
+      merged.setDrawRange(0, totalIndices);
 
-      // Create or update the scene mesh
-      if (existing) {
-        const old = existing.geometry;
-        existing.geometry = merged;
-        old.dispose();
-        existing.visible = true;
+      // ---- Attach geometry to mesh if new allocation ----
+
+      if (!canReuse) {
+        if (existing) {
+          const old = existing.geometry;
+          existing.geometry = merged;
+          old.dispose();
+          existing.visible = true;
+        } else {
+          const mesh = this.createLayerMesh(merged, layer);
+          mesh.position.set(0, 0, 0); // World-space positions baked in
+          this.scene.add(mesh);
+          group.meshes[layer] = mesh;
+        }
       } else {
-        const mesh = this.createLayerMesh(merged, layer);
-        mesh.position.set(0, 0, 0); // World-space positions baked in
-        this.scene.add(mesh);
-        group.meshes[layer] = mesh;
+        existing!.visible = true;
       }
 
       // Shadow distance culling per group
