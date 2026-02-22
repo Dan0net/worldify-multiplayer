@@ -245,11 +245,8 @@ export class VoxelIntegration implements TerrainRaycaster {
     this.colliderGenerations.clear();
     this.collision.dispose();
     
-    // Refresh world
+    // Refresh world — remesh listeners will rebuild colliders automatically
     this.world.refresh();
-    
-    // Rebuild colliders
-    this.syncColliders();
   }
 
   /**
