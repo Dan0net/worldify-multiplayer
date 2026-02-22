@@ -483,6 +483,20 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Request any unloaded chunks in the given key list from the server.
+   * Skips chunks that are already loaded or pending.
+   * Used by applyBuildOperation and BuildPreview to fetch affected chunks
+   * that the client hasn't streamed yet.
+   */
+  requestMissingChunks(keys: string[]): void {
+    for (const key of keys) {
+      if (this.chunks.has(key) || this.pendingChunks.has(key)) continue;
+      const { cx, cy, cz } = parseChunkKey(key);
+      this.requestChunkFromServer(cx, cy, cz);
+    }
+  }
+
+  /**
    * Request a chunk from the server.
    */
   private requestChunkFromServer(cx: number, cy: number, cz: number): void {
@@ -933,18 +947,14 @@ export class VoxelWorld implements ChunkProvider {
     const affectedKeys = getAffectedChunks(operation);
     const modifiedKeys: string[] = [];
 
+    // Request any affected chunks that aren't loaded yet so the server
+    // sends authoritative data. Also adds them to pendingChunks, which
+    // causes hasNeighborsPending to defer neighbor meshing until arrival.
+    this.requestMissingChunks(affectedKeys);
+
     for (const key of affectedKeys) {
       const chunk = this.chunks.get(key);
-      if (!chunk) {
-        // Chunk not loaded — request it from the server so we get the
-        // authoritative carved data. Adding it to pendingChunks causes
-        // hasNeighborsPending to defer neighbor meshing until it arrives.
-        const { cx, cy, cz } = parseChunkKey(key);
-        if (!this.pendingChunks.has(key)) {
-          this.requestChunkFromServer(cx, cy, cz);
-        }
-        continue;
-      }
+      if (!chunk) continue;
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {

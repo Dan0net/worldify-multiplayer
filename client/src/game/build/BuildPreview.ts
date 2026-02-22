@@ -132,6 +132,11 @@ export class BuildPreview {
     const drawnChunks: string[] = [];
     const drawnSet = new Set<string>();
 
+    // Request any affected chunks that aren't loaded yet (e.g. carving into
+    // a new chunk). The data will arrive via ingestChunkData and the next
+    // preview update will include them.
+    this.world.requestMissingChunks(affectedKeys);
+
     for (const key of affectedKeys) {
       const chunk = this.world.chunks.get(key);
       if (!chunk) continue; // Skip unloaded chunks — can't preview into empty space
