@@ -38,7 +38,7 @@ function createChunkWithTerrain(cx = 0, cy = 0, cz = 0): Chunk {
 function createTestChunkMesh(chunk: Chunk): ChunkMesh {
   const chunkMesh = new ChunkMesh(chunk);
   const output = meshChunk(chunk, new Map());
-  chunkMesh.updateMesh(output);
+  chunkMesh.updateMeshes(output);
   return chunkMesh;
 }
 
@@ -160,8 +160,8 @@ describe('Collision Wireframe Tests', () => {
     const chunk = createChunkWithTerrain(1, 0, 1);
     const chunkMesh = createTestChunkMesh(chunk);
     
-    if (chunkMesh.mesh) {
-      chunkMesh.mesh.position.set(8, 0, 8);
+    if (chunkMesh.solidMesh) {
+      chunkMesh.solidMesh.position.set(8, 0, 8);
     }
     
     const wireframe = createCollisionWireframe(chunkMesh);

@@ -13,12 +13,7 @@
  */
 
 import * as THREE from 'three';
-import {
-  getTerrainMaterial,
-  getTransparentTerrainMaterial,
-  getLiquidTerrainMaterial,
-  getTransparentDepthMaterial,
-} from './VoxelMaterials.js';
+import { createLayerMesh, LAYER_LIQUID, LAYER_COUNT } from './LayerConfig.js';
 import { getShadowRadius } from '../quality/QualityManager.js';
 
 // ---- Constants ----
@@ -26,19 +21,11 @@ import { getShadowRadius } from '../quality/QualityManager.js';
 /** Chunks per axis per spatial group */
 const GROUP_GRID = 4;
 
-/** Number of mesh layers (solid, transparent, liquid) */
-const LAYER_COUNT = 3;
-
 /** Growth factor when a merged buffer needs to be reallocated */
 const BUFFER_GROWTH = 1.5;
 
 /** Maximum number of groups to rebuild per frame to avoid spikes */
 const MAX_REBUILDS_PER_FRAME = 4;
-
-/** Layer indices matching ChunkMesh convention */
-const LAYER_SOLID = 0;
-const LAYER_TRANSPARENT = 1;
-const LAYER_LIQUID = 2;
 
 // ---- Attribute layout ----
 
@@ -362,6 +349,62 @@ export class TerrainBatch {
     // it will be rebuilt on the next eligible rebuild() call naturally.
   }
 
+  // ---- Higher-level preview coordination ----
+
+  /** Set of group keys currently suppressed for preview */
+  private suppressedGroupKeys = new Set<string>();
+
+  /**
+   * Suppress all terrain batch groups that contain any of the given preview chunks.
+   * Groups the chunks by their group key and calls suppressForPreview per group.
+   * Tracks which groups are suppressed for fast restore.
+   */
+  suppressGroupsForChunks(previewChunkKeys: Set<string>): void {
+    const groupPreviewChunks = new Map<string, Set<string>>();
+    for (const key of previewChunkKeys) {
+      const gk = this.slots.get(key)?.groupKey;
+      if (!gk) continue;
+      let set = groupPreviewChunks.get(gk);
+      if (!set) {
+        set = new Set();
+        groupPreviewChunks.set(gk, set);
+      }
+      set.add(key);
+    }
+    for (const [gk, keys] of groupPreviewChunks) {
+      this.suppressForPreview(gk, keys);
+      this.suppressedGroupKeys.add(gk);
+    }
+  }
+
+  /**
+   * Restore all currently suppressed groups.
+   */
+  restoreAllSuppressedGroups(): void {
+    for (const gk of this.suppressedGroupKeys) {
+      this.restoreFromPreview(gk);
+    }
+    this.suppressedGroupKeys.clear();
+  }
+
+  /**
+   * Restore a single chunk's group if no pending commit chunks remain in it.
+   * Returns true if the group was restored.
+   */
+  restoreGroupIfComplete(chunkKey: string, pendingCommitChunks: Set<string>): boolean {
+    const gk = this.slots.get(chunkKey)?.groupKey;
+    if (!gk || !this.suppressedGroupKeys.has(gk)) return false;
+
+    // Check if any pending commit chunk is in the same group
+    for (const key of pendingCommitChunks) {
+      if (this.slots.get(key)?.groupKey === gk) return false;
+    }
+
+    this.restoreFromPreview(gk);
+    this.suppressedGroupKeys.delete(gk);
+    return true;
+  }
+
   /**
    * Dispose everything (called from VoxelWorld.dispose).
    */
@@ -443,7 +486,7 @@ export class TerrainBatch {
         existing.visible = slot.visible;
       } else {
         // Create new standalone mesh (shares geometry reference — no copy)
-        const mesh = this.createLayerMesh(geo, layer);
+        const mesh = createLayerMesh(geo, layer);
         mesh.frustumCulled = true; // individual chunks can be frustum-culled
         mesh.position.set(slot.wx, slot.wy, slot.wz);
         mesh.visible = slot.visible;
@@ -631,7 +674,8 @@ export class TerrainBatch {
           old.dispose();
           existing.visible = true;
         } else {
-          const mesh = this.createLayerMesh(merged, layer);
+          const mesh = createLayerMesh(merged, layer);
+          mesh.frustumCulled = false; // Merged groups span many chunks
           mesh.position.set(0, 0, 0); // World-space positions baked in
           this.scene.add(mesh);
           group.meshes[layer] = mesh;
@@ -649,41 +693,5 @@ export class TerrainBatch {
       // Liquid layer never casts shadows
       mesh.castShadow = layer !== LAYER_LIQUID && inShadow;
     }
-  }
-
-  /** Create a Three.js mesh for a specific layer with appropriate material/settings */
-  private createLayerMesh(geometry: THREE.BufferGeometry, layer: number): THREE.Mesh {
-    let material: THREE.Material;
-    let castShadow = true;
-    let receiveShadow = true;
-    let renderOrder = 0;
-    let customDepthMaterial: THREE.Material | undefined;
-
-    switch (layer) {
-      case LAYER_SOLID:
-        material = getTerrainMaterial();
-        break;
-      case LAYER_TRANSPARENT:
-        material = getTransparentTerrainMaterial();
-        renderOrder = 1;
-        customDepthMaterial = getTransparentDepthMaterial();
-        break;
-      case LAYER_LIQUID:
-        material = getLiquidTerrainMaterial();
-        castShadow = false;
-        renderOrder = 2;
-        break;
-      default:
-        material = getTerrainMaterial();
-    }
-
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = castShadow;
-    mesh.receiveShadow = receiveShadow;
-    mesh.renderOrder = renderOrder;
-    if (customDepthMaterial) mesh.customDepthMaterial = customDepthMaterial;
-    // Merged groups span many chunks — disable per-mesh frustum culling
-    mesh.frustumCulled = false;
-    return mesh;
   }
 }

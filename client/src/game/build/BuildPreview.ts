@@ -67,9 +67,6 @@ export class BuildPreview {
     config: BuildConfig;
   } | null = null;
 
-  /** Set of group keys currently suppressed for preview */
-  private suppressedGroups: Set<string> = new Set();
-
   /** Chunks with preview still visible after commit, waiting for remesh to replace them */
   private pendingCommitChunks: Set<string> = new Set();
 
@@ -374,11 +371,7 @@ export class BuildPreview {
     }
 
     // Restore group only if no other pending commit chunks remain in it
-    const gk = this.world.terrainBatchGroupKey(chunkKey);
-    if (gk && !this.hasRemainingPendingInGroup(gk)) {
-      this.world.restoreGroupsFromPreview(new Set([chunkKey]));
-      this.suppressedGroups.delete(gk);
-    }
+    this.world.terrainBatch.restoreGroupIfComplete(chunkKey, this.pendingCommitChunks);
   }
 
   /**
@@ -456,32 +449,13 @@ export class BuildPreview {
   /** Suppress terrain batch groups for all currently active preview chunks. */
   private suppressGroupsForActivePreview(): void {
     if (!this.world || this.activePreviewChunks.size === 0) return;
-    this.world.suppressGroupsForPreview(this.activePreviewChunks);
-    // Track suppressed group keys for fast restore
-    for (const key of this.activePreviewChunks) {
-      const gk = this.world.terrainBatchGroupKey(key);
-      if (gk) this.suppressedGroups.add(gk);
-    }
+    this.world.terrainBatch.suppressGroupsForChunks(this.activePreviewChunks);
   }
 
   /** Restore all currently suppressed terrain batch groups. */
   private restoreAllSuppressedGroups(): void {
-    if (!this.world || this.suppressedGroups.size === 0) return;
-    // Collect all chunk keys from active previews + pending commits to restore their groups
-    const allPreviewKeys = new Set<string>();
-    for (const key of this.activePreviewChunks) allPreviewKeys.add(key);
-    for (const key of this.pendingCommitChunks) allPreviewKeys.add(key);
-    this.world.restoreGroupsFromPreview(allPreviewKeys);
-    this.suppressedGroups.clear();
-  }
-
-  /** Check if any pending commit chunks remain in the given group. */
-  private hasRemainingPendingInGroup(gk: string): boolean {
-    if (!this.world) return false;
-    for (const key of this.pendingCommitChunks) {
-      if (this.world.terrainBatchGroupKey(key) === gk) return true;
-    }
-    return false;
+    if (!this.world) return;
+    this.world.terrainBatch.restoreAllSuppressedGroups();
   }
 
   /**

@@ -193,7 +193,7 @@ describe('ChunkMesh Mesh Creation Tests', () => {
 });
 
 describe('ChunkMesh Class Tests', () => {
-  test('ChunkMesh.updateMesh creates mesh correctly', () => {
+  test('ChunkMesh.updateMeshes creates mesh correctly', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
@@ -202,16 +202,16 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output.solid);
+    chunkMesh.updateMeshes(output);
     
     expect(chunkMesh.hasGeometry()).toBe(true);
     expect(chunkMesh.getVertexCount()).toBeGreaterThan(0);
     expect(chunkMesh.getTriangleCount()).toBeGreaterThan(0);
     
-    chunkMesh.disposeMesh();
+    chunkMesh.disposeMeshes();
   });
 
-  test('ChunkMesh.disposeMesh properly cleans up', () => {
+  test('ChunkMesh.disposeMeshes properly cleans up', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
@@ -220,17 +220,17 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output.solid);
+    chunkMesh.updateMeshes(output);
     expect(chunkMesh.hasGeometry()).toBe(true);
     
-    chunkMesh.disposeMesh();
+    chunkMesh.disposeMeshes();
     
-    expect(chunkMesh.mesh).toBeNull();
+    expect(chunkMesh.solidMesh).toBeNull();
     expect(chunkMesh.disposed).toBe(true);
     expect(chunkMesh.hasGeometry()).toBe(false);
   });
 
-  test('ChunkMesh.updateMesh disposes old mesh when called again', () => {
+  test('ChunkMesh.updateMeshes disposes old mesh when called again', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
@@ -239,17 +239,17 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output.solid);
+    chunkMesh.updateMeshes(output);
     const firstVertCount = chunkMesh.getVertexCount();
     
     chunk.generateFlat(10, 1, 16);
     const output2 = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output2);
+    chunkMesh.updateMeshes(output2);
     
     expect(chunkMesh.hasGeometry()).toBe(true);
     
-    chunkMesh.disposeMesh();
+    chunkMesh.disposeMeshes();
   });
 
   test('ChunkMesh stores chunk key in userData', () => {
@@ -261,14 +261,14 @@ describe('ChunkMesh Class Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output.solid);
+    chunkMesh.updateMeshes(output);
     
-    expect(chunkMesh.mesh).not.toBeNull();
-    if (chunkMesh.mesh) {
-      expect(chunkMesh.mesh.userData.chunkKey).toBe('1,2,3');
+    expect(chunkMesh.solidMesh).not.toBeNull();
+    if (chunkMesh.solidMesh) {
+      expect(chunkMesh.solidMesh.userData.chunkKey).toBe('1,2,3');
     }
     
-    chunkMesh.disposeMesh();
+    chunkMesh.disposeMeshes();
   });
 });
 
@@ -283,10 +283,10 @@ describe('Scene Integration Tests', () => {
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMesh(output, scene);
+    chunkMesh.updateMeshes(output, scene);
     expect(scene.children.length).toBe(1);
     
-    chunkMesh.disposeMesh(scene);
+    chunkMesh.disposeMeshes(scene);
     expect(scene.children.length).toBe(0);
   });
 

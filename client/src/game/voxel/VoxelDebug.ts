@@ -119,11 +119,11 @@ export function createEmptyChunkMarker(chunk: Chunk): THREE.Mesh {
  * @returns LineSegments object, or null if no mesh exists
  */
 export function createCollisionWireframe(chunkMesh: ChunkMesh): THREE.LineSegments | null {
-  if (!chunkMesh.mesh || !chunkMesh.mesh.geometry) {
+  if (!chunkMesh.solidMesh || !chunkMesh.solidMesh.geometry) {
     return null;
   }
   
-  const edges = new THREE.EdgesGeometry(chunkMesh.mesh.geometry, 30); // 30 degree threshold
+  const edges = new THREE.EdgesGeometry(chunkMesh.solidMesh.geometry, 30); // 30 degree threshold
   const material = new THREE.LineBasicMaterial({
     color: COLOR_COLLISION,
     transparent: true,
@@ -135,7 +135,7 @@ export function createCollisionWireframe(chunkMesh: ChunkMesh): THREE.LineSegmen
   wireframe.renderOrder = 1; // Render after terrain
   
   // Copy position from mesh
-  wireframe.position.copy(chunkMesh.mesh.position);
+  wireframe.position.copy(chunkMesh.solidMesh.position);
   
   // Store chunk info
   wireframe.userData.chunkKey = chunkMesh.chunk.key;

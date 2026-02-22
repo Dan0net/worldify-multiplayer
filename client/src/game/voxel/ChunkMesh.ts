@@ -10,72 +10,11 @@ import * as THREE from 'three';
 import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import type { SplitSurfaceNetOutput } from './SurfaceNet.js';
-import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, getTransparentDepthMaterial } from './VoxelMaterials.js';
 import { expandGeometry, createGeometryFromSurfaceNet, createBufferGeometry, type ExpandedMeshData } from './MeshGeometry.js';
+import { createLayerMesh, LAYER_SOLID, LAYER_TRANSPARENT, LAYER_LIQUID, LAYER_COUNT } from './LayerConfig.js';
 
 // Re-export for external consumers
 export type { ExpandedMeshData } from './MeshGeometry.js';
-
-// ============== Mesh Layer Configuration ==============
-
-/** Identifies a mesh rendering layer */
-const enum MeshLayer {
-  SOLID = 0,
-  TRANSPARENT = 1,
-  LIQUID = 2,
-}
-
-/** Configuration for each mesh layer */
-interface MeshLayerConfig {
-  material: () => THREE.Material;
-  castShadow: boolean;
-  receiveShadow: boolean;
-  renderOrder: number;
-  customDepthMaterial?: () => THREE.Material;
-  meshType: string;
-}
-
-const LAYER_CONFIGS: readonly MeshLayerConfig[] = [
-  { // SOLID
-    material: getTerrainMaterial,
-    castShadow: true,
-    receiveShadow: true,
-    renderOrder: 0,
-    meshType: 'solid',
-  },
-  { // TRANSPARENT
-    material: getTransparentTerrainMaterial,
-    castShadow: true,
-    receiveShadow: true,
-    renderOrder: 1,
-    customDepthMaterial: getTransparentDepthMaterial,
-    meshType: 'transparent',
-  },
-  { // LIQUID
-    material: getLiquidTerrainMaterial,
-    castShadow: false,
-    receiveShadow: true,
-    renderOrder: 2,
-    meshType: 'liquid',
-  },
-];
-
-const LAYER_COUNT = 3;
-
-/** Create a Three.js mesh for a given layer */
-function createLayerMesh(geometry: THREE.BufferGeometry, chunkKey: string, layer: MeshLayer): THREE.Mesh {
-  const config = LAYER_CONFIGS[layer];
-  const mesh = new THREE.Mesh(geometry, config.material());
-  mesh.userData.chunkKey = chunkKey;
-  mesh.userData.meshType = config.meshType;
-  mesh.castShadow = config.castShadow;
-  mesh.receiveShadow = config.receiveShadow;
-  mesh.renderOrder = config.renderOrder;
-  if (config.customDepthMaterial) {
-    mesh.customDepthMaterial = config.customDepthMaterial();
-  }
-  return mesh;
-}
 
 // ============== ChunkMesh Class ==============
 
@@ -168,7 +107,7 @@ export class ChunkMesh {
     for (let i = 0; i < LAYER_COUNT; i++) {
       if (!data[i]) continue;
       const geometry = createBufferGeometry(data[i]!);
-      const mesh = createLayerMesh(geometry, this.chunk.key, i as MeshLayer);
+      const mesh = createLayerMesh(geometry, i, this.chunk.key);
       mesh.userData.isPreview = true;
       mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
       scene.add(mesh);
@@ -198,41 +137,20 @@ export class ChunkMesh {
   // ============== Accessors ==============
 
   /** Solid mesh (for collision detection) */
-  get solidMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.SOLID]; }
+  get solidMesh(): THREE.Mesh | null { return this.mainMeshes[LAYER_SOLID]; }
 
   /** Transparent mesh */
-  get transparentMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.TRANSPARENT]; }
+  get transparentMesh(): THREE.Mesh | null { return this.mainMeshes[LAYER_TRANSPARENT]; }
 
   /** Liquid mesh */
-  get liquidMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.LIQUID]; }
+  get liquidMesh(): THREE.Mesh | null { return this.mainMeshes[LAYER_LIQUID]; }
 
   /** Get the solid mesh for collision/raycasting */
-  getMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.SOLID]; }
-
-  /** Get all non-null main meshes */
-  getAllMeshes(): THREE.Mesh[] {
-    return this.mainMeshes.filter((m): m is THREE.Mesh => m !== null);
-  }
+  getMesh(): THREE.Mesh | null { return this.mainMeshes[LAYER_SOLID]; }
 
   /** Check if any mesh layer has geometry */
   hasGeometry(): boolean {
     return !this.disposed && this.mainMeshes.some(m => m !== null);
-  }
-
-  // ============== Visibility / Shadows ==============
-
-  /** Set visibility of main meshes (preview meshes unaffected) */
-  setVisible(visible: boolean): void {
-    const effective = visible && !this.previewActive;
-    for (let i = 0; i < LAYER_COUNT; i++) {
-      if (this.mainMeshes[i]) this.mainMeshes[i]!.visible = effective;
-    }
-  }
-
-  /** Toggle castShadow on solid and transparent meshes (shadow distance culling) */
-  setShadowCasting(enabled: boolean): void {
-    if (this.mainMeshes[MeshLayer.SOLID]) this.mainMeshes[MeshLayer.SOLID]!.castShadow = enabled;
-    if (this.mainMeshes[MeshLayer.TRANSPARENT]) this.mainMeshes[MeshLayer.TRANSPARENT]!.castShadow = enabled;
   }
 
   // ============== Stats ==============
@@ -270,31 +188,6 @@ export class ChunkMesh {
     disposeMeshArray(this.previewMeshes, scene);
   }
 
-  // ============== Legacy Aliases (keep callers compiling) ==============
-
-  /** @deprecated Use disposeMeshes() */
-  disposeMesh(scene?: THREE.Scene): void { this.disposeMeshes(scene); }
-
-  /** @deprecated Use solidMesh getter */
-  get mesh(): THREE.Mesh | null { return this.solidMesh; }
-
-  /**
-   * @deprecated Use updateMeshes() with SplitSurfaceNetOutput
-   * Handles both single SurfaceNetOutput and split output for backward compat.
-   */
-  updateMesh(output: SurfaceNetOutput | SplitSurfaceNetOutput, scene?: THREE.Scene): void {
-    if ('solid' in output) {
-      this.updateMeshes(output, scene);
-    } else {
-      // Single SurfaceNetOutput → solid-only
-      this.disposePreviewMeshes(scene);
-      this.previewActive = false;
-      this.updateAllSlots(this.mainMeshes, [toExpandedData(output), null, null], scene);
-      this.disposed = false;
-      this.meshGeneration++;
-    }
-  }
-
   // ============== Private Helpers ==============
 
   /**
@@ -306,7 +199,7 @@ export class ChunkMesh {
     const chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
 
     for (let i = 0; i < LAYER_COUNT; i++) {
-      meshArray[i] = this.updateSlot(meshArray[i], data[i], i as MeshLayer, worldPos, chunkCoords, scene);
+      meshArray[i] = this.updateSlot(meshArray[i], data[i], i, worldPos, chunkCoords, scene);
     }
   }
 
@@ -314,7 +207,7 @@ export class ChunkMesh {
   private updateSlot(
     existing: THREE.Mesh | null,
     data: ExpandedMeshData | null,
-    layer: MeshLayer,
+    layer: number,
     worldPos: { x: number; y: number; z: number },
     chunkCoords: { cx: number; cy: number; cz: number },
     scene?: THREE.Scene,
@@ -336,7 +229,7 @@ export class ChunkMesh {
       return existing;
     }
 
-    const mesh = createLayerMesh(newGeometry, this.chunk.key, layer);
+    const mesh = createLayerMesh(newGeometry, layer, this.chunk.key);
     mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
     mesh.userData.chunkCoords = chunkCoords;
     if (this.previewActive) mesh.visible = false;
@@ -374,7 +267,7 @@ function disposeMeshArray(meshArray: (THREE.Mesh | null)[], scene?: THREE.Scene)
 export function createMeshFromSurfaceNet(output: SurfaceNetOutput, chunk: Chunk): THREE.Mesh | null {
   if (output.vertexCount === 0 || output.triangleCount === 0) return null;
   const geometry = createGeometryFromSurfaceNet(output);
-  const mesh = createLayerMesh(geometry, chunk.key, MeshLayer.SOLID);
+  const mesh = createLayerMesh(geometry, LAYER_SOLID, chunk.key);
   const worldPos = chunk.getWorldPosition();
   mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
   return mesh;
