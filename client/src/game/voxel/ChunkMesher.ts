@@ -13,7 +13,8 @@
  */
 
 import { 
-  CHUNK_SIZE, 
+  CHUNK_SIZE,
+  GRID_SIZE,
   chunkKey,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
@@ -22,8 +23,7 @@ import { meshVoxelsSplit, SurfaceNetInput, SplitSurfaceNetOutput } from './Surfa
 // Re-export types for convenience
 export type { SplitSurfaceNetOutput as ChunkMeshOutput };
 
-// Grid dimensions with +2 margin for neighbor stitching
-const GRID_SIZE = CHUNK_SIZE + 2; // 34
+// Derived grid constants
 const GRID_SIZE_SQ = GRID_SIZE * GRID_SIZE; // 1156
 
 // Reusable expanded grid buffer for sync path (avoids allocation per chunk)

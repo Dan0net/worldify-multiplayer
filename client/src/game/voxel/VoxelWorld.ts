@@ -8,6 +8,9 @@ import {
   VISIBILITY_UNLOAD_BUFFER,
   CHUNK_WORLD_SIZE,
   CHUNK_SIZE,
+  FACE_OFFSETS_6,
+  NEIGHBOR_OFFSETS_26,
+  MESH_MARGIN,
   worldToChunk,
   chunkKey,
   parseChunkKey,
@@ -72,8 +75,11 @@ export class VoxelWorld implements ChunkProvider {
   /** Callback to notify external systems (e.g. map cache) when a tile arrives */
   onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
 
-  /** Callback when a chunk's remesh result is applied (used by BuildPreview to clear committed preview) */
-  onChunkRemeshed: ((chunkKey: string) => void) | null = null;
+  /** Listeners notified when a chunk's remesh result is applied */
+  private remeshListeners: Set<(chunkKey: string) => void> = new Set();
+
+  /** Listeners notified when a chunk is unloaded */
+  private unloadListeners: Set<(chunkKey: string) => void> = new Set();
 
   /** Reference to the Three.js scene */
   readonly scene: THREE.Scene;
@@ -108,9 +114,12 @@ export class VoxelWorld implements ChunkProvider {
   /** Worker pool for off-thread mesh generation */
   readonly meshPool: MeshWorkerPool;
 
+  /** Number of mesh worker threads */
+  private static readonly MESH_WORKER_COUNT = 2;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.meshPool = new MeshWorkerPool(2);
+    this.meshPool = new MeshWorkerPool(VoxelWorld.MESH_WORKER_COUNT);
   }
 
   /**
@@ -120,6 +129,34 @@ export class VoxelWorld implements ChunkProvider {
   init(): void {
     if (this.initialized) return;
     this.initialized = true;
+  }
+
+  /**
+   * Register a listener called when a chunk remesh result is applied.
+   */
+  addRemeshListener(listener: (chunkKey: string) => void): void {
+    this.remeshListeners.add(listener);
+  }
+
+  /**
+   * Remove a previously registered remesh listener.
+   */
+  removeRemeshListener(listener: (chunkKey: string) => void): void {
+    this.remeshListeners.delete(listener);
+  }
+
+  /**
+   * Register a listener called when a chunk is unloaded.
+   */
+  addUnloadListener(listener: (chunkKey: string) => void): void {
+    this.unloadListeners.add(listener);
+  }
+
+  /**
+   * Remove a previously registered unload listener.
+   */
+  removeUnloadListener(listener: (chunkKey: string) => void): void {
+    this.unloadListeners.delete(listener);
   }
 
   /**
@@ -252,62 +289,35 @@ export class VoxelWorld implements ChunkProvider {
     console.log(`[VoxelWorld] Requested initial surface column (${tx}, ${tz})`);
   }
 
-  /** Face neighbor offsets: [dx, dy, dz] for +X, -X, +Y, -Y, +Z, -Z */
-  private static readonly FACE_OFFSETS = [
-    [1, 0, 0], [-1, 0, 0],
-    [0, 1, 0], [0, -1, 0],
-    [0, 0, 1], [0, 0, -1],
-  ] as const;
-
   /**
    * Check if a chunk has any non-solid (air/empty) voxels on a specific boundary face.
    * If so, a surface crossing may exist near that boundary and the neighbor chunk
    * is needed for correct margin data during meshing.
+   *
+   * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
    */
   private static hasSurfaceNearFace(data: Uint16Array, faceIndex: number): boolean {
     const CS = CHUNK_SIZE;
-    // Check the 2-deep boundary slice on the given face for any non-solid voxels.
-    // If the entire slice is solid, no surface crossing can occur at that boundary.
-    switch (faceIndex) {
-      case 0: // +X: x = CS-2 .. CS-1
-        for (let z = 0; z < CS; z++)
-          for (let y = 0; y < CS; y++)
-            for (let x = CS - 2; x < CS; x++)
-              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
-        return false;
-      case 1: // -X: x = 0 .. 1
-        for (let z = 0; z < CS; z++)
-          for (let y = 0; y < CS; y++)
-            for (let x = 0; x < 2; x++)
-              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
-        return false;
-      case 2: // +Y: y = CS-2 .. CS-1
-        for (let z = 0; z < CS; z++)
-          for (let y = CS - 2; y < CS; y++)
-            for (let x = 0; x < CS; x++)
-              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
-        return false;
-      case 3: // -Y: y = 0 .. 1
-        for (let z = 0; z < CS; z++)
-          for (let y = 0; y < 2; y++)
-            for (let x = 0; x < CS; x++)
-              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
-        return false;
-      case 4: // +Z: z = CS-2 .. CS-1
-        for (let z = CS - 2; z < CS; z++)
-          for (let y = 0; y < CS; y++)
-            for (let x = 0; x < CS; x++)
-              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
-        return false;
-      case 5: // -Z: z = 0 .. 1
-        for (let z = 0; z < 2; z++)
-          for (let y = 0; y < CS; y++)
-            for (let x = 0; x < CS; x++)
-              if (!isVoxelSolid(data[voxelIndex(x, y, z)])) return true;
-        return false;
-      default:
-        return false;
+    // Axis: 0=X, 1=Y, 2=Z.  Positive faces scan high end, negative faces scan low end.
+    const axis = faceIndex >> 1;          // 0,1→0  2,3→1  4,5→2
+    const isPositive = (faceIndex & 1) === 0;
+    const lo = isPositive ? CS - MESH_MARGIN : 0;
+    const hi = isPositive ? CS : MESH_MARGIN;
+
+    // coords[0]=x, coords[1]=y, coords[2]=z — axis dimension iterates [lo,hi)
+    const coords = [0, 0, 0];
+    for (let a = 0; a < CS; a++) {
+      for (let b = 0; b < CS; b++) {
+        for (let c = lo; c < hi; c++) {
+          // Map (a, b, c) into (x, y, z) depending on which axis we're scanning
+          coords[axis] = c;
+          coords[(axis + 1) % 3] = a;
+          coords[(axis + 2) % 3] = b;
+          if (!isVoxelSolid(data[voxelIndex(coords[0], coords[1], coords[2])])) return true;
+        }
+      }
     }
+    return false;
   }
 
   /**
@@ -319,7 +329,7 @@ export class VoxelWorld implements ChunkProvider {
     const extra = new Set<string>();
     for (const [, chunk] of this.chunks) {
       for (let face = 0; face < 6; face++) {
-        const [dx, dy, dz] = VoxelWorld.FACE_OFFSETS[face];
+        const [dx, dy, dz] = FACE_OFFSETS_6[face];
         const nx = chunk.cx + dx;
         const ny = chunk.cy + dy;
         const nz = chunk.cz + dz;
@@ -580,7 +590,7 @@ export class VoxelWorld implements ChunkProvider {
 
       // Relight horizontal face-adjacent neighbors so their border light
       // picks up the light values from this newly-arrived chunk.
-      for (const [dx, dy, dz] of VoxelWorld.FACE_OFFSETS) {
+      for (const [dx, dy, dz] of FACE_OFFSETS_6) {
         if (dy !== 0) continue; // vertical already handled above
         const nKey = chunkKey(cx + dx, cy + dy, cz + dz);
         const nChunk = this.chunks.get(nKey);
@@ -608,7 +618,7 @@ export class VoxelWorld implements ChunkProvider {
     computeSunlightColumns(data, isSunlitAbove);
 
     // Inject light from face-adjacent neighbor boundaries before BFS
-    const neighbors: (Uint16Array | null)[] = VoxelWorld.FACE_OFFSETS.map(
+    const neighbors: (Uint16Array | null)[] = FACE_OFFSETS_6.map(
       ([dx, dy, dz]) => this.chunks.get(chunkKey(cx + dx, cy + dy, cz + dz))?.data ?? null,
     );
     injectBorderLight(data, neighbors);
@@ -668,6 +678,9 @@ export class VoxelWorld implements ChunkProvider {
    * Unload a chunk by key.
    */
   private unloadChunk(key: string): void {
+    // Notify listeners before cleanup
+    for (const listener of this.unloadListeners) listener(key);
+
     // Dispose mesh
     const chunkMesh = this.meshes.get(key);
     if (chunkMesh) {
@@ -685,30 +698,12 @@ export class VoxelWorld implements ChunkProvider {
     this.chunks.delete(key);
   }
 
-  /** Neighbor offsets for all 26 adjacent chunks (6 face + 12 edge + 8 corner).
-   *  Full 26-neighborhood is needed because margin voxels at chunk edges/corners
-   *  sample diagonal neighbors via getVoxelWithMargin. Without remeshing diagonal
-   *  neighbors, stale extrapolated data causes seam cracks at multi-chunk junctions. */
-  private static readonly NEIGHBOR_OFFSETS = [
-    // 6 face neighbors
-    [-1, 0, 0], [1, 0, 0],
-    [0, -1, 0], [0, 1, 0],
-    [0, 0, -1], [0, 0, 1],
-    // 12 edge neighbors
-    [-1, -1, 0], [-1, 1, 0], [1, -1, 0], [1, 1, 0],
-    [-1, 0, -1], [-1, 0, 1], [1, 0, -1], [1, 0, 1],
-    [0, -1, -1], [0, -1, 1], [0, 1, -1], [0, 1, 1],
-    // 8 corner neighbors
-    [-1, -1, -1], [-1, -1, 1], [-1, 1, -1], [-1, 1, 1],
-    [1, -1, -1], [1, -1, 1], [1, 1, -1], [1, 1, 1],
-  ] as const;
-
   /**
    * Queue neighbor chunks for remeshing (for seamless boundaries).
    * Public so build system can trigger neighbor remesh after commits.
    */
   queueNeighborRemesh(cx: number, cy: number, cz: number): void {
-    for (const [dx, dy, dz] of VoxelWorld.NEIGHBOR_OFFSETS) {
+    for (const [dx, dy, dz] of NEIGHBOR_OFFSETS_26) {
       const key = chunkKey(cx + dx, cy + dy, cz + dz);
       if (this.chunks.has(key)) {
         this.remeshQueue.add(key);
@@ -757,7 +752,7 @@ export class VoxelWorld implements ChunkProvider {
    * If so, we should delay meshing to avoid stitching artifacts.
    */
   private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
-    for (const [dx, dy, dz] of VoxelWorld.NEIGHBOR_OFFSETS) {
+    for (const [dx, dy, dz] of NEIGHBOR_OFFSETS_26) {
       if (this.pendingChunks.has(chunkKey(cx + dx, cy + dy, cz + dz))) {
         return true;
       }
@@ -861,8 +856,8 @@ export class VoxelWorld implements ChunkProvider {
     chunkMesh.updateMeshesFromData(solid, transparent, liquid, this.scene);
     chunk.clearDirty();
 
-    // Notify listeners (e.g. BuildPreview clears committed preview meshes)
-    this.onChunkRemeshed?.(key);
+    // Notify listeners (e.g. collision rebuild, BuildPreview committed preview cleanup)
+    for (const listener of this.remeshListeners) listener(key);
   }
 
   /**
@@ -984,7 +979,7 @@ export class VoxelWorld implements ChunkProvider {
         }
 
         // Relight face-adjacent horizontal neighbors so their border light updates
-        for (const [dx, dy, dz] of VoxelWorld.FACE_OFFSETS) {
+        for (const [dx, dy, dz] of FACE_OFFSETS_6) {
           if (dy !== 0) continue; // vertical already handled above
           const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
           const nChunk = this.chunks.get(nKey);

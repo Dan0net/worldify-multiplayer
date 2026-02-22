@@ -80,14 +80,18 @@ export class VoxelIntegration implements TerrainRaycaster {
     // Initialize the world (generates initial chunks)
     this.world.init();
 
-    // Rebuild collision BVH whenever a chunk is remeshed by a worker.
-    // This ensures collision always matches the actual rendered geometry.
-    this.world.onChunkRemeshed = (key) => {
+    // Event-driven collision: rebuild BVH whenever a chunk remeshes
+    this.world.addRemeshListener((key) => {
       this.rebuildCollisionForChunks([key]);
-    };
-    
-    // Build colliders for all initial chunk meshes
-    this.syncColliders();
+    });
+
+    // Event-driven collision: remove collider when a chunk unloads
+    this.world.addUnloadListener((key) => {
+      if (this.colliderGenerations.has(key)) {
+        this.collision.removeCollider(key);
+        this.colliderGenerations.delete(key);
+      }
+    });
     
     // Update debug visualization if enabled
     if (this.config.debugEnabled) {
@@ -118,59 +122,15 @@ export class VoxelIntegration implements TerrainRaycaster {
     // Update world (handles chunk loading/unloading)
     this.world.update(playerPos);
     
-    // Sync colliders for any new/updated chunks
-    this.syncColliders();
+    // Colliders are managed reactively via remesh/unload listeners
     
     // Update debug visualization
     this.debug.update(this.world.chunks, this.world.meshes);
   }
 
   /**
-   * Synchronize colliders with chunk meshes.
-   * Adds colliders for new meshes, updates when geometry changes, removes for unloaded chunks.
-   */
-  private syncColliders(): void {
-    // Build or update colliders for chunks that have meshes
-    for (const [key, chunkMesh] of this.world.meshes) {
-      if (!chunkMesh.hasGeometry()) continue;
-      
-      const mesh = chunkMesh.getMesh();
-      if (!mesh) continue;
-      
-      const currentGeneration = chunkMesh.meshGeneration;
-      const storedGeneration = this.colliderGenerations.get(key);
-      
-      // Skip if collider exists and mesh hasn't changed
-      if (storedGeneration === currentGeneration) continue;
-      
-      // Remove old collider if it exists (mesh was regenerated)
-      if (storedGeneration !== undefined) {
-        this.collision.removeCollider(key);
-      }
-      
-      // Add new collider with current geometry
-      this.collision.addCollider(key, mesh);
-      this.colliderGenerations.set(key, currentGeneration);
-    }
-    
-    // Remove colliders for chunks that were unloaded
-    const chunksToRemove: string[] = [];
-    for (const key of this.colliderGenerations.keys()) {
-      if (!this.world.chunks.has(key)) {
-        chunksToRemove.push(key);
-      }
-    }
-    for (const key of chunksToRemove) {
-      this.collision.removeCollider(key);
-      this.colliderGenerations.delete(key);
-    }
-  }
-
-  /**
    * Rebuild collision for specific chunks after voxel modification.
-   * Call this after committing a build operation.
-   * 
-   * @param chunkKeys Array of chunk keys to rebuild collision for
+   * Also called reactively via remesh listener.
    */
   rebuildCollisionForChunks(chunkKeys: string[]): void {
     for (const key of chunkKeys) {

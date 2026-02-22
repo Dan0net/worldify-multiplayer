@@ -13,9 +13,10 @@
  */
 
 import type { MeshWorkerResponse, MeshSlotData } from './meshWorker.js';
+import { GRID_SIZE } from '@worldify/shared';
 
-// Grid size: (CHUNK_SIZE + 2)³ = 34³ = 39,304
-const GRID_LENGTH = 34 * 34 * 34;
+// Grid total voxel count: GRID_SIZE³
+const GRID_LENGTH = GRID_SIZE * GRID_SIZE * GRID_SIZE;
 
 interface Task {
   id: number;

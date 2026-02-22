@@ -1,94 +1,107 @@
 /**
  * ChunkMesh - Manages Three.js mesh lifecycle for voxel chunks
  * 
- * Each chunk has three meshes:
- * - solidMesh: Opaque materials rendered without alpha blending
- * - transparentMesh: Materials with alpha (leaves, etc.) rendered with transparency
- * - liquidMesh: Water and other liquid materials with special rendering
+ * Each chunk has three mesh slots (solid, transparent, liquid) for both
+ * main rendering and build preview. Uses a slot-based architecture to
+ * eliminate repetitive per-type code.
  */
 
 import * as THREE from 'three';
 import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
-import { ChunkMeshOutput } from './ChunkMesher.js';
+import type { SplitSurfaceNetOutput } from './SurfaceNet.js';
 import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, getTransparentDepthMaterial } from './VoxelMaterials.js';
-import { createGeometryFromSurfaceNet, createBufferGeometry, type ExpandedMeshData } from './MeshGeometry.js';
+import { expandGeometry, createGeometryFromSurfaceNet, createBufferGeometry, type ExpandedMeshData } from './MeshGeometry.js';
 
-/**
- * Create a solid (opaque) mesh from geometry.
- */
-function createSolidMesh(geometry: THREE.BufferGeometry, chunkKey: string): THREE.Mesh {
-  const mesh = new THREE.Mesh(geometry, getTerrainMaterial());
-  mesh.userData.chunkKey = chunkKey;
-  mesh.userData.meshType = 'solid';
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
+// Re-export for external consumers
+export type { ExpandedMeshData } from './MeshGeometry.js';
+
+// ============== Mesh Layer Configuration ==============
+
+/** Identifies a mesh rendering layer */
+const enum MeshLayer {
+  SOLID = 0,
+  TRANSPARENT = 1,
+  LIQUID = 2,
 }
 
-/**
- * Create a transparent mesh from geometry.
- */
-function createTransparentMesh(geometry: THREE.BufferGeometry, chunkKey: string): THREE.Mesh {
-  const mesh = new THREE.Mesh(geometry, getTransparentTerrainMaterial());
-  mesh.userData.chunkKey = chunkKey;
-  mesh.userData.meshType = 'transparent';
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  // Use custom depth material for alpha-tested shadow casting
-  mesh.customDepthMaterial = getTransparentDepthMaterial();
-  // Transparent objects should render after opaque ones
-  mesh.renderOrder = 1;
-  return mesh;
+/** Configuration for each mesh layer */
+interface MeshLayerConfig {
+  material: () => THREE.Material;
+  castShadow: boolean;
+  receiveShadow: boolean;
+  renderOrder: number;
+  customDepthMaterial?: () => THREE.Material;
+  meshType: string;
 }
 
-/**
- * Create a liquid mesh from geometry.
- */
-function createLiquidMesh(geometry: THREE.BufferGeometry, chunkKey: string): THREE.Mesh {
-  const mesh = new THREE.Mesh(geometry, getLiquidTerrainMaterial());
+const LAYER_CONFIGS: readonly MeshLayerConfig[] = [
+  { // SOLID
+    material: getTerrainMaterial,
+    castShadow: true,
+    receiveShadow: true,
+    renderOrder: 0,
+    meshType: 'solid',
+  },
+  { // TRANSPARENT
+    material: getTransparentTerrainMaterial,
+    castShadow: true,
+    receiveShadow: true,
+    renderOrder: 1,
+    customDepthMaterial: getTransparentDepthMaterial,
+    meshType: 'transparent',
+  },
+  { // LIQUID
+    material: getLiquidTerrainMaterial,
+    castShadow: false,
+    receiveShadow: true,
+    renderOrder: 2,
+    meshType: 'liquid',
+  },
+];
+
+const LAYER_COUNT = 3;
+
+/** Create a Three.js mesh for a given layer */
+function createLayerMesh(geometry: THREE.BufferGeometry, chunkKey: string, layer: MeshLayer): THREE.Mesh {
+  const config = LAYER_CONFIGS[layer];
+  const mesh = new THREE.Mesh(geometry, config.material());
   mesh.userData.chunkKey = chunkKey;
-  mesh.userData.meshType = 'liquid';
-  mesh.castShadow = false;
-  mesh.receiveShadow = true;
-  // Liquid renders after transparent
-  mesh.renderOrder = 2;
+  mesh.userData.meshType = config.meshType;
+  mesh.castShadow = config.castShadow;
+  mesh.receiveShadow = config.receiveShadow;
+  mesh.renderOrder = config.renderOrder;
+  if (config.customDepthMaterial) {
+    mesh.customDepthMaterial = config.customDepthMaterial();
+  }
   return mesh;
 }
 
 // ============== ChunkMesh Class ==============
 
+/** Input data for mesh updates — one entry per layer */
+export type MeshLayerData = [ExpandedMeshData | null, ExpandedMeshData | null, ExpandedMeshData | null];
+
 /**
- * Container for a chunk's meshes (solid, transparent, and liquid) and related data.
+ * Container for a chunk's meshes (solid, transparent, liquid) and preview meshes.
+ * Uses a slot-based architecture — all three layers are managed identically.
  */
 export class ChunkMesh {
-  /** Solid (opaque) mesh - used for collision detection */
-  solidMesh: THREE.Mesh | null = null;
-  
-  /** Transparent mesh - leaves and other alpha materials */
-  transparentMesh: THREE.Mesh | null = null;
-  
-  /** Liquid mesh - water and other liquid materials */
-  liquidMesh: THREE.Mesh | null = null;
-  
-  /** Preview solid mesh for build preview (visual only, not for collision) */
-  previewSolidMesh: THREE.Mesh | null = null;
-  
-  /** Preview transparent mesh for build preview */
-  previewTransparentMesh: THREE.Mesh | null = null;
-  
-  /** Preview liquid mesh for build preview */
-  previewLiquidMesh: THREE.Mesh | null = null;
-  
+  /** Main meshes indexed by MeshLayer */
+  private mainMeshes: (THREE.Mesh | null)[] = [null, null, null];
+
+  /** Preview meshes indexed by MeshLayer */
+  private previewMeshes: (THREE.Mesh | null)[] = [null, null, null];
+
   /** Whether preview mode is active (hides main meshes, shows preview) */
   private previewActive: boolean = false;
-  
+
   /** The chunk this mesh represents */
   readonly chunk: Chunk;
-  
+
   /** Whether the meshes have been disposed */
   disposed: boolean = false;
-  
+
   /** Generation counter - increments each time mesh geometry is updated */
   meshGeneration: number = 0;
 
@@ -96,39 +109,11 @@ export class ChunkMesh {
     this.chunk = chunk;
   }
 
-  /**
-   * Create or update meshes from ChunkMeshOutput (solid + transparent + liquid).
-   * Reuses existing THREE.Mesh objects when possible to avoid scene.remove/add overhead.
-   * @param output Mesh data for solid, transparent, and liquid materials
-   * @param scene Optional scene to add/remove meshes
-   */
-  updateMeshes(output: ChunkMeshOutput, scene?: THREE.Scene): void {
-    // Clean up preview state (always needed before updating main meshes)
-    this.disposePreviewMeshes(scene);
-    this.previewActive = false;
-
-    const worldPos = this.chunk.getWorldPosition();
-    const chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
-
-    // Update each mesh slot, reusing existing Mesh objects where possible
-    this.solidMesh = this.updateMeshSlot(
-      this.solidMesh, output.solid, createSolidMesh, worldPos, chunkCoords, scene
-    );
-    this.transparentMesh = this.updateMeshSlot(
-      this.transparentMesh, output.transparent, createTransparentMesh, worldPos, chunkCoords, scene
-    );
-    this.liquidMesh = this.updateMeshSlot(
-      this.liquidMesh, output.liquid, createLiquidMesh, worldPos, chunkCoords, scene
-    );
-
-    this.disposed = false;
-    this.meshGeneration++;
-  }
+  // ============== Main Mesh Updates ==============
 
   /**
-   * Create or update meshes from raw ExpandedMeshData (worker results).
-   * Same as updateMeshes() but accepts pre-expanded typed arrays instead of SurfaceNetOutput.
-   * Used by the worker pipeline — avoids needing SurfaceNetOutput on the main thread.
+   * Create or update main meshes from worker results (ExpandedMeshData).
+   * Primary path — used by the async worker pipeline.
    */
   updateMeshesFromData(
     solid: ExpandedMeshData | null,
@@ -136,32 +121,38 @@ export class ChunkMesh {
     liquid: ExpandedMeshData | null,
     scene?: THREE.Scene,
   ): void {
-    // If preview is active (e.g. pending commit), don't touch preview state here.
-    // The real meshes are updated underneath; onChunkRemeshed will call
-    // setPreviewActive(false) to swap visibility atomically.
+    // If preview is active (pending commit), don't touch preview state.
+    // Main meshes update underneath; onChunkRemeshed will swap visibility.
     if (!this.previewActive) {
       this.disposePreviewMeshes(scene);
     }
 
-    const worldPos = this.chunk.getWorldPosition();
-    const chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
-
-    this.solidMesh = this.updateMeshSlotFromData(
-      this.solidMesh, solid, createSolidMesh, worldPos, chunkCoords, scene
-    );
-    this.transparentMesh = this.updateMeshSlotFromData(
-      this.transparentMesh, transparent, createTransparentMesh, worldPos, chunkCoords, scene
-    );
-    this.liquidMesh = this.updateMeshSlotFromData(
-      this.liquidMesh, liquid, createLiquidMesh, worldPos, chunkCoords, scene
-    );
-
+    this.updateAllSlots(this.mainMeshes, [solid, transparent, liquid], scene);
     this.disposed = false;
     this.meshGeneration++;
   }
 
   /**
-   * Update preview meshes from raw ExpandedMeshData (worker batch results).
+   * Create or update main meshes from SurfaceNetOutput (sync/fallback path).
+   */
+  updateMeshes(output: SplitSurfaceNetOutput, scene?: THREE.Scene): void {
+    this.disposePreviewMeshes(scene);
+    this.previewActive = false;
+
+    this.updateAllSlots(this.mainMeshes, [
+      toExpandedData(output.solid),
+      toExpandedData(output.transparent),
+      toExpandedData(output.liquid),
+    ], scene);
+
+    this.disposed = false;
+    this.meshGeneration++;
+  }
+
+  // ============== Preview Mesh Updates ==============
+
+  /**
+   * Update preview meshes from worker results (ExpandedMeshData).
    * Used by BuildPreview's async worker pipeline.
    */
   updatePreviewMeshesFromData(
@@ -172,82 +163,158 @@ export class ChunkMesh {
   ): void {
     this.disposePreviewMeshes(scene);
     const worldPos = this.chunk.getWorldPosition();
+    const data = [solid, transparent, liquid];
 
-    if (solid) {
-      const geometry = createBufferGeometry(solid);
-      this.previewSolidMesh = createSolidMesh(geometry, this.chunk.key);
-      this.previewSolidMesh.userData.isPreview = true;
-      this.previewSolidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      scene.add(this.previewSolidMesh);
-    }
-    if (transparent) {
-      const geometry = createBufferGeometry(transparent);
-      this.previewTransparentMesh = createTransparentMesh(geometry, this.chunk.key);
-      this.previewTransparentMesh.userData.isPreview = true;
-      this.previewTransparentMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      scene.add(this.previewTransparentMesh);
-    }
-    if (liquid) {
-      const geometry = createBufferGeometry(liquid);
-      this.previewLiquidMesh = createLiquidMesh(geometry, this.chunk.key);
-      this.previewLiquidMesh.userData.isPreview = true;
-      this.previewLiquidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      scene.add(this.previewLiquidMesh);
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      if (!data[i]) continue;
+      const geometry = createBufferGeometry(data[i]!);
+      const mesh = createLayerMesh(geometry, this.chunk.key, i as MeshLayer);
+      mesh.userData.isPreview = true;
+      mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+      scene.add(mesh);
+      this.previewMeshes[i] = mesh;
     }
   }
+
+  // ============== Preview State ==============
 
   /**
-   * Update a single mesh slot: reuse existing mesh if possible, create/remove as needed.
-   * - non-empty → non-empty: swap geometry on existing mesh (no scene.remove/add)
-   * - empty → non-empty: create new mesh and add to scene  
-   * - non-empty → empty: remove from scene and dispose
-   * - empty → empty: no-op
+   * Set preview mode active. When active, main meshes are hidden.
    */
-  private updateMeshSlot(
-    existing: THREE.Mesh | null,
-    output: SurfaceNetOutput,
-    createFn: (geometry: THREE.BufferGeometry, chunkKey: string) => THREE.Mesh,
-    worldPos: { x: number; y: number; z: number },
-    chunkCoords: { cx: number; cy: number; cz: number },
-    scene?: THREE.Scene,
-  ): THREE.Mesh | null {
-    const hasData = output.vertexCount > 0 && output.triangleCount > 0;
+  setPreviewActive(active: boolean, scene: THREE.Scene): void {
+    if (this.previewActive === active) return;
+    this.previewActive = active;
 
-    if (!hasData) {
-      // Remove existing mesh if present
-      if (existing) {
-        if (scene) scene.remove(existing);
-        existing.geometry.dispose();
-      }
-      return null;
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      if (this.mainMeshes[i]) this.mainMeshes[i]!.visible = !active;
     }
-
-    const newGeometry = createGeometryFromSurfaceNet(output);
-
-    if (existing) {
-      // Reuse existing mesh — swap geometry, skip scene.remove/add
-      const oldGeometry = existing.geometry;
-      existing.geometry = newGeometry;
-      oldGeometry.dispose();
-      return existing;
-    }
-
-    // Create new mesh (first time or transitioning from empty)
-    const mesh = createFn(newGeometry, this.chunk.key);
-    mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-    mesh.userData.chunkCoords = chunkCoords;
-    // Keep hidden if preview is active (preview meshes are being shown instead)
-    if (this.previewActive) mesh.visible = false;
-    if (scene) scene.add(mesh);
-    mesh.updateMatrixWorld(true);
-    return mesh;
+    if (!active) this.disposePreviewMeshes(scene);
   }
 
-  /** Reusable slot updater for ExpandedMeshData (worker path). Same reuse logic as updateMeshSlot. */
-  private updateMeshSlotFromData(
+  isPreviewActive(): boolean {
+    return this.previewActive;
+  }
+
+  // ============== Accessors ==============
+
+  /** Solid mesh (for collision detection) */
+  get solidMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.SOLID]; }
+
+  /** Transparent mesh */
+  get transparentMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.TRANSPARENT]; }
+
+  /** Liquid mesh */
+  get liquidMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.LIQUID]; }
+
+  /** Get the solid mesh for collision/raycasting */
+  getMesh(): THREE.Mesh | null { return this.mainMeshes[MeshLayer.SOLID]; }
+
+  /** Get all non-null main meshes */
+  getAllMeshes(): THREE.Mesh[] {
+    return this.mainMeshes.filter((m): m is THREE.Mesh => m !== null);
+  }
+
+  /** Check if any mesh layer has geometry */
+  hasGeometry(): boolean {
+    return !this.disposed && this.mainMeshes.some(m => m !== null);
+  }
+
+  // ============== Visibility / Shadows ==============
+
+  /** Set visibility of main meshes (preview meshes unaffected) */
+  setVisible(visible: boolean): void {
+    const effective = visible && !this.previewActive;
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      if (this.mainMeshes[i]) this.mainMeshes[i]!.visible = effective;
+    }
+  }
+
+  /** Toggle castShadow on solid and transparent meshes (shadow distance culling) */
+  setShadowCasting(enabled: boolean): void {
+    if (this.mainMeshes[MeshLayer.SOLID]) this.mainMeshes[MeshLayer.SOLID]!.castShadow = enabled;
+    if (this.mainMeshes[MeshLayer.TRANSPARENT]) this.mainMeshes[MeshLayer.TRANSPARENT]!.castShadow = enabled;
+  }
+
+  // ============== Stats ==============
+
+  getVertexCount(): number {
+    let count = 0;
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      const attr = this.mainMeshes[i]?.geometry.getAttribute('position');
+      if (attr) count += attr.count;
+    }
+    return count;
+  }
+
+  getTriangleCount(): number {
+    let count = 0;
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      const idx = this.mainMeshes[i]?.geometry.index;
+      if (idx) count += idx.count / 3;
+    }
+    return count;
+  }
+
+  // ============== Disposal ==============
+
+  /** Dispose all meshes (main + preview) */
+  disposeMeshes(scene?: THREE.Scene): void {
+    this.disposePreviewMeshes(scene);
+    this.previewActive = false;
+    disposeMeshArray(this.mainMeshes, scene);
+    this.disposed = true;
+  }
+
+  /** Dispose preview meshes only */
+  disposePreviewMeshes(scene?: THREE.Scene): void {
+    disposeMeshArray(this.previewMeshes, scene);
+  }
+
+  // ============== Legacy Aliases (keep callers compiling) ==============
+
+  /** @deprecated Use disposeMeshes() */
+  disposeMesh(scene?: THREE.Scene): void { this.disposeMeshes(scene); }
+
+  /** @deprecated Use solidMesh getter */
+  get mesh(): THREE.Mesh | null { return this.solidMesh; }
+
+  /**
+   * @deprecated Use updateMeshes() with SplitSurfaceNetOutput
+   * Handles both single SurfaceNetOutput and split output for backward compat.
+   */
+  updateMesh(output: SurfaceNetOutput | SplitSurfaceNetOutput, scene?: THREE.Scene): void {
+    if ('solid' in output) {
+      this.updateMeshes(output, scene);
+    } else {
+      // Single SurfaceNetOutput → solid-only
+      this.disposePreviewMeshes(scene);
+      this.previewActive = false;
+      this.updateAllSlots(this.mainMeshes, [toExpandedData(output), null, null], scene);
+      this.disposed = false;
+      this.meshGeneration++;
+    }
+  }
+
+  // ============== Private Helpers ==============
+
+  /**
+   * Update all mesh slots from data array. Reuses existing THREE.Mesh objects
+   * when possible (swap geometry) to avoid scene.remove/add overhead.
+   */
+  private updateAllSlots(meshArray: (THREE.Mesh | null)[], data: MeshLayerData, scene?: THREE.Scene): void {
+    const worldPos = this.chunk.getWorldPosition();
+    const chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
+
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      meshArray[i] = this.updateSlot(meshArray[i], data[i], i as MeshLayer, worldPos, chunkCoords, scene);
+    }
+  }
+
+  /** Update a single mesh slot: reuse geometry swap or create/remove */
+  private updateSlot(
     existing: THREE.Mesh | null,
     data: ExpandedMeshData | null,
-    createFn: (geometry: THREE.BufferGeometry, chunkKey: string) => THREE.Mesh,
+    layer: MeshLayer,
     worldPos: { x: number; y: number; z: number },
     chunkCoords: { cx: number; cy: number; cz: number },
     scene?: THREE.Scene,
@@ -259,361 +326,64 @@ export class ChunkMesh {
       }
       return null;
     }
+
     const newGeometry = createBufferGeometry(data);
+
     if (existing) {
-      const oldGeometry = existing.geometry;
+      const old = existing.geometry;
       existing.geometry = newGeometry;
-      oldGeometry.dispose();
+      old.dispose();
       return existing;
     }
-    const mesh = createFn(newGeometry, this.chunk.key);
+
+    const mesh = createLayerMesh(newGeometry, this.chunk.key, layer);
     mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
     mesh.userData.chunkCoords = chunkCoords;
-    // Keep hidden if preview is active (preview meshes are being shown instead)
     if (this.previewActive) mesh.visible = false;
     if (scene) scene.add(mesh);
     mesh.updateMatrixWorld(true);
     return mesh;
   }
+}
 
-  /**
-   * Legacy: Create or update the solid mesh only from SurfaceNet output.
-   * @deprecated Use updateMeshes() with ChunkMeshOutput instead
-   * @param output SurfaceNet mesh data
-   * @param scene Optional scene to add mesh to
-   */
-  updateMesh(output: SurfaceNetOutput, scene?: THREE.Scene): void {
-    // Dispose old solid mesh if exists
-    if (this.solidMesh) {
-      if (scene) scene.remove(this.solidMesh);
-      this.solidMesh.geometry.dispose();
-      this.solidMesh = null;
+// ============== Helper Functions ==============
+
+/** Convert SurfaceNetOutput to ExpandedMeshData (or null if empty) */
+function toExpandedData(output: SurfaceNetOutput): ExpandedMeshData | null {
+  if (output.vertexCount === 0 || output.triangleCount === 0) return null;
+  return expandGeometry(output);
+}
+
+/** Dispose all meshes in an array and null them out */
+function disposeMeshArray(meshArray: (THREE.Mesh | null)[], scene?: THREE.Scene): void {
+  for (let i = 0; i < meshArray.length; i++) {
+    const m = meshArray[i];
+    if (m) {
+      if (scene) scene.remove(m);
+      m.geometry.dispose();
+      meshArray[i] = null;
     }
-
-    // Don't create mesh for empty geometry
-    if (output.vertexCount === 0 || output.triangleCount === 0) {
-      return;
-    }
-
-    // Create geometry and mesh
-    const geometry = createGeometryFromSurfaceNet(output);
-    this.solidMesh = createSolidMesh(geometry, this.chunk.key);
-    
-    // Position mesh at chunk world position
-    const worldPos = this.chunk.getWorldPosition();
-    this.solidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-    this.solidMesh.userData.chunkCoords = { cx: this.chunk.cx, cy: this.chunk.cy, cz: this.chunk.cz };
-
-    this.disposed = false;
-    this.meshGeneration++;
-
-    // Add to scene if provided
-    if (scene) {
-      scene.add(this.solidMesh);
-    }
-    
-    // Update world matrix so raycasting works immediately
-    this.solidMesh.updateMatrixWorld(true);
-  }
-
-  /**
-   * Update the preview meshes from ChunkMeshOutput (temp data).
-   * The preview meshes are visual only - collision uses the main solid mesh.
-   * @param output Mesh data from temp voxel data
-   * @param scene Scene to add preview meshes to
-   */
-  updatePreviewMeshes(output: ChunkMeshOutput, scene: THREE.Scene): void {
-    // Dispose old preview meshes
-    this.disposePreviewMeshes(scene);
-
-    const worldPos = this.chunk.getWorldPosition();
-
-    // Create preview solid mesh
-    if (output.solid.vertexCount > 0 && output.solid.triangleCount > 0) {
-      const solidGeometry = createGeometryFromSurfaceNet(output.solid);
-      this.previewSolidMesh = createSolidMesh(solidGeometry, this.chunk.key);
-      this.previewSolidMesh.userData.isPreview = true;
-      this.previewSolidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      scene.add(this.previewSolidMesh);
-    }
-
-    // Create preview transparent mesh
-    if (output.transparent.vertexCount > 0 && output.transparent.triangleCount > 0) {
-      const transparentGeometry = createGeometryFromSurfaceNet(output.transparent);
-      this.previewTransparentMesh = createTransparentMesh(transparentGeometry, this.chunk.key);
-      this.previewTransparentMesh.userData.isPreview = true;
-      this.previewTransparentMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      scene.add(this.previewTransparentMesh);
-    }
-
-    // Create preview liquid mesh
-    if (output.liquid.vertexCount > 0 && output.liquid.triangleCount > 0) {
-      const liquidGeometry = createGeometryFromSurfaceNet(output.liquid);
-      this.previewLiquidMesh = createLiquidMesh(liquidGeometry, this.chunk.key);
-      this.previewLiquidMesh.userData.isPreview = true;
-      this.previewLiquidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-      scene.add(this.previewLiquidMesh);
-    }
-  }
-
-  /**
-   * Legacy: Update the preview mesh from SurfaceNet output (temp data).
-   * @deprecated Use updatePreviewMeshes() with ChunkMeshOutput instead
-   */
-  updatePreviewMesh(output: SurfaceNetOutput, scene: THREE.Scene): void {
-    // Dispose old preview mesh
-    this.disposePreviewMesh(scene);
-
-    // Don't create mesh for empty geometry
-    if (output.vertexCount === 0 || output.triangleCount === 0) {
-      return;
-    }
-
-    // Create geometry and mesh using helpers
-    const geometry = createGeometryFromSurfaceNet(output);
-    this.previewSolidMesh = createSolidMesh(geometry, this.chunk.key);
-    this.previewSolidMesh.userData.isPreview = true;
-    
-    const worldPos = this.chunk.getWorldPosition();
-    this.previewSolidMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-
-    scene.add(this.previewSolidMesh);
-  }
-
-  /**
-   * Dispose of the preview meshes only.
-   */
-  disposePreviewMeshes(scene?: THREE.Scene): void {
-    if (this.previewSolidMesh) {
-      if (scene) scene.remove(this.previewSolidMesh);
-      this.previewSolidMesh.geometry.dispose();
-      this.previewSolidMesh = null;
-    }
-    if (this.previewTransparentMesh) {
-      if (scene) scene.remove(this.previewTransparentMesh);
-      this.previewTransparentMesh.geometry.dispose();
-      this.previewTransparentMesh = null;
-    }
-    if (this.previewLiquidMesh) {
-      if (scene) scene.remove(this.previewLiquidMesh);
-      this.previewLiquidMesh.geometry.dispose();
-      this.previewLiquidMesh = null;
-    }
-  }
-
-  /**
-   * Legacy alias for disposePreviewMeshes.
-   * @deprecated Use disposePreviewMeshes() instead
-   */
-  disposePreviewMesh(scene?: THREE.Scene): void {
-    this.disposePreviewMeshes(scene);
-  }
-
-  /**
-   * Set preview mode active. When active, main meshes are hidden.
-   * @param active Whether to activate preview mode
-   * @param scene Scene to remove preview meshes from when deactivating (required)
-   */
-  setPreviewActive(active: boolean, scene: THREE.Scene): void {
-    if (this.previewActive === active) return;
-    this.previewActive = active;
-
-    if (this.solidMesh) {
-      this.solidMesh.visible = !active;
-    }
-    if (this.transparentMesh) {
-      this.transparentMesh.visible = !active;
-    }
-    if (this.liquidMesh) {
-      this.liquidMesh.visible = !active;
-    }
-    
-    // If deactivating, clean up preview meshes
-    if (!active) {
-      this.disposePreviewMeshes(scene);
-    }
-  }
-
-  /**
-   * Check if preview mode is active.
-   */
-  isPreviewActive(): boolean {
-    return this.previewActive;
-  }
-
-  /**
-   * Dispose of all meshes and clean up resources.
-   * @param scene Optional scene to remove meshes from
-   */
-  disposeMeshes(scene?: THREE.Scene): void {
-    // Also dispose preview meshes
-    this.disposePreviewMeshes(scene);
-    this.previewActive = false;
-    
-    if (this.solidMesh) {
-      if (scene) scene.remove(this.solidMesh);
-      this.solidMesh.geometry.dispose();
-      this.solidMesh = null;
-    }
-    
-    if (this.transparentMesh) {
-      if (scene) scene.remove(this.transparentMesh);
-      this.transparentMesh.geometry.dispose();
-      this.transparentMesh = null;
-    }
-    
-    if (this.liquidMesh) {
-      if (scene) scene.remove(this.liquidMesh);
-      this.liquidMesh.geometry.dispose();
-      this.liquidMesh = null;
-    }
-    
-    this.disposed = true;
-  }
-
-  /**
-   * Legacy alias for disposeMeshes.
-   * @deprecated Use disposeMeshes() instead
-   */
-  disposeMesh(scene?: THREE.Scene): void {
-    this.disposeMeshes(scene);
-  }
-
-  /**
-   * Check if this chunk mesh has valid geometry (solid, transparent, or liquid).
-   */
-  hasGeometry(): boolean {
-    return (this.solidMesh !== null || this.transparentMesh !== null || this.liquidMesh !== null) && !this.disposed;
-  }
-
-  /**
-   * Set visibility of all meshes (for culling).
-   * When preview is active, main meshes stay hidden regardless of this setting.
-   * Does not affect preview meshes.
-   */
-  setVisible(visible: boolean): void {
-    // If preview is active, main meshes must stay hidden
-    const effectiveVisible = visible && !this.previewActive;
-    if (this.solidMesh) this.solidMesh.visible = effectiveVisible;
-    if (this.transparentMesh) this.transparentMesh.visible = effectiveVisible;
-    if (this.liquidMesh) this.liquidMesh.visible = effectiveVisible;
-  }
-
-  /**
-   * Toggle castShadow on solid and transparent meshes.
-   * Used for shadow distance culling — chunks beyond the shadow radius
-   * still render but don't cast into the shadow map, reducing draw calls
-   * in the shadow pass.
-   */
-  setShadowCasting(enabled: boolean): void {
-    if (this.solidMesh) this.solidMesh.castShadow = enabled;
-    if (this.transparentMesh) this.transparentMesh.castShadow = enabled;
-  }
-
-  /**
-   * Get the solid mesh (for collision, etc).
-   * @returns The solid mesh or null if not created/disposed
-   */
-  getMesh(): THREE.Mesh | null {
-    return this.solidMesh;
-  }
-
-  /**
-   * Get all meshes as an array.
-   * @returns Array of non-null meshes (solid, transparent, and/or liquid)
-   */
-  getAllMeshes(): THREE.Mesh[] {
-    const meshes: THREE.Mesh[] = [];
-    if (this.solidMesh) meshes.push(this.solidMesh);
-    if (this.transparentMesh) meshes.push(this.transparentMesh);
-    if (this.liquidMesh) meshes.push(this.liquidMesh);
-    return meshes;
-  }
-
-  /**
-   * Get the total vertex count of all meshes.
-   */
-  getVertexCount(): number {
-    let count = 0;
-    if (this.solidMesh) {
-      const posAttr = this.solidMesh.geometry.getAttribute('position');
-      if (posAttr) count += posAttr.count;
-    }
-    if (this.transparentMesh) {
-      const posAttr = this.transparentMesh.geometry.getAttribute('position');
-      if (posAttr) count += posAttr.count;
-    }
-    if (this.liquidMesh) {
-      const posAttr = this.liquidMesh.geometry.getAttribute('position');
-      if (posAttr) count += posAttr.count;
-    }
-    return count;
-  }
-
-  /**
-   * Get the total triangle count of all meshes.
-   */
-  getTriangleCount(): number {
-    let count = 0;
-    if (this.solidMesh) {
-      const index = this.solidMesh.geometry.index;
-      if (index) count += index.count / 3;
-    }
-    if (this.transparentMesh) {
-      const index = this.transparentMesh.geometry.index;
-      if (index) count += index.count / 3;
-    }
-    if (this.liquidMesh) {
-      const index = this.liquidMesh.geometry.index;
-      if (index) count += index.count / 3;
-    }
-    return count;
-  }
-
-  // Legacy property for backwards compatibility
-  get mesh(): THREE.Mesh | null {
-    return this.solidMesh;
-  }
-
-  set mesh(value: THREE.Mesh | null) {
-    this.solidMesh = value;
-  }
-
-  get previewMesh(): THREE.Mesh | null {
-    return this.previewSolidMesh;
-  }
-
-  set previewMesh(value: THREE.Mesh | null) {
-    this.previewSolidMesh = value;
   }
 }
 
+// ============== Standalone Functions ==============
+
 /**
- * Create a mesh directly from SurfaceNet output (standalone function).
- * @param output SurfaceNet mesh data
- * @param chunk The source chunk (for positioning)
- * @returns THREE.Mesh or null if empty geometry
+ * Create a mesh directly from SurfaceNet output (standalone).
  */
 export function createMeshFromSurfaceNet(output: SurfaceNetOutput, chunk: Chunk): THREE.Mesh | null {
-  if (output.vertexCount === 0 || output.triangleCount === 0) {
-    return null;
-  }
-
+  if (output.vertexCount === 0 || output.triangleCount === 0) return null;
   const geometry = createGeometryFromSurfaceNet(output);
-  const mesh = createSolidMesh(geometry, chunk.key);
-  
+  const mesh = createLayerMesh(geometry, chunk.key, MeshLayer.SOLID);
   const worldPos = chunk.getWorldPosition();
   mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-
   return mesh;
 }
 
 /**
- * Dispose a mesh created with createMeshFromSurfaceNet.
+ * Dispose a standalone mesh.
  */
 export function disposeMesh(mesh: THREE.Mesh, scene?: THREE.Scene): void {
-  if (scene) {
-    scene.remove(mesh);
-  }
+  if (scene) scene.remove(mesh);
   mesh.geometry.dispose();
 }

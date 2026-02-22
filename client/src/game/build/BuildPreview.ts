@@ -305,18 +305,44 @@ export class BuildPreview {
   }
 
   /**
-   * Clear all preview state (e.g., when player switches to non-build tool).
+   * Cancel any in-flight worker batch and reset dispatch state.
    */
-  clearPreview(): void {
-    if (!this.world || !this.scene) return;
-
-    // Cancel in-flight batch (truly cancel — we're done with preview)
+  private cancelInFlightBatch(): void {
     if (this.cancelBatch) {
       this.cancelBatch();
       this.cancelBatch = null;
     }
     this.batchInFlight = false;
     this.pendingOperation = null;
+  }
+
+  /**
+   * Shared cleanup for holdPreview / commitPreview.
+   * Cancels in-flight batch, discards temp data, transfers active preview
+   * chunks to pendingCommitChunks (so meshes stay visible until remesh),
+   * and resets preview tracking state.
+   */
+  private endPreview(): void {
+    this.cancelInFlightBatch();
+
+    for (const key of this.activePreviewChunks) {
+      const chunk = this.world?.chunks.get(key);
+      if (chunk) chunk.discardTemp();
+      this.pendingCommitChunks.add(key);
+    }
+
+    this.activePreviewChunks.clear();
+    this.renderedHash = '';
+    this.currentOperation = null;
+  }
+
+  /**
+   * Clear all preview state (e.g., when player switches to non-build tool).
+   */
+  clearPreview(): void {
+    if (!this.world || !this.scene) return;
+
+    this.cancelInFlightBatch();
 
     for (const key of this.activePreviewChunks) {
       this.clearChunkPreview(key);
@@ -352,28 +378,7 @@ export class BuildPreview {
    */
   holdPreview(): void {
     if (!this.world || !this.scene) return;
-
-    // Cancel in-flight batch
-    if (this.cancelBatch) {
-      this.cancelBatch();
-      this.cancelBatch = null;
-    }
-    this.batchInFlight = false;
-    this.pendingOperation = null;
-
-    // Discard temp data but KEEP preview meshes visible
-    for (const key of this.activePreviewChunks) {
-      const chunk = this.world.chunks.get(key);
-      if (chunk) {
-        chunk.discardTemp();
-      }
-      this.pendingCommitChunks.add(key);
-    }
-
-    // Clear preview state (but pendingCommitChunks stays until remesh completes)
-    this.activePreviewChunks.clear();
-    this.renderedHash = '';
-    this.currentOperation = null;
+    this.endPreview();
   }
 
   /**
@@ -386,33 +391,12 @@ export class BuildPreview {
   commitPreview(): string[] {
     if (!this.world || !this.scene || !this.currentOperation) return [];
 
-    // Cancel in-flight batch
-    if (this.cancelBatch) {
-      this.cancelBatch();
-      this.cancelBatch = null;
-    }
-    this.batchInFlight = false;
-    this.pendingOperation = null;
-
-    // Discard temp data but KEEP preview meshes visible — they'll be cleared
-    // when the remesh results arrive (prevents flicker gap).
-    for (const key of this.activePreviewChunks) {
-      const chunk = this.world.chunks.get(key);
-      if (chunk) {
-        chunk.discardTemp();
-      }
-      this.pendingCommitChunks.add(key);
-    }
+    // Capture operation before endPreview clears it
+    const operation = this.currentOperation;
+    this.endPreview();
 
     // Apply the operation using the shared VoxelWorld method (DRY)
-    const modifiedKeys = this.world.applyBuildOperation(this.currentOperation);
-
-    // Clear preview state (but pendingCommitChunks stays until remesh completes)
-    this.activePreviewChunks.clear();
-    this.renderedHash = '';
-    this.currentOperation = null;
-
-    return modifiedKeys;
+    return this.world.applyBuildOperation(operation);
   }
 
   /**

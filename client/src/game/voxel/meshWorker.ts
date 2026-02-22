@@ -8,6 +8,7 @@
 
 import { meshVoxelsSplit, type SurfaceNetInput, type SurfaceNetOutput } from './SurfaceNet.js';
 import { expandGeometry, type ExpandedMeshData } from './MeshGeometry.js';
+import { GRID_SIZE } from '@worldify/shared';
 
 /** Message from main thread → worker */
 export interface MeshWorkerRequest {
@@ -39,7 +40,7 @@ self.onmessage = (e: MessageEvent<MeshWorkerRequest>) => {
 
   // Run SurfaceNet on the expanded grid
   const input: SurfaceNetInput = {
-    dims: [34, 34, 34],
+    dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE],
     data: grid,
     skipHighBoundary,
   };

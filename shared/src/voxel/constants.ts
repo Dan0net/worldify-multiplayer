@@ -112,3 +112,35 @@ export const VISIBILITY_ALL = 0x7FFF;
 
 /** No face pairs visible (solid chunk) */
 export const VISIBILITY_NONE = 0x0000;
+
+// ============== Meshing ==============
+
+/** High-side margin (in voxels) added to chunk grid for SurfaceNet stitching */
+export const MESH_MARGIN = 2;
+
+/** Grid dimension: CHUNK_SIZE + MESH_MARGIN */
+export const GRID_SIZE = CHUNK_SIZE + MESH_MARGIN; // 34
+
+// ============== Canonical Neighbor Offsets ==============
+
+/** 6 face-adjacent neighbor offsets: +X, -X, +Y, -Y, +Z, -Z */
+export const FACE_OFFSETS_6: readonly (readonly [number, number, number])[] = [
+  [1, 0, 0], [-1, 0, 0],
+  [0, 1, 0], [0, -1, 0],
+  [0, 0, 1], [0, 0, -1],
+] as const;
+
+/** All 26 neighbor offsets (6 face + 12 edge + 8 corner) for margin stitching */
+export const NEIGHBOR_OFFSETS_26: readonly (readonly [number, number, number])[] = [
+  // 6 face neighbors
+  [-1, 0, 0], [1, 0, 0],
+  [0, -1, 0], [0, 1, 0],
+  [0, 0, -1], [0, 0, 1],
+  // 12 edge neighbors
+  [-1, -1, 0], [-1, 1, 0], [1, -1, 0], [1, 1, 0],
+  [-1, 0, -1], [-1, 0, 1], [1, 0, -1], [1, 0, 1],
+  [0, -1, -1], [0, -1, 1], [0, 1, -1], [0, 1, 1],
+  // 8 corner neighbors
+  [-1, -1, -1], [-1, -1, 1], [-1, 1, -1], [-1, 1, 1],
+  [1, -1, -1], [1, -1, 1], [1, 1, -1], [1, 1, 1],
+] as const;

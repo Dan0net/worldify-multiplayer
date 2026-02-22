@@ -91,12 +91,9 @@ export class Builder {
     this.preview.initialize(world, scene, world.meshPool);
 
     // When a chunk remesh completes, let preview clear committed preview meshes.
-    // Chain onto existing onChunkRemeshed (VoxelIntegration sets up collision rebuild).
-    const existingCallback = world.onChunkRemeshed;
-    world.onChunkRemeshed = (chunkKey) => {
-      existingCallback?.(chunkKey);
+    world.addRemeshListener((chunkKey) => {
       this.preview.onChunkRemeshed(chunkKey);
-    };
+    });
   }
 
   /**
