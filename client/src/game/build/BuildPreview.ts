@@ -251,9 +251,6 @@ export class BuildPreview {
       this.cancelBatch = null;
       this.batchInFlight = false;
 
-      // Restore previously suppressed groups before changing preview state
-      this.restoreAllSuppressedGroups();
-
       // Remove stale chunk keys from active set BEFORE suppressing new groups.
       // This ensures old preview chunks are treated as normal chunks during
       // suppress (they get standalones) rather than being excluded.
@@ -261,7 +258,9 @@ export class BuildPreview {
         this.activePreviewChunks.delete(key);
       }
 
-      // Suppress groups that contain new preview chunks
+      // Suppress groups that contain new preview chunks.
+      // This also restores groups no longer needed and updates already-suppressed
+      // groups in-place (no full teardown/rebuild scene graph cycle).
       const allImmediate = this.suppressGroupsForActivePreview();
 
       if (allImmediate) {
