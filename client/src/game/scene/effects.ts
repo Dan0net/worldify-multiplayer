@@ -52,22 +52,28 @@ let current: EffectsSettings = {
 
 // ============== Internal helpers ==============
 
-/** Returns true if any effect pass should be active. */
-function anyEffectActive(): boolean {
-  return current.bloomEnabled || current.ssaoEnabled;
-}
-
 /**
- * Ensure exactly one of EffectPass / CopyPass renders to screen.
- * EffectPass is used when any effect is on; CopyPass when all effects are off.
+ * Sync pass enabled/renderToScreen state based on which effects are active.
+ * - NormalPass only runs when SSAO is on (it generates normals for SSAO)
+ * - Individual effects are disabled when off (skips their internal render passes)
+ * - EffectPass is on when any effect is active; CopyPass when none are
  */
 function updatePassStates(): void {
-  if (!effectPass || !copyPass) return;
-  const active = anyEffectActive();
-  effectPass.enabled = active;
-  effectPass.renderToScreen = active;
-  copyPass.enabled = !active;
-  copyPass.renderToScreen = !active;
+  if (!effectPass || !copyPass || !normalPass || !ssaoEffect || !bloomEffect) return;
+
+  // Skip NormalPass entirely when SSAO is off
+  normalPass.enabled = current.ssaoEnabled;
+
+  // Disable individual effects so their internal passes don't run
+  ssaoEffect.blendMode.setBlendFunction(current.ssaoEnabled ? BlendFunction.MULTIPLY : BlendFunction.SKIP);
+  bloomEffect.blendMode.setBlendFunction(current.bloomEnabled ? BlendFunction.SCREEN : BlendFunction.SKIP);
+
+  // EffectPass vs CopyPass
+  const anyActive = current.ssaoEnabled || current.bloomEnabled;
+  effectPass.enabled = anyActive;
+  effectPass.renderToScreen = anyActive;
+  copyPass.enabled = !anyActive;
+  copyPass.renderToScreen = !anyActive;
 }
 
 function applySettings(next: Partial<EffectsSettings>): void {
@@ -78,39 +84,25 @@ function applySettings(next: Partial<EffectsSettings>): void {
     console.log(`[Effects] MSAA → ${composer.multisampling}`);
   }
 
-  // SSAO
+  // SSAO params
   if (ssaoEffect) {
-    if (next.ssaoEnabled !== undefined) {
-      ssaoEffect.blendMode.setBlendFunction(next.ssaoEnabled ? BlendFunction.MULTIPLY : BlendFunction.SKIP);
-    }
-    if (next.ssaoIntensity !== undefined) {
-      ssaoEffect.intensity = next.ssaoIntensity;
-    }
-    if (next.ssaoRadius !== undefined) {
-      ssaoEffect.ssaoMaterial.radius = next.ssaoRadius;
-    }
+    if (next.ssaoIntensity !== undefined) ssaoEffect.intensity = next.ssaoIntensity;
+    if (next.ssaoRadius !== undefined) ssaoEffect.ssaoMaterial.radius = next.ssaoRadius;
   }
 
-  // Bloom
+  // Bloom params
   if (bloomEffect) {
-    if (next.bloomEnabled !== undefined) {
-      bloomEffect.blendMode.setBlendFunction(next.bloomEnabled ? BlendFunction.SCREEN : BlendFunction.SKIP);
-    }
-    if (next.bloomIntensity !== undefined) {
-      bloomEffect.intensity = next.bloomIntensity;
-    }
+    if (next.bloomIntensity !== undefined) bloomEffect.intensity = next.bloomIntensity;
     if (next.bloomThreshold !== undefined) {
       (bloomEffect.luminancePass.fullscreenMaterial as LuminanceMaterial).threshold = next.bloomThreshold;
     }
-    if (next.bloomRadius !== undefined) {
-      bloomEffect.mipmapBlurPass.radius = next.bloomRadius;
-    }
+    if (next.bloomRadius !== undefined) bloomEffect.mipmapBlurPass.radius = next.bloomRadius;
   }
 
-  // Merge BEFORE updatePassStates so anyEffectActive() uses new values
+  // Merge BEFORE updatePassStates so it uses new values
   Object.assign(current, next);
 
-  // Toggle EffectPass vs CopyPass if any enabled flag changed
+  // Update pass enable states if any toggle changed
   if (next.ssaoEnabled !== undefined || next.bloomEnabled !== undefined) {
     updatePassStates();
   }
@@ -159,9 +151,6 @@ export function initEffects(
     rangeFalloff: 0.0001,
     resolutionScale: 0.5,
   });
-  if (!state.ssaoEnabled) {
-    ssaoEffect.blendMode.setBlendFunction(BlendFunction.SKIP);
-  }
 
   // BloomEffect
   bloomEffect = new BloomEffect({
@@ -171,9 +160,6 @@ export function initEffects(
     mipmapBlur: true,
     radius: state.environment.bloomRadius,
   });
-  if (!state.bloomEnabled) {
-    bloomEffect.blendMode.setBlendFunction(BlendFunction.SKIP);
-  }
 
   // EffectPass — combines all effects into one fullscreen pass
   effectPass = new EffectPass(camera, ssaoEffect, bloomEffect);
