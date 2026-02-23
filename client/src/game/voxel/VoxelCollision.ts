@@ -12,6 +12,7 @@ import {
   disposeBoundsTree,
   acceleratedRaycast 
 } from 'three-mesh-bvh';
+import { CHUNK_WORLD_SIZE, COLLISION_CHUNK_RADIUS } from '@worldify/shared';
 
 // Add BVH methods to THREE.BufferGeometry prototype
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -36,6 +37,14 @@ export interface CapsuleInfo {
   segment: THREE.Line3;
 }
 
+/** Cached collider entry: mesh + chunk coordinates to avoid parsing keys per frame */
+interface ColliderEntry {
+  mesh: THREE.Mesh;
+  cx: number;
+  cy: number;
+  cz: number;
+}
+
 // ============== VoxelCollision Class ==============
 
 /**
@@ -43,8 +52,8 @@ export interface CapsuleInfo {
  * Uses three-mesh-bvh for efficient collision detection with capsule geometry.
  */
 export class VoxelCollision {
-  /** Collider meshes keyed by chunk key */
-  private colliderMeshes: Map<string, THREE.Mesh> = new Map();
+  /** Collider entries keyed by chunk key (mesh + cached chunk coords) */
+  private colliders: Map<string, ColliderEntry> = new Map();
   
   /** BVH helpers for debug visualization */
   private bvhHelpers: Map<string, MeshBVHHelper> = new Map();
@@ -73,9 +82,9 @@ export class VoxelCollision {
    * Add or update a collider mesh for a chunk.
    * The mesh's geometry will have its BVH computed.
    */
-  addCollider(key: string, mesh: THREE.Mesh): void {
+  addCollider(key: string, cx: number, cy: number, cz: number, mesh: THREE.Mesh): void {
     // Remove existing collider if present
-    if (this.colliderMeshes.has(key)) {
+    if (this.colliders.has(key)) {
       this.removeCollider(key);
     }
 
@@ -89,7 +98,7 @@ export class VoxelCollision {
       mesh.geometry.computeBoundsTree();
     }
 
-    this.colliderMeshes.set(key, mesh);
+    this.colliders.set(key, { mesh, cx, cy, cz });
 
     // Create debug helper if enabled
     if (this.debugEnabled && this.scene) {
@@ -104,11 +113,11 @@ export class VoxelCollision {
    * Remove collider for a chunk.
    */
   removeCollider(key: string): void {
-    const mesh = this.colliderMeshes.get(key);
-    if (mesh && mesh.geometry.boundsTree) {
-      mesh.geometry.disposeBoundsTree();
+    const entry = this.colliders.get(key);
+    if (entry && entry.mesh.geometry.boundsTree) {
+      entry.mesh.geometry.disposeBoundsTree();
     }
-    this.colliderMeshes.delete(key);
+    this.colliders.delete(key);
 
     // Remove debug helper
     const helper = this.bvhHelpers.get(key);
@@ -126,7 +135,7 @@ export class VoxelCollision {
 
     if (enabled && this.scene) {
       // Create helpers for existing colliders
-      for (const [key, mesh] of this.colliderMeshes) {
+      for (const [key, { mesh }] of this.colliders) {
         if (!this.bvhHelpers.has(key)) {
           const helper = new MeshBVHHelper(mesh, 10);
           helper.visible = true;
@@ -164,8 +173,20 @@ export class VoxelCollision {
     // Working position that gets updated after each collider
     const workingPosition = position.clone();
 
-    for (const collider of this.colliderMeshes.values()) {
+    // Compute player chunk coords for distance filtering
+    const pcx = Math.floor(position.x / CHUNK_WORLD_SIZE);
+    const pcy = Math.floor(position.y / CHUNK_WORLD_SIZE);
+    const pcz = Math.floor(position.z / CHUNK_WORLD_SIZE);
+
+    for (const { mesh: collider, cx, cy, cz } of this.colliders.values()) {
       if (!collider?.matrixWorld || !collider.geometry?.boundsTree) continue;
+
+      // Skip colliders far from the player (Chebyshev distance in chunk coords)
+      if (Math.abs(cx - pcx) > COLLISION_CHUNK_RADIUS ||
+          Math.abs(cy - pcy) > COLLISION_CHUNK_RADIUS ||
+          Math.abs(cz - pcz) > COLLISION_CHUNK_RADIUS) {
+        continue;
+      }
 
       // Reset temp objects
       this.tempBox.makeEmpty();
@@ -251,7 +272,7 @@ export class VoxelCollision {
    * Get number of loaded colliders
    */
   getColliderCount(): number {
-    return this.colliderMeshes.size;
+    return this.colliders.size;
   }
 
   /**
@@ -259,7 +280,7 @@ export class VoxelCollision {
    */
   getTotalTriangleCount(): number {
     let count = 0;
-    for (const mesh of this.colliderMeshes.values()) {
+    for (const { mesh } of this.colliders.values()) {
       const index = mesh.geometry.getIndex();
       if (index) {
         count += index.count / 3;
@@ -272,7 +293,7 @@ export class VoxelCollision {
    * Clear all colliders
    */
   dispose(): void {
-    for (const key of [...this.colliderMeshes.keys()]) {
+    for (const key of [...this.colliders.keys()]) {
       this.removeCollider(key);
     }
   }

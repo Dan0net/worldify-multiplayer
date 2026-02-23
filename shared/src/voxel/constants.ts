@@ -81,6 +81,14 @@ export const STREAM_UNLOAD_MARGIN = 1;
 /** Initial terrain height in voxel units (-16 voxels = -4m surface) */
 export const INITIAL_TERRAIN_HEIGHT = -16;
 
+// ============== Collision ==============
+
+/** Max Chebyshev chunk distance for shapecast tests against the player capsule */
+export const COLLISION_CHUNK_RADIUS = 1;
+
+/** Max Chebyshev chunk distance for maintaining BVH collider meshes around the player */
+export const COLLIDER_CHUNK_RADIUS = 2;
+
 // ============== Visibility Culling ==============
 /** Maximum BFS traversal distance in chunks */
 export const VISIBILITY_RADIUS = 8;

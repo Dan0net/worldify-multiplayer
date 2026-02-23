@@ -12,6 +12,7 @@ import { VoxelWorld } from './VoxelWorld.js';
 import { VoxelCollision, CapsuleInfo, CapsuleCollisionResult } from './VoxelCollision.js';
 import { VoxelDebugManager } from './VoxelDebug.js';
 import type { TerrainRaycaster } from '../spawn/TerrainRaycaster.js';
+import { worldToChunk, chunkKey, COLLIDER_CHUNK_RADIUS } from '@worldify/shared';
 
 /**
  * Configuration for the voxel integration.
@@ -60,6 +61,12 @@ export class VoxelIntegration implements TerrainRaycaster {
   /** Track which chunks have colliders built and their mesh generation */
   private colliderGenerations: Map<string, number> = new Map();
 
+  /** Last known player chunk for collider proximity checks */
+  private lastColliderPlayerChunk: { cx: number; cy: number; cz: number } | null = null;
+
+  /** Chunk keys whose mesh was updated and may need a collider rebuild */
+  private pendingColliderKeys: Set<string> = new Set();
+
   constructor(scene: THREE.Scene, config: VoxelConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     
@@ -80,9 +87,9 @@ export class VoxelIntegration implements TerrainRaycaster {
     // Initialize the world (generates initial chunks)
     this.world.init();
 
-    // Event-driven collision: rebuild BVH whenever a chunk remeshes
+    // Event-driven collision: queue key for deferred proximity-based rebuild
     this.world.addRemeshListener((key) => {
-      this.rebuildCollisionForChunks([key]);
+      this.pendingColliderKeys.add(key);
     });
 
     // Event-driven collision: remove collider when a chunk unloads
@@ -95,7 +102,7 @@ export class VoxelIntegration implements TerrainRaycaster {
     
     // Update debug visualization if enabled
     if (this.config.debugEnabled) {
-      this.debug.update(this.world.chunks, this.world.geometries);
+      this.debug.update(this.world.chunks, this.world.geometries, this.colliderGenerations);
       this.collision.setDebugEnabled(true);
     }
     
@@ -122,10 +129,84 @@ export class VoxelIntegration implements TerrainRaycaster {
     // Update world (handles chunk loading/unloading)
     this.world.update(playerPos);
     
-    // Colliders are managed reactively via remesh/unload listeners
+    // Sync colliders: build nearby, remove distant
+    this.syncColliders(playerPos);
     
     // Update debug visualization
-    this.debug.update(this.world.chunks, this.world.geometries);
+    this.debug.update(this.world.chunks, this.world.geometries, this.colliderGenerations);
+  }
+
+  /**
+   * Sync collision colliders based on player proximity.
+   * - Builds BVH for chunks within COLLIDER_CHUNK_RADIUS that are pending or newly nearby.
+   * - Removes colliders for chunks that are now too far away.
+   * Only rescans the full set when the player crosses a chunk boundary.
+   */
+  private syncColliders(playerPos: THREE.Vector3): void {
+    const pc = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
+
+    // Process any pending remesh keys that fall within range
+    if (this.pendingColliderKeys.size > 0) {
+      for (const key of this.pendingColliderKeys) {
+        const chunk = this.world.chunks.get(key);
+        if (!chunk) continue;
+        if (Math.abs(chunk.cx - pc.cx) <= COLLIDER_CHUNK_RADIUS &&
+            Math.abs(chunk.cy - pc.cy) <= COLLIDER_CHUNK_RADIUS &&
+            Math.abs(chunk.cz - pc.cz) <= COLLIDER_CHUNK_RADIUS) {
+          this.buildCollider(key, chunk.cx, chunk.cy, chunk.cz);
+        } else if (this.colliderGenerations.has(key)) {
+          this.collision.removeCollider(key);
+          this.colliderGenerations.delete(key);
+        }
+      }
+      this.pendingColliderKeys.clear();
+    }
+
+    // Full proximity rescan only when the player crosses a chunk boundary
+    const prev = this.lastColliderPlayerChunk;
+    if (prev && prev.cx === pc.cx && prev.cy === pc.cy && prev.cz === pc.cz) return;
+    this.lastColliderPlayerChunk = { ...pc };
+
+    // Build the set of desired chunk keys and ensure colliders are up-to-date
+    const desiredKeys = new Set<string>();
+    for (let dx = -COLLIDER_CHUNK_RADIUS; dx <= COLLIDER_CHUNK_RADIUS; dx++) {
+      for (let dy = -COLLIDER_CHUNK_RADIUS; dy <= COLLIDER_CHUNK_RADIUS; dy++) {
+        for (let dz = -COLLIDER_CHUNK_RADIUS; dz <= COLLIDER_CHUNK_RADIUS; dz++) {
+          const k = chunkKey(pc.cx + dx, pc.cy + dy, pc.cz + dz);
+          desiredKeys.add(k);
+          const geo = this.world.geometries.get(k);
+          if (!geo || !geo.hasGeometry()) continue;
+          const gen = this.colliderGenerations.get(k);
+          if (gen === undefined || gen !== geo.meshGeneration) {
+            this.buildCollider(k, pc.cx + dx, pc.cy + dy, pc.cz + dz);
+          }
+        }
+      }
+    }
+
+    // Remove colliders outside desired set (cheap Set.has lookup, no coord parsing)
+    for (const key of this.colliderGenerations.keys()) {
+      if (!desiredKeys.has(key)) {
+        this.collision.removeCollider(key);
+        this.colliderGenerations.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Build (or rebuild) a single collider from the chunk's current geometry.
+   */
+  private buildCollider(key: string, cx: number, cy: number, cz: number): void {
+    const geo = this.world.geometries.get(key);
+    if (!geo || !geo.hasGeometry()) return;
+    const mesh = geo.getMesh();
+    if (!mesh) return;
+
+    if (this.colliderGenerations.has(key)) {
+      this.collision.removeCollider(key);
+    }
+    this.collision.addCollider(key, cx, cy, cz, mesh);
+    this.colliderGenerations.set(key, geo.meshGeneration);
   }
 
   /**
@@ -134,6 +215,8 @@ export class VoxelIntegration implements TerrainRaycaster {
    */
   rebuildCollisionForChunks(chunkKeys: string[]): void {
     for (const key of chunkKeys) {
+      const chunk = this.world.chunks.get(key);
+      if (!chunk) continue;
       const geo = this.world.geometries.get(key);
       if (!geo || !geo.hasGeometry()) continue;
 
@@ -147,7 +230,7 @@ export class VoxelIntegration implements TerrainRaycaster {
       }
 
       // Add new collider with updated geometry
-      this.collision.addCollider(key, mesh);
+      this.collision.addCollider(key, chunk.cx, chunk.cy, chunk.cz, mesh);
       this.colliderGenerations.set(key, geo.meshGeneration);
     }
   }
@@ -243,9 +326,11 @@ export class VoxelIntegration implements TerrainRaycaster {
   refresh(): void {
     // Clear collider tracking
     this.colliderGenerations.clear();
+    this.pendingColliderKeys.clear();
+    this.lastColliderPlayerChunk = null;
     this.collision.dispose();
     
-    // Refresh world — remesh listeners will rebuild colliders automatically
+    // Refresh world — syncColliders will rebuild nearby colliders next frame
     this.world.refresh();
   }
 
@@ -259,6 +344,8 @@ export class VoxelIntegration implements TerrainRaycaster {
     
     // Clear colliders
     this.colliderGenerations.clear();
+    this.pendingColliderKeys.clear();
+    this.lastColliderPlayerChunk = null;
     this.collision.dispose();
     
     // Clear and reload world
@@ -275,6 +362,8 @@ export class VoxelIntegration implements TerrainRaycaster {
     this.collision.dispose();
     this.world.dispose();
     this.colliderGenerations.clear();
+    this.pendingColliderKeys.clear();
+    this.lastColliderPlayerChunk = null;
     this.initialized = false;
   }
 }

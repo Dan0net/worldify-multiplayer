@@ -255,20 +255,25 @@ export class VoxelDebugManager {
    * Update debug visuals based on current chunks and meshes.
    * Call this after chunks load/unload.
    * @param chunks All loaded chunks
-   * @param meshes All chunk meshes
+   * @param geometries All chunk geometries
+   * @param colliderKeys Chunk keys that currently have active collision colliders
    */
-  update(chunks: Map<string, Chunk>, geometries: Map<string, ChunkGeometry>): void {
+  update(chunks: Map<string, Chunk>, geometries: Map<string, ChunkGeometry>, colliderKeys?: ReadonlyMap<string, unknown> | ReadonlySet<string>): void {
     const anyFlagOn = this.state.showChunkBounds || this.state.showEmptyChunks
       || this.state.showCollisionMesh || this.state.showChunkCoords;
 
     // Fast path: nothing to create or clean up
     if (!anyFlagOn && this.debugObjects.size === 0) return;
 
-    // Remove debug objects for unloaded chunks (use chunks.has() directly — no Set allocation)
+    // Remove debug objects for unloaded chunks, and collision wireframes
+    // for chunks that no longer have active colliders.
     if (this.debugObjects.size > 0) {
       const keysToRemove: string[] = [];
       for (const [objKey, obj] of this.debugObjects) {
         if (!chunks.has(obj.userData.chunkKey)) {
+          keysToRemove.push(objKey);
+        } else if (obj.userData.debugType === 'collisionWireframe' &&
+                   colliderKeys && !colliderKeys.has(obj.userData.chunkKey)) {
           keysToRemove.push(objKey);
         }
       }
@@ -302,8 +307,9 @@ export class VoxelDebugManager {
         this.removeDebugObject('emptyMarker', chunkKey);
       }
       
-      // Collision wireframe
-      if (this.state.showCollisionMesh && chunkGeo && hasMesh) {
+      // Collision wireframe — only for chunks with active colliders
+      if (this.state.showCollisionMesh && chunkGeo && hasMesh
+          && (!colliderKeys || colliderKeys.has(chunkKey))) {
         this.ensureCollisionWireframe(chunkGeo);
       }
       
