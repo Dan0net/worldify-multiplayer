@@ -123,6 +123,9 @@ export class ChunkGrouper {
   private slots = new Map<string, ChunkSlot>();
   private groups = new Map<string, ChunkGroup>();
 
+  /** Number of groups with suppressionPending === true (O(1) check). */
+  private pendingSuppressionCount = 0;
+
   // Reusable scratch arrays to avoid per-frame allocations
   private eligibleBuf: { gk: string; group: ChunkGroup; dist: number }[] = [];
   private visibleSlotsBuf: ChunkSlot[] = [];
@@ -325,7 +328,10 @@ export class ChunkGrouper {
     }
 
     // Defer — group hasn't been merged yet
-    group.suppressionPending = true;
+    if (!group.suppressionPending) {
+      group.suppressionPending = true;
+      this.pendingSuppressionCount++;
+    }
     group.pendingPreviewChunkKeys = new Set(previewChunkKeys);
     this.markGroupDirty(gk);
     return false;
@@ -341,6 +347,7 @@ export class ChunkGrouper {
     // Clear any pending suppression that was never finalized
     if (group.suppressionPending) {
       group.suppressionPending = false;
+      this.pendingSuppressionCount--;
       group.pendingPreviewChunkKeys.clear();
       return;
     }
@@ -445,10 +452,7 @@ export class ChunkGrouper {
    * Check if any groups have pending suppressions (waiting for merge).
    */
   hasPendingSuppressions(): boolean {
-    for (const group of this.groups.values()) {
-      if (group.suppressionPending) return true;
-    }
-    return false;
+    return this.pendingSuppressionCount > 0;
   }
 
   /**
@@ -458,6 +462,7 @@ export class ChunkGrouper {
   getPriorityChunkKeys(): Set<string> {
     const keys = this.priorityKeysBuf;
     keys.clear();
+    if (this.pendingSuppressionCount === 0) return keys;
     for (const group of this.groups.values()) {
       if (!group.suppressionPending) continue;
       for (const ck of group.chunkKeys) keys.add(ck);
@@ -485,7 +490,10 @@ export class ChunkGrouper {
   private applySuppression(group: ChunkGroup, previewChunkKeys: Set<string>): void {
     group.previewSuppressed = true;
     group.previewChunkKeys = new Set(previewChunkKeys);
-    group.suppressionPending = false;
+    if (group.suppressionPending) {
+      group.suppressionPending = false;
+      this.pendingSuppressionCount--;
+    }
     group.pendingPreviewChunkKeys.clear();
 
     for (let i = 0; i < LAYER_COUNT; i++) {
@@ -527,7 +535,10 @@ export class ChunkGrouper {
   /** Finalize a pending suppression after the group has been rebuilt. */
   private finalizePendingSuppression(_gk: string, group: ChunkGroup): void {
     const previewChunkKeys = group.pendingPreviewChunkKeys;
-    group.suppressionPending = false;
+    if (group.suppressionPending) {
+      group.suppressionPending = false;
+      this.pendingSuppressionCount--;
+    }
     group.pendingPreviewChunkKeys = new Set();
     this.applySuppression(group, previewChunkKeys);
   }
