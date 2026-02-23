@@ -135,7 +135,7 @@ function createDataArrayTexture(
   mapType: string
 ): THREE.DataArrayTexture {
   const channelCount = channels.length;
-  const texture = new THREE.DataArrayTexture(data as unknown as BufferSource, width, height, layers);
+  const texture = new THREE.DataArrayTexture(data, width, height, layers);
   
   texture.format = channelCount === 4 ? THREE.RGBAFormat : THREE.RedFormat;
   texture.type = THREE.UnsignedByteType;
