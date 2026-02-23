@@ -374,7 +374,7 @@ export function DebugPanel() {
   if (!debugPanelExpanded) {
     return (
       <div
-        className="fixed top-5 left-5 py-1.5 px-3 bg-black/80 text-green-500 font-mono text-xs rounded-lg z-50 cursor-pointer hover:bg-black/90 transition-colors select-none"
+        className="absolute top-5 left-5 py-1.5 px-3 bg-black/80 text-green-500 font-mono text-xs rounded-lg cursor-pointer hover:bg-black/90 transition-colors select-none pointer-events-auto"
         onClick={toggleDebugPanelExpanded}
         title="Click to expand debug panel"
       >
@@ -385,7 +385,7 @@ export function DebugPanel() {
   }
 
   return (
-    <div className="fixed top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg z-50 max-h-[90vh] overflow-y-auto min-w-[200px]">
+    <div className="absolute top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg max-h-[90vh] overflow-y-auto min-w-[200px] pointer-events-auto">
       
       {/* Collapse button */}
       <button

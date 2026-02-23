@@ -195,7 +195,7 @@ export function BuildMenu() {
 
       {/* Menu panel — same width as hotbar, sits directly above it */}
       <div
-        className="relative z-[100] w-full flex flex-col max-h-[60vh]"
+        className="relative z-[100] w-full flex flex-col max-h-[60vh] pointer-events-auto"
         onMouseDown={(e) => e.stopPropagation()}
         onContextMenu={handleContextMenu}
       >

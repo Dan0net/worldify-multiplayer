@@ -110,7 +110,7 @@ export function BuildToolbar() {
   const build = useGameStore((s) => s.build);
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50">
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-auto">
       {/* Build menu pops up above the hotbar */}
       <BuildMenu />
 

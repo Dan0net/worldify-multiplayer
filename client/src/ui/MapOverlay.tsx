@@ -42,7 +42,7 @@ export function MapOverlay() {
 
   return (
     <div
-      className="fixed top-5 right-5 z-40"
+      className="absolute top-5 right-5"
       style={{ boxShadow: '0 2px 4px rgba(0,0,0,1.0)' }}
     >
       <MapPanel

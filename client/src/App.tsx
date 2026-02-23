@@ -27,7 +27,8 @@ function App() {
     <>
       <SpectatorOverlay />
       {connectionStatus === 'connected' && (
-        <>
+        /* Single fixed overlay for all HUD elements — one compositor layer */
+        <div className="fixed inset-0 z-50 pointer-events-none">
           {isPlaying && (
             <>
               <Hud />
@@ -36,7 +37,7 @@ function App() {
             </>
           )}
           <DebugPanel />
-        </>
+        </div>
       )}
     </>
   );
