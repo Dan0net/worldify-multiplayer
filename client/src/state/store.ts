@@ -269,7 +269,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   toneMapping: THREE.ACESFilmicToneMapping,
   toneMappingExposure: 1.0,
   
-  ssaoIntensity: 1.33,
+  ssaoIntensity: 4,
   ssaoRadius: 0.1,
   bloomIntensity: 1,
   bloomThreshold: 0.8,

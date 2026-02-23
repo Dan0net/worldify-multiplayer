@@ -1259,7 +1259,7 @@ export function DebugPanel() {
             label="SSAO Intensity"
             value={environment.ssaoIntensity}
             min={0}
-            max={4}
+            max={10}
             step={0.1}
             onChange={(v) => handleEnvironmentChange({ ssaoIntensity: v })}
           />

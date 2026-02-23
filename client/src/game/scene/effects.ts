@@ -42,7 +42,7 @@ interface EffectsSettings {
 let current: EffectsSettings = {
   msaaSamples: 4,
   ssaoEnabled: true,
-  ssaoIntensity: 1.33,
+  ssaoIntensity: 4,
   ssaoRadius: 0.1,
   bloomEnabled: true,
   bloomIntensity: 1,
