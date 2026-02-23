@@ -54,7 +54,7 @@ function MaterialCubeThumb({
       className={`
         relative flex items-center justify-center
         w-24 h-24 rounded-2xl transition-all snap-start
-        bg-black/60 backdrop-blur-sm
+        bg-black/80
         ${isActive
           ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
           : 'hover:bg-white/10'
@@ -91,7 +91,7 @@ function PresetButton({
       className={`
         relative flex items-center justify-center
         w-24 h-24 rounded-2xl transition-all snap-start
-        bg-black/60 backdrop-blur-sm
+        bg-black/80
         ${isActive
           ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
           : 'hover:bg-white/10'
@@ -203,30 +203,30 @@ export function BuildMenu() {
         <div className="flex gap-1.5 shrink-0 mb-2">
           <button
             onClick={() => setActiveTab('presets')}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors backdrop-blur-sm
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors
               ${activeTab === 'presets'
                 ? 'bg-cyan-400/20 text-cyan-400'
-                : 'bg-black/60 text-white/50 hover:text-white/70 hover:bg-black/80'
+                : 'bg-black/80 text-white/50 hover:text-white/70 hover:bg-black/90'
               }`}
           >
             Presets
           </button>
           <button
             onClick={() => setActiveTab('materials')}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors backdrop-blur-sm
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors
               ${activeTab === 'materials'
                 ? 'bg-cyan-400/20 text-cyan-400'
-                : 'bg-black/60 text-white/50 hover:text-white/70 hover:bg-black/80'
+                : 'bg-black/80 text-white/50 hover:text-white/70 hover:bg-black/90'
               }`}
           >
             Materials
           </button>
           <button
             onClick={() => setActiveTab('config')}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors backdrop-blur-sm
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors
               ${activeTab === 'config'
                 ? 'bg-cyan-400/20 text-cyan-400'
-                : 'bg-black/60 text-white/50 hover:text-white/70 hover:bg-black/80'
+                : 'bg-black/80 text-white/50 hover:text-white/70 hover:bg-black/90'
               }`}
           >
             Config
@@ -235,12 +235,12 @@ export function BuildMenu() {
 
         <div className="flex flex-col flex-1 min-h-0 mb-2">
           {isNonePreset ? (
-            <div className="flex items-center justify-center h-32 text-white/40 text-sm p-4 bg-black/60 rounded-2xl backdrop-blur-sm">
+            <div className="flex items-center justify-center h-32 text-white/40 text-sm p-4 bg-black/80 rounded-2xl">
               Select a build slot (keys 2-9, 0) to configure it
             </div>
           ) : activeTab === 'config' ? (
             /* ---- Config Tab ---- */
-            <div className="p-4 bg-black/60 rounded-2xl backdrop-blur-sm">
+            <div className="p-4 bg-black/80 rounded-2xl">
             {currentConfig && currentMeta ? (
               <BuildConfigTab
                 config={currentConfig}

@@ -43,7 +43,7 @@ export function MapOverlay() {
   return (
     <div
       className="fixed top-5 right-5 z-40"
-      style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,1.0))' }}
+      style={{ boxShadow: '0 2px 4px rgba(0,0,0,1.0)' }}
     >
       <MapPanel
         width={MAP_VIEWPORT_SIZE}

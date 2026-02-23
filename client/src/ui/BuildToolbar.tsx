@@ -43,7 +43,7 @@ function HotbarSlot({
       className={`
         relative flex items-center justify-center
         w-24 h-24 rounded-2xl cursor-pointer transition-all
-        bg-black/60 backdrop-blur-sm
+        bg-black/80
         ${isActive
           ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
           : 'hover:bg-white/10'

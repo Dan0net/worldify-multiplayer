@@ -126,13 +126,13 @@ export function SpectatorOverlay() {
 
         {/* Top-left mode pill */}
         <div className="absolute top-3 left-3 z-10">
-          <span className="bg-black/60 backdrop-blur-sm text-white text-xs font-bold tracking-widest uppercase px-3 py-1.5 rounded-lg border border-white/10">
+          <span className="bg-black/80 text-white text-xs font-bold tracking-widest uppercase px-3 py-1.5 rounded-lg border border-white/10">
             MULTIPLAYER CREATIVE
           </span>
         </div>
 
         {/* Bottom bar with player count and play button */}
-        <div className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm px-4 py-3 flex items-center justify-between">
+        <div className="absolute bottom-0 left-0 right-0 z-10 bg-black/80 px-4 py-3 flex items-center justify-between">
           {isConnected ? (
             <>
               {/* Player count */}
@@ -165,7 +165,7 @@ export function SpectatorOverlay() {
       {/* ===== Settings Panel ===== */}
       {isConnected && (
         <div
-          className="mt-3 rounded-2xl bg-black/70 border border-white/10 backdrop-blur-sm pointer-events-auto py-4 px-5 flex flex-col gap-3"
+          className="mt-3 rounded-2xl bg-black/80 border border-white/10 pointer-events-auto py-4 px-5 flex flex-col gap-3"
           style={{ width: MAP_PANEL_W }}
         >
           {/* Textures - two button toggle */}
