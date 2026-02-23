@@ -754,7 +754,7 @@ export class ChunkGrouper {
           existing.visible = true;
         } else {
           const mesh = createLayerMesh(merged, layer);
-          mesh.frustumCulled = false;
+          mesh.frustumCulled = true;
           mesh.position.set(0, 0, 0);
           this.scene.add(mesh);
           group.meshes[layer] = mesh;
