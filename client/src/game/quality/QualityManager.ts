@@ -20,7 +20,8 @@ import {
   saveQualityLevel,
   saveVisibilityRadius,
 } from './QualityPresets.js';
-import { updatePostProcessing, updateMsaaSamples } from '../scene/postprocessing.js';
+import { updatePostProcessing } from '../scene/postprocessing.js';
+// MSAA is now driven by store subscription in effects.ts — no direct import needed
 import { getActiveShadowLight, setMoonShadowsAllowed, updateShadowFrustumSize, applyEnvironmentSettings } from '../scene/Lighting.js';
 import {
   setShaderMapDefines,
@@ -77,12 +78,12 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   // --- Shadow frustum (uses shadow-specific radius, not visibility) ---
   updateShadowFrustumSize(preset.shadowRadius);
 
-  // --- MSAA ---
-  applyMsaaSamples(preset.msaaSamples);
+  // --- MSAA (store-driven — effects.ts subscribes) ---
+  storeBridge.setMsaaSamples(preset.msaaSamples);
 
-  // --- Post-processing ---
+  // --- Post-processing (store-driven — effects.ts subscribes) ---
+  storeBridge.setBloomEnabled(preset.bloomEnabled);
   applySsaoEnabled(preset.ssaoEnabled);
-  applyBloomEnabled(preset.bloomEnabled);
   applyColorCorrectionEnabled(preset.colorCorrectionEnabled);
 
   // --- Terrain material shader maps ---
@@ -178,7 +179,8 @@ export function applySsaoEnabled(enabled: boolean): void {
 }
 
 export function applyBloomEnabled(enabled: boolean): void {
-  updatePostProcessing({ bloomEnabled: enabled });
+  // Store-driven — effects.ts subscription handles this
+  storeBridge.setBloomEnabled(enabled);
 }
 
 export function applyColorCorrectionEnabled(enabled: boolean): void {
@@ -190,7 +192,8 @@ export function applyAnisotropy(value: number): void {
 }
 
 export function applyMsaaSamples(samples: number): void {
-  updateMsaaSamples(samples);
+  // Store-driven — effects.ts subscription handles this
+  storeBridge.setMsaaSamples(samples);
 }
 
 /**

@@ -10,14 +10,12 @@ import { cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, type QualityLevel } 
 import {
   applyVisibilityRadius,
   applySsaoEnabled,
-  applyBloomEnabled,
   applyColorCorrectionEnabled,
   applyShadowsEnabled,
   applyMoonShadows,
   applyShadowRadius,
   applyAnisotropy,
   applyPixelRatio,
-  applyMsaaSamples,
   syncQualityToStore,
 } from '../game/quality/QualityManager';
 import { setShaderMapDefines } from '../game/material/TerrainMaterial';
@@ -267,8 +265,8 @@ export function DebugPanel() {
     applyEnvironmentSettings({ ...environment, ...updates });
     
     // Apply post-processing changes if any relevant settings changed
+    // (bloom is store-driven via effects.ts — only SSAO/saturation still use old pipeline)
     if ('ssaoKernelRadius' in updates || 'ssaoMinDistance' in updates ||
-        'bloomIntensity' in updates || 'bloomThreshold' in updates || 'bloomRadius' in updates ||
         'saturation' in updates) {
       updatePostProcessing(updates);
     }
@@ -640,7 +638,6 @@ export function DebugPanel() {
             options={msaaOptions}
             onChange={(v) => {
               storeBridge.setMsaaSamples(v);
-              applyMsaaSamples(v);
             }}
           />
         </div>
@@ -698,7 +695,6 @@ export function DebugPanel() {
             value={bloomEnabled}
             onChange={(v) => {
               storeBridge.setBloomEnabled(v);
-              applyBloomEnabled(v);
             }}
           />
           <Toggle

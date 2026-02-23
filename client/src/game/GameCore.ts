@@ -19,7 +19,7 @@ import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera 
 import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
 import { updateSkyTime, updateSkyCamera } from './scene/SkyDome';
-import { initPostProcessing, renderWithPostProcessing, resizePostProcessing, disposePostProcessing, isPostProcessingEnabled } from './scene/postprocessing';
+import { initEffects, renderEffects, resizeEffects, disposeEffects } from './scene/effects';
 import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
 import {
@@ -79,8 +79,7 @@ export class GameCore {
     });
 
     // Create renderer
-    // antialias: false because EffectComposer uses its own MSAA render target;
-    // canvas-level MSAA would only antialias the final fullscreen quad (wasted GPU work).
+    // antialias: false — pmndrs EffectComposer handles MSAA via multisampled FBOs
     this.renderer = new THREE.WebGLRenderer({
       antialias: false,
       powerPreference: 'high-performance',
@@ -114,21 +113,11 @@ export class GameCore {
     const initialEnv = useGameStore.getState().environment;
     applyEnvironmentSettings(initialEnv);
 
-    // Initialize post-processing (ambient occlusion + bloom)
+    // Initialize pmndrs post-processing pipeline (empty — render pass only for now)
     const scene = getScene();
     const camera = getCamera();
     if (scene && camera) {
-      initPostProcessing(this.renderer, scene, camera, {
-        enabled: true,
-        // SSAO settings from worldify-app
-        ssaoKernelRadius: 0.5,
-        ssaoMinDistance: 0.002,
-        // Bloom settings
-        bloomEnabled: true,
-        bloomIntensity: 0.5,
-        bloomThreshold: 0.8,
-        bloomRadius: 1,
-      });
+      initEffects(this.renderer, scene, camera);
     }
 
     // ---- Quality auto-detect / restore ----
@@ -434,15 +423,11 @@ export class GameCore {
       camera.rotation.set(controls.pitch, controls.yaw, 0);
     }
 
-    // Render with post-processing (SSAO + bloom) or fallback to direct render
+    // Render through effects pipeline
     const scene = getScene();
     if (scene && camera) {
       perfStats.begin('render');
-      if (isPostProcessingEnabled()) {
-        renderWithPostProcessing();
-      } else {
-        this.renderer.render(scene, camera);
-      }
+      renderEffects(this.renderer, scene, camera, deltaMs * 0.001);
       perfStats.end('render');
       perfStats.captureRendererInfo(this.renderer);
     }
@@ -580,7 +565,7 @@ export class GameCore {
       camera.updateProjectionMatrix();
     }
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    resizePostProcessing(window.innerWidth, window.innerHeight);
+    resizeEffects(window.innerWidth, window.innerHeight);
   };
 
   dispose(): void {
@@ -601,8 +586,8 @@ export class GameCore {
       this.voxelIntegration.dispose();
     }
 
-    // Clean up post-processing
-    disposePostProcessing();
+    // Clean up effects pipeline
+    disposeEffects();
 
     window.removeEventListener('resize', this.onResize);
     this.renderer.dispose();

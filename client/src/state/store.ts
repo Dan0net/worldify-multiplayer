@@ -271,9 +271,9 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   
   ssaoKernelRadius: 0.5,
   ssaoMinDistance: 0.002,
-  bloomIntensity: 0.5,
+  bloomIntensity: 1,
   bloomThreshold: 0.8,
-  bloomRadius: 1,
+  bloomRadius: 0.5,
   saturation: 1.2,  // Slightly boosted for more vivid colors
   lightFillPower: 0.5,
   lightFillIntensity: 2.0,
