@@ -16,33 +16,40 @@ import {
   CHUNK_SIZE,
   ChunkFace,
   CHUNK_FACE_COUNT,
+  LIGHT_BITS,
+  MATERIAL_BITS,
+  MATERIAL_MASK,
   VISIBILITY_ALL,
   VISIBILITY_NONE,
-  WEIGHT_SHIFT,
-  WEIGHT_MASK,
   WEIGHT_MAX_PACKED,
 } from './constants.js';
-import { getMaterial } from './voxelData.js';
-import { isLiquid, isTransparent } from '../materials/index.js';
+import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
 
-// ============== Visibility Helpers ==============
+// ============== Visibility Opaqueness LUT ==============
 
 /**
- * Check if a packed voxel blocks visibility for chunk culling.
+ * Pre-computed opaqueness LUT for visibility flood-fill.
+ * Indexed by voxel >> LIGHT_BITS (upper 11 bits: weight + material).
+ * Entry is 1 if the voxel blocks visibility (fully-solid opaque), 0 otherwise.
  *
- * Uses a RELAXED threshold: only fully-solid voxels (packed weight = max)
- * block the flood fill.  Any voxel with weight < 0.5 could produce a
- * surface face when paired with an air voxel in a neighbor chunk, so
- * visibility must propagate through it to ensure that neighbor gets loaded.
+ * Uses a RELAXED threshold: only fully-solid weight (WEIGHT_MAX_PACKED) with
+ * a solid material blocks the flood fill. Transparent/liquid materials and
+ * any voxel with weight < max allow visibility through.
+ *
+ * 2048 entries — fits in L1 cache for fast BFS inner-loop access.
  */
-function isVoxelOpaque(packed: number): boolean {
-  const packedWeight = (packed >> WEIGHT_SHIFT) & WEIGHT_MASK;
-  if (packedWeight < WEIGHT_MAX_PACKED) return false; // not fully solid — allow visibility
-  // Fully solid — check material (liquid/transparent still allow visibility)
-  const material = getMaterial(packed);
-  if (isLiquid(material) || isTransparent(material)) return false;
-  return true;
-}
+const VOXEL_OPAQUE_VIS = new Uint8Array(1 << (16 - LIGHT_BITS));
+
+(function initVisOpaqueLUT() {
+  for (let wm = 0; wm < VOXEL_OPAQUE_VIS.length; wm++) {
+    const weight = wm >> MATERIAL_BITS;
+    const material = wm & MATERIAL_MASK;
+    // Only fully-solid weight with solid material blocks visibility
+    if (weight === WEIGHT_MAX_PACKED && MATERIAL_TYPE_LUT[material] === MAT_TYPE_SOLID) {
+      VOXEL_OPAQUE_VIS[wm] = 1;
+    }
+  }
+})();
 
 // ============== Pre-allocated Buffers ==============
 // All computation uses these module-level arrays - zero allocations per call
@@ -256,7 +263,7 @@ export function computeVisibility(voxelData: Uint16Array): number {
   let hasSeeThrough = false;
   
   for (let i = 0; i < voxelData.length; i++) {
-    if (isVoxelOpaque(voxelData[i])) {
+    if (VOXEL_OPAQUE_VIS[voxelData[i] >> LIGHT_BITS]) {
       hasOpaque = true;
     } else {
       hasSeeThrough = true;
@@ -287,7 +294,7 @@ export function computeVisibility(voxelData: Uint16Array): number {
       const startIdx = boundaryIndices[i];
       
       // Skip if opaque or already visited in THIS computation
-      if (isVoxelOpaque(voxelData[startIdx])) continue;
+      if (VOXEL_OPAQUE_VIS[voxelData[startIdx] >> LIGHT_BITS]) continue;
       if (visited[startIdx] === gen) continue;
       
       // Flood fill using pre-allocated queue
@@ -315,7 +322,7 @@ export function computeVisibility(voxelData: Uint16Array): number {
           
           // Skip if already visited or opaque (liquid/transparent allow visibility)
           if (visited[neighborIdx] === gen) continue;
-          if (isVoxelOpaque(voxelData[neighborIdx])) continue;
+          if (VOXEL_OPAQUE_VIS[voxelData[neighborIdx] >> LIGHT_BITS]) continue;
           
           visited[neighborIdx] = gen;
           queue[queueTail++] = neighborIdx;

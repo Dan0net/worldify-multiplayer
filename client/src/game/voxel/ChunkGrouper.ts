@@ -26,7 +26,7 @@ const GROUP_GRID = 4;
 const BUFFER_GROWTH = 1.5;
 
 /** Maximum number of groups to rebuild per frame to avoid spikes */
-const MAX_REBUILDS_PER_FRAME = 4;
+const MAX_REBUILDS_PER_FRAME = 8;
 
 // ---- Interfaces ----
 
