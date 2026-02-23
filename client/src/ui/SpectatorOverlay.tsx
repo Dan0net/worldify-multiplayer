@@ -271,7 +271,7 @@ export function SpectatorOverlay() {
 
       {/* Controls hint at bottom */}
       {isConnected && (
-        <div className="fixed bottom-4 left-0 right-0 flex justify-center pointer-events-none">
+        <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
           <KeyInstructions rows={GAME_KEY_ROWS} />
         </div>
       )}
