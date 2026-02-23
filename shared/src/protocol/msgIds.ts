@@ -15,3 +15,5 @@ export const MSG_ROOM_INFO = 0x81;
 export const MSG_SNAPSHOT = 0x82;
 export const MSG_ERROR = 0x85;
 export const MSG_PONG = 0x86;
+/** Server could not fulfil a request (concurrency limit or generation error). */
+export const MSG_REQUEST_NACK = 0x8C;

@@ -11,6 +11,10 @@ import {
   FACE_OFFSETS_6,
   POSITIVE_FACE_OFFSETS_3,
   MESH_MARGIN,
+  REQUEST_TIMEOUT_MS,
+  MSG_VOXEL_CHUNK_REQUEST,
+  MSG_MAP_TILE_REQUEST,
+  MSG_SURFACE_COLUMN_REQUEST,
   worldToChunk,
   chunkKey,
   parseChunkKey,
@@ -18,6 +22,7 @@ import {
   getAffectedChunks,
   drawToChunk,
   VoxelChunkData,
+  RequestNack,
   encodeVoxelChunkRequest,
   encodeSurfaceColumnRequest,
   encodeMapTileRequest,
@@ -77,6 +82,11 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Tiles pending from server, keyed by "tx,tz" */
   private pendingTiles: Set<string> = new Set();
+
+  /** Timestamps for pending requests (keyed same as their pending sets) */
+  private pendingChunkTimes: Map<string, number> = new Map();
+  private pendingColumnTimes: Map<string, number> = new Map();
+  private pendingTileTimes: Map<string, number> = new Map();
 
   /** Column info from received tiles: maxCy for the column. Keyed by "tx,tz" */
   private columnInfo: Map<string, { maxCy: number }> = new Map();
@@ -198,6 +208,45 @@ export class VoxelWorld implements ChunkProvider {
     return this._visibilityRadius;
   }
 
+  // ---- Stale pending request cleanup ----
+
+  /**
+   * Remove entries from a pending set whose timestamps exceed REQUEST_TIMEOUT_MS.
+   * Returns true if any entries were cleaned (caller may want to invalidate BFS).
+   */
+  private expireStale(pending: Set<string>, timestamps: Map<string, number>, now: number): boolean {
+    let cleaned = false;
+    for (const [key, time] of timestamps) {
+      if (now - time > REQUEST_TIMEOUT_MS) {
+        pending.delete(key);
+        timestamps.delete(key);
+        cleaned = true;
+      }
+    }
+    return cleaned;
+  }
+
+  /**
+   * Sweep all pending sets for stale entries.
+   * Called once per update() before BFS so freed slots are available for new requests.
+   */
+  private cleanStalePending(): void {
+    const now = Date.now();
+    const hadStaleChunks = this.expireStale(this.pendingChunks, this.pendingChunkTimes, now);
+    const hadStaleTiles = this.expireStale(this.pendingTiles, this.pendingTileTimes, now);
+    const hadStaleColumns = this.expireStale(this.pendingColumns, this.pendingColumnTimes, now);
+
+    if (hadStaleChunks || hadStaleTiles || hadStaleColumns) {
+      // Invalidate BFS so next cycle re-discovers and re-requests
+      this.lastBFSChunk = null;
+
+      // If the initial surface column timed out, allow re-request
+      if (hadStaleColumns && this.pendingColumns.size === 0 && this.columnInfo.size === 0) {
+        this.initialColumnRequested = false;
+      }
+    }
+  }
+
   /**
    * ChunkProvider interface - get a chunk by key.
    */
@@ -223,6 +272,9 @@ export class VoxelWorld implements ChunkProvider {
     // Get player's current chunk
     const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
     this.lastPlayerChunk = { ...playerChunk };
+
+    // Expire stale pending requests so they can be re-requested
+    this.cleanStalePending();
 
     // Use visibility-based loading
     this.updateWithVisibility(playerChunk, playerPos);
@@ -308,6 +360,7 @@ export class VoxelWorld implements ChunkProvider {
     if (this.pendingColumns.has(columnKey)) return;
     
     this.pendingColumns.add(columnKey);
+    this.pendingColumnTimes.set(columnKey, Date.now());
     this.initialColumnRequested = true;
     
     const request = encodeSurfaceColumnRequest({ tx, tz });
@@ -399,7 +452,7 @@ export class VoxelWorld implements ChunkProvider {
    * Phase 2: Request individual chunks for columns where we have tile data
    * Phase 3: Request margin neighbors needed for stitching that BFS missed
    * 
-   * Chunks above the tile's maxCy + 1 are skipped (air, +1 for top-face margin).
+   * Chunks above the tile's maxCy are skipped (air).
    */
   private requestVisibleChunks(toRequest: Set<string>): void {
     // Limit concurrent requests
@@ -549,6 +602,7 @@ export class VoxelWorld implements ChunkProvider {
   private requestChunkFromServer(cx: number, cy: number, cz: number): void {
     const key = chunkKey(cx, cy, cz);
     this.pendingChunks.add(key);
+    this.pendingChunkTimes.set(key, Date.now());
     
     const request = encodeVoxelChunkRequest({
       chunkX: cx,
@@ -568,6 +622,7 @@ export class VoxelWorld implements ChunkProvider {
     if (this.pendingTiles.has(columnKey)) return;
     
     this.pendingTiles.add(columnKey);
+    this.pendingTileTimes.set(columnKey, Date.now());
     sendBinary(encodeMapTileRequest({ tx, tz }));
   }
 
@@ -581,6 +636,7 @@ export class VoxelWorld implements ChunkProvider {
     
     // Remove from pending
     this.pendingTiles.delete(columnKey);
+    this.pendingTileTimes.delete(columnKey);
     
     // Compute and store column info from tile heights
     const { maxCy } = getChunkRangeFromHeights(heights);
@@ -604,6 +660,7 @@ export class VoxelWorld implements ChunkProvider {
     
     // Remove from pending
     this.pendingChunks.delete(key);
+    this.pendingChunkTimes.delete(key);
     
     // Create or update chunk
     let chunk = this.chunks.get(key);
@@ -723,6 +780,7 @@ export class VoxelWorld implements ChunkProvider {
     
     // Remove from pending columns
     this.pendingColumns.delete(columnKey);
+    this.pendingColumnTimes.delete(columnKey);
     
     // Store column info from tile heights
     const { maxCy } = getChunkRangeFromHeights(heights);
@@ -747,6 +805,45 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Handle a REQUEST_NACK from the server.
+   * Clears the matching pending entry so it can be re-requested next BFS cycle.
+   */
+  handleRequestNack(nack: RequestNack): void {
+    const { originalMsgId, x, y, z } = nack;
+
+    switch (originalMsgId) {
+      case MSG_VOXEL_CHUNK_REQUEST: {
+        const key = chunkKey(x, y, z);
+        console.warn(`[VoxelWorld] NACK: chunk request (${x},${y},${z}) rejected, will retry`);
+        this.pendingChunks.delete(key);
+        this.pendingChunkTimes.delete(key);
+        break;
+      }
+      case MSG_MAP_TILE_REQUEST: {
+        const columnKey = `${x},${z}`;
+        console.warn(`[VoxelWorld] NACK: tile request (${x},${z}) rejected, will retry`);
+        this.pendingTiles.delete(columnKey);
+        this.pendingTileTimes.delete(columnKey);
+        break;
+      }
+      case MSG_SURFACE_COLUMN_REQUEST: {
+        const columnKey = `${x},${z}`;
+        console.warn(`[VoxelWorld] NACK: surface column request (${x},${z}) rejected, will retry`);
+        this.pendingColumns.delete(columnKey);
+        this.pendingColumnTimes.delete(columnKey);
+        // Allow initial column re-request if it was the one that got NACKed
+        if (this.pendingColumns.size === 0 && this.columnInfo.size === 0) {
+          this.initialColumnRequested = false;
+        }
+        break;
+      }
+    }
+
+    // Invalidate BFS so freed slot gets re-requested
+    this.lastBFSChunk = null;
+  }
+
+  /**
    * Unload a chunk by key.
    */
   private unloadChunk(key: string): void {
@@ -768,6 +865,7 @@ export class VoxelWorld implements ChunkProvider {
 
     // Remove from pending if it was still pending
     this.pendingChunks.delete(key);
+    this.pendingChunkTimes.delete(key);
 
     // Remove chunk
     this.chunks.delete(key);
@@ -1193,6 +1291,9 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingChunks.clear();
     this.pendingColumns.clear();
     this.pendingTiles.clear();
+    this.pendingChunkTimes.clear();
+    this.pendingColumnTimes.clear();
+    this.pendingTileTimes.clear();
 
     // Clear column info
     this.columnInfo.clear();

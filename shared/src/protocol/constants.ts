@@ -16,6 +16,10 @@ export const BUILD_STRICT_ORDER = true;
 // Room cleanup
 export const EMPTY_ROOM_TIMEOUT_MS = 60_000;
 
+// Network request timeouts
+/** Timeout for pending network requests (tiles, chunks, columns). Client cleans up stale entries. */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
 // ============== Room Names ==============
 /**
  * Fixed pool of fun room names.

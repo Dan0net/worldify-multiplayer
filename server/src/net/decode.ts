@@ -19,6 +19,7 @@ import {
   decodeSurfaceColumnRequest,
   encodeMapTileData,
   encodeSurfaceColumnData,
+  encodeRequestNack,
 } from '@worldify/shared';
 import { roomManager } from '../rooms/roomManager.js';
 import { encodePong } from '@worldify/shared';
@@ -118,12 +119,17 @@ function handleVoxelChunkRequest(roomId: string, playerId: number, reader: ByteR
 
   // Per-player concurrency limit
   const playerKey = `${roomId}:${playerId}`;
-  if (!chunkLimiter.tryAcquire(playerKey)) return;
+  if (!chunkLimiter.tryAcquire(playerKey)) {
+    console.warn(`[decode] Chunk request dropped for player ${playerId} (concurrency limit)`);
+    ws.send(encodeRequestNack(MSG_VOXEL_CHUNK_REQUEST, request.chunkX, request.chunkY, request.chunkZ));
+    return;
+  }
   
   handleChunkRequest(room, playerId, request, ws)
     .finally(() => chunkLimiter.release(playerKey))
     .catch((err) => {
       console.error('[decode] Error handling chunk request:', err);
+      ws.send(encodeRequestNack(MSG_VOXEL_CHUNK_REQUEST, request.chunkX, request.chunkY, request.chunkZ));
     });
 }
 
@@ -138,7 +144,11 @@ function handleMapTileRequest(roomId: string, playerId: number, reader: ByteRead
 
   // Per-player concurrency limit
   const playerKey = `${roomId}:${playerId}`;
-  if (!tileLimiter.tryAcquire(playerKey)) return;
+  if (!tileLimiter.tryAcquire(playerKey)) {
+    console.warn(`[decode] Tile request dropped for player ${playerId} (concurrency limit)`);
+    ws.send(encodeRequestNack(MSG_MAP_TILE_REQUEST, request.tx, 0, request.tz));
+    return;
+  }
   
   getSurfaceColumnProvider().getColumn(request.tx, request.tz)
     .then(({ tile }) => {
@@ -147,6 +157,7 @@ function handleMapTileRequest(roomId: string, playerId: number, reader: ByteRead
     })
     .catch((err) => {
       console.error('[decode] Error handling map tile request:', err);
+      ws.send(encodeRequestNack(MSG_MAP_TILE_REQUEST, request.tx, 0, request.tz));
     })
     .finally(() => tileLimiter.release(playerKey));
 }
@@ -162,7 +173,11 @@ function handleSurfaceColumnRequest(roomId: string, playerId: number, reader: By
 
   // Per-player concurrency limit
   const playerKey = `${roomId}:${playerId}`;
-  if (!columnLimiter.tryAcquire(playerKey)) return;
+  if (!columnLimiter.tryAcquire(playerKey)) {
+    console.warn(`[decode] Surface column request dropped for player ${playerId} (concurrency limit)`);
+    ws.send(encodeRequestNack(MSG_SURFACE_COLUMN_REQUEST, request.tx, 0, request.tz));
+    return;
+  }
   
   getSurfaceColumnProvider().getColumn(request.tx, request.tz)
     .then(({ tile, chunks }) => {
@@ -171,6 +186,7 @@ function handleSurfaceColumnRequest(roomId: string, playerId: number, reader: By
     })
     .catch((err) => {
       console.error('[decode] Error handling surface column request:', err);
+      ws.send(encodeRequestNack(MSG_SURFACE_COLUMN_REQUEST, request.tx, 0, request.tz));
     })
     .finally(() => columnLimiter.release(playerKey));
 }

@@ -32,7 +32,7 @@ import {
 import { setRendererRef, setVisibilityRadiusCallback, syncQualityToStore } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, updateTileFromChunk, updateTileHash, createMapTile } from '@worldify/shared';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, RequestNack, updateTileFromChunk, updateTileHash, createMapTile } from '@worldify/shared';
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -215,6 +215,7 @@ export class GameCore {
     on('chunkData', this.handleChunkData);
     on('mapTileData', this.handleMapTileData);
     on('surfaceColumnData', this.handleSurfaceColumnData);
+    on('requestNack', this.handleRequestNack);
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
@@ -359,6 +360,14 @@ export class GameCore {
   private handleSurfaceColumnData = (columnData: SurfaceColumnResponse): void => {
     if (!this.voxelIntegration) return;
     this.voxelIntegration.world.receiveSurfaceColumnData(columnData);
+  };
+
+  /**
+   * Handle request NACK from server - clear pending entry so it can be re-requested
+   */
+  private handleRequestNack = (nack: RequestNack): void => {
+    if (!this.voxelIntegration) return;
+    this.voxelIntegration.world.handleRequestNack(nack);
   };
 
   /**

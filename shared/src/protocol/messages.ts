@@ -23,6 +23,7 @@ import {
   MSG_ROOM_INFO,
   MSG_PONG,
   MSG_ERROR,
+  MSG_REQUEST_NACK,
 } from './msgIds.js';
 
 // ============== Client → Server ==============
@@ -155,5 +156,53 @@ export function encodeError(errorCode: number): Uint8Array {
 export function decodeError(reader: ByteReader): { errorCode: number } {
   return {
     errorCode: reader.readUint8(),
+  };
+}
+
+// ============== Request NACK ==============
+
+/**
+ * REQUEST_NACK Binary Layout (Server -> Client):
+ * ┌─────────────┬─────────┬──────────────────────────────────────────┐
+ * │ Byte Offset │ Type    │ Description                              │
+ * ├─────────────┼─────────┼──────────────────────────────────────────┤
+ * │ 0           │ uint8   │ MSG_REQUEST_NACK (0x8C)                  │
+ * │ 1           │ uint8   │ Original request message ID              │
+ * │ 2-3         │ int16   │ X coordinate (cx or tx)                  │
+ * │ 4-5         │ int16   │ Y coordinate (cy, 0 for tiles/columns)   │
+ * │ 6-7         │ int16   │ Z coordinate (cz or tz)                  │
+ * └─────────────┴─────────┴──────────────────────────────────────────┘
+ * Total: 8 bytes
+ */
+
+export interface RequestNack {
+  originalMsgId: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Encode a REQUEST_NACK — server tells client a request was dropped.
+ */
+export function encodeRequestNack(originalMsgId: number, x: number, y: number, z: number): Uint8Array {
+  const writer = new ByteWriter(8);
+  writer.writeUint8(MSG_REQUEST_NACK);
+  writer.writeUint8(originalMsgId);
+  writer.writeInt16(x);
+  writer.writeInt16(y);
+  writer.writeInt16(z);
+  return writer.toUint8Array();
+}
+
+/**
+ * Decode a REQUEST_NACK.
+ */
+export function decodeRequestNack(reader: ByteReader): RequestNack {
+  return {
+    originalMsgId: reader.readUint8(),
+    x: reader.readInt16(),
+    y: reader.readInt16(),
+    z: reader.readInt16(),
   };
 }
