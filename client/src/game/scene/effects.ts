@@ -17,7 +17,7 @@ import {
   BlendFunction, LuminanceMaterial,
 } from 'postprocessing';
 import { useGameStore } from '../../state/store';
-import { getSunLight } from './Lighting';
+import { getSunLight, getMoonLight, getActiveShadowCaster } from './Lighting';
 
 // ============== State ==============
 
@@ -278,13 +278,15 @@ export function initEffects(
 }
 
 /**
- * Sync sunMesh position from the directional light. Call each frame.
+ * Sync sun mesh position and color from the active light source each frame.
+ * Follows whichever light currently casts shadows (sun or moon).
  */
 function syncSunMeshPosition(): void {
   if (!sunMesh) return;
-  const sun = getSunLight();
-  if (sun) {
-    sunMesh.position.copy(sun.position);
+  const light = getActiveShadowCaster() === 'moon' ? getMoonLight() : getSunLight();
+  if (light) {
+    sunMesh.position.copy(light.position);
+    (sunMesh.material as THREE.MeshBasicMaterial).color.copy(light.color);
     sunMesh.updateMatrix();
   }
 }
