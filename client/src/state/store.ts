@@ -140,6 +140,7 @@ export interface EnvironmentSettings {
   shadowBias: number;       // -0.01 to 0.01
   shadowNormalBias: number; // 0 to 0.1
   shadowMapSize: number;    // 512, 1024, 2048, 4096
+  shadowBlurRadius: number; // 1-25, controls shadow edge softness
   
   // Tone mapping
   toneMapping: THREE.ToneMapping;
@@ -267,6 +268,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   shadowBias: -0.0001,
   shadowNormalBias: 0.02,
   shadowMapSize: 4096,
+  shadowBlurRadius: 8,
   
   toneMapping: THREE.ACESFilmicToneMapping,
   toneMappingExposure: 1.0,

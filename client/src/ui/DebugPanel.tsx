@@ -674,6 +674,16 @@ export function DebugPanel() {
                 }}
                 formatValue={(v) => `${v} chunks`}
               />
+              <Slider
+                label="Shadow Softness"
+                value={environment.shadowBlurRadius}
+                min={1}
+                max={25}
+                step={1}
+                onChange={(v) => {
+                  storeBridge.setEnvironment({ shadowBlurRadius: v });
+                }}
+              />
             </>
           )}
         </div>

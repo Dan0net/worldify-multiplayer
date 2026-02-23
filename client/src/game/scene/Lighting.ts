@@ -141,6 +141,13 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   }
   
   console.log('[Lighting] Initialized with sun + moon + hemisphere + procedural sky (single shadow caster)');
+
+  // Subscribe to store — update shadow blur radius when it changes
+  useGameStore.subscribe((state, prev) => {
+    if (state.environment.shadowBlurRadius !== prev.environment.shadowBlurRadius) {
+      applyShadowBlurRadius(state.environment.shadowBlurRadius);
+    }
+  });
 }
 
 function configureShadowCamera(light: THREE.DirectionalLight, settings: EnvironmentSettings): void {
@@ -154,6 +161,19 @@ function configureShadowCamera(light: THREE.DirectionalLight, settings: Environm
   light.shadow.camera.far = SHADOW_FAR;
   light.shadow.bias = settings.shadowBias;
   light.shadow.normalBias = settings.shadowNormalBias;
+  light.shadow.radius = settings.shadowBlurRadius ?? 8;
+}
+
+/**
+ * Apply shadow blur radius to both lights.
+ * Higher values = softer, more blurred shadow edges.
+ */
+function applyShadowBlurRadius(radius: number): void {
+  for (const light of [sunLight, moonLight]) {
+    if (light) {
+      light.shadow.radius = radius;
+    }
+  }
 }
 
 // ============== Environment Intensity ==============

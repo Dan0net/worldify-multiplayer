@@ -89,9 +89,9 @@ export class GameCore {
     this.renderer.setClearColor(0x87ceeb); // Sky blue
     
     // Enable shadow mapping
-    // Using PCFSoftShadowMap to support customDepthMaterial for alpha-tested shadows
+    // PCFShadowMap supports shadow.radius for soft/blurred edges
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     
     // Enable tone mapping for better HDR handling
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
