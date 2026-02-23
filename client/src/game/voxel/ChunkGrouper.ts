@@ -130,7 +130,6 @@ export class ChunkGrouper {
   // Reusable scratch arrays to avoid per-frame allocations
   private eligibleBuf: { gk: string; group: ChunkGroup; dist: number }[] = [];
   private visibleSlotsBuf: ChunkSlot[] = [];
-  private geosBuf: { geo: THREE.BufferGeometry; wx: number; wy: number; wz: number }[] = [];
   private priorityKeysBuf = new Set<string>();
   private groupKeysBuf = new Set<string>();
 
@@ -653,29 +652,22 @@ export class ChunkGrouper {
     }
 
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
-      // Gather non-empty geometries
-      const geos = this.geosBuf;
-      geos.length = 0;
-      for (const slot of visibleSlots) {
-        const geo = slot.geometries[layer];
+      const existing = group.meshes[layer];
+
+      // Count totals directly from visible slots (avoids per-rebuild object allocations)
+      let totalVerts = 0;
+      let totalIndices = 0;
+      for (let si = 0; si < visibleSlots.length; si++) {
+        const geo = visibleSlots[si].geometries[layer];
         if (geo && geo.index && geo.index.count > 0) {
-          geos.push({ geo, wx: slot.wx, wy: slot.wy, wz: slot.wz });
+          totalVerts += geo.getAttribute('position').count;
+          totalIndices += geo.index.count;
         }
       }
 
-      const existing = group.meshes[layer];
-
-      if (geos.length === 0) {
+      if (totalVerts === 0) {
         if (existing) existing.visible = false;
         continue;
-      }
-
-      // Count totals
-      let totalVerts = 0;
-      let totalIndices = 0;
-      for (const { geo } of geos) {
-        totalVerts += geo.getAttribute('position').count;
-        totalIndices += geo.index!.count;
       }
 
       // Check if existing GPU buffers can be reused
@@ -689,8 +681,8 @@ export class ChunkGrouper {
       if (canReuse) {
         merged = existing!.geometry;
       } else {
-        const vertCap = lb ? Math.ceil(totalVerts * BUFFER_GROWTH) : totalVerts;
-        const idxCap = lb ? Math.ceil(totalIndices * BUFFER_GROWTH) : totalIndices;
+        const vertCap = Math.ceil(totalVerts * BUFFER_GROWTH);
+        const idxCap = Math.ceil(totalIndices * BUFFER_GROWTH);
 
         merged = new THREE.BufferGeometry();
         for (const attr of TERRAIN_ATTRS) {
@@ -703,7 +695,7 @@ export class ChunkGrouper {
         group.layerBuffers[layer] = { vertexCapacity: vertCap, indexCapacity: idxCap };
       }
 
-      // ---- Fill attribute data ----
+      // ---- Fill attribute data (iterate visibleSlots directly — zero alloc) ----
       for (const attr of TERRAIN_ATTRS) {
         const dstAttr = merged.getAttribute(attr.name) as THREE.BufferAttribute;
         const arr = dstAttr.array as Float32Array;
@@ -711,10 +703,14 @@ export class ChunkGrouper {
 
         if (attr.name === 'position') {
           // Bake positions into world space
-          for (const { geo, wx, wy, wz } of geos) {
-            const srcAttr = geo.getAttribute(attr.name) as THREE.BufferAttribute | undefined;
+          for (let si = 0; si < visibleSlots.length; si++) {
+            const slot = visibleSlots[si];
+            const geo = slot.geometries[layer];
+            if (!geo || !geo.index || geo.index.count === 0) continue;
+            const srcAttr = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
             if (!srcAttr) continue;
             const srcArr = srcAttr.array as Float32Array;
+            const { wx, wy, wz } = slot;
             for (let v = 0; v < srcAttr.count; v++) {
               const sBase = v * 3;
               const dBase = (vertOffset + v) * 3;
@@ -725,7 +721,9 @@ export class ChunkGrouper {
             vertOffset += srcAttr.count;
           }
         } else {
-          for (const { geo } of geos) {
+          for (let si = 0; si < visibleSlots.length; si++) {
+            const geo = visibleSlots[si].geometries[layer];
+            if (!geo || !geo.index || geo.index.count === 0) continue;
             const srcAttr = geo.getAttribute(attr.name) as THREE.BufferAttribute | undefined;
             if (!srcAttr) continue;
             arr.set(srcAttr.array as Float32Array, vertOffset * attr.itemSize);
@@ -743,8 +741,10 @@ export class ChunkGrouper {
       const indices = idxAttr.array as Uint32Array;
       let idxOffset = 0;
       let vertBase = 0;
-      for (const { geo } of geos) {
-        const srcIdx = geo.index!;
+      for (let si = 0; si < visibleSlots.length; si++) {
+        const geo = visibleSlots[si].geometries[layer];
+        if (!geo || !geo.index || geo.index.count === 0) continue;
+        const srcIdx = geo.index;
         const srcArr = srcIdx.array;
         for (let i = 0; i < srcIdx.count; i++) {
           indices[idxOffset + i] = srcArr[i] + vertBase;
@@ -763,13 +763,16 @@ export class ChunkGrouper {
       //  (b) Over-allocated buffers have zero-filled tails that poison auto-computation
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-      for (const { wx, wy, wz } of geos) {
-        if (wx < minX) minX = wx;
-        if (wy < minY) minY = wy;
-        if (wz < minZ) minZ = wz;
-        const ex = wx + CHUNK_WORLD_SIZE;
-        const ey = wy + CHUNK_WORLD_SIZE;
-        const ez = wz + CHUNK_WORLD_SIZE;
+      for (let si = 0; si < visibleSlots.length; si++) {
+        const slot = visibleSlots[si];
+        const geo = slot.geometries[layer];
+        if (!geo || !geo.index || geo.index.count === 0) continue;
+        if (slot.wx < minX) minX = slot.wx;
+        if (slot.wy < minY) minY = slot.wy;
+        if (slot.wz < minZ) minZ = slot.wz;
+        const ex = slot.wx + CHUNK_WORLD_SIZE;
+        const ey = slot.wy + CHUNK_WORLD_SIZE;
+        const ez = slot.wz + CHUNK_WORLD_SIZE;
         if (ex > maxX) maxX = ex;
         if (ey > maxY) maxY = ey;
         if (ez > maxZ) maxZ = ez;
