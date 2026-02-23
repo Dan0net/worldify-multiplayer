@@ -95,7 +95,7 @@ export class VoxelIntegration implements TerrainRaycaster {
     
     // Update debug visualization if enabled
     if (this.config.debugEnabled) {
-      this.debug.update(this.world.chunks, this.world.meshes);
+      this.debug.update(this.world.chunks, this.world.geometries);
       this.collision.setDebugEnabled(true);
     }
     
@@ -125,7 +125,7 @@ export class VoxelIntegration implements TerrainRaycaster {
     // Colliders are managed reactively via remesh/unload listeners
     
     // Update debug visualization
-    this.debug.update(this.world.chunks, this.world.meshes);
+    this.debug.update(this.world.chunks, this.world.geometries);
   }
 
   /**
@@ -134,10 +134,10 @@ export class VoxelIntegration implements TerrainRaycaster {
    */
   rebuildCollisionForChunks(chunkKeys: string[]): void {
     for (const key of chunkKeys) {
-      const chunkMesh = this.world.meshes.get(key);
-      if (!chunkMesh || !chunkMesh.hasGeometry()) continue;
+      const geo = this.world.geometries.get(key);
+      if (!geo || !geo.hasGeometry()) continue;
 
-      const mesh = chunkMesh.getMesh();
+      const mesh = geo.getMesh();
       if (!mesh) continue;
 
       // Remove old collider if exists
@@ -148,7 +148,7 @@ export class VoxelIntegration implements TerrainRaycaster {
 
       // Add new collider with updated geometry
       this.collision.addCollider(key, mesh);
-      this.colliderGenerations.set(key, chunkMesh.meshGeneration);
+      this.colliderGenerations.set(key, geo.meshGeneration);
     }
   }
 
@@ -199,17 +199,17 @@ export class VoxelIntegration implements TerrainRaycaster {
    */
   getCollisionMeshes(): THREE.Object3D[] {
     const meshes: THREE.Object3D[] = [];
-    for (const chunkMesh of this.world.meshes.values()) {
-      if (chunkMesh.hasGeometry()) {
-        const solid = chunkMesh.getMesh();
+    for (const geo of this.world.geometries.values()) {
+      if (geo.hasGeometry()) {
+        const solid = geo.getMesh();
         if (solid) {
           meshes.push(solid);
         }
-        if (chunkMesh.transparentMesh) {
-          meshes.push(chunkMesh.transparentMesh);
+        if (geo.transparentMesh) {
+          meshes.push(geo.transparentMesh);
         }
-        if (chunkMesh.liquidMesh) {
-          meshes.push(chunkMesh.liquidMesh);
+        if (geo.liquidMesh) {
+          meshes.push(geo.liquidMesh);
         }
       }
     }

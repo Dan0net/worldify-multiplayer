@@ -29,7 +29,7 @@ describe('Constructor Tests', () => {
   test('VoxelWorld constructor creates empty world', () => {
     const { world } = createTestWorld();
     expect(world.chunks.size).toBe(0);
-    expect(world.meshes.size).toBe(0);
+    expect(world.geometries.size).toBe(0);
   });
 
   test('VoxelWorld stores scene reference', () => {
@@ -339,11 +339,11 @@ describe('Dispose Tests', () => {
     const { world } = createTestWorld();
     world.init();
     
-    expect(world.meshes.size).toBeGreaterThan(0);
+    expect(world.geometries.size).toBeGreaterThan(0);
     
     world.dispose();
     
-    expect(world.meshes.size).toBe(0);
+    expect(world.geometries.size).toBe(0);
   });
 
   test('dispose removes meshes from scene', () => {

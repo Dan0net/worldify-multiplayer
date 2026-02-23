@@ -1,5 +1,5 @@
 /**
- * TerrainBatch - Geometry merging for terrain draw-call reduction
+ * ChunkGrouper - Geometry merging for terrain draw-call reduction
  *
  * Instead of drawing each chunk as a separate mesh (hundreds of draw calls),
  * chunks are grouped into spatial buckets (GROUP_GRID³ chunks each) and their
@@ -53,7 +53,8 @@ interface LayerBuffers {
   indexCapacity: number;
 }
 
-interface MergedGroup {
+/** A spatial group of chunks whose geometry is merged for draw-call reduction. */
+interface ChunkGroup {
   /** Per-layer merged meshes in the scene */
   meshes: (THREE.Mesh | null)[];
   /** Set of chunk keys belonging to this group */
@@ -69,12 +70,11 @@ interface MergedGroup {
   /** Per-layer capacity tracking for buffer reuse */
   layerBuffers: (LayerBuffers | null)[];
   /** When true, group is suppressed for build preview — merged mesh hidden,
-   *  standalones shown for non-preview chunks. No dirty/rebuild triggered. */
+   *  standalones shown for non-preview chunks. */
   previewSuppressed: boolean;
   /** Chunk keys that are in preview while group is suppressed */
   previewChunkKeys: Set<string>;
-  /** When true, suppression is waiting for the group to be merged first.
-   *  The group keeps its current visible state until rebuild finalizes it. */
+  /** When true, suppression is waiting for the group to be merged first. */
   suppressionPending: boolean;
   /** Preview chunk keys saved while suppression is pending */
   pendingPreviewChunkKeys: Set<string>;
@@ -97,14 +97,31 @@ function groupCenter(gx: number, gy: number, gz: number): { cx: number; cy: numb
   };
 }
 
+function createEmptyGroup(centerCx: number, centerCy: number, centerCz: number): ChunkGroup {
+  return {
+    meshes: new Array<THREE.Mesh | null>(LAYER_COUNT).fill(null),
+    chunkKeys: new Set(),
+    dirty: true,
+    merged: false,
+    centerCx,
+    centerCy,
+    centerCz,
+    layerBuffers: new Array<LayerBuffers | null>(LAYER_COUNT).fill(null),
+    previewSuppressed: false,
+    previewChunkKeys: new Set(),
+    suppressionPending: false,
+    pendingPreviewChunkKeys: new Set(),
+  };
+}
+
 // ============================================================
-// TerrainBatch
+// ChunkGrouper
 // ============================================================
 
-export class TerrainBatch {
+export class ChunkGrouper {
   private scene: THREE.Scene;
   private slots = new Map<string, ChunkSlot>();
-  private groups = new Map<string, MergedGroup>();
+  private groups = new Map<string, ChunkGroup>();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -114,7 +131,7 @@ export class TerrainBatch {
 
   /**
    * Register or update a chunk's geometry references.
-   * Called after ChunkMesh.updateMeshes / updateMeshesFromData.
+   * Called after mesh generation completes.
    */
   updateChunk(
     key: string,
@@ -143,9 +160,7 @@ export class TerrainBatch {
       }
     } else {
       slot = {
-        cx,
-        cy,
-        cz,
+        cx, cy, cz,
         wx: worldPos.x,
         wy: worldPos.y,
         wz: worldPos.z,
@@ -169,8 +184,8 @@ export class TerrainBatch {
   }
 
   /**
-   * Set visibility for a chunk (called from updateMeshVisibility).
-   * Marks the owning group dirty so it is rebuilt on the next rebuild() call.
+   * Set visibility for a chunk. Marks the owning group dirty so it is
+   * rebuilt on the next rebuild() call.
    */
   setVisible(key: string, visible: boolean): void {
     const slot = this.slots.get(key);
@@ -211,21 +226,13 @@ export class TerrainBatch {
   }
 
   /**
-   * Rebuild dirty groups. Call once per frame after updateMeshVisibility.
-   *
-   * Caps the number of rebuilds per frame (MAX_REBUILDS_PER_FRAME) to avoid
-   * a spike when all deferred groups become eligible at once. Groups closest
-   * to the player are rebuilt first; standalone meshes keep chunks visible
-   * while their group waits.
+   * Rebuild dirty groups. Call once per frame after visibility updates.
    *
    * Groups with suppressionPending are rebuilt with top priority (before
-   * distance sort) and bypass the isBusy check — the preview is blocked
-   * until these groups are merged, so completing them fast is critical.
+   * distance sort) so preview can show ASAP.
    *
-   * @param isBusy Optional callback: returns true if a chunk key is still being
-   *   processed (in remesh queue or in-flight on a worker). Groups with ANY busy
-   *   chunk are skipped (left dirty) so we don't rebuild the same group dozens
-   *   of times while chunks stream in one at a time.
+   * @param isBusy Returns true if a chunk key is still being processed.
+   *   Groups with ANY busy chunk are skipped to avoid redundant rebuilds.
    */
   rebuild(
     playerCx: number,
@@ -236,52 +243,33 @@ export class TerrainBatch {
     const shadowRadius = getShadowRadius();
 
     // === Phase 1: Priority rebuild for groups with pending suppression ===
-    // These groups must be merged before preview can show — no frame cap, no isBusy skip.
     for (const [gk, group] of this.groups) {
       if (!group.suppressionPending || !group.dirty) continue;
-
       group.dirty = false;
       this.rebuildGroup(gk, group, playerCx, playerCy, playerCz, shadowRadius);
-
-      // Now that group is merged, finalize the deferred suppression
       this.finalizePendingSuppression(gk, group);
     }
 
     // === Phase 2: Normal dirty groups (distance-sorted, capped, isBusy-gated) ===
-    const eligible: { gk: string; group: MergedGroup; dist: number }[] = [];
+    const eligible: { gk: string; group: ChunkGroup; dist: number }[] = [];
 
     for (const [gk, group] of this.groups) {
-      if (!group.dirty) continue;
+      if (!group.dirty || group.previewSuppressed || group.suppressionPending) continue;
 
-      // Don't rebuild while suppressed for preview
-      if (group.previewSuppressed) continue;
-
-      // suppressionPending groups that are still dirty were handled in Phase 1
-      // (if they weren't dirty they don't need a rebuild)
-      if (group.suppressionPending) continue;
-
-      // Defer rebuild while any chunk in this group is still being meshed
       if (isBusy) {
         let busy = false;
         for (const ck of group.chunkKeys) {
-          if (isBusy(ck)) {
-            busy = true;
-            break;
-          }
+          if (isBusy(ck)) { busy = true; break; }
         }
-        if (busy) continue; // leave dirty, retry next frame
+        if (busy) continue;
       }
 
-      // Distance from player to group center (Chebyshev)
       const dx = Math.abs(group.centerCx - playerCx);
       const dy = Math.abs(group.centerCy - playerCy);
       const dz = Math.abs(group.centerCz - playerCz);
-      const dist = Math.max(dx, dy, dz);
-
-      eligible.push({ gk, group, dist });
+      eligible.push({ gk, group, dist: Math.max(dx, dy, dz) });
     }
 
-    // Sort by distance (closest first) and cap per frame
     if (eligible.length > MAX_REBUILDS_PER_FRAME) {
       eligible.sort((a, b) => a.dist - b.dist);
     }
@@ -294,109 +282,50 @@ export class TerrainBatch {
     }
   }
 
-  /**
-   * Finalize a pending suppression after the group has been rebuilt.
-   * Transitions from suppressionPending → previewSuppressed.
-   */
-  private finalizePendingSuppression(_gk: string, group: MergedGroup): void {
-    const previewChunkKeys = group.pendingPreviewChunkKeys;
-    group.suppressionPending = false;
-    group.pendingPreviewChunkKeys = new Set();
+  // ---- GrouperForSuppression interface ----
 
-    // Now we have a merged mesh — apply the actual suppression
-    group.previewSuppressed = true;
-    group.previewChunkKeys = new Set(previewChunkKeys);
-
-    // Hide merged meshes
-    for (let i = 0; i < LAYER_COUNT; i++) {
-      const m = group.meshes[i];
-      if (m) m.visible = false;
-    }
-
-    // Show standalones for non-preview, visible chunks
-    for (const ck of group.chunkKeys) {
-      if (previewChunkKeys.has(ck)) continue;
-      const slot = this.slots.get(ck);
-      if (slot && slot.visible) {
-        this.showStandalone(slot);
-      }
-    }
-  }
-
-  // ---- Public: preview suppression ----
-
-  /**
-   * Get the group key for a chunk key. Returns undefined if the chunk isn't registered.
-   */
+  /** Get the group key for a chunk key. */
   getGroupKey(chunkKey: string): string | undefined {
     return this.slots.get(chunkKey)?.groupKey;
   }
 
-  /**
-   * Suppress a group for build preview. If the group has a valid merged mesh,
-   * suppresses immediately (hides merged, shows standalones). Otherwise defers
-   * suppression until the group is rebuilt — current visible state is preserved
-   * to avoid holes.
-   *
-   * @param gk Group key
-   * @param previewChunkKeys Chunk keys that are in preview (their standalones will be hidden)
-   * @returns true if suppression was applied immediately
-   */
-  suppressForPreview(gk: string, previewChunkKeys: Set<string>): boolean {
-    const group = this.groups.get(gk);
-    if (!group || group.previewSuppressed) return true; // already suppressed
+  /** Check if a group has a pending suppression flag. */
+  isGroupSuppressionPending(groupKey: string): boolean {
+    return this.groups.get(groupKey)?.suppressionPending ?? false;
+  }
 
-    // Can suppress immediately if the group has been merged (has visible meshes to hide)
+  /**
+   * Suppress a single group for build preview. Returns true if immediate.
+   */
+  suppressGroup(gk: string, previewChunkKeys: Set<string>): boolean {
+    const group = this.groups.get(gk);
+    if (!group || group.previewSuppressed) return true;
+
     const hasMergedMesh = group.merged && group.meshes.some(m => m !== null);
 
     if (hasMergedMesh) {
-      // Immediate suppression — safe because we have a merged mesh to restore later
-      group.previewSuppressed = true;
-      group.previewChunkKeys = new Set(previewChunkKeys);
-      group.suppressionPending = false;
-      group.pendingPreviewChunkKeys.clear();
-
-      // Hide merged meshes
-      for (let i = 0; i < LAYER_COUNT; i++) {
-        const m = group.meshes[i];
-        if (m) m.visible = false;
-      }
-
-      // Show standalones for non-preview, visible chunks
-      for (const ck of group.chunkKeys) {
-        if (previewChunkKeys.has(ck)) continue;
-        const slot = this.slots.get(ck);
-        if (slot && slot.visible) {
-          this.showStandalone(slot);
-        }
-      }
+      this.applySuppression(group, previewChunkKeys);
       return true;
     }
 
-    // Defer suppression — group hasn't been merged yet. Keep current
-    // visible state (standalones or nothing) to avoid holes.
+    // Defer — group hasn't been merged yet
     group.suppressionPending = true;
     group.pendingPreviewChunkKeys = new Set(previewChunkKeys);
-    // Mark dirty so rebuild() prioritizes this group
     this.markGroupDirty(gk);
     return false;
   }
 
   /**
-   * Restore a group after build preview ends. If the group has a valid merged
-   * mesh, hides standalones and shows the merged mesh. If not (never been
-   * merged), keeps standalones visible and marks dirty — the next rebuild()
-   * will merge and clean up standalones naturally.
+   * Restore a single group from preview suppression.
    */
-  restoreFromPreview(gk: string): void {
+  restoreGroup(gk: string): void {
     const group = this.groups.get(gk);
     if (!group) return;
 
-    // Clear any pending suppression if it was never finalized
+    // Clear any pending suppression that was never finalized
     if (group.suppressionPending) {
       group.suppressionPending = false;
       group.pendingPreviewChunkKeys.clear();
-      // Group was never actually suppressed, nothing to restore
       return;
     }
 
@@ -405,62 +334,52 @@ export class TerrainBatch {
     group.previewSuppressed = false;
     group.previewChunkKeys.clear();
 
-    // Check if group has a valid merged mesh to restore
     const hasMergedMesh = group.merged && group.meshes.some(m => m !== null);
 
     if (hasMergedMesh && !group.dirty) {
-      // Safe: remove standalones and show merged mesh
       this.removeGroupStandalones(group);
-
       for (let i = 0; i < LAYER_COUNT; i++) {
         const m = group.meshes[i];
         if (m) m.visible = true;
       }
     } else {
-      // No valid merged mesh (or it's stale). Show standalones for ALL
-      // visible chunks, including former preview chunks that had no standalone
-      // while the group was suppressed. This prevents 1-frame holes when
-      // preview is cleared or moved across chunk boundaries.
+      // No valid merged mesh — show standalones for ALL visible chunks
       for (const ck of group.chunkKeys) {
         const slot = this.slots.get(ck);
-        if (slot && slot.visible) {
-          this.showStandalone(slot);
-        }
+        if (slot && slot.visible) this.showStandalone(slot);
       }
-      // Mark dirty so rebuild() merges and removes standalones naturally.
       group.dirty = true;
       group.merged = false;
     }
   }
 
-  // ---- Higher-level preview coordination ----
+  /** Mark a group as dirty so rebuild() processes it. */
+  markGroupDirty(gk: string): void {
+    const group = this.groups.get(gk);
+    if (group) {
+      group.dirty = true;
+      group.merged = false;
+    }
+  }
 
-  /** Set of group keys currently suppressed for preview */
-  private suppressedGroupKeys = new Set<string>();
+  // ---- High-level preview helpers (used by BuildPreview) ----
 
   /**
-   * Suppress all terrain batch groups that contain any of the given preview chunks.
-   * Groups the chunks by their group key and calls suppressForPreview per group.
-   * Tracks which groups are suppressed for fast restore.
-   * @returns true if ALL groups were suppressed immediately (safe to show preview)
+   * Suppress groups containing the given preview chunks.
+   * @returns true if ALL groups were suppressed immediately.
    */
   suppressGroupsForChunks(previewChunkKeys: Set<string>): boolean {
-    const groupPreviewChunks = new Map<string, Set<string>>();
-    for (const key of previewChunkKeys) {
-      const gk = this.slots.get(key)?.groupKey;
-      if (!gk) continue;
-      let set = groupPreviewChunks.get(gk);
-      if (!set) {
-        set = new Set();
-        groupPreviewChunks.set(gk, set);
-      }
-      set.add(key);
+    const groupKeys = new Set<string>();
+    for (const ck of previewChunkKeys) {
+      const gk = this.getGroupKey(ck);
+      if (gk) groupKeys.add(gk);
     }
+
     let allImmediate = true;
-    for (const [gk, keys] of groupPreviewChunks) {
-      const immediate = this.suppressForPreview(gk, keys);
-      if (!immediate) allImmediate = false;
-      this.suppressedGroupKeys.add(gk);
+    for (const gk of groupKeys) {
+      if (!this.suppressGroup(gk, previewChunkKeys)) {
+        allImmediate = false;
+      }
     }
     return allImmediate;
   }
@@ -469,60 +388,56 @@ export class TerrainBatch {
    * Restore all currently suppressed groups.
    */
   restoreAllSuppressedGroups(): void {
-    for (const gk of this.suppressedGroupKeys) {
-      this.restoreFromPreview(gk);
+    for (const [gk, group] of this.groups) {
+      if (group.previewSuppressed || group.suppressionPending) {
+        this.restoreGroup(gk);
+      }
     }
-    this.suppressedGroupKeys.clear();
   }
 
   /**
-   * Restore a single chunk's group if no pending commit chunks remain in it.
-   * Returns true if the group was restored.
+   * Restore a group if none of the given pending chunk keys belong to it.
+   * Used after a committed preview chunk's remesh arrives.
    */
-  restoreGroupIfComplete(chunkKey: string, pendingCommitChunks: Set<string>): boolean {
-    const gk = this.slots.get(chunkKey)?.groupKey;
-    if (!gk || !this.suppressedGroupKeys.has(gk)) return false;
+  restoreGroupIfComplete(chunkKey: string, pendingKeys: Set<string>): void {
+    const gk = this.getGroupKey(chunkKey);
+    if (!gk) return;
 
-    // Check if any pending commit chunk is in the same group
-    for (const key of pendingCommitChunks) {
-      if (this.slots.get(key)?.groupKey === gk) return false;
+    const group = this.groups.get(gk);
+    if (!group || (!group.previewSuppressed && !group.suppressionPending)) return;
+
+    // Don't restore if other pending commit chunks are still in this group
+    for (const ck of group.chunkKeys) {
+      if (pendingKeys.has(ck)) return;
     }
-
-    this.restoreFromPreview(gk);
-    this.suppressedGroupKeys.delete(gk);
-    return true;
+    this.restoreGroup(gk);
   }
 
   /**
-   * Whether any suppressed groups are still waiting for their initial merge.
-   * BuildPreview uses this to defer showing preview meshes until all affected
-   * groups have been safely merged (avoiding holes).
+   * Check if any groups have pending suppressions (waiting for merge).
    */
   hasPendingSuppressions(): boolean {
-    for (const gk of this.suppressedGroupKeys) {
-      const group = this.groups.get(gk);
-      if (group?.suppressionPending) return true;
+    for (const group of this.groups.values()) {
+      if (group.suppressionPending) return true;
     }
     return false;
   }
 
   /**
-   * Get chunk keys belonging to groups with pending suppression.
-   * VoxelWorld uses this to prioritize these chunks in the remesh queue.
+   * Get chunk keys in groups with pending suppressions.
+   * Used to prioritize these chunks in the remesh queue.
    */
   getPriorityChunkKeys(): Set<string> {
     const keys = new Set<string>();
-    for (const [, group] of this.groups) {
+    for (const group of this.groups.values()) {
       if (!group.suppressionPending) continue;
-      for (const ck of group.chunkKeys) {
-        keys.add(ck);
-      }
+      for (const ck of group.chunkKeys) keys.add(ck);
     }
     return keys;
   }
 
   /**
-   * Dispose everything (called from VoxelWorld.dispose).
+   * Dispose everything.
    */
   dispose(): void {
     for (const slot of this.slots.values()) {
@@ -535,32 +450,46 @@ export class TerrainBatch {
     this.slots.clear();
   }
 
+  // ---- Private: suppression helpers ----
+
+  /** Apply immediate suppression: hide merged mesh, show standalones for non-preview chunks. */
+  private applySuppression(group: ChunkGroup, previewChunkKeys: Set<string>): void {
+    group.previewSuppressed = true;
+    group.previewChunkKeys = new Set(previewChunkKeys);
+    group.suppressionPending = false;
+    group.pendingPreviewChunkKeys.clear();
+
+    for (let i = 0; i < LAYER_COUNT; i++) {
+      const m = group.meshes[i];
+      if (m) m.visible = false;
+    }
+    for (const ck of group.chunkKeys) {
+      if (previewChunkKeys.has(ck)) continue;
+      const slot = this.slots.get(ck);
+      if (slot && slot.visible) this.showStandalone(slot);
+    }
+  }
+
+  /** Finalize a pending suppression after the group has been rebuilt. */
+  private finalizePendingSuppression(_gk: string, group: ChunkGroup): void {
+    const previewChunkKeys = group.pendingPreviewChunkKeys;
+    group.suppressionPending = false;
+    group.pendingPreviewChunkKeys = new Set();
+    this.applySuppression(group, previewChunkKeys);
+  }
+
   // ---- Private: group bookkeeping ----
 
   private addToGroup(chunkKey: string, gk: string, _cx: number, _cy: number, _cz: number): void {
     let group = this.groups.get(gk);
     if (!group) {
-      // Parse group coords from key to compute center
       const parts = gk.split(',');
-      const gx = parseInt(parts[0], 10);
-      const gy = parseInt(parts[1], 10);
-      const gz = parseInt(parts[2], 10);
-      const center = groupCenter(gx, gy, gz);
-
-      group = {
-        meshes: new Array<THREE.Mesh | null>(LAYER_COUNT).fill(null),
-        chunkKeys: new Set(),
-        dirty: true,
-        merged: false,
-        centerCx: center.cx,
-        centerCy: center.cy,
-        centerCz: center.cz,
-        layerBuffers: new Array<LayerBuffers | null>(LAYER_COUNT).fill(null),
-        previewSuppressed: false,
-        previewChunkKeys: new Set(),
-        suppressionPending: false,
-        pendingPreviewChunkKeys: new Set(),
-      };
+      const center = groupCenter(
+        parseInt(parts[0], 10),
+        parseInt(parts[1], 10),
+        parseInt(parts[2], 10),
+      );
+      group = createEmptyGroup(center.cx, center.cy, center.cz);
       this.groups.set(gk, group);
     }
     group.chunkKeys.add(chunkKey);
@@ -569,14 +498,6 @@ export class TerrainBatch {
   private removeFromGroup(chunkKey: string, gk: string): void {
     const group = this.groups.get(gk);
     if (group) group.chunkKeys.delete(chunkKey);
-  }
-
-  private markGroupDirty(gk: string): void {
-    const group = this.groups.get(gk);
-    if (group) {
-      group.dirty = true;
-      group.merged = false;
-    }
   }
 
   // ---- Private: standalone mesh management ----
@@ -588,24 +509,20 @@ export class TerrainBatch {
       const existing = slot.standaloneMeshes[layer];
 
       if (!geo || !geo.index || geo.index.count === 0) {
-        // No geometry for this layer — remove standalone if present
         if (existing) {
           this.scene.remove(existing);
-          // Don't dispose geometry — it's owned by ChunkMesh
           slot.standaloneMeshes[layer] = null;
         }
         continue;
       }
 
       if (existing) {
-        // Reuse existing standalone mesh, swap geometry
         existing.geometry = geo;
         existing.position.set(slot.wx, slot.wy, slot.wz);
         existing.visible = slot.visible;
       } else {
-        // Create new standalone mesh (shares geometry reference — no copy)
         const mesh = createLayerMesh(geo, layer);
-        mesh.frustumCulled = true; // individual chunks can be frustum-culled
+        mesh.frustumCulled = true;
         mesh.position.set(slot.wx, slot.wy, slot.wz);
         mesh.visible = slot.visible;
         this.scene.add(mesh);
@@ -620,14 +537,13 @@ export class TerrainBatch {
       const m = slot.standaloneMeshes[layer];
       if (m) {
         this.scene.remove(m);
-        // Don't dispose geometry — it's owned by ChunkMesh
         slot.standaloneMeshes[layer] = null;
       }
     }
   }
 
   /** Remove standalone meshes for all chunks in a group. */
-  private removeGroupStandalones(group: MergedGroup): void {
+  private removeGroupStandalones(group: ChunkGroup): void {
     for (const ck of group.chunkKeys) {
       const slot = this.slots.get(ck);
       if (slot) this.removeStandalone(slot);
@@ -653,17 +569,16 @@ export class TerrainBatch {
 
   private rebuildGroup(
     _gk: string,
-    group: MergedGroup,
+    group: ChunkGroup,
     playerCx: number,
     playerCy: number,
     playerCz: number,
     shadowRadius: number,
   ): void {
-    // Remove standalone per-chunk meshes — they'll be replaced by the merged mesh
     this.removeGroupStandalones(group);
     group.merged = true;
 
-    // Collect visible chunk slots for this group
+    // Collect visible chunk slots
     const visibleSlots: ChunkSlot[] = [];
     for (const ck of group.chunkKeys) {
       const slot = this.slots.get(ck);
@@ -671,7 +586,7 @@ export class TerrainBatch {
     }
 
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
-      // Gather non-empty geometries for this layer
+      // Gather non-empty geometries
       const geos: { geo: THREE.BufferGeometry; wx: number; wy: number; wz: number }[] = [];
       for (const slot of visibleSlots) {
         const geo = slot.geometries[layer];
@@ -683,10 +598,7 @@ export class TerrainBatch {
       const existing = group.meshes[layer];
 
       if (geos.length === 0) {
-        // Nothing to render for this layer — hide mesh but keep buffers for reuse
-        if (existing) {
-          existing.visible = false;
-        }
+        if (existing) existing.visible = false;
         continue;
       }
 
@@ -698,7 +610,7 @@ export class TerrainBatch {
         totalIndices += geo.index!.count;
       }
 
-      // Determine if we can reuse existing GPU buffers (avoids allocation + GC)
+      // Check if existing GPU buffers can be reused
       const lb = group.layerBuffers[layer];
       const canReuse = !!(existing && lb &&
         totalVerts <= lb.vertexCapacity &&
@@ -707,10 +619,8 @@ export class TerrainBatch {
       let merged: THREE.BufferGeometry;
 
       if (canReuse) {
-        // Fast path: write into existing geometry's typed arrays
         merged = existing!.geometry;
       } else {
-        // Slow path: allocate new buffers (with growth headroom on re-alloc)
         const vertCap = lb ? Math.ceil(totalVerts * BUFFER_GROWTH) : totalVerts;
         const idxCap = lb ? Math.ceil(totalIndices * BUFFER_GROWTH) : totalIndices;
 
@@ -722,12 +632,10 @@ export class TerrainBatch {
           );
         }
         merged.setIndex(new THREE.BufferAttribute(new Uint32Array(idxCap), 1));
-
         group.layerBuffers[layer] = { vertexCapacity: vertCap, indexCapacity: idxCap };
       }
 
-      // ---- Fill attribute data (shared by both paths) ----
-
+      // ---- Fill attribute data ----
       for (const attr of TERRAIN_ATTRS) {
         const dstAttr = merged.getAttribute(attr.name) as THREE.BufferAttribute;
         const arr = dstAttr.array as Float32Array;
@@ -757,14 +665,12 @@ export class TerrainBatch {
           }
         }
 
-        // Only upload the used portion to the GPU (not the over-allocated tail)
         dstAttr.clearUpdateRanges();
         dstAttr.addUpdateRange(0, totalVerts * attr.itemSize);
         dstAttr.needsUpdate = true;
       }
 
       // ---- Fill index buffer ----
-
       const idxAttr = merged.index!;
       const indices = idxAttr.array as Uint32Array;
       let idxOffset = 0;
@@ -784,7 +690,6 @@ export class TerrainBatch {
       merged.setDrawRange(0, totalIndices);
 
       // ---- Attach geometry to mesh if new allocation ----
-
       if (!canReuse) {
         if (existing) {
           const old = existing.geometry;
@@ -793,8 +698,8 @@ export class TerrainBatch {
           existing.visible = true;
         } else {
           const mesh = createLayerMesh(merged, layer);
-          mesh.frustumCulled = false; // Merged groups span many chunks
-          mesh.position.set(0, 0, 0); // World-space positions baked in
+          mesh.frustumCulled = false;
+          mesh.position.set(0, 0, 0);
           this.scene.add(mesh);
           group.meshes[layer] = mesh;
         }
@@ -808,7 +713,6 @@ export class TerrainBatch {
       const dy = Math.abs(group.centerCy - playerCy);
       const dz = Math.abs(group.centerCz - playerCz);
       const inShadow = dx <= shadowRadius && dy <= shadowRadius && dz <= shadowRadius;
-      // Liquid layer never casts shadows
       mesh.castShadow = layer !== LAYER_LIQUID && inShadow;
     }
   }

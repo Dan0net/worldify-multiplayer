@@ -6,10 +6,8 @@ import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
   VISIBILITY_UNLOAD_BUFFER,
-  CHUNK_WORLD_SIZE,
   CHUNK_SIZE,
   FACE_OFFSETS_6,
-  POSITIVE_FACE_OFFSETS_3,
   MESH_MARGIN,
   REQUEST_TIMEOUT_MS,
   MSG_VOXEL_CHUNK_REQUEST,
@@ -38,10 +36,10 @@ import {
   injectBorderLight,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
-import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
-import { ChunkMesh } from './ChunkMesh.js';
-import { TerrainBatch } from './TerrainBatch.js';
-import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
+import { ChunkGeometry } from './ChunkGeometry.js';
+import { ChunkGrouper } from './ChunkGrouper.js';
+import { RemeshPipeline } from './RemeshPipeline.js';
+import { MeshWorkerPool } from './MeshWorkerPool.js';
 import { sendBinary } from '../../net/netClient.js';
 import { storeBridge } from '../../state/bridge.js';
 import { perfStats } from '../debug/PerformanceStats.js';
@@ -71,8 +69,11 @@ export class VoxelWorld implements ChunkProvider {
   /** All loaded chunks, keyed by "cx,cy,cz" */
   readonly chunks: Map<string, Chunk> = new Map();
 
-  /** All chunk meshes, keyed by "cx,cy,cz" */
-  readonly meshes: Map<string, ChunkMesh> = new Map();
+  /** All chunk geometries, keyed by "cx,cy,cz" */
+  readonly geometries: Map<string, ChunkGeometry> = new Map();
+
+  /** Chunk keys currently in build preview (set by BuildPreview, read by visibility) */
+  readonly previewChunks: Set<string> = new Set();
 
   /** Chunks pending data from server, keyed by "cx,cy,cz" */
   private pendingChunks: Set<string> = new Set();
@@ -93,9 +94,6 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Callback to notify external systems (e.g. map cache) when a tile arrives */
   onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
-
-  /** Listeners notified when a chunk's remesh result is applied */
-  private remeshListeners: Set<(chunkKey: string) => void> = new Set();
 
   /** Listeners notified when a chunk is unloaded */
   private unloadListeners: Set<(chunkKey: string) => void> = new Set();
@@ -118,14 +116,8 @@ export class VoxelWorld implements ChunkProvider {
   /** Cached reachable set from last BFS (reused until player changes chunk) */
   private cachedReachable: Set<string> = new Set();
 
-  /** Queue of chunks that need remeshing */
-  private remeshQueue: Set<string> = new Set();
-
   /** Build operations deferred until all affected chunks are loaded */
   private deferredBuildOps: Array<{ operation: BuildOperation; affectedKeys: string[] }> = [];
-
-  /** Reusable array for priority-sorted remesh processing (avoids allocation) */
-  private remeshSortBuffer: string[] = [];
 
   /** Whether the world has been initialized */
   private initialized = false;
@@ -139,13 +131,23 @@ export class VoxelWorld implements ChunkProvider {
   /** Number of mesh worker threads */
   private static readonly MESH_WORKER_COUNT = 2;
 
-  /** Merges chunk geometries into spatial groups for draw-call reduction */
-  readonly terrainBatch: TerrainBatch;
+  /** Groups chunk geometries into spatial buckets for draw-call reduction */
+  readonly chunkGrouper: ChunkGrouper;
+
+  /** Manages remesh queue and worker dispatch */
+  readonly remeshPipeline: RemeshPipeline;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.meshPool = new MeshWorkerPool(VoxelWorld.MESH_WORKER_COUNT);
-    this.terrainBatch = new TerrainBatch(scene);
+    this.chunkGrouper = new ChunkGrouper(scene);
+    this.remeshPipeline = new RemeshPipeline(
+      this.chunks,
+      this.geometries,
+      this.chunkGrouper,
+      this.meshPool,
+      this.pendingChunks,
+    );
   }
 
   /**
@@ -161,14 +163,14 @@ export class VoxelWorld implements ChunkProvider {
    * Register a listener called when a chunk remesh result is applied.
    */
   addRemeshListener(listener: (chunkKey: string) => void): void {
-    this.remeshListeners.add(listener);
+    this.remeshPipeline.addListener(listener);
   }
 
   /**
    * Remove a previously registered remesh listener.
    */
   removeRemeshListener(listener: (chunkKey: string) => void): void {
-    this.remeshListeners.delete(listener);
+    this.remeshPipeline.removeListener(listener);
   }
 
   /**
@@ -279,14 +281,14 @@ export class VoxelWorld implements ChunkProvider {
     // Use visibility-based loading
     this.updateWithVisibility(playerChunk, playerPos);
 
-    // Process some remesh queue items per frame
-    // Process remesh queue with time budget (target 60fps = 16.6ms frame budget)
+    // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');
-    this.processRemeshQueue(playerPos);
+    const priorityKeys = this.chunkGrouper.getPriorityChunkKeys();
+    this.remeshPipeline.process(playerPos, priorityKeys.size > 0 ? priorityKeys : undefined);
     perfStats.end('remesh');
 
     // Report queue stats for debug overlay
-    perfStats.setVoxelQueueStats(this.remeshQueue.size, this.pendingChunks.size);
+    perfStats.setVoxelQueueStats(this.remeshPipeline.size, this.pendingChunks.size);
   }
 
   /**
@@ -343,9 +345,7 @@ export class VoxelWorld implements ChunkProvider {
     // to avoid rebuilding the same group dozens of times during loading.
     if (this.lastPlayerChunk) {
       const { cx, cy, cz } = this.lastPlayerChunk;
-      this.terrainBatch.rebuild(cx, cy, cz, (chunkKey) =>
-        this.remeshQueue.has(chunkKey) || this.meshPool.isInFlight(chunkKey),
-      );
+      this.chunkGrouper.rebuild(cx, cy, cz, (key) => this.remeshPipeline.isBusy(key));
     }
 
     // Unload chunks far outside reachable set (with +2 hysteresis buffer)
@@ -523,10 +523,10 @@ export class VoxelWorld implements ChunkProvider {
     const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
     const visibilityRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
 
-    for (const [key, chunkMesh] of this.meshes) {
+    for (const [key] of this.geometries) {
       const chunk = this.chunks.get(key);
       if (!chunk) {
-        this.terrainBatch.setVisible(key, false);
+        this.chunkGrouper.setVisible(key, false);
         continue;
       }
 
@@ -538,17 +538,17 @@ export class VoxelWorld implements ChunkProvider {
       const inExtendedRadius = dx <= visibilityRadius && dy <= visibilityRadius && dz <= visibilityRadius;
 
       if (!inReachable && !inExtendedRadius) {
-        this.terrainBatch.setVisible(key, false);
+        this.chunkGrouper.setVisible(key, false);
         continue;
       }
 
       // Skip preview chunks — their groups are suppressed, don't touch visibility
-      if (chunkMesh.isPreviewActive()) {
+      if (this.previewChunks.has(key)) {
         continue;
       }
 
-      this.terrainBatch.setVisible(key, true);
-      // Shadow culling is handled per-group in TerrainBatch.rebuild()
+      this.chunkGrouper.setVisible(key, true);
+      // Shadow culling is handled per-group in ChunkGrouper.rebuild()
     }
   }
 
@@ -691,7 +691,7 @@ export class VoxelWorld implements ChunkProvider {
     chunk.faceSurfaceMask = VoxelWorld.computeFaceSurfaceMask(chunk.data);
     
     // Queue for remeshing
-    this.remeshQueue.add(key);
+    this.remeshPipeline.add(key);
     
     // Invalidate BFS cache when new chunks load (they may open visibility paths)
     if (isNewChunk) {
@@ -706,7 +706,7 @@ export class VoxelWorld implements ChunkProvider {
     if (belowChunk) {
       this.computeChunkSunlight(cx, cy - 1, cz, belowChunk.data);
       belowChunk.dirty = true;
-      this.remeshQueue.add(belowKey);
+      this.remeshPipeline.add(belowKey);
     }
 
     const aboveKey = chunkKey(cx, cy + 1, cz);
@@ -714,7 +714,7 @@ export class VoxelWorld implements ChunkProvider {
     if (aboveChunk) {
       this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
       aboveChunk.dirty = true;
-      this.remeshQueue.add(aboveKey);
+      this.remeshPipeline.add(aboveKey);
     }
 
     for (const [dx, dy, dz] of FACE_OFFSETS_6) {
@@ -724,7 +724,7 @@ export class VoxelWorld implements ChunkProvider {
       if (!nChunk) continue;
       this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
       nChunk.dirty = true;
-      this.remeshQueue.add(nKey);
+      this.remeshPipeline.add(nKey);
     }
 
     // Execute any build operations that were waiting for this chunk
@@ -850,18 +850,18 @@ export class VoxelWorld implements ChunkProvider {
     // Notify listeners before cleanup
     for (const listener of this.unloadListeners) listener(key);
 
-    // Remove from terrain batch before disposing geometry
-    this.terrainBatch.removeChunk(key);
+    // Remove from grouper before disposing geometry
+    this.chunkGrouper.removeChunk(key);
 
-    // Dispose mesh
-    const chunkMesh = this.meshes.get(key);
-    if (chunkMesh) {
-      chunkMesh.disposeMeshes(this.scene);
-      this.meshes.delete(key);
+    // Dispose geometry
+    const geo = this.geometries.get(key);
+    if (geo) {
+      geo.dispose();
+      this.geometries.delete(key);
     }
 
     // Remove from remesh queue
-    this.remeshQueue.delete(key);
+    this.remeshPipeline.delete(key);
 
     // Remove from pending if it was still pending
     this.pendingChunks.delete(key);
@@ -880,181 +880,25 @@ export class VoxelWorld implements ChunkProvider {
     for (const [dx, dy, dz] of FACE_OFFSETS_6) {
       const key = chunkKey(cx + dx, cy + dy, cz + dz);
       if (this.chunks.has(key)) {
-        this.remeshQueue.add(key);
+        this.remeshPipeline.add(key);
       }
     }
   }
 
   /**
    * Remesh a single chunk synchronously.
-   * Used by remeshAllDirty() and applyBuildOperation() where immediate results are needed.
+   * Delegates to RemeshPipeline.
    */
   remeshChunk(chunk: Chunk): void {
-    const key = chunk.key;
-
-    // Get or create ChunkMesh
-    let chunkMesh = this.meshes.get(key);
-    if (!chunkMesh) {
-      chunkMesh = new ChunkMesh(chunk);
-      this.meshes.set(key, chunkMesh);
-    }
-
-    // Generate mesh with neighbor data (solid + transparent)
-    const output = meshChunk(chunk, this.chunks);
-
-    // Update meshes (no scene — TerrainBatch owns scene meshes)
-    chunkMesh.updateMeshes(output);
-
-    // Register geometry with terrain batch for merged rendering
-    const worldPos = chunk.getWorldPosition();
-    this.terrainBatch.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, [
-      chunkMesh.solidMesh?.geometry ?? null,
-      chunkMesh.transparentMesh?.geometry ?? null,
-      chunkMesh.liquidMesh?.geometry ?? null,
-    ], worldPos);
-
-    // Clear dirty flag
-    chunk.clearDirty();
+    this.remeshPipeline.remeshSync(chunk);
   }
 
   /**
-   * Remesh all dirty chunks.
+   * Remesh all dirty chunks synchronously.
+   * Delegates to RemeshPipeline.
    */
   remeshAllDirty(): void {
-    for (const chunk of this.chunks.values()) {
-      if (chunk.dirty) {
-        this.remeshChunk(chunk);
-      }
-    }
-    this.remeshQueue.clear();
-  }
-
-  /**
-   * Check if any positive-face neighbor (+X, +Y, +Z) is still pending.
-   * Only these 3 supply margin data for this chunk's mesh.
-   */
-  private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
-    for (const [dx, dy, dz] of POSITIVE_FACE_OFFSETS_3) {
-      if (this.pendingChunks.has(chunkKey(cx + dx, cy + dy, cz + dz))) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** 
-   * Maximum number of chunks to dispatch to workers per frame.
-   * Each dispatch costs ~0.5ms (expand grid), so 8 dispatches ≈ 4ms.
-   */
-  private static readonly MAX_DISPATCHES_PER_FRAME = 8;
-
-  /**
-   * Process remesh queue by dispatching to worker pool.
-   * 
-   * Main thread expands chunk data (~0.5ms each), transfers grid to worker.
-   * Worker runs SurfaceNet + geometry expansion (~3-5ms each, off-thread).
-   * Results applied asynchronously via applyMeshResult.
-   * 
-   * - Sorts queue by distance to player (nearest chunks first)
-   * - Skips chunks already in-flight
-   * - Defers chunks with pending neighbors to avoid stitch artifacts
-   */
-  private processRemeshQueue(playerPos: THREE.Vector3): void {
-    const queueSize = this.remeshQueue.size;
-    if (queueSize === 0) return;
-
-    // === Priority sort: nearest chunks first, priority chunks at front ===
-    const sorted = this.remeshSortBuffer;
-    sorted.length = 0;
-    for (const key of this.remeshQueue) {
-      sorted.push(key);
-    }
-    
-    const px = playerPos.x / CHUNK_WORLD_SIZE;
-    const py = playerPos.y / CHUNK_WORLD_SIZE;
-    const pz = playerPos.z / CHUNK_WORLD_SIZE;
-
-    // Chunks in groups with pending suppression get dispatched first
-    const priorityKeys = this.terrainBatch.getPriorityChunkKeys();
-    
-    sorted.sort((a, b) => {
-      const aPriority = priorityKeys.has(a) ? 0 : 1;
-      const bPriority = priorityKeys.has(b) ? 0 : 1;
-      if (aPriority !== bPriority) return aPriority - bPriority;
-      const ca = this.chunks.get(a);
-      const cb = this.chunks.get(b);
-      if (!ca || !cb) return ca ? -1 : cb ? 1 : 0;
-      const da = (ca.cx - px) ** 2 + (ca.cy - py) ** 2 + (ca.cz - pz) ** 2;
-      const db = (cb.cx - px) ** 2 + (cb.cy - py) ** 2 + (cb.cz - pz) ** 2;
-      return da - db;
-    });
-
-    // === Dispatch to workers ===
-    let dispatched = 0;
-    
-    for (let i = 0; i < sorted.length; ++i) {
-      if (dispatched >= VoxelWorld.MAX_DISPATCHES_PER_FRAME) break;
-
-      const key = sorted[i];
-
-      const chunk = this.chunks.get(key);
-      if (!chunk) {
-        this.remeshQueue.delete(key);
-        continue;
-      }
-
-      // Skip if already being meshed by a worker
-      if (this.meshPool.isInFlight(key)) continue;
-
-      // Skip chunks owned by build preview (avoid competing with preview batch)
-      if (this.meshPool.isPreviewChunk(key)) continue;
-      
-      // Defer if any face neighbors are still pending from server
-      if (this.hasNeighborsPending(chunk.cx, chunk.cy, chunk.cz)) continue;
-      
-      // Expand grid on main thread (~0.5ms) and dispatch to worker
-      const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
-      
-      this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {
-        this.applyMeshResult(result);
-      });
-
-      this.remeshQueue.delete(key);
-      dispatched++;
-    }
-  }
-
-  /**
-   * Apply meshing results from a worker to the scene.
-   * Called asynchronously when a worker completes.
-   */
-  private applyMeshResult(result: MeshResult): void {
-    const { chunkKey: key, solid, transparent, liquid } = result;
-    
-    const chunk = this.chunks.get(key);
-    if (!chunk) return; // Chunk was unloaded while worker was busy
-
-    let chunkMesh = this.meshes.get(key);
-    if (!chunkMesh) {
-      chunkMesh = new ChunkMesh(chunk);
-      this.meshes.set(key, chunkMesh);
-    }
-
-    // No scene param — TerrainBatch owns scene meshes
-    chunkMesh.updateMeshesFromData(solid, transparent, liquid);
-    chunk.clearDirty();
-
-    // Register geometry with terrain batch for merged rendering
-    const worldPos = chunk.getWorldPosition();
-    this.terrainBatch.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, [
-      chunkMesh.solidMesh?.geometry ?? null,
-      chunkMesh.transparentMesh?.geometry ?? null,
-      chunkMesh.liquidMesh?.geometry ?? null,
-    ], worldPos);
-
-    // Notify listeners (e.g. collision rebuild, BuildPreview committed preview cleanup)
-    for (const listener of this.remeshListeners) listener(key);
+    this.remeshPipeline.remeshAllDirty();
   }
 
   /**
@@ -1086,8 +930,8 @@ export class VoxelWorld implements ChunkProvider {
    */
   getMeshCount(): number {
     let count = 0;
-    for (const chunkMesh of this.meshes.values()) {
-      if (chunkMesh.hasGeometry()) {
+    for (const geo of this.geometries.values()) {
+      if (geo.hasGeometry()) {
         count++;
       }
     }
@@ -1105,7 +949,7 @@ export class VoxelWorld implements ChunkProvider {
     return {
       chunksLoaded: this.chunks.size,
       meshesVisible: this.getMeshCount(),
-      remeshQueueSize: this.remeshQueue.size,
+      remeshQueueSize: this.remeshPipeline.size,
     };
   }
 
@@ -1115,7 +959,7 @@ export class VoxelWorld implements ChunkProvider {
   refresh(): void {
     // Queue all chunks for remesh
     for (const key of this.chunks.keys()) {
-      this.remeshQueue.add(key);
+      this.remeshPipeline.add(key);
     }
     this.remeshAllDirty();
   }
@@ -1211,41 +1055,9 @@ export class VoxelWorld implements ChunkProvider {
 
     // Dispatch all affected chunks as one atomic batch so every mesh
     // updates in the same frame — no boundary flash between neighbors.
-    this.dispatchBuildBatch(batchKeys);
+    this.remeshPipeline.dispatchBatch(batchKeys);
 
     return modifiedKeys;
-  }
-
-  /**
-   * Expand grids and dispatch a set of chunks as an atomic batch.
-   * All mesh results are applied together in one frame.
-   */
-  private dispatchBuildBatch(keys: Set<string>): void {
-    const batchItems: Array<{
-      chunkKey: string;
-      grid: Uint16Array;
-      skipHighBoundary: [boolean, boolean, boolean];
-    }> = [];
-
-    for (const key of keys) {
-      const chunk = this.chunks.get(key);
-      if (!chunk) continue;
-
-      // Remove from remeshQueue — the batch handles it
-      this.remeshQueue.delete(key);
-
-      const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
-      batchItems.push({ chunkKey: key, grid, skipHighBoundary });
-    }
-
-    if (batchItems.length === 0) return;
-
-    this.meshPool.dispatchBatch(batchItems, (results) => {
-      for (const result of results) {
-        this.applyMeshResult(result);
-      }
-    });
   }
 
   /**
@@ -1275,14 +1087,14 @@ export class VoxelWorld implements ChunkProvider {
       this.meshPool.dispose();
     }
 
-    // Dispose terrain batch (removes merged meshes from scene)
-    this.terrainBatch.dispose();
+    // Dispose chunk grouper (removes merged meshes from scene)
+    this.chunkGrouper.dispose();
 
-    // Dispose all chunk mesh holders
-    for (const chunkMesh of this.meshes.values()) {
-      chunkMesh.disposeMeshes(this.scene);
+    // Dispose all chunk geometry holders
+    for (const geo of this.geometries.values()) {
+      geo.dispose();
     }
-    this.meshes.clear();
+    this.geometries.clear();
 
     // Clear chunks
     this.chunks.clear();
@@ -1298,11 +1110,14 @@ export class VoxelWorld implements ChunkProvider {
     // Clear column info
     this.columnInfo.clear();
 
-    // Clear queue
-    this.remeshQueue.clear();
+    // Clear remesh queue
+    this.remeshPipeline.clear();
 
     // Clear deferred build operations
     this.deferredBuildOps.length = 0;
+
+    // Clear preview chunk tracking
+    this.previewChunks.clear();
 
     // Reset player chunk tracking so next update triggers chunk loading
     this.lastPlayerChunk = null;

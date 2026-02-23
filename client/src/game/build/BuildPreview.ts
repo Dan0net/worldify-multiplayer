@@ -31,6 +31,8 @@ import {
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { expandChunkToGrid } from '../voxel/ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from '../voxel/MeshWorkerPool.js';
+import { createBufferGeometry } from '../voxel/MeshGeometry.js';
+import { createLayerMesh, LAYER_COUNT } from '../voxel/LayerConfig.js';
 
 /**
  * BuildPreview manages non-destructive voxel preview rendering.
@@ -75,6 +77,9 @@ export class BuildPreview {
 
   /** Chunks to remove from preview after deferred results are applied */
   private deferredChunksToRemove: string[] | null = null;
+
+  /** Preview meshes per chunk (solid, transparent, liquid slots) */
+  private previewMeshes: Map<string, (THREE.Mesh | null)[]> = new Map();
 
   /**
    * Set the voxel world, scene, and worker pool to use for preview.
@@ -334,6 +339,12 @@ export class BuildPreview {
       this.clearChunkPreview(key);
     }
 
+    // Dispose any remaining preview meshes
+    this.disposeAllPreviewMeshes();
+
+    // Clear preview tracking on world
+    this.world.previewChunks.clear();
+
     this.activePreviewChunks.clear();
     this.clearLastOperation();
   }
@@ -349,10 +360,11 @@ export class BuildPreview {
       chunk.discardTemp();
     }
 
-    const chunkMesh = this.world.meshes.get(key);
-    if (chunkMesh) {
-      chunkMesh.setPreviewActive(false, this.scene);
-    }
+    // Remove preview meshes from scene
+    this.disposePreviewMeshesForChunk(key);
+
+    // Unmark as preview chunk
+    this.world.previewChunks.delete(key);
   }
 
   /**
@@ -375,13 +387,13 @@ export class BuildPreview {
     this.pendingCommitChunks.delete(chunkKey);
 
     if (!this.world || !this.scene) return;
-    const chunkMesh = this.world.meshes.get(chunkKey);
-    if (chunkMesh) {
-      chunkMesh.setPreviewActive(false, this.scene);
-    }
+
+    // Remove preview meshes for this chunk
+    this.disposePreviewMeshesForChunk(chunkKey);
+    this.world.previewChunks.delete(chunkKey);
 
     // Restore group only if no other pending commit chunks remain in it
-    this.world.terrainBatch.restoreGroupIfComplete(chunkKey, this.pendingCommitChunks);
+    this.world.chunkGrouper.restoreGroupIfComplete(chunkKey, this.pendingCommitChunks);
   }
 
   /**
@@ -462,13 +474,13 @@ export class BuildPreview {
    */
   private suppressGroupsForActivePreview(): boolean {
     if (!this.world || this.activePreviewChunks.size === 0) return true;
-    return this.world.terrainBatch.suppressGroupsForChunks(this.activePreviewChunks);
+    return this.world.chunkGrouper.suppressGroupsForChunks(this.activePreviewChunks);
   }
 
   /** Restore all currently suppressed terrain batch groups. */
   private restoreAllSuppressedGroups(): void {
     if (!this.world) return;
-    this.world.terrainBatch.restoreAllSuppressedGroups();
+    this.world.chunkGrouper.restoreAllSuppressedGroups();
   }
 
   // ---- Deferred preview application ----
@@ -488,18 +500,54 @@ export class BuildPreview {
       this.clearChunkPreview(key);
     }
     for (const result of results) {
-      const chunkMesh = world.meshes.get(result.chunkKey);
-      if (!chunkMesh) continue;
-      chunkMesh.updatePreviewMeshesFromData(
-        result.solid, result.transparent, result.liquid, scene,
-      );
-      chunkMesh.setPreviewActive(true, scene);
+      const chunk = world.chunks.get(result.chunkKey);
+      if (!chunk) continue;
+
+      const worldPos = chunk.getWorldPosition();
+      const data = [result.solid, result.transparent, result.liquid];
+      const existing = this.previewMeshes.get(result.chunkKey);
+      const meshes: (THREE.Mesh | null)[] = existing ?? [null, null, null];
+
+      for (let i = 0; i < LAYER_COUNT; i++) {
+        const oldMesh = meshes[i];
+
+        if (!data[i]) {
+          // No data for this layer — remove old mesh if present
+          if (oldMesh) {
+            scene.remove(oldMesh);
+            oldMesh.geometry.dispose();
+            meshes[i] = null;
+          }
+          continue;
+        }
+
+        const geometry = createBufferGeometry(data[i]!);
+
+        if (oldMesh) {
+          // Reuse existing mesh — just swap geometry (avoids scene add/remove + material alloc)
+          const oldGeo = oldMesh.geometry;
+          oldMesh.geometry = geometry;
+          oldGeo.dispose();
+          oldMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+          oldMesh.visible = true;
+        } else {
+          // First time this layer has data — create mesh and add to scene
+          const mesh = createLayerMesh(geometry, i, chunk.key);
+          mesh.userData.isPreview = true;
+          mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+          scene.add(mesh);
+          meshes[i] = mesh;
+        }
+      }
+
+      this.previewMeshes.set(result.chunkKey, meshes);
+      world.previewChunks.add(result.chunkKey);
     }
   }
 
   /**
    * Check if deferred preview results can be applied.
-   * Call once per frame from the game loop (after terrainBatch.rebuild()).
+   * Call once per frame from the game loop (after chunkGrouper.rebuild()).
    * When pending suppressions are resolved, applies the deferred preview
    * and continues with pending operations.
    */
@@ -507,7 +555,7 @@ export class BuildPreview {
     if (!this.deferredPreviewResults || !this.world || !this.scene) return;
 
     // Still waiting for groups to be merged?
-    if (this.world.terrainBatch.hasPendingSuppressions()) return;
+    if (this.world.chunkGrouper.hasPendingSuppressions()) return;
 
     // All groups are now merged and suppressed — safe to show preview
     const results = this.deferredPreviewResults;
@@ -529,6 +577,31 @@ export class BuildPreview {
     this.world = null;
     this.scene = null;
     this.meshPool = null;
+  }
+
+  // ---- Preview Mesh Management ----
+
+  /** Dispose and remove preview meshes for a single chunk. */
+  private disposePreviewMeshesForChunk(key: string): void {
+    const meshes = this.previewMeshes.get(key);
+    if (!meshes) return;
+    for (let i = 0; i < meshes.length; i++) {
+      const m = meshes[i];
+      if (m) {
+        if (this.scene) this.scene.remove(m);
+        m.geometry.dispose();
+        meshes[i] = null;
+      }
+    }
+    this.previewMeshes.delete(key);
+  }
+
+  /** Dispose all preview meshes for all chunks. */
+  private disposeAllPreviewMeshes(): void {
+    for (const key of this.previewMeshes.keys()) {
+      this.disposePreviewMeshesForChunk(key);
+    }
+    this.previewMeshes.clear();
   }
 
   // ============== Boundary Change Detection ==============

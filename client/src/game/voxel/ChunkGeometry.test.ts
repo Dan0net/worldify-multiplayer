@@ -1,12 +1,12 @@
 /**
- * Unit tests for ChunkMesh and VoxelMaterials
+ * Unit tests for ChunkGeometry and VoxelMaterials
  */
 
 import { describe, test, expect } from 'vitest';
 import * as THREE from 'three';
 import { meshChunk } from './ChunkMesher.js';
 import { Chunk } from './Chunk.js';
-import { ChunkMesh, createMeshFromSurfaceNet, disposeMesh } from './ChunkMesh.js';
+import { ChunkGeometry, createMeshFromSurfaceNet, disposeMesh } from './ChunkGeometry.js';
 import { getMaterialColor, MATERIAL_COLORS, voxelMaterial } from './VoxelMaterials.js';
 import { CHUNK_WORLD_SIZE, VOXEL_SCALE } from '@worldify/shared';
 
@@ -43,7 +43,7 @@ describe('VoxelMaterials Tests', () => {
   });
 });
 
-describe('ChunkMesh Mesh Creation Tests', () => {
+describe('ChunkGeometry Mesh Creation Tests', () => {
   test('Single chunk with flat terrain creates visible mesh', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
@@ -192,102 +192,101 @@ describe('ChunkMesh Mesh Creation Tests', () => {
   });
 });
 
-describe('ChunkMesh Class Tests', () => {
-  test('ChunkMesh.updateMeshes creates mesh correctly', () => {
+describe('ChunkGeometry Class Tests', () => {
+  test('ChunkGeometry.updateFromSurfaceNet creates geometry correctly', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
-    const chunkMesh = new ChunkMesh(chunk);
+    const chunkGeo = new ChunkGeometry(chunk);
     
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMeshes(output);
+    chunkGeo.updateFromSurfaceNet(output);
     
-    expect(chunkMesh.hasGeometry()).toBe(true);
-    expect(chunkMesh.getVertexCount()).toBeGreaterThan(0);
-    expect(chunkMesh.getTriangleCount()).toBeGreaterThan(0);
+    expect(chunkGeo.hasGeometry()).toBe(true);
+    expect(chunkGeo.getVertexCount()).toBeGreaterThan(0);
+    expect(chunkGeo.getTriangleCount()).toBeGreaterThan(0);
     
-    chunkMesh.disposeMeshes();
+    chunkGeo.dispose();
   });
 
-  test('ChunkMesh.disposeMeshes properly cleans up', () => {
+  test('ChunkGeometry.dispose properly cleans up', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
-    const chunkMesh = new ChunkMesh(chunk);
+    const chunkGeo = new ChunkGeometry(chunk);
     
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMeshes(output);
-    expect(chunkMesh.hasGeometry()).toBe(true);
+    chunkGeo.updateFromSurfaceNet(output);
+    expect(chunkGeo.hasGeometry()).toBe(true);
     
-    chunkMesh.disposeMeshes();
+    chunkGeo.dispose();
     
-    expect(chunkMesh.solidMesh).toBeNull();
-    expect(chunkMesh.disposed).toBe(true);
-    expect(chunkMesh.hasGeometry()).toBe(false);
+    expect(chunkGeo.solidMesh).toBeNull();
+    expect(chunkGeo.disposed).toBe(true);
+    expect(chunkGeo.hasGeometry()).toBe(false);
   });
 
-  test('ChunkMesh.updateMeshes disposes old mesh when called again', () => {
+  test('ChunkGeometry.updateFromSurfaceNet disposes old geometry when called again', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
-    const chunkMesh = new ChunkMesh(chunk);
+    const chunkGeo = new ChunkGeometry(chunk);
     
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMeshes(output);
-    const firstVertCount = chunkMesh.getVertexCount();
+    chunkGeo.updateFromSurfaceNet(output);
+    const firstVertCount = chunkGeo.getVertexCount();
     
     chunk.generateFlat(10, 1, 16);
     const output2 = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMeshes(output2);
+    chunkGeo.updateFromSurfaceNet(output2);
     
-    expect(chunkMesh.hasGeometry()).toBe(true);
+    expect(chunkGeo.hasGeometry()).toBe(true);
     
-    chunkMesh.disposeMeshes();
+    chunkGeo.dispose();
   });
 
-  test('ChunkMesh stores chunk key in userData', () => {
+  test('ChunkGeometry stores chunk key in userData', () => {
     const chunk = new Chunk(1, 2, 3);
     chunk.generateFlat(16, 0, 16);
     
-    const chunkMesh = new ChunkMesh(chunk);
+    const chunkGeo = new ChunkGeometry(chunk);
     
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMeshes(output);
+    chunkGeo.updateFromSurfaceNet(output);
     
-    expect(chunkMesh.solidMesh).not.toBeNull();
-    if (chunkMesh.solidMesh) {
-      expect(chunkMesh.solidMesh.userData.chunkKey).toBe('1,2,3');
+    expect(chunkGeo.solidMesh).not.toBeNull();
+    if (chunkGeo.solidMesh) {
+      expect(chunkGeo.solidMesh.userData.chunkKey).toBe('1,2,3');
     }
     
-    chunkMesh.disposeMeshes();
+    chunkGeo.dispose();
   });
 });
 
 describe('Scene Integration Tests', () => {
-  test('ChunkMesh adds to and removes from scene', () => {
-    const scene = new THREE.Scene();
+  test('ChunkGeometry creates geometry without adding to scene', () => {
     const chunk = new Chunk(0, 0, 0);
     chunk.generateFlat(16, 0, 16);
     
-    const chunkMesh = new ChunkMesh(chunk);
+    const chunkGeo = new ChunkGeometry(chunk);
     
     const neighbors = new Map<string, Chunk>();
     const output = meshChunk(chunk, neighbors);
     
-    chunkMesh.updateMeshes(output, scene);
-    expect(scene.children.length).toBe(1);
+    chunkGeo.updateFromSurfaceNet(output);
+    expect(chunkGeo.hasGeometry()).toBe(true);
     
-    chunkMesh.disposeMeshes(scene);
-    expect(scene.children.length).toBe(0);
+    chunkGeo.dispose();
+    expect(chunkGeo.hasGeometry()).toBe(false);
   });
 
   test('disposeMesh standalone function works', () => {
@@ -324,8 +323,8 @@ describe('Different Material Tests', () => {
     const output1 = meshChunk(chunk1, neighbors);
     const output2 = meshChunk(chunk2, neighbors);
     
-    const mesh1 = createMeshFromSurfaceNet(output1, chunk1);
-    const mesh2 = createMeshFromSurfaceNet(output2, chunk2);
+    const mesh1 = createMeshFromSurfaceNet(output1.solid, chunk1);
+    const mesh2 = createMeshFromSurfaceNet(output2.solid, chunk2);
     
     expect(mesh1).not.toBeNull();
     expect(mesh2).not.toBeNull();

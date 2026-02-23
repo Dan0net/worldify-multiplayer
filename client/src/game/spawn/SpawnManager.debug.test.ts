@@ -22,17 +22,17 @@ describe('SpawnManager with Local Chunks (useServerChunks=false)', () => {
     integration.init();
     
     // Check meshes exist
-    const meshCount = integration.world.meshes.size;
-    console.log('Total ChunkMesh objects:', meshCount);
+    const meshCount = integration.world.geometries.size;
+    console.log('Total ChunkGeometry objects:', meshCount);
     
     // Check how many have geometry
     let withGeometry = 0;
-    for (const [key, chunkMesh] of integration.world.meshes) {
-      if (chunkMesh.hasGeometry()) {
+    for (const [key, geo] of integration.world.geometries) {
+      if (geo.hasGeometry()) {
         withGeometry++;
       }
     }
-    console.log('ChunkMeshes with geometry:', withGeometry);
+    console.log('ChunkGeometries with geometry:', withGeometry);
     
     // Get collision meshes
     const collisionMeshes = integration.getCollisionMeshes();

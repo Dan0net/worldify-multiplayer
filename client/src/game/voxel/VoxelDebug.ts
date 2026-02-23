@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { CHUNK_WORLD_SIZE } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
-import { ChunkMesh } from './ChunkMesh.js';
+import { ChunkGeometry } from './ChunkGeometry.js';
 
 // ============== Debug Colors ==============
 /** Green - chunk has visible mesh */
@@ -115,15 +115,15 @@ export function createEmptyChunkMarker(chunk: Chunk): THREE.Mesh {
 
 /**
  * Create a wireframe overlay for a terrain mesh (collision visualization).
- * @param chunkMesh The ChunkMesh to create wireframe for
+ * @param chunkGeo The ChunkGeometry to create wireframe for
  * @returns LineSegments object, or null if no mesh exists
  */
-export function createCollisionWireframe(chunkMesh: ChunkMesh): THREE.LineSegments | null {
-  if (!chunkMesh.solidMesh || !chunkMesh.solidMesh.geometry) {
+export function createCollisionWireframe(chunkGeo: ChunkGeometry): THREE.LineSegments | null {
+  if (!chunkGeo.solidMesh || !chunkGeo.solidMesh.geometry) {
     return null;
   }
   
-  const edges = new THREE.EdgesGeometry(chunkMesh.solidMesh.geometry, 30); // 30 degree threshold
+  const edges = new THREE.EdgesGeometry(chunkGeo.solidMesh.geometry, 30); // 30 degree threshold
   const material = new THREE.LineBasicMaterial({
     color: COLOR_COLLISION,
     transparent: true,
@@ -135,10 +135,10 @@ export function createCollisionWireframe(chunkMesh: ChunkMesh): THREE.LineSegmen
   wireframe.renderOrder = 1; // Render after terrain
   
   // Copy position from mesh
-  wireframe.position.copy(chunkMesh.solidMesh.position);
+  wireframe.position.copy(chunkGeo.solidMesh.position);
   
   // Store chunk info
-  wireframe.userData.chunkKey = chunkMesh.chunk.key;
+  wireframe.userData.chunkKey = chunkGeo.chunk.key;
   wireframe.userData.debugType = 'collisionWireframe';
   
   return wireframe;
@@ -257,7 +257,7 @@ export class VoxelDebugManager {
    * @param chunks All loaded chunks
    * @param meshes All chunk meshes
    */
-  update(chunks: Map<string, Chunk>, meshes: Map<string, ChunkMesh>): void {
+  update(chunks: Map<string, Chunk>, geometries: Map<string, ChunkGeometry>): void {
     const anyFlagOn = this.state.showChunkBounds || this.state.showEmptyChunks
       || this.state.showCollisionMesh || this.state.showChunkCoords;
 
@@ -286,8 +286,8 @@ export class VoxelDebugManager {
     
     // Add/update debug objects for loaded chunks
     for (const [chunkKey, chunk] of chunks) {
-      const chunkMesh = meshes.get(chunkKey);
-      const hasMesh = chunkMesh?.hasGeometry() ?? false;
+      const chunkGeo = geometries.get(chunkKey);
+      const hasMesh = chunkGeo?.hasGeometry() ?? false;
       
       // Chunk bounds
       if (this.state.showChunkBounds) {
@@ -303,8 +303,8 @@ export class VoxelDebugManager {
       }
       
       // Collision wireframe
-      if (this.state.showCollisionMesh && chunkMesh && hasMesh) {
-        this.ensureCollisionWireframe(chunkMesh);
+      if (this.state.showCollisionMesh && chunkGeo && hasMesh) {
+        this.ensureCollisionWireframe(chunkGeo);
       }
       
       // Chunk labels
@@ -351,15 +351,15 @@ export class VoxelDebugManager {
   /**
    * Ensure collision wireframe exists for a chunk mesh.
    */
-  private ensureCollisionWireframe(chunkMesh: ChunkMesh): void {
-    const objKey = `collisionWireframe:${chunkMesh.chunk.key}`;
+  private ensureCollisionWireframe(chunkGeo: ChunkGeometry): void {
+    const objKey = `collisionWireframe:${chunkGeo.chunk.key}`;
     
     // Remove old wireframe if mesh geometry changed (check generation counter)
     const existing = this.debugObjects.get(objKey);
     if (existing) {
       // Check if mesh generation changed (geometry was regenerated)
       const storedGeneration = existing.userData.meshGeneration ?? -1;
-      if (storedGeneration === chunkMesh.meshGeneration) {
+      if (storedGeneration === chunkGeo.meshGeneration) {
         return; // No change
       }
       // Remove old and recreate
@@ -367,10 +367,10 @@ export class VoxelDebugManager {
       this.debugObjects.delete(objKey);
     }
     
-    const wireframe = createCollisionWireframe(chunkMesh);
+    const wireframe = createCollisionWireframe(chunkGeo);
     if (wireframe) {
       // Store the generation so we know when to update
-      wireframe.userData.meshGeneration = chunkMesh.meshGeneration;
+      wireframe.userData.meshGeneration = chunkGeo.meshGeneration;
       this.debugObjects.set(objKey, wireframe);
       this.scene.add(wireframe);
     }

@@ -17,7 +17,7 @@ import {
   COLOR_COLLISION,
 } from './VoxelDebug.js';
 import { Chunk } from './Chunk.js';
-import { ChunkMesh } from './ChunkMesh.js';
+import { ChunkGeometry } from './ChunkGeometry.js';
 import { meshChunk } from './ChunkMesher.js';
 import { CHUNK_WORLD_SIZE } from '@worldify/shared';
 
@@ -35,11 +35,11 @@ function createChunkWithTerrain(cx = 0, cy = 0, cz = 0): Chunk {
   return chunk;
 }
 
-function createTestChunkMesh(chunk: Chunk): ChunkMesh {
-  const chunkMesh = new ChunkMesh(chunk);
+function createTestChunkGeo(chunk: Chunk): ChunkGeometry {
+  const geo = new ChunkGeometry(chunk);
   const output = meshChunk(chunk, new Map());
-  chunkMesh.updateMeshes(output);
-  return chunkMesh;
+  geo.updateFromSurfaceNet(output);
+  return geo;
 }
 
 describe('Default State Tests', () => {
@@ -139,32 +139,32 @@ describe('Empty Chunk Marker Tests', () => {
 });
 
 describe('Collision Wireframe Tests', () => {
-  test('createCollisionWireframe returns null for ChunkMesh without geometry', () => {
+  test('createCollisionWireframe returns null for ChunkGeometry without geometry', () => {
     const chunk = createTestChunk();
-    const chunkMesh = new ChunkMesh(chunk);
+    const geo = new ChunkGeometry(chunk);
     
-    const wireframe = createCollisionWireframe(chunkMesh);
+    const wireframe = createCollisionWireframe(geo);
     expect(wireframe).toBeNull();
   });
 
   test('createCollisionWireframe returns LineSegments for mesh with geometry', () => {
     const chunk = createChunkWithTerrain();
-    const chunkMesh = createTestChunkMesh(chunk);
+    const chunkGeo = createTestChunkGeo(chunk);
     
-    const wireframe = createCollisionWireframe(chunkMesh);
+    const wireframe = createCollisionWireframe(chunkGeo);
     expect(wireframe).not.toBeNull();
     expect(wireframe).toBeInstanceOf(THREE.LineSegments);
   });
 
   test('createCollisionWireframe copies mesh position', () => {
     const chunk = createChunkWithTerrain(1, 0, 1);
-    const chunkMesh = createTestChunkMesh(chunk);
+    const geo = createTestChunkGeo(chunk);
     
-    if (chunkMesh.solidMesh) {
-      chunkMesh.solidMesh.position.set(8, 0, 8);
+    if (geo.solidMesh) {
+      geo.solidMesh.position.set(8, 0, 8);
     }
     
-    const wireframe = createCollisionWireframe(chunkMesh);
+    const wireframe = createCollisionWireframe(geo);
     expect(wireframe).not.toBeNull();
     expect(wireframe!.position.x).toBe(8);
     expect(wireframe!.position.z).toBe(8);
@@ -172,9 +172,9 @@ describe('Collision Wireframe Tests', () => {
 
   test('createCollisionWireframe uses cyan color', () => {
     const chunk = createChunkWithTerrain();
-    const chunkMesh = createTestChunkMesh(chunk);
+    const chunkGeo = createTestChunkGeo(chunk);
     
-    const wireframe = createCollisionWireframe(chunkMesh);
+    const wireframe = createCollisionWireframe(chunkGeo);
     expect(wireframe).not.toBeNull();
     
     const material = wireframe!.material as THREE.LineBasicMaterial;
@@ -183,9 +183,9 @@ describe('Collision Wireframe Tests', () => {
 
   test('createCollisionWireframe stores userData correctly', () => {
     const chunk = createChunkWithTerrain(2, 0, 3);
-    const chunkMesh = createTestChunkMesh(chunk);
+    const chunkGeo = createTestChunkGeo(chunk);
     
-    const wireframe = createCollisionWireframe(chunkMesh);
+    const wireframe = createCollisionWireframe(chunkGeo);
     expect(wireframe).not.toBeNull();
     expect(wireframe!.userData.chunkKey).toBe('2,0,3');
     expect(wireframe!.userData.debugType).toBe('collisionWireframe');
@@ -243,7 +243,7 @@ describe('VoxelDebugManager Tests', () => {
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk.key, chunk);
     
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     manager.setState({ showChunkBounds: true });
     manager.update(chunks, meshes);
@@ -260,7 +260,7 @@ describe('VoxelDebugManager Tests', () => {
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk.key, chunk);
     
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     manager.setState({ showEmptyChunks: true });
     manager.update(chunks, meshes);
@@ -277,9 +277,9 @@ describe('VoxelDebugManager Tests', () => {
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk.key, chunk);
     
-    const chunkMesh = createTestChunkMesh(chunk);
-    const meshes = new Map<string, ChunkMesh>();
-    meshes.set(chunk.key, chunkMesh);
+    const chunkGeo = createTestChunkGeo(chunk);
+    const meshes = new Map<string, ChunkGeometry>();
+    meshes.set(chunk.key, chunkGeo);
     
     manager.setState({ showCollisionMesh: true });
     manager.update(chunks, meshes);
@@ -295,7 +295,7 @@ describe('VoxelDebugManager Tests', () => {
     const chunk = createTestChunk();
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk.key, chunk);
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     manager.setState({
       showChunkBounds: true,
@@ -324,7 +324,7 @@ describe('VoxelDebugManager Tests', () => {
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk1.key, chunk1);
     chunks.set(chunk2.key, chunk2);
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     manager.setState({ showChunkBounds: true });
     manager.update(chunks, meshes);
@@ -344,7 +344,7 @@ describe('VoxelDebugManager Tests', () => {
     const chunk = createTestChunk();
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk.key, chunk);
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     manager.setState({ showChunkBounds: true, showEmptyChunks: true });
     manager.update(chunks, meshes);
@@ -362,13 +362,13 @@ describe('VoxelDebugManager Tests', () => {
     const manager = new VoxelDebugManager(scene);
     
     const chunks = new Map<string, Chunk>();
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     for (let i = 0; i < 3; i++) {
       const chunk = createChunkWithTerrain(i, 0, 0);
       chunks.set(chunk.key, chunk);
-      const chunkMesh = createTestChunkMesh(chunk);
-      meshes.set(chunk.key, chunkMesh);
+      const chunkGeo = createTestChunkGeo(chunk);
+      meshes.set(chunk.key, chunkGeo);
     }
     
     manager.setState({
@@ -388,7 +388,7 @@ describe('VoxelDebugManager Tests', () => {
     const manager = new VoxelDebugManager(scene);
     
     const chunks = new Map<string, Chunk>();
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     for (let i = 0; i < 64; i++) {
       const chunk = createTestChunk(i % 4, Math.floor(i / 4) % 4, Math.floor(i / 16));
@@ -408,13 +408,13 @@ describe('VoxelDebugManager Tests', () => {
     const chunk = createChunkWithTerrain();
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk.key, chunk);
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     manager.setState({ showChunkBounds: true });
     manager.update(chunks, meshes);
     
-    const chunkMesh = createTestChunkMesh(chunk);
-    meshes.set(chunk.key, chunkMesh);
+    const chunkGeo = createTestChunkGeo(chunk);
+    meshes.set(chunk.key, chunkGeo);
     
     manager.update(chunks, meshes);
     
@@ -428,15 +428,15 @@ describe('VoxelDebugManager Tests', () => {
     const chunk = createChunkWithTerrain();
     const chunks = new Map<string, Chunk>();
     chunks.set(chunk.key, chunk);
-    const meshes = new Map<string, ChunkMesh>();
+    const meshes = new Map<string, ChunkGeometry>();
     
     manager.setState({ showEmptyChunks: true });
     manager.update(chunks, meshes);
     
     expect(manager.getStats().emptyMarkers).toBe(1);
     
-    const chunkMesh = createTestChunkMesh(chunk);
-    meshes.set(chunk.key, chunkMesh);
+    const chunkGeo = createTestChunkGeo(chunk);
+    meshes.set(chunk.key, chunkGeo);
     manager.update(chunks, meshes);
     
     expect(manager.getStats().emptyMarkers).toBe(0);
