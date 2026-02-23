@@ -43,14 +43,13 @@ export function MapOverlay() {
   return (
     <div
       className="absolute top-5 right-5"
-      style={{ boxShadow: '0 2px 4px rgba(0,0,0,1.0)' }}
     >
       <MapPanel
         width={MAP_VIEWPORT_SIZE}
         height={MAP_VIEWPORT_SIZE}
         scale={ZOOM_LEVELS[zoomIndex]}
         showMarkers
-        className="rounded overflow-hidden"
+        className="rounded-full overflow-hidden"
       />
     </div>
   );

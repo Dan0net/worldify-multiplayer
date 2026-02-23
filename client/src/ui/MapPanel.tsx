@@ -34,7 +34,7 @@ const ARROW_PATH = 'M12 2 L5 18 L12 14 L19 18 Z';
 function createMarkerSvg(size: number): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
-  svg.style.cssText = `position:absolute;width:${size}px;height:${size}px;pointer-events:none;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5))`;
+  svg.style.cssText = `position:absolute;left:0;top:0;width:${size}px;height:${size}px;pointer-events:none;will-change:transform`;
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('d', ARROW_PATH);
   path.setAttribute('fill', '#ffffff');
@@ -120,16 +120,15 @@ export function MapPanel({ width, height, scale, showMarkers = true, className }
           const rDeg = (-p.rotation * 180) / Math.PI;
           const el = container.children[i] as SVGSVGElement;
 
-          el.style.left = `${halfW + dx - 9}px`;
-          el.style.top = `${halfH + dz - 9}px`;
-          el.style.transform = `rotate(${rDeg}deg)`;
+          // Use transform only (compositor-only, no layout thrash)
+          const visible = Math.abs(dx) < halfW && Math.abs(dz) < halfH;
+          el.style.transform = visible
+            ? `translate(${halfW + dx - 9}px, ${halfH + dz - 9}px) rotate(${rDeg}deg)`
+            : 'translate(-9999px, -9999px)';
 
           // Color
           const path = el.querySelector('path');
           if (path) path.setAttribute('fill', p.color);
-
-          // Clip to viewport
-          el.style.display = Math.abs(dx) < halfW && Math.abs(dz) < halfH ? '' : 'none';
         }
       }
     }
@@ -164,7 +163,6 @@ export function MapPanel({ width, height, scale, showMarkers = true, className }
               height: 24,
               marginLeft: -12,
               marginTop: -12,
-              filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.5))',
             }}
             viewBox="0 0 24 24"
           >

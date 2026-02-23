@@ -1,14 +1,14 @@
 /**
- * MapRenderer - Renders map tiles using DOM elements for GPU-accelerated transforms
+ * MapRenderer - Renders map tiles using grouped canvases for minimal compositor layers
  * 
  * Architecture:
- * - Each tile is a separate <canvas> element positioned absolutely
- * - All tiles are inside a container that moves via CSS transform
- * - Player movement only updates the container transform (no re-rendering)
- * - Tile images come from the shared MapTileImageCache (async, staggered)
+ * - Tiles are grouped into GROUP_SIZE×GROUP_SIZE (4×4) clusters
+ * - Each group is a single <canvas> element (128×128 native pixels)
+ * - When a tile updates, only its group canvas is repainted
+ * - All groups live inside a container that scrolls via CSS transform
+ * - This reduces ~360 compositor layers to ~23
  * 
- * This approach uses the browser's compositor for smooth scrolling without
- * any per-frame canvas operations.
+ * Tile images come from the shared MapTileImageCache (async, staggered).
  */
 
 import {
@@ -28,10 +28,32 @@ const DEFAULT_CONFIG: MapRendererConfig = {
   scale: 1,
 };
 
+/** Number of tiles per group axis (4×4 = 16 tiles per group canvas) */
+const GROUP_SIZE = 4;
+/** Native pixel size of a group canvas */
+const GROUP_PIXELS = MAP_TILE_SIZE * GROUP_SIZE; // 128
+
+/** Floor-divide that works for negatives: e.g. floorDiv(-1, 4) = -1 */
+function floorDiv(a: number, b: number): number {
+  return Math.floor(a / b);
+}
+
+/** Positive modulo that works for negatives: e.g. posMod(-1, 4) = 3 */
+function posMod(a: number, b: number): number {
+  return ((a % b) + b) % b;
+}
+
+/** State for a single group canvas */
+interface TileGroup {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  /** Track which dataHash is painted at each local slot (0..15) */
+  paintedHashes: (number | undefined)[];
+}
+
 /**
- * DOM-based map renderer using CSS transforms for smooth scrolling.
- * Tile images are produced by the shared MapTileImageCache singleton
- * (async, staggered, and shared across all MapRenderer instances).
+ * Canvas-group-based map renderer.
+ * Groups tiles into GROUP_SIZE×GROUP_SIZE clusters to minimise compositor layers.
  */
 export class MapRenderer {
   private container: HTMLDivElement;
@@ -44,17 +66,17 @@ export class MapRenderer {
   private playerX = 0;
   private playerZ = 0;
 
-  // DOM element cache (keyed by "tx,tz")
-  private tileElements = new Map<string, HTMLCanvasElement>();
-  
-  // Track which hash is currently painted on each element to avoid redundant draws
-  private paintedHashes = new Map<string, number>();
+  // Group cache keyed by "gx,gz"
+  private groups = new Map<string, TileGroup>();
 
   constructor(container: HTMLDivElement, config: Partial<MapRendererConfig> = {}) {
     this.container = container;
     this.config = { ...DEFAULT_CONFIG, ...config };
     
-    // Create tiles container (this will be transformed)
+    // Clip viewport so groups outside aren't visible
+    this.container.style.overflow = 'hidden';
+    
+    // Create tiles container (this will be transformed for scrolling)
     this.tilesContainer = document.createElement('div');
     this.tilesContainer.style.cssText = `
       position: absolute;
@@ -85,81 +107,130 @@ export class MapRenderer {
    */
   setConfig(config: Partial<MapRendererConfig>): void {
     const scaleChanged = 'scale' in config && config.scale !== this.config.scale;
-    
     this.config = { ...this.config, ...config };
-    
-    // Update all tile sizes if scale changed
     if (scaleChanged) {
-      this.updateAllTileSizes();
+      this.repositionAllGroups();
     }
   }
 
   /**
-   * Update sizes of all tile elements after scale change.
+   * Reposition all group canvases after a scale change.
    */
-  private updateAllTileSizes(): void {
+  private repositionAllGroups(): void {
     const { scale } = this.config;
-    const tileScreenSize = MAP_TILE_SIZE * scale;
+    const groupScreenSize = GROUP_PIXELS * scale;
     
-    for (const [key, canvas] of this.tileElements) {
-      const [txStr, tzStr] = key.split(',');
-      const tx = parseInt(txStr, 10);
-      const tz = parseInt(tzStr, 10);
-      
-      canvas.style.left = `${tx * tileScreenSize}px`;
-      canvas.style.top = `${tz * tileScreenSize}px`;
-      canvas.style.width = `${tileScreenSize}px`;
-      canvas.style.height = `${tileScreenSize}px`;
+    for (const [key, group] of this.groups) {
+      const [gxStr, gzStr] = key.split(',');
+      const gx = parseInt(gxStr, 10);
+      const gz = parseInt(gzStr, 10);
+      group.canvas.style.left = `${gx * groupScreenSize}px`;
+      group.canvas.style.top = `${gz * groupScreenSize}px`;
+      group.canvas.style.width = `${groupScreenSize}px`;
+      group.canvas.style.height = `${groupScreenSize}px`;
     }
   }
 
   /**
-   * Render visible tiles. Only updates DOM when tiles change.
+   * Render visible tiles grouped into cluster canvases.
    */
   render(tiles: Map<string, MapTileData>, _centerTx: number, _centerTz: number): void {
     const { scale } = this.config;
     const tileScreenSize = MAP_TILE_SIZE * scale;
+    const groupScreenSize = GROUP_PIXELS * scale;
     
-    // Calculate tile world size (MAP_TILE_SIZE * VOXEL_SCALE = 32 * 0.25 = 8m)
+    // Tile world size: MAP_TILE_SIZE * VOXEL_SCALE = 32 * 0.25 = 8m
     const tileWorldSize = MAP_TILE_SIZE * 0.25;
     
-    // Calculate how many tiles we need to cover the viewport
+    // How many tiles to cover viewport (+ margin)
     const tilesX = Math.ceil(this.viewportWidth / tileScreenSize) + 2;
     const tilesZ = Math.ceil(this.viewportHeight / tileScreenSize) + 2;
     const halfTilesX = Math.floor(tilesX / 2);
     const halfTilesZ = Math.floor(tilesZ / 2);
     
-    // Calculate center tile based on player position
+    // Center tile based on player pos
     const centerTx = Math.floor(this.playerX / tileWorldSize);
     const centerTz = Math.floor(this.playerZ / tileWorldSize);
     
-    // Track which tiles should be visible
-    const visibleKeys = new Set<string>();
+    // Determine which groups are needed
+    const visibleGroupKeys = new Set<string>();
     
-    // Update/create tile elements for visible area
     for (let dz = -halfTilesZ; dz <= halfTilesZ; dz++) {
       for (let dx = -halfTilesX; dx <= halfTilesX; dx++) {
         const tx = centerTx + dx;
         const tz = centerTz + dz;
-        const key = `${tx},${tz}`;
-        visibleKeys.add(key);
+        const gx = floorDiv(tx, GROUP_SIZE);
+        const gz = floorDiv(tz, GROUP_SIZE);
+        const groupKey = `${gx},${gz}`;
+        visibleGroupKeys.add(groupKey);
         
-        const tile = tiles.get(key);
-        this.updateTileElement(tx, tz, key, tile, tileScreenSize);
+        // Ensure group exists
+        let group = this.groups.get(groupKey);
+        if (!group) {
+          group = this.createGroup(gx, gz, groupScreenSize);
+          this.groups.set(groupKey, group);
+        }
+        
+        // Paint tile into group if data is available and changed
+        const tileKey = `${tx},${tz}`;
+        const tile = tiles.get(tileKey);
+        if (tile) {
+          const cached = getTileBitmap(tileKey, tile);
+          if (cached) {
+            const localX = posMod(tx, GROUP_SIZE);
+            const localZ = posMod(tz, GROUP_SIZE);
+            const slotIndex = localZ * GROUP_SIZE + localX;
+            if (group.paintedHashes[slotIndex] !== cached.dataHash) {
+              group.ctx.drawImage(
+                cached.bitmap,
+                localX * MAP_TILE_SIZE,
+                localZ * MAP_TILE_SIZE,
+                MAP_TILE_SIZE,
+                MAP_TILE_SIZE,
+              );
+              group.paintedHashes[slotIndex] = cached.dataHash;
+            }
+          }
+        }
       }
     }
     
-    // Remove tile elements that are no longer visible
-    for (const [key, canvas] of this.tileElements) {
-      if (!visibleKeys.has(key)) {
-        canvas.remove();
-        this.tileElements.delete(key);
-        this.paintedHashes.delete(key);
+    // Remove groups no longer visible
+    for (const [key, group] of this.groups) {
+      if (!visibleGroupKeys.has(key)) {
+        group.canvas.remove();
+        this.groups.delete(key);
       }
     }
     
-    // Update container transform for smooth scrolling
+    // Scroll container
     this.updateTransform();
+  }
+
+  /**
+   * Create a new group canvas for the given group coordinate.
+   */
+  private createGroup(gx: number, gz: number, groupScreenSize: number): TileGroup {
+    const canvas = document.createElement('canvas');
+    canvas.width = GROUP_PIXELS;
+    canvas.height = GROUP_PIXELS;
+    canvas.style.cssText = `
+      position: absolute;
+      pointer-events: none;
+      image-rendering: pixelated;
+      left: ${gx * groupScreenSize}px;
+      top: ${gz * groupScreenSize}px;
+      width: ${groupScreenSize}px;
+      height: ${groupScreenSize}px;
+    `;
+    this.tilesContainer.appendChild(canvas);
+    
+    const ctx = canvas.getContext('2d')!;
+    return {
+      canvas,
+      ctx,
+      paintedHashes: new Array(GROUP_SIZE * GROUP_SIZE).fill(undefined),
+    };
   }
 
   /**
@@ -170,15 +241,12 @@ export class MapRenderer {
     const tileWorldSize = MAP_TILE_SIZE * 0.25;
     const tileScreenSize = MAP_TILE_SIZE * scale;
     
-    // Player position in tile coordinates
     const playerTileX = this.playerX / tileWorldSize;
     const playerTileZ = this.playerZ / tileWorldSize;
     
-    // Player's position in screen coordinates (relative to tiles container origin)
     const playerScreenX = playerTileX * tileScreenSize;
     const playerScreenZ = playerTileZ * tileScreenSize;
     
-    // Translate so player position appears at viewport center
     const translateX = this.viewportWidth / 2 - playerScreenX;
     const translateZ = this.viewportHeight / 2 - playerScreenZ;
     
@@ -186,72 +254,13 @@ export class MapRenderer {
   }
 
   /**
-   * Update or create a tile element.
-   */
-  private updateTileElement(
-    tx: number,
-    tz: number,
-    key: string,
-    tile: MapTileData | undefined,
-    tileScreenSize: number,
-  ): void {
-    let canvas = this.tileElements.get(key);
-    
-    if (tile) {
-      // Ask the shared image cache for a bitmap
-      const cached = getTileBitmap(key, tile);
-      
-      if (!canvas) {
-        // Create a small canvas element sized to MAP_TILE_SIZE (32×32)
-        canvas = document.createElement('canvas');
-        canvas.width = MAP_TILE_SIZE;
-        canvas.height = MAP_TILE_SIZE;
-        canvas.style.cssText = `
-          position: absolute;
-          pointer-events: none;
-          image-rendering: pixelated;
-          left: ${tx * tileScreenSize}px;
-          top: ${tz * tileScreenSize}px;
-          width: ${tileScreenSize}px;
-          height: ${tileScreenSize}px;
-        `;
-        this.tilesContainer.appendChild(canvas);
-        this.tileElements.set(key, canvas);
-      }
-      
-      // Paint bitmap if available and hash changed
-      if (cached && this.paintedHashes.get(key) !== cached.dataHash) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(cached.bitmap, 0, 0);
-          this.paintedHashes.set(key, cached.dataHash);
-        }
-      }
-      
-      // Ensure position is up-to-date
-      canvas.style.left = `${tx * tileScreenSize}px`;
-      canvas.style.top = `${tz * tileScreenSize}px`;
-      canvas.style.width = `${tileScreenSize}px`;
-      canvas.style.height = `${tileScreenSize}px`;
-    } else {
-      // No tile data — remove element if it exists
-      if (canvas) {
-        canvas.remove();
-        this.tileElements.delete(key);
-        this.paintedHashes.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Clear all DOM elements.
+   * Clear all group canvases.
    */
   clearCache(): void {
-    for (const canvas of this.tileElements.values()) {
-      canvas.remove();
+    for (const group of this.groups.values()) {
+      group.canvas.remove();
     }
-    this.tileElements.clear();
-    this.paintedHashes.clear();
+    this.groups.clear();
   }
 
   /**
