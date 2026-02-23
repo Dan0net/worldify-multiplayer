@@ -352,6 +352,7 @@ export class BuildPreview {
 
     // Clear preview tracking on world
     this.world.previewChunks.clear();
+    this.world.markVisibilityDirty();
 
     this.activePreviewChunks.clear();
     this.clearLastOperation();
@@ -373,6 +374,7 @@ export class BuildPreview {
 
     // Unmark as preview chunk
     this.world.previewChunks.delete(key);
+    this.world.markVisibilityDirty();
   }
 
   /**
@@ -399,6 +401,7 @@ export class BuildPreview {
     // Remove preview meshes for this chunk
     this.disposePreviewMeshesForChunk(chunkKey);
     this.world.previewChunks.delete(chunkKey);
+    this.world.markVisibilityDirty();
 
     // Restore group only if no other pending commit chunks remain in it
     this.world.chunkGrouper.restoreGroupIfComplete(chunkKey, this.pendingCommitChunks);
@@ -550,6 +553,7 @@ export class BuildPreview {
 
       this.previewMeshes.set(result.chunkKey, meshes);
       world.previewChunks.add(result.chunkKey);
+      world.markVisibilityDirty();
     }
   }
 

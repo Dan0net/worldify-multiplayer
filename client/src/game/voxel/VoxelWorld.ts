@@ -125,6 +125,13 @@ export class VoxelWorld implements ChunkProvider {
   /** Dynamic visibility radius (defaults to shared constant, overridden by quality settings) */
   private _visibilityRadius: number = VISIBILITY_RADIUS;
 
+  /**
+   * Set when inputs to updateMeshVisibility() change (new geometry,
+   * unloaded chunks, preview changes).  Cleared after each full scan.
+   * The BFS chunkChanged flag is handled separately.
+   */
+  private visibilityDirty = true;
+
   /** Worker pool for off-thread mesh generation */
   readonly meshPool: MeshWorkerPool;
 
@@ -148,6 +155,9 @@ export class VoxelWorld implements ChunkProvider {
       this.meshPool,
       this.pendingChunks,
     );
+
+    // New/updated geometry may need its visibility evaluated
+    this.remeshPipeline.addListener(() => { this.visibilityDirty = true; });
   }
 
   /**
@@ -171,6 +181,14 @@ export class VoxelWorld implements ChunkProvider {
    */
   removeRemeshListener(listener: (chunkKey: string) => void): void {
     this.remeshPipeline.removeListener(listener);
+  }
+
+  /**
+   * Mark visibility as dirty so the next update rescans all geometries.
+   * Call when external state that affects visibility changes (e.g. previewChunks).
+   */
+  markVisibilityDirty(): void {
+    this.visibilityDirty = true;
   }
 
   /**
@@ -337,8 +355,12 @@ export class VoxelWorld implements ChunkProvider {
       this.requestVisibleChunks(toRequest);
     }
 
-    // Always update mesh visibility (camera may have rotated)
-    this.updateMeshVisibility(this.cachedReachable);
+    // Only rescan visibility when inputs actually changed:
+    // chunkChanged → new BFS reachable set; visibilityDirty → geometry added/removed
+    if (chunkChanged || this.visibilityDirty) {
+      this.updateMeshVisibility(this.cachedReachable);
+      this.visibilityDirty = false;
+    }
 
     // Rebuild merged terrain groups (only dirty groups are re-merged).
     // Skip groups that still have chunks in the remesh queue or in-flight on workers
@@ -849,6 +871,9 @@ export class VoxelWorld implements ChunkProvider {
   private unloadChunk(key: string): void {
     // Notify listeners before cleanup
     for (const listener of this.unloadListeners) listener(key);
+
+    // Geometry map is changing — need a visibility rescan
+    this.visibilityDirty = true;
 
     // Remove from grouper before disposing geometry
     this.chunkGrouper.removeChunk(key);
