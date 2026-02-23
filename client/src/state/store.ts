@@ -152,6 +152,7 @@ export interface EnvironmentSettings {
   bloomThreshold: number;       // 0-1
   bloomRadius: number;          // 0-3
   godRaysDecay: number;         // 0-1
+  godRaysExposure: number;      // 0-1
   
   // Color correction
   saturation: number;           // 0-2, 1.0 = no change
@@ -276,6 +277,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   bloomThreshold: 0.8,
   bloomRadius: 0.5,
   godRaysDecay: 0.92,
+  godRaysExposure: 0.54,
   saturation: 1.2,  // Slightly boosted for more vivid colors
   lightFillPower: 0.5,
   lightFillIntensity: 2.0,

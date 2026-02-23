@@ -44,6 +44,7 @@ interface EffectsSettings {
   bloomRadius: number;
   godRaysEnabled: boolean;
   godRaysDecay: number;
+  godRaysExposure: number;
 }
 
 let current: EffectsSettings = {
@@ -57,6 +58,7 @@ let current: EffectsSettings = {
   bloomRadius: 0.5,
   godRaysEnabled: true,
   godRaysDecay: 0.92,
+  godRaysExposure: 0.54,
 };
 
 // ============== Internal helpers ==============
@@ -127,6 +129,7 @@ function applySettings(next: Partial<EffectsSettings>): void {
   // God rays params
   if (godRaysEffect) {
     if (next.godRaysDecay !== undefined) godRaysEffect.godRaysMaterial.decay = next.godRaysDecay;
+    if (next.godRaysExposure !== undefined) godRaysEffect.godRaysMaterial.exposure = next.godRaysExposure;
   }
 
   // Merge BEFORE updatePassStates so it uses new values
@@ -241,6 +244,7 @@ export function initEffects(
     bloomRadius: state.environment.bloomRadius,
     godRaysEnabled: state.godRaysEnabled,
     godRaysDecay: state.environment.godRaysDecay,
+    godRaysExposure: state.environment.godRaysExposure,
   };
   updatePassStates();
 
@@ -258,6 +262,7 @@ export function initEffects(
     if (state.environment.bloomRadius !== prev.environment.bloomRadius) changes.bloomRadius = state.environment.bloomRadius;
     if (state.godRaysEnabled !== prev.godRaysEnabled) changes.godRaysEnabled = state.godRaysEnabled;
     if (state.environment.godRaysDecay !== prev.environment.godRaysDecay) changes.godRaysDecay = state.environment.godRaysDecay;
+    if (state.environment.godRaysExposure !== prev.environment.godRaysExposure) changes.godRaysExposure = state.environment.godRaysExposure;
 
     if (Object.keys(changes).length > 0) {
       applySettings(changes);

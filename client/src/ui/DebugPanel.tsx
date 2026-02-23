@@ -1312,6 +1312,14 @@ export function DebugPanel() {
             onChange={(v) => handleEnvironmentChange({ godRaysDecay: v })}
           />
           <Slider
+            label="God Rays Exposure"
+            value={environment.godRaysExposure}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(v) => handleEnvironmentChange({ godRaysExposure: v })}
+          />
+          <Slider
             label="Saturation"
             value={environment.saturation}
             min={0}
