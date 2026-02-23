@@ -128,6 +128,7 @@ export class ChunkGrouper {
   private visibleSlotsBuf: ChunkSlot[] = [];
   private geosBuf: { geo: THREE.BufferGeometry; wx: number; wy: number; wz: number }[] = [];
   private priorityKeysBuf = new Set<string>();
+  private groupKeysBuf = new Set<string>();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -303,10 +304,18 @@ export class ChunkGrouper {
 
   /**
    * Suppress a single group for build preview. Returns true if immediate.
+   * If the group is already suppressed, updates previewChunkKeys in-place
+   * (only adjusts the standalone delta — no scene graph churn).
    */
   suppressGroup(gk: string, previewChunkKeys: Set<string>): boolean {
     const group = this.groups.get(gk);
-    if (!group || group.previewSuppressed) return true;
+    if (!group) return true;
+
+    // Already suppressed — update preview keys and adjust standalones
+    if (group.previewSuppressed) {
+      this.updateSuppressionKeys(group, previewChunkKeys);
+      return true;
+    }
 
     const hasMergedMesh = group.merged && group.meshes.some(m => m !== null);
 
@@ -373,17 +382,29 @@ export class ChunkGrouper {
 
   /**
    * Suppress groups containing the given preview chunks.
+   * Groups that were suppressed but are no longer needed are restored.
+   * Groups that remain suppressed get their previewChunkKeys updated (no churn).
    * @returns true if ALL groups were suppressed immediately.
    */
   suppressGroupsForChunks(previewChunkKeys: Set<string>): boolean {
-    const groupKeys = new Set<string>();
+    // Collect which groups are needed
+    const neededGroups = this.groupKeysBuf;
+    neededGroups.clear();
     for (const ck of previewChunkKeys) {
       const gk = this.getGroupKey(ck);
-      if (gk) groupKeys.add(gk);
+      if (gk) neededGroups.add(gk);
     }
 
+    // Restore groups that are no longer needed
+    for (const [gk, group] of this.groups) {
+      if ((group.previewSuppressed || group.suppressionPending) && !neededGroups.has(gk)) {
+        this.restoreGroup(gk);
+      }
+    }
+
+    // Suppress (or update) needed groups
     let allImmediate = true;
-    for (const gk of groupKeys) {
+    for (const gk of neededGroups) {
       if (!this.suppressGroup(gk, previewChunkKeys)) {
         allImmediate = false;
       }
@@ -476,6 +497,31 @@ export class ChunkGrouper {
       const slot = this.slots.get(ck);
       if (slot && slot.visible) this.showStandalone(slot);
     }
+  }
+
+  /**
+   * Update preview chunk keys on an already-suppressed group.
+   * Only adjusts standalones for the delta — no full teardown/rebuild.
+   */
+  private updateSuppressionKeys(group: ChunkGroup, newPreviewChunkKeys: Set<string>): void {
+    const oldKeys = group.previewChunkKeys;
+
+    for (const ck of group.chunkKeys) {
+      const wasPreview = oldKeys.has(ck);
+      const isPreview = newPreviewChunkKeys.has(ck);
+
+      if (wasPreview && !isPreview) {
+        // Chunk left preview — show its standalone
+        const slot = this.slots.get(ck);
+        if (slot && slot.visible) this.showStandalone(slot);
+      } else if (!wasPreview && isPreview) {
+        // Chunk entered preview — remove its standalone (preview mesh takes over)
+        const slot = this.slots.get(ck);
+        if (slot) this.removeStandalone(slot);
+      }
+    }
+
+    group.previewChunkKeys = new Set(newPreviewChunkKeys);
   }
 
   /** Finalize a pending suppression after the group has been rebuilt. */
