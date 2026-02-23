@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import { CHUNK_WORLD_SIZE } from '@worldify/shared';
 import { createLayerMesh, LAYER_LIQUID, LAYER_COUNT, TERRAIN_ATTRS } from './LayerConfig.js';
 import { getShadowRadius } from '../quality/QualityManager.js';
 
@@ -755,6 +756,29 @@ export class ChunkGrouper {
       idxAttr.addUpdateRange(0, totalIndices);
       idxAttr.needsUpdate = true;
       merged.setDrawRange(0, totalIndices);
+
+      // ---- Compute bounding box from chunk world positions ----
+      // We must set this manually because:
+      //  (a) Three.js caches boundingSphere and won't recompute on buffer reuse
+      //  (b) Over-allocated buffers have zero-filled tails that poison auto-computation
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const { wx, wy, wz } of geos) {
+        if (wx < minX) minX = wx;
+        if (wy < minY) minY = wy;
+        if (wz < minZ) minZ = wz;
+        const ex = wx + CHUNK_WORLD_SIZE;
+        const ey = wy + CHUNK_WORLD_SIZE;
+        const ez = wz + CHUNK_WORLD_SIZE;
+        if (ex > maxX) maxX = ex;
+        if (ey > maxY) maxY = ey;
+        if (ez > maxZ) maxZ = ez;
+      }
+      if (!merged.boundingBox) merged.boundingBox = new THREE.Box3();
+      merged.boundingBox.min.set(minX, minY, minZ);
+      merged.boundingBox.max.set(maxX, maxY, maxZ);
+      if (!merged.boundingSphere) merged.boundingSphere = new THREE.Sphere();
+      merged.boundingBox.getBoundingSphere(merged.boundingSphere);
 
       // ---- Attach geometry to mesh if new allocation ----
       if (!canReuse) {
