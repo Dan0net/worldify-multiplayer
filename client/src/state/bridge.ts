@@ -532,6 +532,10 @@ class StoreBridge {
     getState().setBloomEnabled(enabled);
   }
 
+  setGodRaysEnabled(enabled: boolean): void {
+    getState().setGodRaysEnabled(enabled);
+  }
+
   setColorCorrectionEnabled(enabled: boolean): void {
     getState().setColorCorrectionEnabled(enabled);
   }

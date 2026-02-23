@@ -151,6 +151,7 @@ export interface EnvironmentSettings {
   bloomIntensity: number;       // 0-3
   bloomThreshold: number;       // 0-1
   bloomRadius: number;          // 0-3
+  godRaysDecay: number;         // 0-1
   
   // Color correction
   saturation: number;           // 0-2, 1.0 = no change
@@ -274,6 +275,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   bloomIntensity: 1,
   bloomThreshold: 0.8,
   bloomRadius: 0.5,
+  godRaysDecay: 0.92,
   saturation: 1.2,  // Slightly boosted for more vivid colors
   lightFillPower: 0.5,
   lightFillIntensity: 2.0,
@@ -336,6 +338,7 @@ export interface GameState {
   fov: number;
   ssaoEnabled: boolean;
   bloomEnabled: boolean;
+  godRaysEnabled: boolean;
   colorCorrectionEnabled: boolean;
   shadowsEnabled: boolean;
   moonShadows: boolean;
@@ -393,6 +396,7 @@ export interface GameState {
   setFov: (fov: number) => void;
   setSsaoEnabled: (enabled: boolean) => void;
   setBloomEnabled: (enabled: boolean) => void;
+  setGodRaysEnabled: (enabled: boolean) => void;
   setColorCorrectionEnabled: (enabled: boolean) => void;
   setShadowsEnabled: (enabled: boolean) => void;
   setMoonShadows: (enabled: boolean) => void;
@@ -515,6 +519,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   fov: 90,
   ssaoEnabled: true,
   bloomEnabled: true,
+  godRaysEnabled: true,
   colorCorrectionEnabled: true,
   shadowsEnabled: true,
   moonShadows: true,
@@ -601,6 +606,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setFov: (fov) => set({ fov }),
   setSsaoEnabled: (enabled) => set({ ssaoEnabled: enabled }),
   setBloomEnabled: (enabled) => set({ bloomEnabled: enabled }),
+  setGodRaysEnabled: (enabled) => set({ godRaysEnabled: enabled }),
   setColorCorrectionEnabled: (enabled) => set({ colorCorrectionEnabled: enabled }),
   setShadowsEnabled: (enabled) => set({ shadowsEnabled: enabled }),
   setMoonShadows: (enabled) => set({ moonShadows: enabled }),

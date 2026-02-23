@@ -13,9 +13,11 @@
 import * as THREE from 'three';
 import {
   EffectComposer, EffectPass, RenderPass, CopyPass, NormalPass,
-  BloomEffect, SSAOEffect, BlendFunction, LuminanceMaterial,
+  BloomEffect, SSAOEffect, GodRaysEffect, KernelSize,
+  BlendFunction, LuminanceMaterial,
 } from 'postprocessing';
 import { useGameStore } from '../../state/store';
+import { getSunLight } from './Lighting';
 
 // ============== State ==============
 
@@ -23,7 +25,10 @@ let composer: EffectComposer | null = null;
 let normalPass: NormalPass | null = null;
 let ssaoEffect: SSAOEffect | null = null;
 let bloomEffect: BloomEffect | null = null;
-let effectPass: EffectPass | null = null;
+let godRaysEffect: GodRaysEffect | null = null;
+let sunMesh: THREE.Mesh | null = null;
+let effectPass: EffectPass | null = null;  // SSAO + bloom
+let godRaysPass: EffectPass | null = null; // god rays (separate — needs sun mesh)
 let copyPass: CopyPass | null = null;
 let unsubscribe: (() => void) | null = null;
 
@@ -37,6 +42,8 @@ interface EffectsSettings {
   bloomIntensity: number;
   bloomThreshold: number;
   bloomRadius: number;
+  godRaysEnabled: boolean;
+  godRaysDecay: number;
 }
 
 let current: EffectsSettings = {
@@ -48,32 +55,50 @@ let current: EffectsSettings = {
   bloomIntensity: 1,
   bloomThreshold: 0.8,
   bloomRadius: 0.5,
+  godRaysEnabled: true,
+  godRaysDecay: 0.92,
 };
 
 // ============== Internal helpers ==============
 
 /**
  * Sync pass enabled/renderToScreen state based on which effects are active.
- * - NormalPass only runs when SSAO is on (it generates normals for SSAO)
- * - Individual effects are disabled when off (skips their internal render passes)
- * - EffectPass is on when any effect is active; CopyPass when none are
+ * - NormalPass only runs when SSAO is on
+ * - Individual effects use SKIP blend when off
+ * - God rays pass is independently toggled
+ * - CopyPass is fallback when ALL effects are off
  */
 function updatePassStates(): void {
-  if (!effectPass || !copyPass || !normalPass || !ssaoEffect || !bloomEffect) return;
+  if (!effectPass || !godRaysPass || !copyPass || !normalPass || !ssaoEffect || !bloomEffect || !godRaysEffect) return;
 
-  // Skip NormalPass entirely when SSAO is off
+  // NormalPass — only needed for SSAO
   normalPass.enabled = current.ssaoEnabled;
 
-  // Disable individual effects so their internal passes don't run
+  // Individual effect blend functions
   ssaoEffect.blendMode.setBlendFunction(current.ssaoEnabled ? BlendFunction.MULTIPLY : BlendFunction.SKIP);
   bloomEffect.blendMode.setBlendFunction(current.bloomEnabled ? BlendFunction.SCREEN : BlendFunction.SKIP);
 
-  // EffectPass vs CopyPass
-  const anyActive = current.ssaoEnabled || current.bloomEnabled;
-  effectPass.enabled = anyActive;
-  effectPass.renderToScreen = anyActive;
-  copyPass.enabled = !anyActive;
-  copyPass.renderToScreen = !anyActive;
+  // EffectPass (SSAO + bloom)
+  const ssaoOrBloom = current.ssaoEnabled || current.bloomEnabled;
+  effectPass.enabled = ssaoOrBloom;
+
+  // God rays pass
+  godRaysPass.enabled = current.godRaysEnabled;
+
+  // Exactly one pass renders to screen — last enabled pass gets it
+  effectPass.renderToScreen = false;
+  godRaysPass.renderToScreen = false;
+  copyPass.enabled = false;
+  copyPass.renderToScreen = false;
+
+  if (current.godRaysEnabled) {
+    godRaysPass.renderToScreen = true;
+  } else if (ssaoOrBloom) {
+    effectPass.renderToScreen = true;
+  } else {
+    copyPass.enabled = true;
+    copyPass.renderToScreen = true;
+  }
 }
 
 function applySettings(next: Partial<EffectsSettings>): void {
@@ -99,11 +124,16 @@ function applySettings(next: Partial<EffectsSettings>): void {
     if (next.bloomRadius !== undefined) bloomEffect.mipmapBlurPass.radius = next.bloomRadius;
   }
 
+  // God rays params
+  if (godRaysEffect) {
+    if (next.godRaysDecay !== undefined) godRaysEffect.godRaysMaterial.decay = next.godRaysDecay;
+  }
+
   // Merge BEFORE updatePassStates so it uses new values
   Object.assign(current, next);
 
   // Update pass enable states if any toggle changed
-  if (next.ssaoEnabled !== undefined || next.bloomEnabled !== undefined) {
+  if (next.ssaoEnabled !== undefined || next.bloomEnabled !== undefined || next.godRaysEnabled !== undefined) {
     updatePassStates();
   }
 }
@@ -161,9 +191,36 @@ export function initEffects(
     radius: state.environment.bloomRadius,
   });
 
-  // EffectPass — combines all effects into one fullscreen pass
+  // EffectPass — SSAO + bloom
   effectPass = new EffectPass(camera, ssaoEffect, bloomEffect);
   composer.addPass(effectPass);
+
+  // Sun mesh for god rays (invisible, transparent, no depth write)
+  sunMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(50, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffddaa, transparent: true, fog: false }),
+  );
+  sunMesh.frustumCulled = false;
+  sunMesh.matrixAutoUpdate = false;
+  // Position from sunLight (don't add to main scene — GodRaysEffect renders it internally)
+  syncSunMeshPosition();
+
+  // GodRaysEffect — defaults match pmndrs demo
+  godRaysEffect = new GodRaysEffect(camera, sunMesh, {
+    density: 0.96,
+    decay: state.environment.godRaysDecay,
+    weight: 0.3,
+    exposure: 0.54,
+    samples: 60,
+    clampMax: 1.0,
+    kernelSize: KernelSize.SMALL,
+    blur: true,
+    resolutionScale: 0.5,
+  });
+
+  // God rays in a separate EffectPass
+  godRaysPass = new EffectPass(camera, godRaysEffect);
+  composer.addPass(godRaysPass);
 
   // CopyPass — resolves MSAA FBO to screen when all effects are off
   copyPass = new CopyPass();
@@ -182,6 +239,8 @@ export function initEffects(
     bloomIntensity: state.environment.bloomIntensity,
     bloomThreshold: state.environment.bloomThreshold,
     bloomRadius: state.environment.bloomRadius,
+    godRaysEnabled: state.godRaysEnabled,
+    godRaysDecay: state.environment.godRaysDecay,
   };
   updatePassStates();
 
@@ -197,6 +256,8 @@ export function initEffects(
     if (state.environment.bloomIntensity !== prev.environment.bloomIntensity) changes.bloomIntensity = state.environment.bloomIntensity;
     if (state.environment.bloomThreshold !== prev.environment.bloomThreshold) changes.bloomThreshold = state.environment.bloomThreshold;
     if (state.environment.bloomRadius !== prev.environment.bloomRadius) changes.bloomRadius = state.environment.bloomRadius;
+    if (state.godRaysEnabled !== prev.godRaysEnabled) changes.godRaysEnabled = state.godRaysEnabled;
+    if (state.environment.godRaysDecay !== prev.environment.godRaysDecay) changes.godRaysDecay = state.environment.godRaysDecay;
 
     if (Object.keys(changes).length > 0) {
       applySettings(changes);
@@ -207,7 +268,20 @@ export function initEffects(
     multisampling: composer.multisampling,
     ssao: state.ssaoEnabled,
     bloom: state.bloomEnabled,
+    godRays: state.godRaysEnabled,
   });
+}
+
+/**
+ * Sync sunMesh position from the directional light. Call each frame.
+ */
+function syncSunMeshPosition(): void {
+  if (!sunMesh) return;
+  const sun = getSunLight();
+  if (sun) {
+    sunMesh.position.copy(sun.position);
+    sunMesh.updateMatrix();
+  }
 }
 
 /**
@@ -220,6 +294,7 @@ export function renderEffects(
   delta: number,
 ): void {
   if (composer) {
+    syncSunMeshPosition();
     composer.render(delta);
   } else {
     renderer.render(scene, camera);
@@ -247,10 +322,17 @@ export function disposeEffects(): void {
     composer.dispose();
     composer = null;
   }
+  if (sunMesh) {
+    sunMesh.geometry.dispose();
+    (sunMesh.material as THREE.MeshBasicMaterial).dispose();
+    sunMesh = null;
+  }
   normalPass = null;
   ssaoEffect = null;
   bloomEffect = null;
+  godRaysEffect = null;
   effectPass = null;
+  godRaysPass = null;
   copyPass = null;
 }
 

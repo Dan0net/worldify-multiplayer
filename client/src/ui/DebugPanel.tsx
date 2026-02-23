@@ -196,6 +196,7 @@ export function DebugPanel() {
     visibilityRadius,
     ssaoEnabled,
     bloomEnabled,
+    godRaysEnabled,
     colorCorrectionEnabled,
     shadowsEnabled,
     moonShadows,
@@ -692,6 +693,13 @@ export function DebugPanel() {
             value={bloomEnabled}
             onChange={(v) => {
               storeBridge.setBloomEnabled(v);
+            }}
+          />
+          <Toggle
+            label="God Rays"
+            value={godRaysEnabled}
+            onChange={(v) => {
+              storeBridge.setGodRaysEnabled(v);
             }}
           />
           <Toggle
@@ -1294,6 +1302,14 @@ export function DebugPanel() {
             max={3}
             step={0.01}
             onChange={(v) => handleEnvironmentChange({ bloomRadius: v })}
+          />
+          <Slider
+            label="God Rays Decay"
+            value={environment.godRaysDecay}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(v) => handleEnvironmentChange({ godRaysDecay: v })}
           />
           <Slider
             label="Saturation"
