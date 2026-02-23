@@ -123,6 +123,12 @@ export class ChunkGrouper {
   private slots = new Map<string, ChunkSlot>();
   private groups = new Map<string, ChunkGroup>();
 
+  // Reusable scratch arrays to avoid per-frame allocations
+  private eligibleBuf: { gk: string; group: ChunkGroup; dist: number }[] = [];
+  private visibleSlotsBuf: ChunkSlot[] = [];
+  private geosBuf: { geo: THREE.BufferGeometry; wx: number; wy: number; wz: number }[] = [];
+  private priorityKeysBuf = new Set<string>();
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
   }
@@ -251,7 +257,8 @@ export class ChunkGrouper {
     }
 
     // === Phase 2: Normal dirty groups (distance-sorted, capped, isBusy-gated) ===
-    const eligible: { gk: string; group: ChunkGroup; dist: number }[] = [];
+    const eligible = this.eligibleBuf;
+    eligible.length = 0;
 
     for (const [gk, group] of this.groups) {
       if (!group.dirty || group.previewSuppressed || group.suppressionPending) continue;
@@ -428,7 +435,8 @@ export class ChunkGrouper {
    * Used to prioritize these chunks in the remesh queue.
    */
   getPriorityChunkKeys(): Set<string> {
-    const keys = new Set<string>();
+    const keys = this.priorityKeysBuf;
+    keys.clear();
     for (const group of this.groups.values()) {
       if (!group.suppressionPending) continue;
       for (const ck of group.chunkKeys) keys.add(ck);
@@ -579,7 +587,8 @@ export class ChunkGrouper {
     group.merged = true;
 
     // Collect visible chunk slots
-    const visibleSlots: ChunkSlot[] = [];
+    const visibleSlots = this.visibleSlotsBuf;
+    visibleSlots.length = 0;
     for (const ck of group.chunkKeys) {
       const slot = this.slots.get(ck);
       if (slot && slot.visible) visibleSlots.push(slot);
@@ -587,7 +596,8 @@ export class ChunkGrouper {
 
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
       // Gather non-empty geometries
-      const geos: { geo: THREE.BufferGeometry; wx: number; wy: number; wz: number }[] = [];
+      const geos = this.geosBuf;
+      geos.length = 0;
       for (const slot of visibleSlots) {
         const geo = slot.geometries[layer];
         if (geo && geo.index && geo.index.count > 0) {

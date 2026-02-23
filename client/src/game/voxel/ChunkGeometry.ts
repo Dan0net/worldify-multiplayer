@@ -28,6 +28,9 @@ export class ChunkGeometry {
   /** Main meshes indexed by layer (used as geometry containers + for collision) */
   private mainMeshes: (THREE.Mesh | null)[] = [null, null, null];
 
+  /** Cached geometry array returned by getGeometries() — avoids allocation per call */
+  private cachedGeoArray: (THREE.BufferGeometry | null)[] = [null, null, null];
+
   /** The chunk this geometry represents */
   readonly chunk: Chunk;
 
@@ -77,11 +80,10 @@ export class ChunkGeometry {
    * Eliminates the repeated solidMesh?.geometry ?? null pattern.
    */
   getGeometries(): (THREE.BufferGeometry | null)[] {
-    return [
-      this.mainMeshes[LAYER_SOLID]?.geometry ?? null,
-      this.mainMeshes[LAYER_TRANSPARENT]?.geometry ?? null,
-      this.mainMeshes[LAYER_LIQUID]?.geometry ?? null,
-    ];
+    this.cachedGeoArray[LAYER_SOLID] = this.mainMeshes[LAYER_SOLID]?.geometry ?? null;
+    this.cachedGeoArray[LAYER_TRANSPARENT] = this.mainMeshes[LAYER_TRANSPARENT]?.geometry ?? null;
+    this.cachedGeoArray[LAYER_LIQUID] = this.mainMeshes[LAYER_LIQUID]?.geometry ?? null;
+    return this.cachedGeoArray;
   }
 
   /** Solid mesh (for collision detection / raycasting) */

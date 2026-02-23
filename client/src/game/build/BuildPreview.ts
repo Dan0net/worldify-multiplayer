@@ -81,6 +81,11 @@ export class BuildPreview {
   /** Preview meshes per chunk (solid, transparent, liquid slots) */
   private previewMeshes: Map<string, (THREE.Mesh | null)[]> = new Map();
 
+  // Reusable scratch buffers to avoid per-dispatch allocations
+  private drawnChunksBuf: string[] = [];
+  private drawnSetBuf = new Set<string>();
+  private newActiveChunksBuf = new Set<string>();
+
   /**
    * Set the voxel world, scene, and worker pool to use for preview.
    */
@@ -147,8 +152,10 @@ export class BuildPreview {
 
     // === Pass 1: Copy temp data and draw operation to ALL affected chunks ===
     // Must complete before grid expansion so boundary reads see drawn neighbors.
-    const drawnChunks: string[] = [];
-    const drawnSet = new Set<string>();
+    const drawnChunks = this.drawnChunksBuf;
+    drawnChunks.length = 0;
+    const drawnSet = this.drawnSetBuf;
+    drawnSet.clear();
 
     for (const key of affectedKeys) {
       const chunk = this.world.chunks.get(key)!;
@@ -172,7 +179,8 @@ export class BuildPreview {
       grid: Uint16Array;
       skipHighBoundary: [boolean, boolean, boolean];
     }> = [];
-    const newActiveChunks = new Set<string>();
+    const newActiveChunks = this.newActiveChunksBuf;
+    newActiveChunks.clear();
 
     for (const key of drawnChunks) {
       const chunk = this.world.chunks.get(key)!;
@@ -207,6 +215,7 @@ export class BuildPreview {
     // Capture which old preview chunks to clear — any previously active chunk
     // that is NOT in the new batch needs its preview reverted. Computed AFTER
     // Pass 2b so boundary neighbors aren't incorrectly marked for removal.
+    // Allocated fresh since it's captured by the async callback closure
     const chunksToRemove: string[] = [];
     for (const key of this.activePreviewChunks) {
       if (!newActiveChunks.has(key)) {
