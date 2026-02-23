@@ -83,7 +83,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
 
   // --- Post-processing (store-driven — effects.ts subscribes) ---
   storeBridge.setBloomEnabled(preset.bloomEnabled);
-  applySsaoEnabled(preset.ssaoEnabled);
+  storeBridge.setSsaoEnabled(preset.ssaoEnabled);
   applyColorCorrectionEnabled(preset.colorCorrectionEnabled);
 
   // --- Terrain material shader maps ---
@@ -175,7 +175,8 @@ export function applyMoonShadows(enabled: boolean): void {
 }
 
 export function applySsaoEnabled(enabled: boolean): void {
-  updatePostProcessing({ ssaoEnabled: enabled });
+  // Store-driven — effects.ts subscription handles this
+  storeBridge.setSsaoEnabled(enabled);
 }
 
 export function applyBloomEnabled(enabled: boolean): void {

@@ -9,7 +9,6 @@ import { storeBridge } from '../state/bridge';
 import { cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, type QualityLevel } from '../game/quality/QualityPresets';
 import {
   applyVisibilityRadius,
-  applySsaoEnabled,
   applyColorCorrectionEnabled,
   applyShadowsEnabled,
   applyMoonShadows,
@@ -265,9 +264,8 @@ export function DebugPanel() {
     applyEnvironmentSettings({ ...environment, ...updates });
     
     // Apply post-processing changes if any relevant settings changed
-    // (bloom is store-driven via effects.ts — only SSAO/saturation still use old pipeline)
-    if ('ssaoKernelRadius' in updates || 'ssaoMinDistance' in updates ||
-        'saturation' in updates) {
+    // (SSAO/bloom are store-driven via effects.ts — only saturation still uses old pipeline)
+    if ('saturation' in updates) {
       updatePostProcessing(updates);
     }
     
@@ -687,7 +685,6 @@ export function DebugPanel() {
             value={ssaoEnabled}
             onChange={(v) => {
               storeBridge.setSsaoEnabled(v);
-              applySsaoEnabled(v);
             }}
           />
           <Toggle
@@ -1259,21 +1256,20 @@ export function DebugPanel() {
         <div className="mb-3">
           <div className="text-green-400 text-xs mb-1">Post-Processing</div>
           <Slider
-            label="SSAO Radius"
-            value={environment.ssaoKernelRadius}
+            label="SSAO Intensity"
+            value={environment.ssaoIntensity}
             min={0}
-            max={32}
+            max={4}
             step={0.1}
-            onChange={(v) => handleEnvironmentChange({ ssaoKernelRadius: v })}
+            onChange={(v) => handleEnvironmentChange({ ssaoIntensity: v })}
           />
           <Slider
-            label="SSAO Min Dist"
-            value={environment.ssaoMinDistance}
-            min={0.001}
-            max={0.02}
-            step={0.001}
-            formatValue={(v) => v.toFixed(3)}
-            onChange={(v) => handleEnvironmentChange({ ssaoMinDistance: v })}
+            label="SSAO Radius"
+            value={environment.ssaoRadius}
+            min={0}
+            max={0.5}
+            step={0.01}
+            onChange={(v) => handleEnvironmentChange({ ssaoRadius: v })}
           />
           <Slider
             label="Bloom Intensity"

@@ -60,7 +60,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     maxPixelRatio: 2,
     msaaSamples: 4,
     visibilityRadius: 8,
-    anisotropy: 8,
+    anisotropy: 16,
     shaderNormalMaps: true,
     shaderAoMaps: true,
     shaderMetalnessMaps: true,

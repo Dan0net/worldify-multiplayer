@@ -146,8 +146,8 @@ export interface EnvironmentSettings {
   toneMappingExposure: number; // 0.1 to 3
   
   // Post-processing effects
-  ssaoKernelRadius: number;     // 0-32
-  ssaoMinDistance: number;      // 0.001-0.02
+  ssaoIntensity: number;        // 0-4
+  ssaoRadius: number;           // 0-0.5
   bloomIntensity: number;       // 0-3
   bloomThreshold: number;       // 0-1
   bloomRadius: number;          // 0-3
@@ -269,8 +269,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   toneMapping: THREE.ACESFilmicToneMapping,
   toneMappingExposure: 1.0,
   
-  ssaoKernelRadius: 0.5,
-  ssaoMinDistance: 0.002,
+  ssaoIntensity: 1.33,
+  ssaoRadius: 0.1,
   bloomIntensity: 1,
   bloomThreshold: 0.8,
   bloomRadius: 0.5,
