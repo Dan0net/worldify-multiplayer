@@ -30,10 +30,8 @@ import {
   getChunkRangeFromHeights,
   isVoxelSolid,
   voxelIndex,
-  computeSunlightColumns,
   getSunlitAbove,
-  propagateLight,
-  injectBorderLight,
+  computeAndPropagateLight,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
@@ -764,17 +762,15 @@ export class VoxelWorld implements ChunkProvider {
     // Check chunk above for sunlight state
     const aboveKey = chunkKey(cx, cy + 1, cz);
     const aboveChunk = this.chunks.get(aboveKey);
-    const isSunlitAbove = getSunlitAbove(aboveChunk?.data);
-    
-    computeSunlightColumns(data, isSunlitAbove);
+    const lightFromAbove = getSunlitAbove(aboveChunk?.data);
 
-    // Inject light from face-adjacent neighbor boundaries before BFS
+    // Gather face-adjacent neighbor data for border light injection
     const neighbors: (Uint16Array | null)[] = FACE_OFFSETS_6.map(
       ([dx, dy, dz]) => this.chunks.get(chunkKey(cx + dx, cy + dy, cz + dz))?.data ?? null,
     );
-    injectBorderLight(data, neighbors);
 
-    propagateLight(data);
+    // Combined pipeline: column pass → frontier seed → border inject → BFS
+    computeAndPropagateLight(data, lightFromAbove, neighbors);
   }
 
   /**
