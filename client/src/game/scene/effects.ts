@@ -57,8 +57,8 @@ let current: EffectsSettings = {
   bloomThreshold: 0.8,
   bloomRadius: 0.5,
   godRaysEnabled: true,
-  godRaysDecay: 0.92,
-  godRaysExposure: 0.54,
+  godRaysDecay: 0.85,
+  godRaysExposure: 0.3,
 };
 
 // ============== Internal helpers ==============
@@ -200,7 +200,7 @@ export function initEffects(
 
   // Sun mesh for god rays (invisible, transparent, no depth write)
   sunMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(50, 16, 16),
+    new THREE.SphereGeometry(30, 16, 16),
     new THREE.MeshBasicMaterial({ color: 0xffddaa, transparent: true, fog: false }),
   );
   sunMesh.frustumCulled = false;

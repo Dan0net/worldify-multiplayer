@@ -278,8 +278,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   bloomIntensity: 1,
   bloomThreshold: 0.8,
   bloomRadius: 0.5,
-  godRaysDecay: 0.92,
-  godRaysExposure: 0.54,
+  godRaysDecay: 0.90,
+  godRaysExposure: 0.25,
   saturation: 1.2,  // Slightly boosted for more vivid colors
   lightFillPower: 0.5,
   lightFillIntensity: 2.0,

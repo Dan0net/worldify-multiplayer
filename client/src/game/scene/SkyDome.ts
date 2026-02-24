@@ -176,8 +176,7 @@ void main() {
   // Final sky gradient
   vec3 sky = mix(skyBelow, skyAbove, horizonBlend) * skyDarkening;
   
-  // === Sun ===
-  sky += celestialBody(worldDir, uSunDirection, uSunColor, uSunIntensity, 0.996, 0.9985, 4.0, 0.4);
+  // Sun/moon discs handled by god-rays mesh — only keep horizon glow
   
   // Sun horizon glow (only near sunset/sunrise)
   if (sunAltitude > -0.2 && sunAltitude < 0.3) {
@@ -188,13 +187,6 @@ void main() {
     horizonGlow *= pow(max(0.0, dot(dirXZ, sunXZ)), 1.5);
     sky += uSunColor * uSunIntensity * horizonGlow;
   }
-  
-  // === Moon ===
-  float moonVisible = smoothstep(-0.1, 0.1, uMoonDirection.y) * uMoonIntensity;
-  sky += celestialBody(worldDir, uMoonDirection, uMoonColor, moonVisible, 0.994, 0.998, 8.0, 0.4);
-  // Moon rim glow
-  float moonAngle = dot(worldDir, uMoonDirection);
-  sky += uMoonColor * smoothstep(0.99, 0.994, moonAngle) * (1.0 - smoothstep(0.994, 0.998, moonAngle)) * 0.3 * moonVisible;
   
   // === Stars ===
   float starsVisible = smoothstep(0.0, -0.15, sunAltitude);
