@@ -4,9 +4,11 @@ import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
 import { BuildToolbar } from './ui/BuildToolbar';
 import { MapOverlay } from './ui/MapOverlay';
+import { MobileControls } from './ui/MobileControls';
 import { useGameStore } from './state/store';
 import { createGame } from './game/createGame';
 import { GameMode } from '@worldify/shared';
+import { isTouchDevice } from './game/player/isMobile';
 
 function App() {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
@@ -32,13 +34,15 @@ function App() {
           {isPlaying && (
             <>
               <Hud />
-              <BuildToolbar />
+              {!isTouchDevice && <BuildToolbar />}
               <MapOverlay />
             </>
           )}
-          <DebugPanel />
+          {!isTouchDevice && <DebugPanel />}
         </div>
       )}
+      {/* Mobile touch controls overlay — only when playing on touch devices */}
+      {isTouchDevice && isPlaying && <MobileControls />}
     </>
   );
 }

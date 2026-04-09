@@ -156,10 +156,12 @@ export function BuildMenu() {
 
   const handleClose = useCallback(() => {
     setBuildMenuOpen(false);
-    // Re-lock pointer after a tiny delay (browser requirement)
-    requestAnimationFrame(() => {
-      document.body.requestPointerLock();
-    });
+    // Re-lock pointer after a tiny delay (browser requirement) — desktop only
+    if (!('ontouchstart' in window)) {
+      requestAnimationFrame(() => {
+        document.body.requestPointerLock();
+      });
+    }
   }, [setBuildMenuOpen]);
 
   const handleSelectMaterial = useCallback((materialId: number) => {

@@ -10,6 +10,16 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   cursor: default;
   user-select: none;
+  /* Prevent mobile browser zoom/scroll gestures */
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  overscroll-behavior: none;
+}
+
+/* Prevent pinch-zoom on mobile */
+html {
+  touch-action: manipulation;
 }
 
 #root {

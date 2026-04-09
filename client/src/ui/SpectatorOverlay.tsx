@@ -16,10 +16,11 @@ import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 import { MapPanel } from './MapPanel';
 import { getMapTileCache } from '../game/maptile/mapTileCacheSingleton';
 import { sendBinary } from '../net/netClient';
+import { isTouchDevice } from '../game/player/isMobile';
 
-// Map panel dimensions
-const MAP_PANEL_W = 400;
-const MAP_PANEL_H = 280;
+// Map panel dimensions — smaller on touch devices
+const MAP_PANEL_W = isTouchDevice ? Math.min(320, window.innerWidth - 32) : 400;
+const MAP_PANEL_H = isTouchDevice ? 200 : 280;
 // Fixed scale so map always fills the panel (show ~12 tiles across regardless of view distance)
 const SPECTATOR_TILES_ACROSS = 12;
 const SPECTATOR_MAP_SCALE = MAP_PANEL_W / (SPECTATOR_TILES_ACROSS * MAP_TILE_SIZE);
@@ -85,7 +86,9 @@ export function SpectatorOverlay() {
   const handleStart = () => {
     if (!canStart) return;
     setGameMode(GameMode.Playing);
-    controls.requestPointerLock();
+    if (!isTouchDevice) {
+      controls.requestPointerLock();
+    }
   };
 
   const handleToggleHD = () => {
@@ -98,9 +101,9 @@ export function SpectatorOverlay() {
   };
 
   return (
-    <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/40 z-50 pointer-events-none">
+    <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/40 z-50 pointer-events-none overflow-y-auto">
       {/* Logo */}
-      <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-28 mb-8" />
+      <img src="/wrldy-logo-white.svg" alt="wrldy" className={`mb-8 ${isTouchDevice ? 'h-16' : 'h-28'}`} />
 
       {/* ===== Room Panel with Map Background ===== */}
       <div
@@ -269,8 +272,8 @@ export function SpectatorOverlay() {
         </div>
       )}
 
-      {/* Controls hint at bottom */}
-      {isConnected && (
+      {/* Controls hint at bottom (desktop only) */}
+      {isConnected && !isTouchDevice && (
         <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
           <KeyInstructions rows={GAME_KEY_ROWS} />
         </div>
