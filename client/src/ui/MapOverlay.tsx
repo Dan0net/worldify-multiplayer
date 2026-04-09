@@ -9,9 +9,10 @@ import { useEffect, useState } from 'react';
 import { useGameStore } from '../state/store';
 import { MapPanel } from './MapPanel';
 import { VISIBILITY_RADIUS, MAP_TILE_SIZE } from '@worldify/shared';
+import { isTouchDevice } from '../game/player/isMobile';
 
-// Map viewport size in pixels
-const MAP_VIEWPORT_SIZE = 200;
+// Map viewport size in pixels — smaller on mobile to leave room for controls
+const MAP_VIEWPORT_SIZE = isTouchDevice ? 100 : 200;
 
 // Calculate scale to fit all tiles within VISIBILITY_RADIUS
 const TILES_ACROSS = VISIBILITY_RADIUS * 2 + 1;

@@ -1,6 +1,7 @@
 
 import { useGameStore } from '../state/store';
 import { NONE_PRESET_ID } from '@worldify/shared';
+import { isTouchDevice } from '../game/player/isMobile';
 
 /**
  * Get crosshair color based on build state.
@@ -27,7 +28,9 @@ export function Hud() {
       </div>
 
       {/* Room info - positioned below map overlay */}
-      <div className="absolute top-[230px] right-5 py-2 px-3 bg-black/60 text-white rounded-lg text-xs whitespace-nowrap">
+      <div className={`absolute right-3 py-1.5 px-2.5 bg-black/60 text-white rounded-lg text-xs whitespace-nowrap ${
+        isTouchDevice ? 'top-[125px]' : 'top-[230px]'
+      }`}>
         {roomId} • {playerCount} player{playerCount !== 1 ? 's' : ''}
       </div>
     </>

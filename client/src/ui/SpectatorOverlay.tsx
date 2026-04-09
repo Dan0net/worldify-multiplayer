@@ -7,7 +7,7 @@ import { useGameStore } from '../state/store';
 import { controls } from '../game/player/controls';
 import { GameMode, CHUNK_SIZE, VOXEL_SCALE, MAP_TILE_SIZE, encodeMapTileRequest } from '@worldify/shared';
 import { materialManager } from '../game/material';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
@@ -17,6 +17,7 @@ import { MapPanel } from './MapPanel';
 import { getMapTileCache } from '../game/maptile/mapTileCacheSingleton';
 import { sendBinary } from '../net/netClient';
 import { isTouchDevice } from '../game/player/isMobile';
+import { Maximize2, Minimize2 } from 'lucide-react';
 
 // Map panel dimensions — smaller on touch devices
 const MAP_PANEL_W = isTouchDevice ? Math.min(320, window.innerWidth - 32) : 400;
@@ -78,6 +79,23 @@ export function SpectatorOverlay() {
     return null;
   }
 
+  const [isFullscreen, setIsFullscreen] = useState(!!document.fullscreenElement);
+
+  // Track fullscreen changes
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
   const isConnected = connectionStatus === 'connected';
   const canStart = isConnected && spawnReady;
   const isLoadingHD = textureState === 'loading-high';
@@ -85,6 +103,10 @@ export function SpectatorOverlay() {
 
   const handleStart = () => {
     if (!canStart) return;
+    // On mobile, enter fullscreen when starting the game
+    if (isTouchDevice && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
     setGameMode(GameMode.Playing);
     if (!isTouchDevice) {
       controls.requestPointerLock();
@@ -148,16 +170,30 @@ export function SpectatorOverlay() {
                 </span>
               </div>
 
-              {/* Play button - lights up on panel hover */}
-              <span
-                className={`py-2 px-8 text-base font-semibold text-white rounded-lg shadow-[0_2px_12px_rgba(79,70,229,0.5)] transition-all duration-200 ${
-                  spawnReady
-                    ? 'bg-indigo-600 group-hover:bg-green-500 group-hover:shadow-[0_4px_20px_rgba(34,197,94,0.6)] group-hover:scale-110'
-                    : 'bg-gray-600/80 opacity-60'
-                }`}
-              >
-                {spawnReady ? '▶  Play' : '⏳  Loading...'}
-              </span>
+              <div className="flex items-center gap-2">
+                {/* Fullscreen toggle */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }}
+                  className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
+                  title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                >
+                  {isFullscreen
+                    ? <Minimize2 size={18} className="text-white/70" />
+                    : <Maximize2 size={18} className="text-white/70" />
+                  }
+                </button>
+
+                {/* Play button - lights up on panel hover */}
+                <span
+                  className={`py-2 px-8 text-base font-semibold text-white rounded-lg shadow-[0_2px_12px_rgba(79,70,229,0.5)] transition-all duration-200 ${
+                    spawnReady
+                      ? 'bg-indigo-600 group-hover:bg-green-500 group-hover:shadow-[0_4px_20px_rgba(34,197,94,0.6)] group-hover:scale-110'
+                      : 'bg-gray-600/80 opacity-60'
+                  }`}
+                >
+                  {spawnReady ? '▶  Play' : '⏳  Loading...'}
+                </span>
+              </div>
             </>
           ) : (
             <div className="text-white/80 text-sm w-full text-center">Connecting...</div>
@@ -174,7 +210,7 @@ export function SpectatorOverlay() {
           {/* Textures - two button toggle */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm">Textures</span>
-            <div className="flex gap-1" style={{ width: 268 }}>
+            <div className="flex gap-1 flex-1 min-w-0 ml-3">
               <button
                 onClick={() => { if (hasHD) handleToggleHD(); }}
                 disabled={textureState === 'loading-low'}
@@ -205,7 +241,7 @@ export function SpectatorOverlay() {
           {/* Quality preset */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm">Quality</span>
-            <div className="flex gap-1" style={{ width: 268 }}>
+            <div className="flex gap-1 flex-1 min-w-0 ml-3">
               {QUALITY_LEVELS.map((level) => (
                 <button
                   key={level}
@@ -225,7 +261,7 @@ export function SpectatorOverlay() {
           {/* View Distance - 4 button toggle */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm whitespace-nowrap">View Dist</span>
-            <div className="flex gap-1" style={{ width: 268 }}>
+            <div className="flex gap-1 flex-1 min-w-0 ml-3">
               {([{ label: 'Near', value: 4 }, { label: 'Close', value: 8 }, { label: 'Far', value: 10 }, { label: 'Max', value: 12 }] as const).map((opt) => (
                 <button
                   key={opt.value}
@@ -248,7 +284,7 @@ export function SpectatorOverlay() {
           {/* FoV slider */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm whitespace-nowrap">Field of View</span>
-            <div className="flex items-center gap-2" style={{ width: 268 }}>
+            <div className="flex items-center gap-2 flex-1 min-w-0 ml-3">
               <input
                 type="range"
                 min={75}

@@ -1,23 +1,38 @@
 /**
  * MobileControls - On-screen touch controls for mobile browsers
  *
- * Layout:
- * - Left side: Virtual joystick for movement (WASD)
- * - Right side: Touch area for camera look (replaces pointer lock mouselook)
- * - Bottom-right: Jump button + Sprint toggle
- * - Bottom-center: Build place button (when build active)
- * - Top-right: Build menu toggle
+ * Layout philosophy: RIGHT SIDE is the look area (clear touch zone).
+ * Buttons live at the edges/corners so they don't block camera look.
+ *
+ * ┌─────────────────────────────────┐
+ * │ [Menu]            [map] │
+ * │                                 │
+ * │                                 │
+ * │            LOOK AREA            │
+ * │                                 │
+ * │                  [Rot] [Sprint] │
+ * │  [Joystick]  [Place]    [Jump] │
+ * │       [====Build Strip====]     │
+ * └─────────────────────────────────┘
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { controls } from '../game/player/controls';
 import { useGameStore } from '../state/store';
 import { storeBridge } from '../state/bridge';
 import { NONE_PRESET_ID } from '@worldify/shared';
+import {
+  ChevronUp,
+  Zap,
+  Hammer,
+  Plus,
+  RotateCcw,
+  RotateCw,
+} from 'lucide-react';
 
 // --- Joystick constants ---
-const JOYSTICK_SIZE = 140;
-const JOYSTICK_KNOB = 56;
+const JOYSTICK_SIZE = 130;
+const JOYSTICK_KNOB = 52;
 const JOYSTICK_MAX_DIST = (JOYSTICK_SIZE - JOYSTICK_KNOB) / 2;
 const DEAD_ZONE = 0.15;
 
@@ -34,7 +49,7 @@ function Joystick() {
   }, []);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (touchIdRef.current !== null) return; // Already tracking
+    if (touchIdRef.current !== null) return;
     const touch = e.changedTouches[0];
     touchIdRef.current = touch.identifier;
     const rect = containerRef.current!.getBoundingClientRect();
@@ -42,7 +57,6 @@ function Joystick() {
       x: rect.left + rect.width / 2,
       y: rect.top + rect.height / 2,
     };
-    // Immediately process this touch position
     const dx = touch.clientX - originRef.current.x;
     const dy = touch.clientY - originRef.current.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -52,7 +66,7 @@ function Joystick() {
     const clampedDy = Math.sin(angle) * clampedDist;
     updateKnob(clampedDx, clampedDy);
     const nx = clampedDx / JOYSTICK_MAX_DIST;
-    const ny = -clampedDy / JOYSTICK_MAX_DIST; // Invert Y: up = forward
+    const ny = -clampedDy / JOYSTICK_MAX_DIST;
     controls.setTouchMove(
       Math.abs(nx) < DEAD_ZONE ? 0 : nx,
       Math.abs(ny) < DEAD_ZONE ? 0 : ny,
@@ -111,7 +125,6 @@ function Joystick() {
       className="relative rounded-full bg-white/10 border border-white/20 touch-none"
       style={{ width: JOYSTICK_SIZE, height: JOYSTICK_SIZE }}
     >
-      {/* Knob */}
       <div
         ref={knobRef}
         className="absolute rounded-full bg-white/40 border-2 border-white/60 shadow-lg"
@@ -127,7 +140,7 @@ function Joystick() {
   );
 }
 
-/** Camera look area — right side of screen */
+/** Camera look area — fills the right portion of the screen (behind all buttons) */
 function LookArea() {
   const touchIdRef = useRef<number | null>(null);
   const lastPosRef = useRef({ x: 0, y: 0 });
@@ -175,25 +188,22 @@ function LookArea() {
   return (
     <div
       onTouchStart={handleTouchStart}
-      className="absolute top-0 right-0 touch-none"
-      style={{ width: '50%', height: '100%' }}
+      className="absolute inset-0 touch-none"
     />
   );
 }
 
-/** Round action button */
+/** Round action button with Lucide icon */
 function ActionButton({
-  label,
-  icon,
-  size = 64,
+  children,
+  size = 60,
   active = false,
   onTouchStart,
   onTouchEnd,
   onClick,
   className = '',
 }: {
-  label: string;
-  icon?: string;
+  children: React.ReactNode;
   size?: number;
   active?: boolean;
   onTouchStart?: () => void;
@@ -227,9 +237,7 @@ function ActionButton({
         border-2 shadow-lg transition-colors ${className}`}
       style={{ width: size, height: size }}
     >
-      <span className="text-white font-bold text-sm pointer-events-none">
-        {icon || label}
-      </span>
+      {children}
     </div>
   );
 }
@@ -239,7 +247,7 @@ function MobileBuildStrip() {
   const build = useGameStore((s) => s.build);
 
   return (
-    <div className="flex gap-1.5 items-center">
+    <div className="flex gap-1 items-center overflow-x-auto max-w-[85vw] px-1">
       {[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((id) => {
         const isActive = build.presetId === id;
         const isNone = id === NONE_PRESET_ID;
@@ -250,8 +258,8 @@ function MobileBuildStrip() {
               e.stopPropagation();
               storeBridge.selectBuildPreset(id);
             }}
-            className={`flex items-center justify-center rounded-lg touch-none
-              w-10 h-10 text-xs font-bold transition-colors
+            className={`flex-shrink-0 flex items-center justify-center rounded-lg touch-none
+              w-9 h-9 text-xs font-bold transition-colors
               ${isActive
                 ? 'bg-cyan-500/60 text-white border border-cyan-400'
                 : 'bg-black/60 text-white/70 border border-white/20'
@@ -268,7 +276,7 @@ function MobileBuildStrip() {
 export function MobileControls() {
   const build = useGameStore((s) => s.build);
   const buildActive = build.presetId !== NONE_PRESET_ID;
-  const sprintActiveRef = useRef(false);
+  const [sprintActive, setSprintActive] = useState(false);
 
   const handleJumpStart = useCallback(() => {
     controls.setTouchJump(true);
@@ -279,8 +287,11 @@ export function MobileControls() {
   }, []);
 
   const handleSprintToggle = useCallback(() => {
-    sprintActiveRef.current = !sprintActiveRef.current;
-    controls.setTouchSprint(sprintActiveRef.current);
+    setSprintActive((prev) => {
+      const next = !prev;
+      controls.setTouchSprint(next);
+      return next;
+    });
   }, []);
 
   const handleBuildPlace = useCallback(() => {
@@ -301,71 +312,83 @@ export function MobileControls() {
 
   return (
     <div className="fixed inset-0 z-[60] pointer-events-none">
-      {/* Camera look area - covers right half, behind buttons */}
+      {/* Look area — full screen, lowest z-order so buttons sit on top */}
       <div className="pointer-events-auto">
         <LookArea />
       </div>
 
-      {/* Joystick - bottom left */}
-      <div className="absolute bottom-8 left-6 pointer-events-auto">
+      {/* ===== LEFT SIDE ===== */}
+
+      {/* Build menu toggle — top left (away from minimap) */}
+      <div className="absolute top-4 left-4 pointer-events-auto">
+        <ActionButton size={44} onClick={handleBuildMenu}>
+          <Hammer size={22} className="text-white" strokeWidth={2.5} />
+        </ActionButton>
+      </div>
+
+      {/* Joystick — bottom left */}
+      <div className="absolute bottom-14 left-4 pointer-events-auto">
         <Joystick />
       </div>
 
-      {/* Jump button - bottom right */}
-      <div className="absolute bottom-8 right-6 pointer-events-auto">
+      {/* ===== RIGHT SIDE — buttons around the edges ===== */}
+
+      {/* Jump — bottom right corner (primary action, large) */}
+      <div className="absolute bottom-14 right-4 pointer-events-auto">
         <ActionButton
-          label="Jump"
-          icon="^"
-          size={72}
+          size={68}
           onTouchStart={handleJumpStart}
           onTouchEnd={handleJumpEnd}
-        />
+        >
+          <ChevronUp size={32} className="text-white" strokeWidth={3} />
+        </ActionButton>
       </div>
 
-      {/* Sprint button - above jump */}
-      <div className="absolute bottom-28 right-6 pointer-events-auto">
+      {/* Sprint — above jump */}
+      <div className="absolute bottom-36 right-4 pointer-events-auto">
         <ActionButton
-          label="Sprint"
-          icon="S"
-          size={52}
-          active={sprintActiveRef.current}
+          size={48}
+          active={sprintActive}
           onClick={handleSprintToggle}
-        />
+        >
+          <Zap
+            size={22}
+            className={sprintActive ? 'text-yellow-300' : 'text-white'}
+            strokeWidth={2.5}
+            fill={sprintActive ? 'currentColor' : 'none'}
+          />
+        </ActionButton>
       </div>
 
-      {/* Build controls - only when a build preset is active */}
+      {/* Build controls — only when a build preset is active */}
       {buildActive && (
         <>
-          {/* Place button - center right */}
-          <div className="absolute bottom-8 right-24 pointer-events-auto">
+          {/* Place — to the left of jump */}
+          <div className="absolute bottom-14 right-20 pointer-events-auto">
             <ActionButton
-              label="Place"
-              icon="+"
-              size={72}
+              size={60}
               onClick={handleBuildPlace}
-              className="bg-green-500/30 border-green-400/60"
-            />
+              className="bg-green-500/25 border-green-400/50"
+            >
+              <Plus size={28} className="text-green-300" strokeWidth={3} />
+            </ActionButton>
           </div>
 
-          {/* Rotate buttons - above place */}
-          <div className="absolute bottom-28 right-28 flex gap-2 pointer-events-auto">
-            <ActionButton label="Q" icon="<" size={44} onClick={handleRotateLeft} />
-            <ActionButton label="E" icon=">" size={44} onClick={handleRotateRight} />
+          {/* Rotate — above the place button */}
+          <div className="absolute bottom-36 right-16 flex gap-2 pointer-events-auto">
+            <ActionButton size={40} onClick={handleRotateLeft}>
+              <RotateCcw size={18} className="text-white" strokeWidth={2.5} />
+            </ActionButton>
+            <ActionButton size={40} onClick={handleRotateRight}>
+              <RotateCw size={18} className="text-white" strokeWidth={2.5} />
+            </ActionButton>
           </div>
         </>
       )}
 
-      {/* Build menu toggle - top right */}
-      <div className="absolute top-4 right-4 pointer-events-auto">
-        <ActionButton
-          label="Build"
-          icon="B"
-          size={44}
-          onClick={handleBuildMenu}
-        />
-      </div>
+      {/* ===== BOTTOM CENTER ===== */}
 
-      {/* Build preset strip - bottom center */}
+      {/* Build preset strip */}
       <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-auto">
         <MobileBuildStrip />
       </div>
