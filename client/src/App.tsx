@@ -3,6 +3,7 @@ import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
 import { BuildToolbar } from './ui/BuildToolbar';
+import { BuildMenu } from './ui/BuildMenu';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
 import { useGameStore } from './state/store';
@@ -42,7 +43,12 @@ function App() {
         </div>
       )}
       {/* Mobile touch controls overlay — only when playing on touch devices */}
-      {isTouchDevice && isPlaying && <MobileControls />}
+      {isTouchDevice && isPlaying && (
+        <>
+          <MobileControls />
+          <BuildMenu />
+        </>
+      )}
     </>
   );
 }
