@@ -15,6 +15,7 @@ import {
 } from '@worldify/shared';
 import { storeBridge } from '../../state/bridge';
 import { textureCache } from '../material/TextureCache.js';
+import { isTouch } from '../deviceMode';
 
 /** Callback for build place action */
 export type BuildPlaceCallback = () => void;
@@ -27,6 +28,16 @@ export class Controls {
 
   public yaw = 0;
   public pitch = 0;
+
+  /** Movement/action bits contributed by touch controls (OR-ed into getButtonMask). */
+  private touchButtons = 0;
+
+  /**
+   * Screen-space cast point in NDC (-1..1) for the build raycast.
+   * `null` on desktop → BuildMarker uses the camera-centre ray (pointer-lock).
+   * Set by the mobile reticle so aiming can be decoupled from look.
+   */
+  public castNDC: { x: number; y: number } | null = null;
 
   /** Callback when user clicks to place a build */
   public onBuildPlace: BuildPlaceCallback | null = null;
@@ -186,6 +197,8 @@ export class Controls {
   }
 
   requestPointerLock(): void {
+    // Touch devices have no pointer lock; entering Playing mode is button-driven.
+    if (isTouch()) return;
     document.body.requestPointerLock();
   }
 
@@ -197,7 +210,42 @@ export class Controls {
     if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) mask |= INPUT_RIGHT;
     if (this.keys.has('Space')) mask |= INPUT_JUMP;
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) mask |= INPUT_SPRINT;
-    return mask;
+    return mask | this.touchButtons;
+  }
+
+  // ============== Touch input surface (mobile) ==============
+
+  /** Set or clear a single input bit from touch buttons (Jump, Sprint, …). */
+  setTouchButton(bit: number, on: boolean): void {
+    this.touchButtons = on ? (this.touchButtons | bit) : (this.touchButtons & ~bit);
+  }
+
+  /**
+   * Set movement direction from the virtual joystick.
+   * @param moveX left/right in -1..1, moveZ forward(-)/back(+) in -1..1.
+   * Maps to the existing 8-way direction bits via a deadzone threshold.
+   */
+  setTouchMove(moveX: number, moveZ: number): void {
+    this.touchButtons &= ~(INPUT_FORWARD | INPUT_BACKWARD | INPUT_LEFT | INPUT_RIGHT);
+    const t = 0.3;
+    if (moveZ < -t) this.touchButtons |= INPUT_FORWARD;
+    if (moveZ > t) this.touchButtons |= INPUT_BACKWARD;
+    if (moveX < -t) this.touchButtons |= INPUT_LEFT;
+    if (moveX > t) this.touchButtons |= INPUT_RIGHT;
+  }
+
+  /** Apply a look delta from a touch drag (same sensitivity as mouse). */
+  applyLookDelta(dx: number, dy: number): void {
+    this.yaw -= dx * 0.002;
+    this.pitch -= dy * 0.002;
+    this.pitch = clamp(this.pitch, -Math.PI / 2, Math.PI / 2);
+  }
+
+  /** Trigger a build placement (mobile reticle release). */
+  triggerPlace(): void {
+    if (storeBridge.buildIsEnabled && this.onBuildPlace) {
+      this.onBuildPlace();
+    }
   }
 
   dispose(): void {

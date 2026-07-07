@@ -16,6 +16,7 @@ import { DEFAULT_BUILD_PRESETS, NONE_PRESET_ID, type BuildConfig, type Quat } fr
 import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 import { BuildMenu } from './BuildMenu';
 import { usePresetThumbnail } from './usePresetThumbnail';
+import { useIsTouch } from './useDeviceMode';
 
 
 /** Single hotbar slot — uses hook for thumbnail */
@@ -42,7 +43,7 @@ function HotbarSlot({
       onClick={onSelect}
       className={`
         relative flex items-center justify-center
-        w-24 h-24 rounded-2xl cursor-pointer transition-all
+        w-14 h-14 md:w-24 md:h-24 rounded-xl md:rounded-2xl cursor-pointer transition-all
         bg-black/80
         ${isActive
           ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
@@ -64,11 +65,11 @@ function HotbarSlot({
         <img
           src={thumbnailUrl}
           alt=""
-          className="w-[88px] h-[88px] object-contain"
+          className="w-[52px] h-[52px] md:w-[88px] md:h-[88px] object-contain"
           draggable={false}
         />
       ) : (
-        <div className={`text-3xl ${isNone ? 'text-white/30' : 'text-white/90'}`}>
+        <div className={`text-xl md:text-3xl ${isNone ? 'text-white/30' : 'text-white/90'}`}>
           {isNone ? '✕' : '◼'}
         </div>
       )}
@@ -85,7 +86,7 @@ export function HotbarStrip({
   onSelect?: (presetId: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1 md:gap-1.5">
       {[...DEFAULT_BUILD_PRESETS.slice(1), DEFAULT_BUILD_PRESETS[0]].map((preset) => {
         const config = build.presetConfigs[preset.id];
         const meta = build.presetMeta[preset.id];
@@ -108,16 +109,21 @@ export function HotbarStrip({
 
 export function BuildToolbar() {
   const build = useGameStore((s) => s.build);
+  const setBuildPreset = useGameStore((s) => s.setBuildPreset);
+  const isTouch = useIsTouch();
 
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-auto">
+    <div className="absolute bottom-3 md:bottom-4 left-1/2 -translate-x-1/2 max-w-[100vw] flex flex-col items-center gap-2 pointer-events-none">
       {/* Build menu pops up above the hotbar */}
       <BuildMenu />
 
-      <HotbarStrip build={build} />
+      {/* Scroll horizontally if the strip is wider than the viewport */}
+      <div className="max-w-[100vw] overflow-x-auto px-2 pointer-events-auto">
+        <HotbarStrip build={build} onSelect={setBuildPreset} />
+      </div>
 
-      {/* Hotkey hints */}
-      <KeyInstructions rows={GAME_KEY_ROWS} />
+      {/* Hotkey hints (desktop only) */}
+      {!isTouch && <KeyInstructions rows={GAME_KEY_ROWS} />}
     </div>
   );
 }

@@ -16,6 +16,7 @@ import { KeyInstructions, GAME_KEY_ROWS } from './KeyInstructions';
 import { MapPanel } from './MapPanel';
 import { getMapTileCache } from '../game/maptile/mapTileCacheSingleton';
 import { sendBinary } from '../net/netClient';
+import { useIsTouch } from './useDeviceMode';
 
 // Map panel dimensions
 const MAP_PANEL_W = 400;
@@ -37,6 +38,7 @@ export function SpectatorOverlay() {
   const qualityLevel = useGameStore((s) => s.qualityLevel);
   const visibilityRadius = useGameStore((s) => s.visibilityRadius);
   const fov = useGameStore((s) => s.fov);
+  const isTouch = useIsTouch();
 
   // Request tiles to fill the spectator map panel (independent of view distance)
   // Requests are throttled to MAX_TILES_PER_TICK per interval and prioritized center-outward
@@ -98,10 +100,12 @@ export function SpectatorOverlay() {
   };
 
   return (
-    <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-black/40 z-50 pointer-events-none">
+    <div className="fixed inset-0 flex flex-col items-center justify-start md:justify-center overflow-y-auto py-4 bg-gradient-to-b from-transparent to-black/40 z-50 pointer-events-none">
       {/* Logo */}
-      <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-28 mb-8" />
+      <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-14 md:h-28 mt-2 mb-3 md:mb-8" />
 
+      {/* Map + settings: stacked on desktop/portrait, side-by-side on landscape phones */}
+      <div className="flex flex-col items-center gap-3 max-md:landscape:flex-row max-md:landscape:items-start">
       {/* ===== Room Panel with Map Background ===== */}
       <div
         onClick={canStart ? handleStart : undefined}
@@ -110,7 +114,7 @@ export function SpectatorOverlay() {
             ? 'cursor-pointer hover:scale-[1.03] hover:shadow-[0_0_50px_rgba(34,197,94,0.6),0_12px_48px_rgba(34,197,94,0.4)] hover:border-green-400'
             : ''
         }`}
-        style={{ width: MAP_PANEL_W, height: MAP_PANEL_H }}
+        style={{ width: 'min(400px, 92vw)', height: 'min(280px, 64.4vw)' }}
       >
         {/* Solid background before map loads */}
         <div className="absolute inset-0 bg-gray-900" />
@@ -165,13 +169,13 @@ export function SpectatorOverlay() {
       {/* ===== Settings Panel ===== */}
       {isConnected && (
         <div
-          className="mt-3 rounded-2xl bg-black/80 border border-white/10 pointer-events-auto py-4 px-5 flex flex-col gap-3"
-          style={{ width: MAP_PANEL_W }}
+          className="rounded-2xl bg-black/80 border border-white/10 pointer-events-auto py-4 px-5 flex flex-col gap-3"
+          style={{ width: 'min(400px, 92vw)' }}
         >
           {/* Textures - two button toggle */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm">Textures</span>
-            <div className="flex gap-1" style={{ width: 268 }}>
+            <div className="flex gap-1 flex-1">
               <button
                 onClick={() => { if (hasHD) handleToggleHD(); }}
                 disabled={textureState === 'loading-low'}
@@ -202,7 +206,7 @@ export function SpectatorOverlay() {
           {/* Quality preset */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm">Quality</span>
-            <div className="flex gap-1" style={{ width: 268 }}>
+            <div className="flex gap-1 flex-1">
               {QUALITY_LEVELS.map((level) => (
                 <button
                   key={level}
@@ -222,7 +226,7 @@ export function SpectatorOverlay() {
           {/* View Distance - 4 button toggle */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm whitespace-nowrap">View Dist</span>
-            <div className="flex gap-1" style={{ width: 268 }}>
+            <div className="flex gap-1 flex-1">
               {([{ label: 'Near', value: 4 }, { label: 'Close', value: 8 }, { label: 'Far', value: 10 }, { label: 'Max', value: 12 }] as const).map((opt) => (
                 <button
                   key={opt.value}
@@ -245,7 +249,7 @@ export function SpectatorOverlay() {
           {/* FoV slider */}
           <div className="flex items-center justify-between">
             <span className="text-white/70 text-sm whitespace-nowrap">Field of View</span>
-            <div className="flex items-center gap-2" style={{ width: 268 }}>
+            <div className="flex items-center gap-2 flex-1">
               <input
                 type="range"
                 min={75}
@@ -269,8 +273,10 @@ export function SpectatorOverlay() {
         </div>
       )}
 
-      {/* Controls hint at bottom */}
-      {isConnected && (
+      </div>
+
+      {/* Controls hint at bottom (desktop only) */}
+      {isConnected && !isTouch && (
         <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
           <KeyInstructions rows={GAME_KEY_ROWS} />
         </div>

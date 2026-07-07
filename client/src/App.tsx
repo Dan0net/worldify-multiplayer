@@ -4,13 +4,17 @@ import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
 import { BuildToolbar } from './ui/BuildToolbar';
 import { MapOverlay } from './ui/MapOverlay';
+import { MobileControls } from './ui/MobileControls';
+import { RotateDevicePrompt } from './ui/RotateDevicePrompt';
 import { useGameStore } from './state/store';
+import { useIsTouch } from './ui/useDeviceMode';
 import { createGame } from './game/createGame';
 import { GameMode } from '@worldify/shared';
 
 function App() {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   const gameMode = useGameStore((s) => s.gameMode);
+  const isTouch = useIsTouch();
   const joinAttempted = useRef(false);
 
   // Auto-join on mount - skip menu, go straight to spectator mode
@@ -39,6 +43,12 @@ function App() {
           <DebugPanel />
         </div>
       )}
+
+      {/* Touch controls (mobile) — sit above the canvas, below the HUD layer */}
+      {connectionStatus === 'connected' && isPlaying && isTouch && <MobileControls />}
+
+      {/* Portrait rotate prompt — self-gates to touch + portrait */}
+      <RotateDevicePrompt />
     </>
   );
 }

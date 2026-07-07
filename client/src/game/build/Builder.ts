@@ -146,8 +146,10 @@ export class Builder {
     // Get collision meshes for raycasting
     const meshes = this.meshProvider.getCollisionMeshes();
 
-    // Update the marker and get valid target state
-    let { hasValidTarget } = this.marker.update(camera, meshes);
+    // Update the marker and get valid target state.
+    // On mobile, controls.castNDC positions the ray at the draggable reticle;
+    // on desktop it is null and the marker uses the camera-centre ray.
+    let { hasValidTarget } = this.marker.update(camera, meshes, this.controls.castNDC);
     let invalidReason: 'tooClose' | null = null;
 
     // Apply grid snap to marker position (before overlap check)
