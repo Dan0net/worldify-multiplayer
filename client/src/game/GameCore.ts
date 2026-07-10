@@ -184,6 +184,13 @@ export class GameCore {
       this.builder.setVoxelWorld(this.voxelIntegration.world, scene);
       this.builder.addToScene(scene);
 
+      // Offline builds apply locally; refresh map tiles like the server-commit path does.
+      this.builder.onBuildApplied = (modifiedChunks) => {
+        if (modifiedChunks.length > 0) {
+          this.updateMapTilesFromChunks(modifiedChunks);
+        }
+      };
+
       // Register chunk clearing callback for F9 debug
       storeBridge.setClearChunksCallback(() => {
         const playerPos = this.playerManager.getLocalPlayer().position.clone();

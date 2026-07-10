@@ -60,6 +60,12 @@ export class Builder {
   /** Injected controls instance */
   private readonly controls: Controls;
 
+  /**
+   * Called after a build is applied locally (offline mode) with the modified
+   * chunk keys, so the host can refresh map tiles. Set by GameCore.
+   */
+  public onBuildApplied: ((modifiedChunkKeys: string[]) => void) | null = null;
+
   constructor(controls: Controls) {
     this.controls = controls;
     this.marker = new BuildMarker();
@@ -334,15 +340,24 @@ export class Builder {
       config: preset.config,
     };
 
-    // Send build intent to server
-    const encoded = encodeVoxelBuildIntent(intent);
-    sendBinary(encoded);
+    if (storeBridge.useServerChunks) {
+      // Multiplayer: send intent; server validates and broadcasts a commit that
+      // every client (including us) applies via GameCore.handleBuildCommit.
+      const encoded = encodeVoxelBuildIntent(intent);
+      sendBinary(encoded);
+    } else {
+      // Offline: no server round-trip — apply directly to the local world.
+      const operation = { center, rotation, config: preset.config };
+      const modified = this.voxelWorld?.applyBuildOperation(operation) ?? [];
+      if (modified.length > 0) {
+        this.onBuildApplied?.(modified);
+      }
+    }
 
     // Deposit snap points at the placed position
     this.snapManager.deposit(preset, center, rotation);
 
-    // Note: We no longer apply locally - server will broadcast commit and we apply from that
-    // This ensures all clients stay in sync. Hold preview visible until server-confirmed remesh.
+    // Hold preview visible until the (server- or locally-) triggered remesh completes.
     this.preview.holdPreview();
   };
 

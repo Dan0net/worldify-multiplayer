@@ -75,18 +75,36 @@ export class SpawnManager {
     // Only re-raycast if mesh count changed (new chunks loaded)
     if (currentMeshCount !== this.lastMeshCount) {
       this.lastMeshCount = currentMeshCount;
-      
-      // Attempt raycast at origin
-      const terrainHeight = this.raycastTerrainHeight(0, 0);
-      
-      if (terrainHeight !== null) {
-        const spawnY = this.calculateSpawnY(terrainHeight);
-        this.cachedSpawnPosition = new THREE.Vector3(0, spawnY, 0);
+
+      // Find ground near the origin (samples a small fan so we don't land on the
+      // exact 4-chunk corner seam at 0,0 where the ray can slip through).
+      const ground = this.findGroundNear(0, 0);
+      if (ground) {
+        this.cachedSpawnPosition = new THREE.Vector3(ground.x, this.calculateSpawnY(ground.height), ground.z);
         this.spawnFound = true;
       } else {
         this.spawnFound = false;
       }
     }
+  }
+
+  /** XZ offsets (metres) sampled around a target when finding ground. */
+  private static readonly SAMPLE_OFFSETS: ReadonlyArray<readonly [number, number]> = [
+    [0, 0], [2, 2], [-2, 2], [2, -2], [-2, -2], [4, 0], [0, 4], [-4, 0], [0, -4],
+  ];
+
+  /**
+   * Raycast down at a target and a few nearby offsets, returning the first hit.
+   * Avoids the failure where an exact chunk-corner ray misses the surface mesh.
+   */
+  private findGroundNear(x: number, z: number): { x: number; z: number; height: number } | null {
+    for (const [ox, oz] of SpawnManager.SAMPLE_OFFSETS) {
+      const height = this.raycastTerrainHeight(x + ox, z + oz);
+      if (height !== null) {
+        return { x: x + ox, z: z + oz, height };
+      }
+    }
+    return null;
   }
 
   /**
@@ -116,13 +134,12 @@ export class SpawnManager {
    * @returns Spawn position
    */
   getSpawnPosition(x: number = 0, z: number = 0): THREE.Vector3 {
-    const terrainHeight = this.raycastTerrainHeight(x, z);
-    
-    if (terrainHeight !== null) {
-      const spawnY = this.calculateSpawnY(terrainHeight);
-      return new THREE.Vector3(x, spawnY, z);
+    const ground = this.findGroundNear(x, z);
+
+    if (ground) {
+      return new THREE.Vector3(ground.x, this.calculateSpawnY(ground.height), ground.z);
     }
-    
+
     // Fallback: spawn HIGH to let gravity bring player down
     console.warn('[SpawnManager] No terrain found, using fallback height');
     return new THREE.Vector3(x, SPAWN_FALLBACK_HEIGHT, z);
@@ -150,18 +167,18 @@ export class SpawnManager {
       return lastGroundedPos.clone();
     }
     
-    // Option 2: Raycast at current XZ
-    const terrainAtCurrent = this.raycastTerrainHeight(currentPos.x, currentPos.z);
-    if (terrainAtCurrent !== null) {
-      return new THREE.Vector3(currentPos.x, this.calculateSpawnY(terrainAtCurrent), currentPos.z);
+    // Option 2: Ground near current XZ
+    const atCurrent = this.findGroundNear(currentPos.x, currentPos.z);
+    if (atCurrent) {
+      return new THREE.Vector3(atCurrent.x, this.calculateSpawnY(atCurrent.height), atCurrent.z);
     }
-    
-    // Option 3: Raycast at origin
-    const terrainAtOrigin = this.raycastTerrainHeight(0, 0);
-    if (terrainAtOrigin !== null) {
-      return new THREE.Vector3(0, this.calculateSpawnY(terrainAtOrigin), 0);
+
+    // Option 3: Ground near origin
+    const atOrigin = this.findGroundNear(0, 0);
+    if (atOrigin) {
+      return new THREE.Vector3(atOrigin.x, this.calculateSpawnY(atOrigin.height), atOrigin.z);
     }
-    
+
     // All methods failed - terrain not loaded
     return null;
   }

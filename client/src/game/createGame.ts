@@ -1,11 +1,24 @@
 import { GameCore } from './GameCore';
 import { storeBridge } from '../state/bridge';
+import { useGameStore } from '../state/store';
 import { connectToServer, getPlayerId, setOnReconnected } from '../net/netClient';
 
 let gameCore: GameCore | null = null;
 
-export async function createGame(): Promise<GameCore> {
+export type GameStartMode = 'online' | 'local';
+
+export async function createGame(mode: GameStartMode = 'online'): Promise<GameCore> {
   if (gameCore) {
+    return gameCore;
+  }
+
+  if (mode === 'local') {
+    // Offline: no server. Generate terrain client-side and un-gate the UI.
+    useGameStore.getState().setUseServerChunks(false);
+    storeBridge.updateConnectionStatus('connected');
+    gameCore = new GameCore();
+    await gameCore.init();
+    gameCore.setLocalPlayerId(1); // synthetic id (no server assignment)
     return gameCore;
   }
 

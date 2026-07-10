@@ -47,6 +47,10 @@ import {
   getCameraDirection,
   type ChunkProvider,
 } from './VisibilityBFS.js';
+import { LocalTerrainSource } from './LocalTerrainSource.js';
+
+/** Seed for local (offline) terrain generation. Matches the server default. */
+const LOCAL_TERRAIN_SEED = 12345;
 
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
@@ -89,6 +93,9 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Column info from received tiles: maxCy for the column. Keyed by "tx,tz" */
   private columnInfo: Map<string, { maxCy: number }> = new Map();
+
+  /** Local terrain generator (offline mode). Created lazily on first use. */
+  private localSource: LocalTerrainSource | null = null;
 
   /** Callback to notify external systems (e.g. map cache) when a tile arrives */
   onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
@@ -382,7 +389,13 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumns.add(columnKey);
     this.pendingColumnTimes.set(columnKey, Date.now());
     this.initialColumnRequested = true;
-    
+
+    if (this.isLocal) {
+      this.receiveSurfaceColumnData(this.getLocalSource().generateColumn(tx, tz));
+      console.log(`[VoxelWorld] Generated initial surface column locally (${tx}, ${tz})`);
+      return;
+    }
+
     const request = encodeSurfaceColumnRequest({ tx, tz });
     sendBinary(request);
     console.log(`[VoxelWorld] Requested initial surface column (${tx}, ${tz})`);
@@ -616,14 +629,32 @@ export class VoxelWorld implements ChunkProvider {
     }
   }
 
+  /** True when running offline (no multiplayer server) — generate chunks locally. */
+  private get isLocal(): boolean {
+    return !storeBridge.useServerChunks;
+  }
+
+  private getLocalSource(): LocalTerrainSource {
+    if (!this.localSource) {
+      this.localSource = new LocalTerrainSource(LOCAL_TERRAIN_SEED);
+    }
+    return this.localSource;
+  }
+
   /**
-   * Request a chunk from the server.
+   * Request a chunk — from the server, or generate it locally in offline mode.
    */
   private requestChunkFromServer(cx: number, cy: number, cz: number): void {
     const key = chunkKey(cx, cy, cz);
     this.pendingChunks.add(key);
     this.pendingChunkTimes.set(key, Date.now());
-    
+
+    if (this.isLocal) {
+      // Generate + ingest synchronously (meshing/lighting still run as usual).
+      this.receiveChunkData(this.getLocalSource().generateChunk(cx, cy, cz));
+      return;
+    }
+
     const request = encodeVoxelChunkRequest({
       chunkX: cx,
       chunkY: cy,
@@ -640,9 +671,15 @@ export class VoxelWorld implements ChunkProvider {
   private requestTileFromServer(tx: number, tz: number): void {
     const columnKey = `${tx},${tz}`;
     if (this.pendingTiles.has(columnKey)) return;
-    
+
     this.pendingTiles.add(columnKey);
     this.pendingTileTimes.set(columnKey, Date.now());
+
+    if (this.isLocal) {
+      this.receiveTileData(this.getLocalSource().generateTile(tx, tz));
+      return;
+    }
+
     sendBinary(encodeMapTileRequest({ tx, tz }));
   }
 
