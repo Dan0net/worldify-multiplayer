@@ -36,6 +36,7 @@ import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, 
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
+import { isTouch } from './deviceMode';
 import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
@@ -133,8 +134,10 @@ export class GameCore {
       qualityLevel = detectQualityLevel(gl);
       console.log(`[Quality] Auto-detected preset: ${qualityLevel}`);
     }
-    // Store the level so UI can read it
-    const effectiveVisibility = savedVisibility ?? QUALITY_PRESETS[qualityLevel].visibilityRadius;
+    // Store the level so UI can read it. Mobile defaults to a near view
+    // distance (4 chunks) unless the user has saved a preference.
+    const effectiveVisibility = savedVisibility
+      ?? (isTouch() ? 2 : QUALITY_PRESETS[qualityLevel].visibilityRadius);
 
     // Initialize voxel terrain system
     if (scene) {
@@ -183,6 +186,13 @@ export class GameCore {
       this.builder.setMeshProvider(this.voxelIntegration);
       this.builder.setVoxelWorld(this.voxelIntegration.world, scene);
       this.builder.addToScene(scene);
+
+      // Offline builds apply locally; refresh map tiles like the server-commit path does.
+      this.builder.onBuildApplied = (modifiedChunks) => {
+        if (modifiedChunks.length > 0) {
+          this.updateMapTilesFromChunks(modifiedChunks);
+        }
+      };
 
       // Register chunk clearing callback for F9 debug
       storeBridge.setClearChunksCallback(() => {

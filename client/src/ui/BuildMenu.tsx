@@ -22,6 +22,7 @@ import {
 } from '@worldify/shared';
 import { usePresetThumbnail } from './usePresetThumbnail';
 import { BuildConfigTab } from './BuildConfigTab';
+import { isTouch } from '../game/deviceMode';
 
 // ============== Constants ==============
 
@@ -53,7 +54,7 @@ function MaterialCubeThumb({
       onClick={onSelect}
       className={`
         relative flex items-center justify-center
-        w-24 h-24 rounded-2xl transition-all snap-start
+        w-16 h-16 md:w-24 md:h-24 rounded-xl md:rounded-2xl transition-all snap-start
         bg-black/80
         ${isActive
           ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
@@ -65,7 +66,7 @@ function MaterialCubeThumb({
         <img
           src={thumbnailUrl}
           alt=""
-          className="w-[88px] h-[88px] object-contain"
+          className="w-[60px] h-[60px] md:w-[88px] md:h-[88px] object-contain"
           draggable={false}
         />
       ) : (
@@ -90,7 +91,7 @@ function PresetButton({
       onClick={onSelect}
       className={`
         relative flex items-center justify-center
-        w-24 h-24 rounded-2xl transition-all snap-start
+        w-16 h-16 md:w-24 md:h-24 rounded-xl md:rounded-2xl transition-all snap-start
         bg-black/80
         ${isActive
           ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
@@ -102,7 +103,7 @@ function PresetButton({
         <img
           src={thumbnailUrl}
           alt=""
-          className="w-[88px] h-[88px] object-contain"
+          className="w-[60px] h-[60px] md:w-[88px] md:h-[88px] object-contain"
           draggable={false}
         />
       ) : (
@@ -156,10 +157,13 @@ export function BuildMenu() {
 
   const handleClose = useCallback(() => {
     setBuildMenuOpen(false);
-    // Re-lock pointer after a tiny delay (browser requirement)
-    requestAnimationFrame(() => {
-      document.body.requestPointerLock();
-    });
+    // Re-lock pointer after a tiny delay (browser requirement).
+    // Touch devices have no pointer lock — skip it there.
+    if (!isTouch()) {
+      requestAnimationFrame(() => {
+        document.body.requestPointerLock();
+      });
+    }
   }, [setBuildMenuOpen]);
 
   const handleSelectMaterial = useCallback((materialId: number) => {
@@ -186,17 +190,17 @@ export function BuildMenu() {
 
   return (
     <>
-      {/* Invisible backdrop to catch outside clicks */}
+      {/* Invisible backdrop to catch outside clicks/taps */}
       <div
         className="fixed inset-0 z-[99]"
-        onMouseDown={handleClose}
+        onPointerDown={handleClose}
         onContextMenu={handleContextMenu}
       />
 
       {/* Menu panel — same width as hotbar, sits directly above it */}
       <div
-        className="relative z-[100] w-full flex flex-col max-h-[60vh] pointer-events-auto"
-        onMouseDown={(e) => e.stopPropagation()}
+        className="relative z-[100] w-full flex flex-col max-h-[70vh] pointer-events-auto"
+        onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={handleContextMenu}
       >
         {/* Tab bar — own background, spaced from content */}
@@ -230,6 +234,14 @@ export function BuildMenu() {
               }`}
           >
             Config
+          </button>
+          {/* Close button — primary way to dismiss on touch (no Tab/right-click) */}
+          <button
+            onClick={handleClose}
+            aria-label="Close build menu"
+            className="shrink-0 px-4 py-2 text-sm font-medium rounded-xl bg-black/80 text-white/50 hover:text-white/90 hover:bg-black/90 transition-colors"
+          >
+            ✕
           </button>
         </div>
 

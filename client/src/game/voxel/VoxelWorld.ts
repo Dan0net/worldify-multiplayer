@@ -47,6 +47,16 @@ import {
   getCameraDirection,
   type ChunkProvider,
 } from './VisibilityBFS.js';
+import { TerrainWorkerPool } from './TerrainWorkerPool.js';
+
+/** Seed for local (offline) terrain generation. Matches the server default. */
+const LOCAL_TERRAIN_SEED = 12345;
+
+/**
+ * Extra chunks generated above a column's baseline surface so stamp/tree tops
+ * (which sit above the terrain-only tile height) are not clipped.
+ */
+const SURFACE_CHUNK_MARGIN = 1;
 
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
@@ -89,6 +99,9 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Column info from received tiles: maxCy for the column. Keyed by "tx,tz" */
   private columnInfo: Map<string, { maxCy: number }> = new Map();
+
+  /** Local terrain generation worker pool (offline mode). Created lazily. */
+  private localPool: TerrainWorkerPool | null = null;
 
   /** Callback to notify external systems (e.g. map cache) when a tile arrives */
   onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
@@ -217,8 +230,10 @@ export class VoxelWorld implements ChunkProvider {
   setVisibilityRadius(radius: number): void {
     if (radius === this._visibilityRadius) return;
     this._visibilityRadius = radius;
-    // Invalidate BFS cache so it recomputes with new radius
+    // Invalidate BFS cache and force a mesh-visibility/unload rescan so the
+    // change takes effect immediately even when the player isn't moving.
     this.lastBFSChunk = null;
+    this.visibilityDirty = true;
     console.log(`[VoxelWorld] Visibility radius set to ${radius}`);
   }
 
@@ -382,7 +397,13 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumns.add(columnKey);
     this.pendingColumnTimes.set(columnKey, Date.now());
     this.initialColumnRequested = true;
-    
+
+    if (this.isLocal) {
+      this.getLocalPool().requestColumn(tx, tz, (data) => this.receiveSurfaceColumnData(data));
+      console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
+      return;
+    }
+
     const request = encodeSurfaceColumnRequest({ tx, tz });
     sendBinary(request);
     console.log(`[VoxelWorld] Requested initial surface column (${tx}, ${tz})`);
@@ -516,8 +537,9 @@ export class VoxelWorld implements ChunkProvider {
       // Don't request chunks for columns without tile data yet
       if (!info) continue;
       
-      // Skip chunks above the surface (+1 for top-face margin stitching)
-      if (cy > info.maxCy) continue;
+      // Skip chunks above the surface, keeping a margin so stamp/tree tops
+      // (above the terrain-only tile height) and top-face stitching are covered.
+      if (cy > info.maxCy + SURFACE_CHUNK_MARGIN) continue;
       
       this.requestChunkFromServer(cx, cy, cz);
       chunkRequests++;
@@ -616,14 +638,32 @@ export class VoxelWorld implements ChunkProvider {
     }
   }
 
+  /** True when running offline (no multiplayer server) — generate chunks locally. */
+  private get isLocal(): boolean {
+    return !storeBridge.useServerChunks;
+  }
+
+  private getLocalPool(): TerrainWorkerPool {
+    if (!this.localPool) {
+      this.localPool = new TerrainWorkerPool(LOCAL_TERRAIN_SEED);
+    }
+    return this.localPool;
+  }
+
   /**
-   * Request a chunk from the server.
+   * Request a chunk — from the server, or generate it locally (off-thread) in
+   * offline mode. The worker callback feeds the same receiveChunkData path.
    */
   private requestChunkFromServer(cx: number, cy: number, cz: number): void {
     const key = chunkKey(cx, cy, cz);
     this.pendingChunks.add(key);
     this.pendingChunkTimes.set(key, Date.now());
-    
+
+    if (this.isLocal) {
+      this.getLocalPool().requestChunk(cx, cy, cz, (data) => this.receiveChunkData(data));
+      return;
+    }
+
     const request = encodeVoxelChunkRequest({
       chunkX: cx,
       chunkY: cy,
@@ -640,9 +680,15 @@ export class VoxelWorld implements ChunkProvider {
   private requestTileFromServer(tx: number, tz: number): void {
     const columnKey = `${tx},${tz}`;
     if (this.pendingTiles.has(columnKey)) return;
-    
+
     this.pendingTiles.add(columnKey);
     this.pendingTileTimes.set(columnKey, Date.now());
+
+    if (this.isLocal) {
+      this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
+      return;
+    }
+
     sendBinary(encodeMapTileRequest({ tx, tz }));
   }
 
@@ -1106,6 +1152,8 @@ export class VoxelWorld implements ChunkProvider {
     // Terminate workers unless told to keep them
     if (!keepWorkers) {
       this.meshPool.dispose();
+      this.localPool?.dispose();
+      this.localPool = null;
     }
 
     // Dispose chunk grouper (removes merged meshes from scene)

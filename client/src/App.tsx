@@ -4,29 +4,34 @@ import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
 import { BuildToolbar } from './ui/BuildToolbar';
 import { MapOverlay } from './ui/MapOverlay';
+import { MobileControls } from './ui/MobileControls';
 import { useGameStore } from './state/store';
+import { useIsTouch } from './ui/useDeviceMode';
 import { createGame } from './game/createGame';
 import { GameMode } from '@worldify/shared';
 
 function App() {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   const gameMode = useGameStore((s) => s.gameMode);
-  const joinAttempted = useRef(false);
+  const isTouch = useIsTouch();
+  const bootStarted = useRef(false);
 
-  // Auto-join on mount - skip menu, go straight to spectator mode
+  // Boot the local world on load so the home screen shows the rotating-camera
+  // world in the background and terrain (+ colliders) generate before the
+  // player ever spawns. Multiplayer stays offline; the menu drives Play.
   useEffect(() => {
-    if (!joinAttempted.current) {
-      joinAttempted.current = true;
-      createGame();
-    }
+    if (bootStarted.current) return;
+    bootStarted.current = true;
+    createGame('local').catch((err) => console.error('[game] local boot failed:', err));
   }, []);
 
   const isPlaying = gameMode === GameMode.Playing;
+  const inGame = connectionStatus === 'connected';
 
   return (
     <>
       <SpectatorOverlay />
-      {connectionStatus === 'connected' && (
+      {inGame && (
         /* Single fixed overlay for all HUD elements — one compositor layer */
         <div className="fixed inset-0 z-50 pointer-events-none">
           {isPlaying && (
@@ -39,6 +44,9 @@ function App() {
           <DebugPanel />
         </div>
       )}
+
+      {/* Touch controls (mobile) — above the canvas, below the HUD layer */}
+      {inGame && isPlaying && isTouch && <MobileControls />}
     </>
   );
 }

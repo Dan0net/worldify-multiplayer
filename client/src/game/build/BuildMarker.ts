@@ -118,6 +118,9 @@ export class BuildMarker {
   /** Cached auto-rotation Y steps equivalent (for dirty-checking) */
   private lastAutoYAngle = NaN;
 
+  /** Reusable NDC vector for screen-space (mobile reticle) raycasts */
+  private _ndc = new THREE.Vector2();
+
   constructor() {
     this.group = new THREE.Group();
     this.group.name = 'BuildMarker';
@@ -138,9 +141,16 @@ export class BuildMarker {
    * 
    * @param camera The camera to raycast from
    * @param collisionMeshes Array of meshes to raycast against
+   * @param castNDC Optional screen-space cast point in NDC (-1..1). When provided
+   *   (mobile reticle), the ray is cast through that point; otherwise the ray uses
+   *   the camera-centre direction (desktop pointer-lock behaviour).
    * @returns Whether a valid build target was found
    */
-  update(camera: THREE.Camera, collisionMeshes: THREE.Object3D[]): { hasValidTarget: boolean } {
+  update(
+    camera: THREE.Camera,
+    collisionMeshes: THREE.Object3D[],
+    castNDC?: { x: number; y: number } | null,
+  ): { hasValidTarget: boolean } {
     const presetId = storeBridge.buildPresetId;
     const rotationSteps = storeBridge.buildRotationSteps;
 
@@ -174,9 +184,17 @@ export class BuildMarker {
       this.currentConfigFingerprint = fp;
     }
 
-    // Raycast from camera center
-    this._direction.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    this.raycaster.set(camera.position, this._direction);
+    // Raycast through the screen-space cast point (mobile reticle) or the
+    // camera centre (desktop). setFromCamera uses the camera's projection so
+    // the NDC point maps correctly through FOV/aspect.
+    if (castNDC) {
+      this._ndc.set(castNDC.x, castNDC.y);
+      this.raycaster.setFromCamera(this._ndc, camera);
+      this.raycaster.far = MAX_BUILD_DISTANCE;
+    } else {
+      this._direction.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      this.raycaster.set(camera.position, this._direction);
+    }
 
     const intersects = this.raycaster.intersectObjects(collisionMeshes, false);
 
