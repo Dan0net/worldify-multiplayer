@@ -26,7 +26,8 @@ export interface QualitySettings {
   // Post-processing (individual toggles)
   ssaoEnabled: boolean;
   bloomEnabled: boolean;
-  godRaysEnabled: boolean;    // 60-sample radial blur — expensive; ultra/high only
+  godRaysEnabled: boolean;    // radial-blur sun rays — off on low
+  godRaysSamples: number;     // radial-blur sample count (quality/cost lever)
   colorCorrectionEnabled: boolean;
 
   // Shadows
@@ -57,6 +58,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     ssaoEnabled: true,
     bloomEnabled: true,
     godRaysEnabled: true,
+    godRaysSamples: 60,
     colorCorrectionEnabled: true,
     shadowMapSize: 4096,
     shadowsEnabled: true,
@@ -75,6 +77,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     ssaoEnabled: false,
     bloomEnabled: true,
     godRaysEnabled: true,
+    godRaysSamples: 20,   // low-quality god rays
     colorCorrectionEnabled: true,
     shadowMapSize: 2048,
     shadowsEnabled: true,
@@ -93,6 +96,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     ssaoEnabled: false,
     bloomEnabled: false,
     godRaysEnabled: false,
+    godRaysSamples: 20,   // unused (god rays off)
     colorCorrectionEnabled: true,
     shadowMapSize: 1024,
     shadowsEnabled: true,
@@ -111,6 +115,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     ssaoEnabled: false,
     bloomEnabled: false,
     godRaysEnabled: false,
+    godRaysSamples: 20,   // unused (god rays off)
     colorCorrectionEnabled: false,
     shadowMapSize: 512,
     shadowsEnabled: false,

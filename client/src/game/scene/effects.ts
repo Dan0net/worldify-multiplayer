@@ -17,7 +17,7 @@ import {
   BlendFunction, LuminanceMaterial,
 } from 'postprocessing';
 import { useGameStore } from '../../state/store';
-import { getSunLight, getMoonLight, getActiveShadowCaster } from './Lighting';
+import { getSunLight, getMoonLight } from './Lighting';
 
 // ============== State ==============
 
@@ -32,6 +32,9 @@ let effectPass: EffectPass | null = null;  // SSAO + bloom
 let godRaysPass: EffectPass | null = null; // god rays (separate — needs sun mesh)
 let copyPass: CopyPass | null = null;
 let unsubscribe: (() => void) | null = null;
+
+/** God-rays radial-blur sample count — quality lever set by the quality preset. */
+let godRaysSamples = 60;
 
 /** Settings snapshot that the pipeline cares about. */
 interface EffectsSettings {
@@ -236,12 +239,14 @@ export function initEffects(
     decay: state.environment.godRaysDecay,
     weight: 0.3,
     exposure: state.environment.godRaysExposure,
-    samples: 60,
+    samples: godRaysSamples,
     clampMax: 1.0,
     kernelSize: KernelSize.SMALL,
     blur: true,
     resolutionScale: 0.5,
   });
+  // Apply any preset sample count set before init.
+  godRaysEffect.samples = godRaysSamples;
 
   // God rays in a separate EffectPass
   godRaysPass = new EffectPass(camera, godRaysEffect);
@@ -309,7 +314,13 @@ export function initEffects(
  */
 function syncSunMeshPosition(): void {
   if (!sunMesh) return;
-  const light = getActiveShadowCaster() === 'moon' ? getMoonLight() : getSunLight();
+  // God rays emanate from whichever celestial body is above the horizon — the
+  // sun by day, the moon by night — independent of which light casts shadows.
+  // (Tying this to the shadow caster meant the moon never got rays on High,
+  // where moon shadows are off.)
+  const sun = getSunLight();
+  const moon = getMoonLight();
+  const light = sun && sun.position.y >= 0 ? sun : (moon ?? sun);
   if (light) {
     sunMesh.position.copy(light.position);
     (sunMesh.material as THREE.MeshBasicMaterial).color.copy(light.color);
@@ -332,6 +343,15 @@ export function renderEffects(
   } else {
     renderer.render(scene, camera);
   }
+}
+
+/**
+ * Set the god-rays radial-blur sample count (quality/cost lever). Driven by the
+ * quality preset — High uses a low count, Max a high count.
+ */
+export function setGodRaysSamples(samples: number): void {
+  godRaysSamples = samples;
+  if (godRaysEffect) godRaysEffect.samples = samples;
 }
 
 /**

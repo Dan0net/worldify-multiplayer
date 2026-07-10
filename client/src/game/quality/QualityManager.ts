@@ -27,6 +27,7 @@ import {
   setTerrainAnisotropy,
 } from '../material/TerrainMaterial.js';
 import { setWaterQualityLow } from '../material/WaterMaterial.js';
+import { setGodRaysSamples } from '../scene/effects.js';
 import { storeBridge } from '../../state/bridge.js';
 
 // ============== Managed References ==============
@@ -85,6 +86,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   storeBridge.setBloomEnabled(preset.bloomEnabled);
   storeBridge.setSsaoEnabled(preset.ssaoEnabled);
   storeBridge.setGodRaysEnabled(preset.godRaysEnabled);
+  setGodRaysSamples(preset.godRaysSamples);
   applyColorCorrectionEnabled(preset.colorCorrectionEnabled);
 
   // --- Terrain material shader maps ---
