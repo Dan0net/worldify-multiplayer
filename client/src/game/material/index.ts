@@ -20,6 +20,7 @@ export {
   loadDataArrayTextures,
   updateWindTime,
   setTerrainEnvMapIntensity,
+  subscribeMaterialSettings,
   type TextureResolution,
   type LoadedTextures,
 } from './TerrainMaterial.js';
@@ -28,6 +29,7 @@ export {
   getWaterMaterial,
   updateWaterTime,
   applyWaterSettings,
+  subscribeWaterSettings,
 } from './WaterMaterial.js';
 export { DEFAULT_WATER_SETTINGS } from './waterShaders.js';
 export {

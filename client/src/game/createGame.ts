@@ -1,5 +1,4 @@
 import { GameCore } from './GameCore';
-import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
 import { connectToServer, getPlayerId, setOnReconnected } from '../net/netClient';
 
@@ -15,14 +14,14 @@ export async function createGame(mode: GameStartMode = 'online'): Promise<GameCo
   if (mode === 'local') {
     // Offline: no server. Generate terrain client-side and un-gate the UI.
     useGameStore.getState().setUseServerChunks(false);
-    storeBridge.updateConnectionStatus('connected');
+    useGameStore.getState().setConnectionStatus('connected');
     gameCore = new GameCore();
     await gameCore.init();
     gameCore.setLocalPlayerId(1); // synthetic id (no server assignment)
     return gameCore;
   }
 
-  storeBridge.updateConnectionStatus('connecting');
+  useGameStore.getState().setConnectionStatus('connecting');
 
   // Connect to server FIRST so WebSocket is ready for chunk requests
   await connectToServer();

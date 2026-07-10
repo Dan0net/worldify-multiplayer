@@ -20,8 +20,8 @@ import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './sc
 import { updateDayNightCycle } from './scene/DayNightCycle';
 import { updateSkyTime, updateSkyCamera } from './scene/SkyDome';
 import { initEffects, renderEffects, resizeEffects, disposeEffects } from './scene/effects';
-import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
+import { setClearChunksCallback, updateMapPlayerPosition, updateMapOtherPlayers } from '../state/transient';
 import {
   QualityLevel,
   QUALITY_PRESETS,
@@ -40,7 +40,7 @@ import { isTouch } from './deviceMode';
 import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
-import { materialManager, updateWindTime } from './material';
+import { materialManager, updateWindTime, subscribeMaterialSettings, subscribeWaterSettings } from './material';
 import { getMapTileCache } from './maptile/mapTileCacheSingleton';
 import { perfStats } from './debug/PerformanceStats';
 
@@ -69,6 +69,10 @@ export class GameCore {
 
   // Store subscription for the render-scale slider
   private renderScaleUnsub: (() => void) | null = null;
+
+  // Store subscriptions that push material/water settings to the shaders
+  private materialSettingsUnsub: (() => void) | null = null;
+  private waterSettingsUnsub: (() => void) | null = null;
 
   constructor() {
     this.gameLoop = new GameLoop();
@@ -204,7 +208,7 @@ export class GameCore {
       };
 
       // Register chunk clearing callback for F9 debug
-      storeBridge.setClearChunksCallback(() => {
+      setClearChunksCallback(() => {
         const playerPos = this.playerManager.getLocalPlayer().position.clone();
         this.voxelIntegration.clearAndReload(playerPos);
       });
@@ -212,7 +216,7 @@ export class GameCore {
 
     // Request pointer lock on canvas click (only when playing)
     canvas.addEventListener('click', () => {
-      if (storeBridge.gameMode === GameMode.Playing) {
+      if (useGameStore.getState().gameMode === GameMode.Playing) {
         controls.requestPointerLock();
       }
     });
@@ -233,6 +237,11 @@ export class GameCore {
       if (state.renderScale !== prev.renderScale) this.onResize();
     });
 
+    // Push material/water setting changes to the shaders (replaces the old
+    // bridge setters' side effects).
+    this.materialSettingsUnsub = subscribeMaterialSettings();
+    this.waterSettingsUnsub = subscribeWaterSettings();
+
     // Start game loop and input loop
     this.gameLoop.start(this.update);
     this.playerManager.startInputLoop();
@@ -250,13 +259,13 @@ export class GameCore {
     console.log('[GameCore] Handling reconnection...');
     
     // Reset game mode to MainMenu so player sees spectator overlay
-    storeBridge.setGameMode(GameMode.MainMenu);
+    useGameStore.getState().setGameMode(GameMode.MainMenu);
     
     // Reset spawn state so terrain detection starts fresh
     if (this.spawnManager) {
       this.spawnManager.reset();
     }
-    storeBridge.setSpawnReady(false);
+    useGameStore.getState().setSpawnReady(false);
     
     // Clear and reload chunks from new server
     if (this.voxelIntegration) {
@@ -389,7 +398,7 @@ export class GameCore {
   private update = (deltaMs: number, elapsedTime: number): void => {
     perfStats.begin('gameUpdate');
 
-    const gameMode = storeBridge.gameMode;
+    const gameMode = useGameStore.getState().gameMode;
     const camera = getCamera();
     const localPlayer = this.playerManager.getLocalPlayer();
 
@@ -418,8 +427,8 @@ export class GameCore {
 
     // Update map overlay positions (all modes so spectator map shows players)
     const mapCenter = gameMode === GameMode.Playing ? localPlayer.position : this.spectatorCenter;
-    storeBridge.updateMapPlayerPosition(mapCenter.x, mapCenter.z, localPlayer.yaw, this.playerManager.getLocalPlayerColor());
-    storeBridge.updateMapOtherPlayers(this.playerManager.getRemotePlayerPositions());
+    updateMapPlayerPosition(mapCenter.x, mapCenter.z, localPlayer.yaw, this.playerManager.getLocalPlayerColor());
+    updateMapOtherPlayers(this.playerManager.getRemotePlayerPositions());
 
     // Update wind animation for foliage
     updateWindTime(elapsedTime);
@@ -431,7 +440,7 @@ export class GameCore {
     if (camera) {
       updateSkyCamera(camera);
     }
-    const envState = storeBridge.environment;
+    const envState = useGameStore.getState().environment;
     applyEnvironmentSettings(envState);
     perfStats.end('environment');
 
@@ -502,7 +511,7 @@ export class GameCore {
   private updateVoxelDebug(): void {
     if (!this.voxelIntegration) return;
 
-    const debugState = storeBridge.voxelDebug;
+    const debugState = useGameStore.getState().voxelDebug;
     this.voxelIntegration.debug.setState(debugState);
 
     // Sync wireframe mode to shared material
@@ -510,7 +519,7 @@ export class GameCore {
 
     // Update voxel stats in store
     const stats = this.voxelIntegration.getStats();
-    storeBridge.updateVoxelStats({
+    useGameStore.getState().setVoxelStats({
       chunksLoaded: stats.chunksLoaded,
       meshesVisible: stats.meshesVisible,
       debugObjects: this.voxelIntegration.debug.getDebugObjectCount(),
@@ -543,12 +552,12 @@ export class GameCore {
       
       // Update spawn ready state in store
       const spawnReady = this.spawnManager.isSpawnReady();
-      if (spawnReady !== storeBridge.spawnReady) {
-        storeBridge.setSpawnReady(spawnReady);
+      if (spawnReady !== useGameStore.getState().spawnReady) {
+        useGameStore.getState().setSpawnReady(spawnReady);
       }
-    } else if (this.hasSpawnedPlayer && !storeBridge.spawnReady) {
+    } else if (this.hasSpawnedPlayer && !useGameStore.getState().spawnReady) {
       // Already spawned before — always ready to respawn
-      storeBridge.setSpawnReady(true);
+      useGameStore.getState().setSpawnReady(true);
     }
   }
 
@@ -619,6 +628,8 @@ export class GameCore {
 
     window.removeEventListener('resize', this.onResize);
     if (this.renderScaleUnsub) { this.renderScaleUnsub(); this.renderScaleUnsub = null; }
+    if (this.materialSettingsUnsub) { this.materialSettingsUnsub(); this.materialSettingsUnsub = null; }
+    if (this.waterSettingsUnsub) { this.waterSettingsUnsub(); this.waterSettingsUnsub = null; }
     this.renderer.dispose();
     document.body.removeChild(this.renderer.domElement);
   }

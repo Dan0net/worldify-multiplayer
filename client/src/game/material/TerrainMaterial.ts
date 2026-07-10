@@ -687,8 +687,20 @@ export interface MaterialSettingsUpdate {
 }
 
 /**
+ * Subscribe terrain materials to store material-settings changes.
+ * UI just writes the store; shaders react here. Returns an unsubscribe fn.
+ */
+export function subscribeMaterialSettings(): () => void {
+  return useGameStore.subscribe((state, prev) => {
+    if (state.materialSettings !== prev.materialSettings) {
+      applyMaterialSettings(state.materialSettings);
+    }
+  });
+}
+
+/**
  * Apply material settings to all terrain materials.
- * Called from the bridge when store state changes.
+ * Called on store changes (via subscribeMaterialSettings) and after (re)loads.
  */
 export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
   const materials = [solidMaterial, transparentMaterial];

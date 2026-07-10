@@ -14,7 +14,7 @@ import { PlayerRemote, getPlayerColor, playerColorToHex } from './player/playerR
 import { Controls, controls } from './player/controls';
 import { sendBinary } from '../net/netClient';
 import { CLIENT_INPUT_HZ, RoomSnapshot, encodeInput, SPAWN_FALLBACK_HEIGHT } from '@worldify/shared';
-import { storeBridge } from '../state/bridge';
+import { useGameStore } from '../state/store';
 import type { VoxelIntegration } from './voxel/VoxelIntegration';
 
 /** Callback type for finding respawn positions (decouples from VoxelIntegration) */
@@ -168,7 +168,7 @@ export class PlayerManager {
    */
   handleSnapshot(snapshot: RoomSnapshot, scene: THREE.Scene): void {
     // Update player count in store
-    storeBridge.updatePlayerCount(snapshot.players.length);
+    useGameStore.getState().setPlayerCount(snapshot.players.length);
 
     // Track which players we've seen
     const seenPlayerIds = new Set<number>();

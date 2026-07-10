@@ -2,14 +2,14 @@
  * MapPanel - Reusable map display with player markers
  *
  * Renders map tiles via MapRenderer and overlays arrow markers for the
- * local player and all remote players. Driven by storeBridge data.
+ * local player and all remote players. Driven by transient store data.
  *
  * Used by both MapOverlay (small in-game minimap) and SpectatorOverlay
  * (larger lobby map panel).
  */
 
 import { useEffect, useRef, useCallback } from 'react';
-import { storeBridge } from '../state/bridge';
+import { getMapPlayerPosition, getMapOtherPlayers } from '../state/transient';
 import { MapRenderer } from '../game/maptile/MapRenderer';
 import { getMapTileCache } from '../game/maptile/mapTileCacheSingleton';
 import { CHUNK_SIZE, VOXEL_SCALE, MAP_TILE_SIZE } from '@worldify/shared';
@@ -76,7 +76,7 @@ export function MapPanel({ width, height, scale, showMarkers = true, className }
     if (!renderer) return;
 
     const cache = getMapTileCache();
-    const { x, z, rotation, color: localColor } = storeBridge.mapPlayerPosition;
+    const { x, z, rotation, color: localColor } = getMapPlayerPosition();
 
     // Centre tile
     const centerTx = Math.floor(x / (CHUNK_SIZE * VOXEL_SCALE));
@@ -99,7 +99,7 @@ export function MapPanel({ width, height, scale, showMarkers = true, className }
 
       // --- Remote player markers ---
       if (remoteMarkersRef.current) {
-        const others = storeBridge.mapOtherPlayers;
+        const others = getMapOtherPlayers();
         const container = remoteMarkersRef.current;
 
         // Reconcile marker element count

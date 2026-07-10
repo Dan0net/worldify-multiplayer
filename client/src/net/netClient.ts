@@ -2,7 +2,7 @@
  * WebSocket client for server communication
  */
 
-import { storeBridge } from '../state/bridge';
+import { useGameStore } from '../state/store';
 import { PROTOCOL_VERSION, encodeJoin } from '@worldify/shared';
 import { decodeMessage } from './decode';
 
@@ -64,8 +64,8 @@ async function connectWebSocket(
 
     newSocket.onopen = () => {
       console.log('[net] WebSocket connected');
-      storeBridge.updateConnectionStatus('connected');
-      storeBridge.updateRoomInfo(roomId, playerId);
+      useGameStore.getState().setConnectionStatus('connected');
+      useGameStore.getState().setRoomInfo(roomId, playerId);
       newSocket.send(encodeJoin(PROTOCOL_VERSION, playerId));
       reconnectAttempts = 0;
       
@@ -86,7 +86,7 @@ async function connectWebSocket(
       console.log('[net] WebSocket closed');
       // Only handle if this is still the current socket
       if (ws === newSocket) {
-        storeBridge.updateConnectionStatus('disconnected');
+        useGameStore.getState().setConnectionStatus('disconnected');
         ws = null;
         // Attempt reconnect
         scheduleReconnect();
@@ -97,7 +97,7 @@ async function connectWebSocket(
       console.error('[net] WebSocket error');
       // Only handle if this is still the current socket
       if (ws === newSocket) {
-        storeBridge.updateConnectionStatus('disconnected');
+        useGameStore.getState().setConnectionStatus('disconnected');
         reject(new Error('WebSocket connection failed'));
       }
     };
@@ -117,7 +117,7 @@ function scheduleReconnect(): void {
   
   reconnectAttempts++;
   // Show connecting state during reconnection attempts
-  storeBridge.updateConnectionStatus('connecting');
+  useGameStore.getState().setConnectionStatus('connecting');
   console.log(`[net] Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
   
   reconnectTimeout = setTimeout(async () => {

@@ -417,6 +417,7 @@ export interface GameState {
   // Build actions
   setBuildPreset: (presetId: number) => void;
   setBuildRotation: (rotationSteps: number) => void;
+  rotateBuild: (direction: number) => void;
   setBuildHasValidTarget: (valid: boolean) => void;
   setBuildInvalidReason: (reason: 'tooClose' | null) => void;
   toggleBuildSnapPoint: () => void;
@@ -433,6 +434,7 @@ export interface GameState {
   
   // Dev mode actions
   setForceRegenerateChunks: (enabled: boolean) => void;
+  toggleForceRegenerate: () => void;
   toggleForceRegenerateChunks: () => void;
   
   // Environment actions
@@ -633,6 +635,12 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setBuildRotation: (rotationSteps) => set((state) => ({
     build: { ...state.build, rotationSteps: rotationSteps & (BUILD_ROTATION_STEPS - 1) },
   })),
+  rotateBuild: (direction) => set((state) => ({
+    build: {
+      ...state.build,
+      rotationSteps: (state.build.rotationSteps + direction + BUILD_ROTATION_STEPS) % BUILD_ROTATION_STEPS,
+    },
+  })),
   setBuildHasValidTarget: (hasValidTarget) => set((state) => ({
     build: { ...state.build, hasValidTarget },
   })),
@@ -677,6 +685,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   
   // Dev mode actions
   setForceRegenerateChunks: (forceRegenerateChunks) => set({ forceRegenerateChunks }),
+  toggleForceRegenerate: () => set((state) => ({ forceRegenerateChunks: !state.forceRegenerateChunks })),
   toggleForceRegenerateChunks: () => set((state) => ({
     forceRegenerateChunks: !state.forceRegenerateChunks,
   })),

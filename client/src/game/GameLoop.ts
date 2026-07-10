@@ -8,7 +8,7 @@
  * - Elapsed time tracking
  */
 
-import { storeBridge } from '../state/bridge';
+import { updateDebugStats } from '../state/transient';
 
 export type LoopCallback = (deltaMs: number, elapsedTime: number) => void;
 
@@ -75,7 +75,7 @@ export class GameLoop {
     this.fpsAccumulator += deltaMs;
     if (this.fpsAccumulator >= 1000) {
       const fps = Math.round((this.frameCount * 1000) / this.fpsAccumulator);
-      storeBridge.updateDebugStats(fps, deltaMs);
+      updateDebugStats(fps, deltaMs);
       this.frameCount = 0;
       this.fpsAccumulator = 0;
     }

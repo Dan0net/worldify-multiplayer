@@ -14,7 +14,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { INPUT_JUMP, INPUT_SPRINT, GameMode, NONE_PRESET_ID } from '@worldify/shared';
 import { controls } from '../game/player/controls';
-import { storeBridge } from '../state/bridge';
 import { useGameStore } from '../state/store';
 import { useIsPortrait } from './useDeviceMode';
 
@@ -178,8 +177,8 @@ export function MobileControls() {
         <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); toggleBuildMenu(); }} aria-label="Build menu">🧱</button>
         {buildEnabled && (
           <>
-            <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); storeBridge.rotateBuild(-1); }} aria-label="Rotate left">⟲</button>
-            <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); storeBridge.rotateBuild(1); }} aria-label="Rotate right">⟳</button>
+            <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(-1); }} aria-label="Rotate left">⟲</button>
+            <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(1); }} aria-label="Rotate right">⟳</button>
             <button className={`${btn} w-14 h-14 text-xl !bg-green-600/60 border-green-300`} onPointerDown={(e) => { e.preventDefault(); controls.triggerPlace(); }} aria-label="Place build">✓</button>
           </>
         )}

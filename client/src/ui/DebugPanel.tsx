@@ -4,7 +4,7 @@ import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings } from '../game/material/TerrainMaterial';
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
-import { storeBridge } from '../state/bridge';
+import { clearAndReloadChunks } from '../state/transient';
 import { cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, type QualityLevel } from '../game/quality/QualityPresets';
 import {
   applyVisibilityRadius,
@@ -220,12 +220,12 @@ export function DebugPanel() {
 
   const handleClearChunks = () => {
     setChunksClearing(true);
-    storeBridge.clearAndReloadChunks();
+    clearAndReloadChunks();
     setTimeout(() => setChunksClearing(false), 500);
   };
 
   const handleToggleForceRegenerate = () => {
-    storeBridge.toggleForceRegenerate();
+    useGameStore.getState().toggleForceRegenerate();
     handleClearChunks();
   };
 
@@ -243,14 +243,14 @@ export function DebugPanel() {
   };
 
   const handleVisibilityRadiusChange = (radius: number) => {
-    storeBridge.setVisibilityRadius(radius);
+    useGameStore.getState().setVisibilityRadius(radius);
     applyVisibilityRadius(radius);
   };
 
   const handleShaderMapToggle = (map: 'normal' | 'ao' | 'metalness', enabled: boolean) => {
-    if (map === 'normal') storeBridge.setShaderNormalMaps(enabled);
-    else if (map === 'ao') storeBridge.setShaderAoMaps(enabled);
-    else storeBridge.setShaderMetalnessMaps(enabled);
+    if (map === 'normal') useGameStore.getState().setShaderNormalMaps(enabled);
+    else if (map === 'ao') useGameStore.getState().setShaderAoMaps(enabled);
+    else useGameStore.getState().setShaderMetalnessMaps(enabled);
     setShaderMapDefines({
       normalMaps: map === 'normal' ? enabled : shaderNormalMaps,
       aoMaps: map === 'ao' ? enabled : shaderAoMaps,
@@ -273,22 +273,22 @@ export function DebugPanel() {
 
   // Apply material settings changes to shaders
   const handleMaterialChange = (updates: Partial<typeof materialSettings>) => {
-    storeBridge.setMaterialSettings(updates);
+    useGameStore.getState().setMaterialSettings(updates);
   };
 
   // Reset material settings to defaults
   const handleResetMaterialSettings = () => {
-    storeBridge.resetMaterialSettings();
+    useGameStore.getState().resetMaterialSettings();
   };
 
   // Apply water settings changes to shaders
   const handleWaterChange = (updates: Partial<typeof waterSettings>) => {
-    storeBridge.setWaterSettings(updates);
+    useGameStore.getState().setWaterSettings(updates);
   };
 
   // Reset water settings to defaults
   const handleResetWaterSettings = () => {
-    storeBridge.resetWaterSettings();
+    useGameStore.getState().resetWaterSettings();
   };
 
   // Keyboard shortcuts
@@ -609,7 +609,7 @@ export function DebugPanel() {
             max={2}
             step={0.25}
             onChange={(v) => {
-              storeBridge.setMaxPixelRatio(v);
+              useGameStore.getState().setMaxPixelRatio(v);
               applyPixelRatio(v);
             }}
             formatValue={(v) => `${v}x`}
@@ -621,7 +621,7 @@ export function DebugPanel() {
             max={16}
             step={1}
             onChange={(v) => {
-              storeBridge.setAnisotropy(v);
+              useGameStore.getState().setAnisotropy(v);
               applyAnisotropy(v);
             }}
             formatValue={(v) => `${v}x`}
@@ -631,7 +631,7 @@ export function DebugPanel() {
             value={msaaSamples}
             options={msaaOptions}
             onChange={(v) => {
-              storeBridge.setMsaaSamples(v);
+              useGameStore.getState().setMsaaSamples(v);
             }}
           />
         </div>
@@ -643,7 +643,7 @@ export function DebugPanel() {
             label="Shadows"
             value={shadowsEnabled}
             onChange={(v) => {
-              storeBridge.setShadowsEnabled(v);
+              useGameStore.getState().setShadowsEnabled(v);
               applyShadowsEnabled(v);
             }}
           />
@@ -653,7 +653,7 @@ export function DebugPanel() {
                 label="Moon Shadows"
                 value={moonShadows}
                 onChange={(v) => {
-                  storeBridge.setMoonShadows(v);
+                  useGameStore.getState().setMoonShadows(v);
                   applyMoonShadows(v);
                 }}
               />
@@ -664,7 +664,7 @@ export function DebugPanel() {
                 max={8}
                 step={1}
                 onChange={(v) => {
-                  storeBridge.setShadowRadius(v);
+                  useGameStore.getState().setShadowRadius(v);
                   applyShadowRadius(v);
                 }}
                 formatValue={(v) => `${v} chunks`}
@@ -676,7 +676,7 @@ export function DebugPanel() {
                 max={25}
                 step={1}
                 onChange={(v) => {
-                  storeBridge.setEnvironment({ shadowBlurRadius: v });
+                  useGameStore.getState().setEnvironment({ shadowBlurRadius: v });
                 }}
               />
             </>
@@ -690,28 +690,28 @@ export function DebugPanel() {
             label="SSAO"
             value={ssaoEnabled}
             onChange={(v) => {
-              storeBridge.setSsaoEnabled(v);
+              useGameStore.getState().setSsaoEnabled(v);
             }}
           />
           <Toggle
             label="Bloom"
             value={bloomEnabled}
             onChange={(v) => {
-              storeBridge.setBloomEnabled(v);
+              useGameStore.getState().setBloomEnabled(v);
             }}
           />
           <Toggle
             label="God Rays"
             value={godRaysEnabled}
             onChange={(v) => {
-              storeBridge.setGodRaysEnabled(v);
+              useGameStore.getState().setGodRaysEnabled(v);
             }}
           />
           <Toggle
             label="Color Correction"
             value={colorCorrectionEnabled}
             onChange={(v) => {
-              storeBridge.setColorCorrectionEnabled(v);
+              useGameStore.getState().setColorCorrectionEnabled(v);
               applyColorCorrectionEnabled(v);
             }}
           />

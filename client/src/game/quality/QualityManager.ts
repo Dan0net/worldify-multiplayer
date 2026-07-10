@@ -28,7 +28,7 @@ import {
 } from '../material/TerrainMaterial.js';
 import { setWaterQualityLow } from '../material/WaterMaterial.js';
 import { setGodRaysSamples } from '../scene/effects.js';
-import { storeBridge } from '../../state/bridge.js';
+import { useGameStore } from '../../state/store.js';
 
 // ============== Managed References ==============
 
@@ -73,19 +73,19 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   applyMoonShadows(preset.moonShadows);
 
   // --- Shadow map size (routed through environment settings) ---
-  storeBridge.setEnvironment({ shadowMapSize: preset.shadowMapSize });
+  useGameStore.getState().setEnvironment({ shadowMapSize: preset.shadowMapSize });
   applyEnvironmentSettings({ shadowMapSize: preset.shadowMapSize });
 
   // --- Shadow frustum (uses shadow-specific radius, not visibility) ---
   updateShadowFrustumSize(preset.shadowRadius);
 
   // --- MSAA (store-driven — effects.ts subscribes) ---
-  storeBridge.setMsaaSamples(preset.msaaSamples);
+  useGameStore.getState().setMsaaSamples(preset.msaaSamples);
 
   // --- Post-processing (store-driven — effects.ts subscribes) ---
-  storeBridge.setBloomEnabled(preset.bloomEnabled);
-  storeBridge.setSsaoEnabled(preset.ssaoEnabled);
-  storeBridge.setGodRaysEnabled(preset.godRaysEnabled);
+  useGameStore.getState().setBloomEnabled(preset.bloomEnabled);
+  useGameStore.getState().setSsaoEnabled(preset.ssaoEnabled);
+  useGameStore.getState().setGodRaysEnabled(preset.godRaysEnabled);
   setGodRaysSamples(preset.godRaysSamples);
   applyColorCorrectionEnabled(preset.colorCorrectionEnabled);
 
@@ -135,21 +135,21 @@ export function syncQualityToStore(level: QualityLevel, customVisibility?: numbe
   const preset = QUALITY_PRESETS[level];
   const vis = customVisibility ?? preset.visibilityRadius;
   applyQuality(level, vis);
-  storeBridge.setQualityLevel(level);
-  storeBridge.setVisibilityRadius(vis);
-  storeBridge.setSsaoEnabled(preset.ssaoEnabled);
-  storeBridge.setBloomEnabled(preset.bloomEnabled);
-  storeBridge.setGodRaysEnabled(preset.godRaysEnabled);
-  storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
-  storeBridge.setShadowsEnabled(preset.shadowsEnabled);
-  storeBridge.setMoonShadows(preset.moonShadows);
-  storeBridge.setShadowRadius(preset.shadowRadius);
-  storeBridge.setAnisotropy(preset.anisotropy);
-  storeBridge.setMaxPixelRatio(preset.maxPixelRatio);
-  storeBridge.setMsaaSamples(preset.msaaSamples);
-  storeBridge.setShaderNormalMaps(preset.shaderNormalMaps);
-  storeBridge.setShaderAoMaps(preset.shaderAoMaps);
-  storeBridge.setShaderMetalnessMaps(preset.shaderMetalnessMaps);
+  useGameStore.getState().setQualityLevel(level);
+  useGameStore.getState().setVisibilityRadius(vis);
+  useGameStore.getState().setSsaoEnabled(preset.ssaoEnabled);
+  useGameStore.getState().setBloomEnabled(preset.bloomEnabled);
+  useGameStore.getState().setGodRaysEnabled(preset.godRaysEnabled);
+  useGameStore.getState().setColorCorrectionEnabled(preset.colorCorrectionEnabled);
+  useGameStore.getState().setShadowsEnabled(preset.shadowsEnabled);
+  useGameStore.getState().setMoonShadows(preset.moonShadows);
+  useGameStore.getState().setShadowRadius(preset.shadowRadius);
+  useGameStore.getState().setAnisotropy(preset.anisotropy);
+  useGameStore.getState().setMaxPixelRatio(preset.maxPixelRatio);
+  useGameStore.getState().setMsaaSamples(preset.msaaSamples);
+  useGameStore.getState().setShaderNormalMaps(preset.shaderNormalMaps);
+  useGameStore.getState().setShaderAoMaps(preset.shaderAoMaps);
+  useGameStore.getState().setShaderMetalnessMaps(preset.shaderMetalnessMaps);
 }
 
 // ============== Individual Setting Appliers ==============
@@ -182,17 +182,17 @@ export function applyMoonShadows(enabled: boolean): void {
 
 export function applySsaoEnabled(enabled: boolean): void {
   // Store-driven — effects.ts subscription handles this
-  storeBridge.setSsaoEnabled(enabled);
+  useGameStore.getState().setSsaoEnabled(enabled);
 }
 
 export function applyBloomEnabled(enabled: boolean): void {
   // Store-driven — effects.ts subscription handles this
-  storeBridge.setBloomEnabled(enabled);
+  useGameStore.getState().setBloomEnabled(enabled);
 }
 
 export function applyColorCorrectionEnabled(enabled: boolean): void {
   // Store-driven — effects.ts subscription applies it to the live pmndrs chain
-  storeBridge.setColorCorrectionEnabled(enabled);
+  useGameStore.getState().setColorCorrectionEnabled(enabled);
 }
 
 export function applyAnisotropy(value: number): void {
@@ -201,7 +201,7 @@ export function applyAnisotropy(value: number): void {
 
 export function applyMsaaSamples(samples: number): void {
   // Store-driven — effects.ts subscription handles this
-  storeBridge.setMsaaSamples(samples);
+  useGameStore.getState().setMsaaSamples(samples);
 }
 
 /**
