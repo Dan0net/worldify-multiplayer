@@ -532,13 +532,3 @@ export const TONE_MAPPING_OPTIONS: { label: string; value: THREE.ToneMapping }[]
   { label: 'ACES Filmic', value: THREE.ACESFilmicToneMapping },
   { label: 'AgX', value: THREE.AgXToneMapping },
 ];
-
-/**
- * Format time value (0-1) as HH:MM string.
- * Kept for UI compatibility even though time is no longer dynamic.
- */
-export function formatTimeOfDay(time: number): string {
-  const hours = Math.floor(time * 24);
-  const minutes = Math.floor((time * 24 - hours) * 60);
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-}

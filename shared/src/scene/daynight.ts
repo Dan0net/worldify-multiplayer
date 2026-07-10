@@ -18,6 +18,15 @@ import { smoothstep, lerp, lerpColor } from '../util/math.js';
 export type DayPhase = 'night' | 'sunrise' | 'day' | 'sunset';
 
 /**
+ * Format normalized time (0-1) as an HH:MM clock string.
+ */
+export function formatTimeOfDay(time: number): string {
+  const hours = Math.floor(time * 24);
+  const minutes = Math.floor((time * 24 - hours) * 60);
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+}
+
+/**
  * Determine the current phase of day from normalized time (0-1).
  */
 export function getDayPhase(time: number): DayPhase {

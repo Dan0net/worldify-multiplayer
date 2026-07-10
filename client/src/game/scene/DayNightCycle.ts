@@ -6,7 +6,7 @@
  */
 
 import { useGameStore, EnvironmentSettings } from '../../state/store';
-import { updateShadowCaster } from './Lighting';
+import { updateShadowCaster, applyEnvironmentSettings } from './Lighting';
 import {
   // Solar
   SUN_ELEVATION_MIN,
@@ -128,88 +128,83 @@ function getMoonIntensity(sunElevation: number): number {
 export function updateDayNightCycle(deltaMs: number): void {
   const state = useGameStore.getState();
   const env = state.environment;
-  
+
   if (!(env.dayNightEnabled ?? false)) return;
-  
-  const updates: Partial<EnvironmentSettings> = {};
-  
-  // Advance time
+
+  // Advance time — the one *input* that changes. Persisted so the UI clock and
+  // the time slider reflect it. (Default timeSpeed is 0, so at rest there is no
+  // per-frame store write at all.)
+  let time = env.timeOfDay ?? 0.35;
   const timeSpeed = env.timeSpeed ?? 0;
   if (timeSpeed > 0) {
     const minutesElapsed = timeSpeed * (deltaMs / 1000);
-    let newTime = (env.timeOfDay ?? 0.35) + minutesElapsed / 1440;
-    if (newTime >= 1) newTime -= 1;
-    if (newTime < 0) newTime += 1;
-    updates.timeOfDay = newTime;
+    time = (time + minutesElapsed / 1440) % 1;
+    if (time < 0) time += 1;
+    state.setTimeOfDay(time);
   }
-  
-  const time = updates.timeOfDay ?? env.timeOfDay ?? 0.35;
+
   const sunElevation = getSunElevation(time);
   const sunAzimuth = getSunAzimuth(time);
-  
-  // Sun
+
+  // Derived lighting *outputs*. These are applied DIRECTLY to the lights + sky
+  // (never written back to the store) — this is what removes the per-frame
+  // round-trip. Fields whose auto-flag is off are left untouched, so manual
+  // overrides (applied on-change by the debug panel) persist.
+  const derived: Partial<EnvironmentSettings> = {};
+
   if (env.autoSunPosition ?? true) {
-    updates.sunAzimuth = sunAzimuth;
-    updates.sunElevation = sunElevation;
+    derived.sunAzimuth = sunAzimuth;
+    derived.sunElevation = sunElevation;
   }
   if (env.autoSunColor ?? true) {
-    updates.sunColor = getSunColor(time);
+    derived.sunColor = getSunColor(time);
   }
   if (env.autoSunIntensity ?? true) {
-    updates.sunIntensity = getSunIntensity(sunElevation);
+    derived.sunIntensity = getSunIntensity(sunElevation);
   }
-  
-  // Moon (opposite sun)
+
   if (env.autoMoonPosition ?? true) {
-    updates.moonAzimuth = (sunAzimuth + 180) % 360;
-    updates.moonElevation = -sunElevation;
+    derived.moonAzimuth = (sunAzimuth + 180) % 360;
+    derived.moonElevation = -sunElevation;
   }
   if (env.autoMoonIntensity ?? true) {
-    updates.moonIntensity = getMoonIntensity(sunElevation);
+    derived.moonIntensity = getMoonIntensity(sunElevation);
   }
-  
+
   // Update which light casts shadows based on current intensities
-  const effectiveSunIntensity = updates.sunIntensity ?? env.sunIntensity ?? 3.0;
-  const effectiveMoonIntensity = updates.moonIntensity ?? env.moonIntensity ?? 0.3;
+  const effectiveSunIntensity = derived.sunIntensity ?? env.sunIntensity ?? 3.0;
+  const effectiveMoonIntensity = derived.moonIntensity ?? env.moonIntensity ?? 0.3;
   updateShadowCaster(effectiveSunIntensity, effectiveMoonIntensity);
-  
-  // Environment intensity
+
   if (env.autoEnvironmentIntensity ?? true) {
-    updates.environmentIntensity = getPhaseValue(time, ENVIRONMENT_INTENSITY_DAY, ENVIRONMENT_INTENSITY_NIGHT);
+    derived.environmentIntensity = getPhaseValue(time, ENVIRONMENT_INTENSITY_DAY, ENVIRONMENT_INTENSITY_NIGHT);
   }
-  
-  // Hemisphere light
+
   if (env.hemisphereEnabled ?? true) {
     if (env.autoHemisphereColors ?? true) {
-      updates.hemisphereSkyColor = getPhaseColorGradient(
+      derived.hemisphereSkyColor = getPhaseColorGradient(
         time, HEMISPHERE_SKY_DAY, HEMISPHERE_SKY_NIGHT,
         HEMISPHERE_SKY_GRADIENT_SUNRISE, HEMISPHERE_SKY_GRADIENT_SUNSET
       );
-      updates.hemisphereGroundColor = getPhaseColor(
+      derived.hemisphereGroundColor = getPhaseColor(
         time, HEMISPHERE_GROUND_DAY, HEMISPHERE_GROUND_NIGHT,
         HEMISPHERE_GROUND_SUNRISE, HEMISPHERE_GROUND_SUNSET
       );
     }
     if (env.autoHemisphereIntensity ?? true) {
-      updates.hemisphereIntensity = getPhaseValue(time, HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT);
+      derived.hemisphereIntensity = getPhaseValue(time, HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT);
     }
   }
-  
-  if (Object.keys(updates).length > 0) {
-    state.setEnvironment(updates);
-  }
+
+  // Apply the animated values straight to the THREE lights + sky uniforms.
+  applyEnvironmentSettings(derived);
 }
 
 // ============== Utility Exports ==============
 
-/**
- * Format time value (0-1) as HH:MM string.
- */
-export function formatTimeOfDay(time: number): string {
-  const hours = Math.floor(time * 24);
-  const minutes = Math.floor((time * 24 - hours) * 60);
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-}
+// formatTimeOfDay now lives in @worldify/shared (single definition); re-exported
+// here so existing UI imports (`../game/scene/DayNightCycle`) keep working.
+export { formatTimeOfDay } from '@worldify/shared';
 
 /**
  * Get current day phase as readable string.
