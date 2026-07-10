@@ -42,8 +42,8 @@ function HotbarSlot({
     <div
       onClick={onSelect}
       className={`
-        relative flex items-center justify-center
-        w-14 h-14 md:w-24 md:h-24 rounded-xl md:rounded-2xl cursor-pointer transition-all
+        relative flex items-center justify-center shrink-0 aspect-square
+        w-11 h-11 md:w-24 md:h-24 rounded-xl md:rounded-2xl cursor-pointer transition-all
         bg-black/80
         ${isActive
           ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
@@ -65,7 +65,7 @@ function HotbarSlot({
         <img
           src={thumbnailUrl}
           alt=""
-          className="w-[52px] h-[52px] md:w-[88px] md:h-[88px] object-contain"
+          className="w-9 h-9 md:w-[88px] md:h-[88px] object-contain"
           draggable={false}
         />
       ) : (
@@ -113,8 +113,12 @@ export function BuildToolbar() {
   const isTouch = useIsTouch();
 
   return (
-    <div className="absolute bottom-3 md:bottom-4 left-1/2 -translate-x-1/2 max-w-[100vw] flex flex-col items-center gap-2 pointer-events-none">
-      {/* Build menu pops up above the hotbar */}
+    <div
+      className={`absolute left-1/2 -translate-x-1/2 max-w-[100vw] flex items-center gap-2 pointer-events-none ${
+        isTouch ? 'top-2 flex-col-reverse' : 'bottom-4 flex-col'
+      }`}
+    >
+      {/* Build menu: above the hotbar on desktop (bottom bar), below it on touch (top bar) */}
       <BuildMenu />
 
       {/* Scroll horizontally if the strip is wider than the viewport */}

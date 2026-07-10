@@ -12,6 +12,9 @@ import { storeBridge } from '../state/bridge';
 
 export type LoopCallback = (deltaMs: number, elapsedTime: number) => void;
 
+/** Max delta passed to the update callback (ms). Prevents physics tunneling after a hitch. */
+const MAX_FRAME_DELTA_MS = 100;
+
 export class GameLoop {
   private animationId: number | null = null;
   private lastTime = 0;
@@ -77,9 +80,12 @@ export class GameLoop {
       this.fpsAccumulator = 0;
     }
 
-    // Call the update callback
+    // Call the update callback with a clamped delta. A generation/GC hitch or a
+    // backgrounded tab can produce a huge deltaMs; an unclamped physics step
+    // that large tunnels the player capsule through the thin surface mesh.
     if (this.callback) {
-      this.callback(deltaMs, this.elapsedTime);
+      const dt = Math.min(deltaMs, MAX_FRAME_DELTA_MS);
+      this.callback(dt, this.elapsedTime);
     }
   };
 }

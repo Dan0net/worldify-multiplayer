@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { SpectatorOverlay } from './ui/SpectatorOverlay';
@@ -6,15 +7,23 @@ import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
 import { useGameStore } from './state/store';
 import { useIsTouch } from './ui/useDeviceMode';
+import { createGame } from './game/createGame';
 import { GameMode } from '@worldify/shared';
 
 function App() {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   const gameMode = useGameStore((s) => s.gameMode);
   const isTouch = useIsTouch();
+  const bootStarted = useRef(false);
 
-  // The home screen (SpectatorOverlay) starts the game (Local / Multiplayer).
-  // No auto-join, so a down multiplayer server never blocks the menu.
+  // Boot the local world on load so the home screen shows the rotating-camera
+  // world in the background and terrain (+ colliders) generate before the
+  // player ever spawns. Multiplayer stays offline; the menu drives Play.
+  useEffect(() => {
+    if (bootStarted.current) return;
+    bootStarted.current = true;
+    createGame('local').catch((err) => console.error('[game] local boot failed:', err));
+  }, []);
 
   const isPlaying = gameMode === GameMode.Playing;
   const inGame = connectionStatus === 'connected';

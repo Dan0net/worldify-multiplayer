@@ -47,10 +47,16 @@ import {
   getCameraDirection,
   type ChunkProvider,
 } from './VisibilityBFS.js';
-import { LocalTerrainSource } from './LocalTerrainSource.js';
+import { TerrainWorkerPool } from './TerrainWorkerPool.js';
 
 /** Seed for local (offline) terrain generation. Matches the server default. */
 const LOCAL_TERRAIN_SEED = 12345;
+
+/**
+ * Extra chunks generated above a column's baseline surface so stamp/tree tops
+ * (which sit above the terrain-only tile height) are not clipped.
+ */
+const SURFACE_CHUNK_MARGIN = 1;
 
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
@@ -94,8 +100,8 @@ export class VoxelWorld implements ChunkProvider {
   /** Column info from received tiles: maxCy for the column. Keyed by "tx,tz" */
   private columnInfo: Map<string, { maxCy: number }> = new Map();
 
-  /** Local terrain generator (offline mode). Created lazily on first use. */
-  private localSource: LocalTerrainSource | null = null;
+  /** Local terrain generation worker pool (offline mode). Created lazily. */
+  private localPool: TerrainWorkerPool | null = null;
 
   /** Callback to notify external systems (e.g. map cache) when a tile arrives */
   onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
@@ -391,8 +397,8 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
-      this.receiveSurfaceColumnData(this.getLocalSource().generateColumn(tx, tz));
-      console.log(`[VoxelWorld] Generated initial surface column locally (${tx}, ${tz})`);
+      this.getLocalPool().requestColumn(tx, tz, (data) => this.receiveSurfaceColumnData(data));
+      console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
       return;
     }
 
@@ -529,8 +535,9 @@ export class VoxelWorld implements ChunkProvider {
       // Don't request chunks for columns without tile data yet
       if (!info) continue;
       
-      // Skip chunks above the surface (+1 for top-face margin stitching)
-      if (cy > info.maxCy) continue;
+      // Skip chunks above the surface, keeping a margin so stamp/tree tops
+      // (above the terrain-only tile height) and top-face stitching are covered.
+      if (cy > info.maxCy + SURFACE_CHUNK_MARGIN) continue;
       
       this.requestChunkFromServer(cx, cy, cz);
       chunkRequests++;
@@ -634,15 +641,16 @@ export class VoxelWorld implements ChunkProvider {
     return !storeBridge.useServerChunks;
   }
 
-  private getLocalSource(): LocalTerrainSource {
-    if (!this.localSource) {
-      this.localSource = new LocalTerrainSource(LOCAL_TERRAIN_SEED);
+  private getLocalPool(): TerrainWorkerPool {
+    if (!this.localPool) {
+      this.localPool = new TerrainWorkerPool(LOCAL_TERRAIN_SEED);
     }
-    return this.localSource;
+    return this.localPool;
   }
 
   /**
-   * Request a chunk — from the server, or generate it locally in offline mode.
+   * Request a chunk — from the server, or generate it locally (off-thread) in
+   * offline mode. The worker callback feeds the same receiveChunkData path.
    */
   private requestChunkFromServer(cx: number, cy: number, cz: number): void {
     const key = chunkKey(cx, cy, cz);
@@ -650,8 +658,7 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingChunkTimes.set(key, Date.now());
 
     if (this.isLocal) {
-      // Generate + ingest synchronously (meshing/lighting still run as usual).
-      this.receiveChunkData(this.getLocalSource().generateChunk(cx, cy, cz));
+      this.getLocalPool().requestChunk(cx, cy, cz, (data) => this.receiveChunkData(data));
       return;
     }
 
@@ -676,7 +683,7 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.set(columnKey, Date.now());
 
     if (this.isLocal) {
-      this.receiveTileData(this.getLocalSource().generateTile(tx, tz));
+      this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
       return;
     }
 
@@ -1143,6 +1150,8 @@ export class VoxelWorld implements ChunkProvider {
     // Terminate workers unless told to keep them
     if (!keepWorkers) {
       this.meshPool.dispose();
+      this.localPool?.dispose();
+      this.localPool = null;
     }
 
     // Dispose chunk grouper (removes merged meshes from scene)
