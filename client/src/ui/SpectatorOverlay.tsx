@@ -20,6 +20,7 @@ import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
 import { getCamera } from '../game/scene/camera';
+import { formatTimeOfDay } from '../game/scene/DayNightCycle';
 
 
 export function SpectatorOverlay() {
@@ -31,6 +32,10 @@ export function SpectatorOverlay() {
   const qualityLevel = useGameStore((s) => s.qualityLevel);
   const visibilityRadius = useGameStore((s) => s.visibilityRadius);
   const fov = useGameStore((s) => s.fov);
+  const renderScale = useGameStore((s) => s.renderScale);
+  const setRenderScale = useGameStore((s) => s.setRenderScale);
+  const timeOfDay = useGameStore((s) => s.environment.timeOfDay);
+  const setTimeOfDay = useGameStore((s) => s.setTimeOfDay);
   const [hasPlayed, setHasPlayed] = useState(false);
 
   if (gameMode !== GameMode.MainMenu) return null;
@@ -52,7 +57,10 @@ export function SpectatorOverlay() {
     }`;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 overflow-y-auto py-4 px-6 bg-gradient-to-b from-black/20 to-black/50 pointer-events-none">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-gradient-to-b from-black/20 to-black/50 pointer-events-none">
+      {/* min-h-full centering wrapper: centers when it fits, scrolls from the top
+          (no clipping) when the panel is taller than the viewport — e.g. mobile landscape. */}
+      <div className="min-h-full flex flex-col items-center justify-center gap-4 py-4 px-6">
       <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-14 pointer-events-none" />
 
       {/* Primary actions */}
@@ -149,6 +157,31 @@ export function SpectatorOverlay() {
             <span className="text-white/60 text-xs w-6 text-right">{fov}°</span>
           </div>
         </div>
+        {/* Render scale — sub-native resolution for weak GPUs / 4K */}
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-white/70 text-sm whitespace-nowrap">Resolution</span>
+          <div className="flex items-center gap-2 flex-1">
+            <input
+              type="range" min={50} max={100} step={5} value={Math.round(renderScale * 100)}
+              onChange={(e) => setRenderScale(parseInt(e.target.value, 10) / 100)}
+              className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+            />
+            <span className="text-white/60 text-xs w-9 text-right">{Math.round(renderScale * 100)}%</span>
+          </div>
+        </div>
+        {/* Time of day */}
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-white/70 text-sm whitespace-nowrap">Time</span>
+          <div className="flex items-center gap-2 flex-1">
+            <input
+              type="range" min={0} max={1} step={0.005} value={timeOfDay}
+              onChange={(e) => setTimeOfDay(parseFloat(e.target.value))}
+              className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+            />
+            <span className="text-white/60 text-xs w-9 text-right tabular-nums">{formatTimeOfDay(timeOfDay)}</span>
+          </div>
+        </div>
+      </div>
       </div>
     </div>
   );

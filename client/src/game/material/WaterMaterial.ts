@@ -53,6 +53,9 @@ function createBlendOffsetMatrix(): THREE.Matrix3 {
  * Uses vertex displacement for wave geometry and animated normals for surface detail.
  */
 export class WaterMaterial extends THREE.MeshStandardMaterial {
+  /** Quality gate — when true, the shader compiles with WATER_LOW (fewer samples). */
+  static qualityLow = false;
+
   private _shader: THREE.WebGLProgramParametersWithUniforms | null = null;
   private textures: LoadedTextures | null = null;
   private _waveSpeed: number = DEFAULT_WATER_SETTINGS.waveSpeed;
@@ -72,7 +75,17 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
     
     this.onBeforeCompile = (shader) => {
       this._shader = shader;
-      
+
+      // Quality-driven define — low/medium water uses fewer normal samples and
+      // skips the second getWaterNormal() call. Explicitly delete when off so it
+      // doesn't persist across recompilations (see TerrainMaterial for the rationale).
+      shader.defines = shader.defines || {};
+      if (WaterMaterial.qualityLow) {
+        shader.defines.WATER_LOW = '';
+      } else {
+        delete shader.defines.WATER_LOW;
+      }
+
       // Standard terrain texture uniforms
       shader.uniforms.mapArray = { value: this.textures?.albedo };
       shader.uniforms.normalArray = { value: this.textures?.normal };
@@ -230,9 +243,15 @@ export class WaterMaterial extends THREE.MeshStandardMaterial {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <normal_fragment_maps>',
         /* glsl */ `
+          #ifdef WATER_LOW
+          // Low/medium: reuse the normal already sampled for the diffuse/scatter
+          // pass instead of a second full getWaterNormal() call.
+          normal = animatedNormal;
+          #else
           // Use animated water normal from texture sampling
           vec3 waterNormal = getWaterNormal(vWorldPosition, uWaveTime, normal, normalArray, vMaterialIds.x);
           normal = waterNormal;
+          #endif
         `
       );
       
@@ -364,6 +383,16 @@ export function getWaterMaterial(): WaterMaterial {
 /** Update water animation time */
 export function updateWaterTime(time: number): void {
   getWaterMaterial().setWaveTime(time);
+}
+
+/**
+ * Toggle the low-detail water path (fewer normal samples, one getWaterNormal call).
+ * Driven by the quality preset. Recompiles the shader only when the flag changes.
+ */
+export function setWaterQualityLow(low: boolean): void {
+  if (WaterMaterial.qualityLow === low) return;
+  WaterMaterial.qualityLow = low;
+  if (waterMaterial) waterMaterial.needsUpdate = true;
 }
 
 /** Apply water settings from store */

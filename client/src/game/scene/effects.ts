@@ -13,11 +13,11 @@
 import * as THREE from 'three';
 import {
   EffectComposer, EffectPass, RenderPass, CopyPass, NormalPass,
-  BloomEffect, SSAOEffect, GodRaysEffect, KernelSize,
+  BloomEffect, SSAOEffect, GodRaysEffect, HueSaturationEffect, KernelSize,
   BlendFunction, LuminanceMaterial,
 } from 'postprocessing';
 import { useGameStore } from '../../state/store';
-import { getSunLight, getMoonLight, getActiveShadowCaster } from './Lighting';
+import { getSunLight, getMoonLight } from './Lighting';
 
 // ============== State ==============
 
@@ -26,11 +26,15 @@ let normalPass: NormalPass | null = null;
 let ssaoEffect: SSAOEffect | null = null;
 let bloomEffect: BloomEffect | null = null;
 let godRaysEffect: GodRaysEffect | null = null;
+let hueSaturationEffect: HueSaturationEffect | null = null;
 let sunMesh: THREE.Mesh | null = null;
 let effectPass: EffectPass | null = null;  // SSAO + bloom
 let godRaysPass: EffectPass | null = null; // god rays (separate — needs sun mesh)
 let copyPass: CopyPass | null = null;
 let unsubscribe: (() => void) | null = null;
+
+/** God-rays radial-blur sample count — quality lever set by the quality preset. */
+let godRaysSamples = 60;
 
 /** Settings snapshot that the pipeline cares about. */
 interface EffectsSettings {
@@ -45,6 +49,8 @@ interface EffectsSettings {
   godRaysEnabled: boolean;
   godRaysDecay: number;
   godRaysExposure: number;
+  colorCorrectionEnabled: boolean;
+  saturation: number;              // store units: 0-2, 1.0 = neutral
 }
 
 let current: EffectsSettings = {
@@ -59,7 +65,14 @@ let current: EffectsSettings = {
   godRaysEnabled: true,
   godRaysDecay: 0.85,
   godRaysExposure: 0.3,
+  colorCorrectionEnabled: true,
+  saturation: 1.0,
 };
+
+/** Map store saturation (0-2, 1=neutral) → HueSaturationEffect saturation (-1..1, 0=neutral). */
+function toEffectSaturation(storeSaturation: number): number {
+  return Math.max(-1, Math.min(1, storeSaturation - 1));
+}
 
 // ============== Internal helpers ==============
 
@@ -71,7 +84,7 @@ let current: EffectsSettings = {
  * - CopyPass is fallback when ALL effects are off
  */
 function updatePassStates(): void {
-  if (!effectPass || !godRaysPass || !copyPass || !normalPass || !ssaoEffect || !bloomEffect || !godRaysEffect) return;
+  if (!effectPass || !godRaysPass || !copyPass || !normalPass || !ssaoEffect || !bloomEffect || !godRaysEffect || !hueSaturationEffect) return;
 
   // NormalPass — only needed for SSAO
   normalPass.enabled = current.ssaoEnabled;
@@ -79,10 +92,11 @@ function updatePassStates(): void {
   // Individual effect blend functions
   ssaoEffect.blendMode.setBlendFunction(current.ssaoEnabled ? BlendFunction.MULTIPLY : BlendFunction.SKIP);
   bloomEffect.blendMode.setBlendFunction(current.bloomEnabled ? BlendFunction.SCREEN : BlendFunction.SKIP);
+  hueSaturationEffect.blendMode.setBlendFunction(current.colorCorrectionEnabled ? BlendFunction.SRC : BlendFunction.SKIP);
 
-  // EffectPass (SSAO + bloom)
-  const ssaoOrBloom = current.ssaoEnabled || current.bloomEnabled;
-  effectPass.enabled = ssaoOrBloom;
+  // EffectPass (SSAO + bloom + color correction)
+  const anyEffect = current.ssaoEnabled || current.bloomEnabled || current.colorCorrectionEnabled;
+  effectPass.enabled = anyEffect;
 
   // God rays pass
   godRaysPass.enabled = current.godRaysEnabled;
@@ -95,7 +109,7 @@ function updatePassStates(): void {
 
   if (current.godRaysEnabled) {
     godRaysPass.renderToScreen = true;
-  } else if (ssaoOrBloom) {
+  } else if (anyEffect) {
     effectPass.renderToScreen = true;
   } else {
     copyPass.enabled = true;
@@ -132,11 +146,17 @@ function applySettings(next: Partial<EffectsSettings>): void {
     if (next.godRaysExposure !== undefined) godRaysEffect.godRaysMaterial.exposure = next.godRaysExposure;
   }
 
+  // Color correction params
+  if (hueSaturationEffect && next.saturation !== undefined) {
+    hueSaturationEffect.saturation = toEffectSaturation(next.saturation);
+  }
+
   // Merge BEFORE updatePassStates so it uses new values
   Object.assign(current, next);
 
   // Update pass enable states if any toggle changed
-  if (next.ssaoEnabled !== undefined || next.bloomEnabled !== undefined || next.godRaysEnabled !== undefined) {
+  if (next.ssaoEnabled !== undefined || next.bloomEnabled !== undefined
+    || next.godRaysEnabled !== undefined || next.colorCorrectionEnabled !== undefined) {
     updatePassStates();
   }
 }
@@ -194,8 +214,13 @@ export function initEffects(
     radius: state.environment.bloomRadius,
   });
 
-  // EffectPass — SSAO + bloom
-  effectPass = new EffectPass(camera, ssaoEffect, bloomEffect);
+  // HueSaturationEffect — color correction / saturation grading
+  hueSaturationEffect = new HueSaturationEffect({
+    saturation: toEffectSaturation(state.environment.saturation),
+  });
+
+  // EffectPass — SSAO + bloom + color correction (saturation applied last)
+  effectPass = new EffectPass(camera, ssaoEffect, bloomEffect, hueSaturationEffect);
   composer.addPass(effectPass);
 
   // Sun mesh for god rays (invisible, transparent, no depth write)
@@ -208,18 +233,20 @@ export function initEffects(
   // Position from sunLight (don't add to main scene — GodRaysEffect renders it internally)
   syncSunMeshPosition();
 
-  // GodRaysEffect — defaults match pmndrs demo
+  // GodRaysEffect — defaults match pmndrs demo (exposure seeded from store)
   godRaysEffect = new GodRaysEffect(camera, sunMesh, {
     density: 0.96,
     decay: state.environment.godRaysDecay,
     weight: 0.3,
-    exposure: 0.54,
-    samples: 60,
+    exposure: state.environment.godRaysExposure,
+    samples: godRaysSamples,
     clampMax: 1.0,
     kernelSize: KernelSize.SMALL,
     blur: true,
     resolutionScale: 0.5,
   });
+  // Apply any preset sample count set before init.
+  godRaysEffect.samples = godRaysSamples;
 
   // God rays in a separate EffectPass
   godRaysPass = new EffectPass(camera, godRaysEffect);
@@ -245,6 +272,8 @@ export function initEffects(
     godRaysEnabled: state.godRaysEnabled,
     godRaysDecay: state.environment.godRaysDecay,
     godRaysExposure: state.environment.godRaysExposure,
+    colorCorrectionEnabled: state.colorCorrectionEnabled,
+    saturation: state.environment.saturation,
   };
   updatePassStates();
 
@@ -263,6 +292,8 @@ export function initEffects(
     if (state.godRaysEnabled !== prev.godRaysEnabled) changes.godRaysEnabled = state.godRaysEnabled;
     if (state.environment.godRaysDecay !== prev.environment.godRaysDecay) changes.godRaysDecay = state.environment.godRaysDecay;
     if (state.environment.godRaysExposure !== prev.environment.godRaysExposure) changes.godRaysExposure = state.environment.godRaysExposure;
+    if (state.colorCorrectionEnabled !== prev.colorCorrectionEnabled) changes.colorCorrectionEnabled = state.colorCorrectionEnabled;
+    if (state.environment.saturation !== prev.environment.saturation) changes.saturation = state.environment.saturation;
 
     if (Object.keys(changes).length > 0) {
       applySettings(changes);
@@ -283,7 +314,13 @@ export function initEffects(
  */
 function syncSunMeshPosition(): void {
   if (!sunMesh) return;
-  const light = getActiveShadowCaster() === 'moon' ? getMoonLight() : getSunLight();
+  // God rays emanate from whichever celestial body is above the horizon — the
+  // sun by day, the moon by night — independent of which light casts shadows.
+  // (Tying this to the shadow caster meant the moon never got rays on High,
+  // where moon shadows are off.)
+  const sun = getSunLight();
+  const moon = getMoonLight();
+  const light = sun && sun.position.y >= 0 ? sun : (moon ?? sun);
   if (light) {
     sunMesh.position.copy(light.position);
     (sunMesh.material as THREE.MeshBasicMaterial).color.copy(light.color);
@@ -306,6 +343,15 @@ export function renderEffects(
   } else {
     renderer.render(scene, camera);
   }
+}
+
+/**
+ * Set the god-rays radial-blur sample count (quality/cost lever). Driven by the
+ * quality preset — High uses a low count, Max a high count.
+ */
+export function setGodRaysSamples(samples: number): void {
+  godRaysSamples = samples;
+  if (godRaysEffect) godRaysEffect.samples = samples;
 }
 
 /**
@@ -338,6 +384,7 @@ export function disposeEffects(): void {
   ssaoEffect = null;
   bloomEffect = null;
   godRaysEffect = null;
+  hueSaturationEffect = null;
   effectPass = null;
   godRaysPass = null;
   copyPass = null;

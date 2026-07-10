@@ -96,19 +96,24 @@ export const waterNormalPerturbation = /* glsl */ `
     float medScale = scale * 0.06;
     vec2 uvB = baseUV * medScale - vec2(time * 0.025, time * -0.02);
     vec3 nB = sampleWaterNormal(normalTex, layer, uvB);
-    
+
+    #ifdef WATER_LOW
+    // Low/medium quality: 2 normal samples instead of 4
+    vec3 blendedNormal = normalize(nA + nB * 0.8);
+    #else
     // Layer C: Large swell (slowest, largest scale, cross direction)
     float largeScale = scale * 0.03;
     vec2 uvC = baseUV * largeScale + vec2(time * -0.015, time * 0.018);
     vec3 nC = sampleWaterNormal(normalTex, layer, uvC);
-    
+
     // Layer D: Detail (fastest, finest scale, diagonal)
     float detailScale = scale * 0.25;
     vec2 uvD = baseUV * detailScale + vec2(time * 0.035, time * -0.04);
     vec3 nD = sampleWaterNormal(normalTex, layer, uvD);
-    
+
     // Weighted blend: primary layers stronger, detail layers add breakup
     vec3 blendedNormal = normalize(nA + nB * 0.8 + nC * 0.6 + nD * 0.4);
+    #endif
     
     // Apply strength and perturb base normal
     vec3 perturbedNormal = safeBaseNormal;

@@ -67,6 +67,9 @@ export class GameCore {
   // Center point for spectator camera orbit (updated when leaving Playing mode)
   private spectatorCenter = new THREE.Vector3(0, 0, 0);
 
+  // Store subscription for the render-scale slider
+  private renderScaleUnsub: (() => void) | null = null;
+
   constructor() {
     this.gameLoop = new GameLoop();
     this.playerManager = new PlayerManager();
@@ -85,7 +88,9 @@ export class GameCore {
       antialias: false,
       powerPreference: 'high-performance',
     });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // updateStyle=false: the drawing buffer may be rendered below native (renderScale);
+    // CSS keeps the canvas full-size so the browser upscales it (the fill-rate win).
+    this.renderer.setSize(window.innerWidth, window.innerHeight, false);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x87ceeb); // Sky blue
     
@@ -101,6 +106,10 @@ export class GameCore {
     // Add canvas to DOM
     const canvas = this.renderer.domElement;
     canvas.id = 'game-canvas';
+    // Display size is governed by CSS (#game-canvas: 100%/100%); the drawing buffer
+    // is set separately so renderScale can shrink it without shrinking the canvas.
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
     document.body.appendChild(canvas);
 
     // Initialize scene, camera, lighting
@@ -218,6 +227,11 @@ export class GameCore {
 
     // Handle resize
     window.addEventListener('resize', this.onResize);
+
+    // Re-apply the drawing-buffer size whenever the render-scale slider changes.
+    this.renderScaleUnsub = useGameStore.subscribe((state, prev) => {
+      if (state.renderScale !== prev.renderScale) this.onResize();
+    });
 
     // Start game loop and input loop
     this.gameLoop.start(this.update);
@@ -574,8 +588,12 @@ export class GameCore {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
     }
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    resizeEffects(window.innerWidth, window.innerHeight);
+    // renderScale shrinks the drawing buffer below the display size (fill-rate lever).
+    const scale = useGameStore.getState().renderScale;
+    const w = Math.max(1, Math.round(window.innerWidth * scale));
+    const h = Math.max(1, Math.round(window.innerHeight * scale));
+    this.renderer.setSize(w, h, false); // updateStyle=false — keep CSS display size
+    resizeEffects(w, h);
   };
 
   dispose(): void {
@@ -600,6 +618,7 @@ export class GameCore {
     disposeEffects();
 
     window.removeEventListener('resize', this.onResize);
+    if (this.renderScaleUnsub) { this.renderScaleUnsub(); this.renderScaleUnsub = null; }
     this.renderer.dispose();
     document.body.removeChild(this.renderer.domElement);
   }

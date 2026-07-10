@@ -26,6 +26,8 @@ export interface QualitySettings {
   // Post-processing (individual toggles)
   ssaoEnabled: boolean;
   bloomEnabled: boolean;
+  godRaysEnabled: boolean;    // radial-blur sun rays — off on low
+  godRaysSamples: number;     // radial-blur sample count (quality/cost lever)
   colorCorrectionEnabled: boolean;
 
   // Shadows
@@ -46,12 +48,17 @@ export interface QualitySettings {
   shaderNormalMaps: boolean;
   shaderAoMaps: boolean;
   shaderMetalnessMaps: boolean;
+
+  // Water: full 4-layer normals + second normal sample (ultra/high) vs cheap 2-layer (medium/low)
+  waterHighQuality: boolean;
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
   ultra: {
     ssaoEnabled: true,
     bloomEnabled: true,
+    godRaysEnabled: true,
+    godRaysSamples: 60,
     colorCorrectionEnabled: true,
     shadowMapSize: 4096,
     shadowsEnabled: true,
@@ -64,10 +71,13 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: true,
     shaderAoMaps: true,
     shaderMetalnessMaps: true,
+    waterHighQuality: true,
   },
   high: {
     ssaoEnabled: false,
     bloomEnabled: true,
+    godRaysEnabled: true,
+    godRaysSamples: 20,   // low-quality god rays
     colorCorrectionEnabled: true,
     shadowMapSize: 2048,
     shadowsEnabled: true,
@@ -80,10 +90,13 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: true,
     shaderAoMaps: true,
     shaderMetalnessMaps: true,
+    waterHighQuality: true,
   },
   medium: {
     ssaoEnabled: false,
     bloomEnabled: false,
+    godRaysEnabled: false,
+    godRaysSamples: 20,   // unused (god rays off)
     colorCorrectionEnabled: true,
     shadowMapSize: 1024,
     shadowsEnabled: true,
@@ -96,10 +109,13 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: false,
     shaderAoMaps: false,
     shaderMetalnessMaps: true,
+    waterHighQuality: false,
   },
   low: {
     ssaoEnabled: false,
     bloomEnabled: false,
+    godRaysEnabled: false,
+    godRaysSamples: 20,   // unused (god rays off)
     colorCorrectionEnabled: false,
     shadowMapSize: 512,
     shadowsEnabled: false,
@@ -112,6 +128,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderNormalMaps: false,
     shaderAoMaps: false,
     shaderMetalnessMaps: false,
+    waterHighQuality: false,
   },
 };
 
