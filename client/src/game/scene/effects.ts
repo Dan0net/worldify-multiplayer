@@ -174,7 +174,7 @@ export function initEffects(
   const state = useGameStore.getState();
 
   composer = new EffectComposer(renderer, {
-    multisampling: Math.min(state.msaaSamples, renderer.capabilities.maxSamples),
+    multisampling: Math.min(state.quality.msaaSamples, renderer.capabilities.maxSamples),
     frameBufferType: THREE.HalfFloatType,
   });
 
@@ -261,18 +261,18 @@ export function initEffects(
 
   // Sync current state
   current = {
-    msaaSamples: state.msaaSamples,
-    ssaoEnabled: state.ssaoEnabled,
+    msaaSamples: state.quality.msaaSamples,
+    ssaoEnabled: state.quality.ssaoEnabled,
     ssaoIntensity: state.environment.ssaoIntensity,
     ssaoRadius: state.environment.ssaoRadius,
-    bloomEnabled: state.bloomEnabled,
+    bloomEnabled: state.quality.bloomEnabled,
     bloomIntensity: state.environment.bloomIntensity,
     bloomThreshold: state.environment.bloomThreshold,
     bloomRadius: state.environment.bloomRadius,
-    godRaysEnabled: state.godRaysEnabled,
+    godRaysEnabled: state.quality.godRaysEnabled,
     godRaysDecay: state.environment.godRaysDecay,
     godRaysExposure: state.environment.godRaysExposure,
-    colorCorrectionEnabled: state.colorCorrectionEnabled,
+    colorCorrectionEnabled: state.quality.colorCorrectionEnabled,
     saturation: state.environment.saturation,
   };
   updatePassStates();
@@ -281,18 +281,18 @@ export function initEffects(
   unsubscribe = useGameStore.subscribe((state, prev) => {
     const changes: Partial<EffectsSettings> = {};
 
-    if (state.msaaSamples !== prev.msaaSamples) changes.msaaSamples = state.msaaSamples;
-    if (state.ssaoEnabled !== prev.ssaoEnabled) changes.ssaoEnabled = state.ssaoEnabled;
+    if (state.quality.msaaSamples !== prev.quality.msaaSamples) changes.msaaSamples = state.quality.msaaSamples;
+    if (state.quality.ssaoEnabled !== prev.quality.ssaoEnabled) changes.ssaoEnabled = state.quality.ssaoEnabled;
     if (state.environment.ssaoIntensity !== prev.environment.ssaoIntensity) changes.ssaoIntensity = state.environment.ssaoIntensity;
     if (state.environment.ssaoRadius !== prev.environment.ssaoRadius) changes.ssaoRadius = state.environment.ssaoRadius;
-    if (state.bloomEnabled !== prev.bloomEnabled) changes.bloomEnabled = state.bloomEnabled;
+    if (state.quality.bloomEnabled !== prev.quality.bloomEnabled) changes.bloomEnabled = state.quality.bloomEnabled;
     if (state.environment.bloomIntensity !== prev.environment.bloomIntensity) changes.bloomIntensity = state.environment.bloomIntensity;
     if (state.environment.bloomThreshold !== prev.environment.bloomThreshold) changes.bloomThreshold = state.environment.bloomThreshold;
     if (state.environment.bloomRadius !== prev.environment.bloomRadius) changes.bloomRadius = state.environment.bloomRadius;
-    if (state.godRaysEnabled !== prev.godRaysEnabled) changes.godRaysEnabled = state.godRaysEnabled;
+    if (state.quality.godRaysEnabled !== prev.quality.godRaysEnabled) changes.godRaysEnabled = state.quality.godRaysEnabled;
     if (state.environment.godRaysDecay !== prev.environment.godRaysDecay) changes.godRaysDecay = state.environment.godRaysDecay;
     if (state.environment.godRaysExposure !== prev.environment.godRaysExposure) changes.godRaysExposure = state.environment.godRaysExposure;
-    if (state.colorCorrectionEnabled !== prev.colorCorrectionEnabled) changes.colorCorrectionEnabled = state.colorCorrectionEnabled;
+    if (state.quality.colorCorrectionEnabled !== prev.quality.colorCorrectionEnabled) changes.colorCorrectionEnabled = state.quality.colorCorrectionEnabled;
     if (state.environment.saturation !== prev.environment.saturation) changes.saturation = state.environment.saturation;
 
     if (Object.keys(changes).length > 0) {
@@ -302,9 +302,9 @@ export function initEffects(
 
   console.log('[Effects] Pipeline initialized', {
     multisampling: composer.multisampling,
-    ssao: state.ssaoEnabled,
-    bloom: state.bloomEnabled,
-    godRays: state.godRaysEnabled,
+    ssao: state.quality.ssaoEnabled,
+    bloom: state.quality.bloomEnabled,
+    godRays: state.quality.godRaysEnabled,
   });
 }
 

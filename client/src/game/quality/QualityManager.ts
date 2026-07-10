@@ -1,15 +1,15 @@
 /**
  * QualityManager - Applies quality presets to all rendering systems
  *
- * Centralises the wiring between QualityPresets and:
- * - WebGLRenderer (pixel ratio, shadows, antialias flag)
- * - Post-processing (SSAO, bloom, color correction)
- * - Lighting (shadow map size via environment settings, moon shadow eligibility)
- * - TerrainMaterial (shader map defines, anisotropy)
- * - VoxelWorld (visibility radius)
+ * The store's `quality` slice is the single source of truth for the active
+ * QualitySettings. `applyQuality` writes that slice and pushes the settings to
+ * the subsystems it owns imperatively (renderer, lighting, terrain/water
+ * materials, visibility). The store-subscription-driven subsystems react on
+ * their own: effects.ts (ssao/bloom/godrays/msaa/color-correction) and SkyDome
+ * (god-ray sun disc) subscribe to `quality`.
  *
- * Call `applyQuality()` for a full preset, or individual `apply*()` for
- * fine-grained control from the debug panel.
+ * Individual `apply*()` helpers (used by the debug panel) update the `quality`
+ * slice AND apply their field immediately.
  */
 
 import * as THREE from 'three';
@@ -20,7 +20,6 @@ import {
   saveQualityLevel,
   saveVisibilityRadius,
 } from './QualityPresets.js';
-// SSAO/bloom/godrays/color-correction are all driven by store subscription in effects.ts
 import { getActiveShadowLight, setMoonShadowsAllowed, updateShadowFrustumSize, applyEnvironmentSettings } from '../scene/Lighting.js';
 import {
   setShaderMapDefines,
@@ -38,9 +37,6 @@ let rendererRef: THREE.WebGLRenderer | null = null;
 /** Callback set by VoxelWorld or GameCore to update visibility radius at runtime */
 let visibilityRadiusCallback: ((radius: number) => void) | null = null;
 
-/** Current effective quality settings (may have custom visibility) */
-let currentSettings: QualitySettings | null = null;
-
 // ============== Public API ==============
 
 export function setRendererRef(r: THREE.WebGLRenderer): void {
@@ -55,51 +51,66 @@ export function setVisibilityRadiusCallback(cb: (radius: number) => void): void 
   visibilityRadiusCallback = cb;
 }
 
+// ============== Internal imperative appliers (no store writes) ==============
+
+function pixelRatioImpl(maxRatio: number): void {
+  if (rendererRef) {
+    rendererRef.setPixelRatio(Math.min(window.devicePixelRatio, maxRatio));
+  }
+}
+
+function shadowsImpl(enabled: boolean): void {
+  if (rendererRef) {
+    rendererRef.shadowMap.enabled = enabled;
+    rendererRef.shadowMap.needsUpdate = true;
+  }
+  const light = getActiveShadowLight();
+  if (light) light.castShadow = enabled;
+}
+
+function shadowMapSizeImpl(size: number): void {
+  // shadowMapSize still lives on the environment slice (the applied home);
+  // the quality preset seeds it here.
+  useGameStore.getState().setEnvironment({ shadowMapSize: size });
+  applyEnvironmentSettings({ shadowMapSize: size });
+}
+
+function visibilityImpl(radius: number): void {
+  if (visibilityRadiusCallback) visibilityRadiusCallback(radius);
+}
+
+// ============== Preset application ==============
+
 /**
  * Apply a full quality preset.
- * `customVisibility` overrides the preset's visibility radius (for the separate slider).
+ * `customVisibility` overrides the preset's visibility radius (separate slider).
  */
 export function applyQuality(level: QualityLevel, customVisibility?: number): void {
   const preset = QUALITY_PRESETS[level];
-  currentSettings = { ...preset };
+  const settings: QualitySettings = {
+    ...preset,
+    visibilityRadius: customVisibility ?? preset.visibilityRadius,
+  };
 
-  // Override visibility if custom value provided
-  const effectiveVisibility = customVisibility ?? preset.visibilityRadius;
-  currentSettings.visibilityRadius = effectiveVisibility;
+  // Single source of truth — this also drives the effects.ts / SkyDome
+  // subscriptions (ssao/bloom/godrays/msaa/color-correction, sun disc).
+  useGameStore.getState().setQuality(settings);
 
-  // --- Renderer ---
-  applyPixelRatio(preset.maxPixelRatio);
-  applyShadowsEnabled(preset.shadowsEnabled);
-  applyMoonShadows(preset.moonShadows);
-
-  // --- Shadow map size (routed through environment settings) ---
-  useGameStore.getState().setEnvironment({ shadowMapSize: preset.shadowMapSize });
-  applyEnvironmentSettings({ shadowMapSize: preset.shadowMapSize });
-
-  // --- Shadow frustum (uses shadow-specific radius, not visibility) ---
-  updateShadowFrustumSize(preset.shadowRadius);
-
-  // --- MSAA (store-driven — effects.ts subscribes) ---
-  useGameStore.getState().setMsaaSamples(preset.msaaSamples);
-
-  // --- Post-processing (store-driven — effects.ts subscribes) ---
-  useGameStore.getState().setBloomEnabled(preset.bloomEnabled);
-  useGameStore.getState().setSsaoEnabled(preset.ssaoEnabled);
-  useGameStore.getState().setGodRaysEnabled(preset.godRaysEnabled);
-  setGodRaysSamples(preset.godRaysSamples);
-  applyColorCorrectionEnabled(preset.colorCorrectionEnabled);
-
-  // --- Terrain material shader maps ---
+  // Subsystems this manager owns imperatively:
+  pixelRatioImpl(settings.maxPixelRatio);
+  shadowsImpl(settings.shadowsEnabled);
+  setMoonShadowsAllowed(settings.moonShadows);
+  shadowMapSizeImpl(settings.shadowMapSize);
+  updateShadowFrustumSize(settings.shadowRadius);
   setShaderMapDefines({
-    normalMaps: preset.shaderNormalMaps,
-    aoMaps: preset.shaderAoMaps,
-    metalnessMaps: preset.shaderMetalnessMaps,
+    normalMaps: settings.shaderNormalMaps,
+    aoMaps: settings.shaderAoMaps,
+    metalnessMaps: settings.shaderMetalnessMaps,
   });
-  setWaterQualityLow(!preset.waterHighQuality);
-  applyAnisotropy(preset.anisotropy);
-
-  // --- Visibility radius ---
-  applyVisibilityRadius(effectiveVisibility);
+  setTerrainAnisotropy(settings.anisotropy);
+  setWaterQualityLow(!settings.waterHighQuality);
+  setGodRaysSamples(settings.godRaysSamples);
+  visibilityImpl(settings.visibilityRadius);
 
   // Persist
   saveQualityLevel(level);
@@ -108,133 +119,92 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   }
 
   console.log(`[Quality] Applied preset: ${level}`, {
-    pixelRatio: Math.min(window.devicePixelRatio, preset.maxPixelRatio),
-    shadows: preset.shadowsEnabled,
-    shadowMap: preset.shadowMapSize,
-    shadowRadius: preset.shadowRadius,
-    msaa: preset.msaaSamples,
-    ssao: preset.ssaoEnabled,
-    bloom: preset.bloomEnabled,
-    godRays: preset.godRaysEnabled,
-    colorCorrection: preset.colorCorrectionEnabled,
-    visibility: effectiveVisibility,
-    normalMaps: preset.shaderNormalMaps,
-    aoMaps: preset.shaderAoMaps,
-    metalness: preset.shaderMetalnessMaps,
-    anisotropy: preset.anisotropy,
-    moonShadows: preset.moonShadows,
+    pixelRatio: Math.min(window.devicePixelRatio, settings.maxPixelRatio),
+    shadows: settings.shadowsEnabled,
+    shadowMap: settings.shadowMapSize,
+    shadowRadius: settings.shadowRadius,
+    msaa: settings.msaaSamples,
+    ssao: settings.ssaoEnabled,
+    bloom: settings.bloomEnabled,
+    godRays: settings.godRaysEnabled,
+    godRaysSamples: settings.godRaysSamples,
+    colorCorrection: settings.colorCorrectionEnabled,
+    visibility: settings.visibilityRadius,
+    normalMaps: settings.shaderNormalMaps,
+    aoMaps: settings.shaderAoMaps,
+    metalness: settings.shaderMetalnessMaps,
+    anisotropy: settings.anisotropy,
+    moonShadows: settings.moonShadows,
   });
 }
 
 /**
- * Apply a quality preset AND sync every individual setting to the Zustand store.
- * This is the single entry-point that UI buttons and GameCore.init should call
- * so the store always mirrors the active rendering state.
+ * Apply a quality preset and record the selected level. Single entry-point that
+ * UI buttons and GameCore.init should call.
  */
 export function syncQualityToStore(level: QualityLevel, customVisibility?: number): void {
-  const preset = QUALITY_PRESETS[level];
-  const vis = customVisibility ?? preset.visibilityRadius;
-  applyQuality(level, vis);
+  applyQuality(level, customVisibility);
   useGameStore.getState().setQualityLevel(level);
-  useGameStore.getState().setVisibilityRadius(vis);
-  useGameStore.getState().setSsaoEnabled(preset.ssaoEnabled);
-  useGameStore.getState().setBloomEnabled(preset.bloomEnabled);
-  useGameStore.getState().setGodRaysEnabled(preset.godRaysEnabled);
-  useGameStore.getState().setColorCorrectionEnabled(preset.colorCorrectionEnabled);
-  useGameStore.getState().setShadowsEnabled(preset.shadowsEnabled);
-  useGameStore.getState().setMoonShadows(preset.moonShadows);
-  useGameStore.getState().setShadowRadius(preset.shadowRadius);
-  useGameStore.getState().setAnisotropy(preset.anisotropy);
-  useGameStore.getState().setMaxPixelRatio(preset.maxPixelRatio);
-  useGameStore.getState().setMsaaSamples(preset.msaaSamples);
-  useGameStore.getState().setShaderNormalMaps(preset.shaderNormalMaps);
-  useGameStore.getState().setShaderAoMaps(preset.shaderAoMaps);
-  useGameStore.getState().setShaderMetalnessMaps(preset.shaderMetalnessMaps);
 }
 
-// ============== Individual Setting Appliers ==============
+// ============== Individual Setting Appliers (debug panel) ==============
+// Each updates the `quality` slice AND applies its field immediately.
 
 export function applyPixelRatio(maxRatio: number): void {
-  if (rendererRef) {
-    rendererRef.setPixelRatio(Math.min(window.devicePixelRatio, maxRatio));
-  }
+  useGameStore.getState().updateQuality({ maxPixelRatio: maxRatio });
+  pixelRatioImpl(maxRatio);
 }
 
 export function applyShadowsEnabled(enabled: boolean): void {
-  if (rendererRef) {
-    rendererRef.shadowMap.enabled = enabled;
-    rendererRef.shadowMap.needsUpdate = true;
-  }
-  // The active shadow caster light is managed by Lighting.ts
-  const light = getActiveShadowLight();
-  if (light) {
-    light.castShadow = enabled;
-  }
+  useGameStore.getState().updateQuality({ shadowsEnabled: enabled });
+  shadowsImpl(enabled);
 }
 
 export function applyMoonShadows(enabled: boolean): void {
-  // Tell Lighting.ts whether moon is eligible to become the shadow caster
+  useGameStore.getState().updateQuality({ moonShadows: enabled });
   setMoonShadowsAllowed(enabled);
-  if (currentSettings) {
-    currentSettings.moonShadows = enabled;
-  }
 }
 
 export function applySsaoEnabled(enabled: boolean): void {
-  // Store-driven — effects.ts subscription handles this
-  useGameStore.getState().setSsaoEnabled(enabled);
+  // effects.ts subscription applies it
+  useGameStore.getState().updateQuality({ ssaoEnabled: enabled });
 }
 
 export function applyBloomEnabled(enabled: boolean): void {
-  // Store-driven — effects.ts subscription handles this
-  useGameStore.getState().setBloomEnabled(enabled);
+  useGameStore.getState().updateQuality({ bloomEnabled: enabled });
 }
 
 export function applyColorCorrectionEnabled(enabled: boolean): void {
-  // Store-driven — effects.ts subscription applies it to the live pmndrs chain
-  useGameStore.getState().setColorCorrectionEnabled(enabled);
-}
-
-export function applyAnisotropy(value: number): void {
-  setTerrainAnisotropy(value);
+  useGameStore.getState().updateQuality({ colorCorrectionEnabled: enabled });
 }
 
 export function applyMsaaSamples(samples: number): void {
-  // Store-driven — effects.ts subscription handles this
-  useGameStore.getState().setMsaaSamples(samples);
+  useGameStore.getState().updateQuality({ msaaSamples: samples });
 }
 
-/**
- * Apply just the visibility radius without changing quality level.
- */
+export function applyAnisotropy(value: number): void {
+  useGameStore.getState().updateQuality({ anisotropy: value });
+  setTerrainAnisotropy(value);
+}
+
+/** Apply just the visibility radius without changing quality level. */
 export function applyVisibilityRadius(radius: number): void {
-  if (currentSettings) {
-    currentSettings.visibilityRadius = radius;
-  }
-  if (visibilityRadiusCallback) {
-    visibilityRadiusCallback(radius);
-  }
+  useGameStore.getState().updateQuality({ visibilityRadius: radius });
+  visibilityImpl(radius);
   saveVisibilityRadius(radius);
 }
 
-/**
- * Apply shadow radius (controls shadow frustum AND per-chunk castShadow culling).
- */
+/** Apply shadow radius (shadow frustum + per-chunk castShadow culling). */
 export function applyShadowRadius(radius: number): void {
-  if (currentSettings) {
-    currentSettings.shadowRadius = radius;
-  }
+  useGameStore.getState().updateQuality({ shadowRadius: radius });
   updateShadowFrustumSize(radius);
 }
 
-/**
- * Get the current shadow radius in chunks.
- * Used by VoxelWorld for per-chunk castShadow distance culling.
- */
+/** Current shadow radius in chunks. Used by VoxelWorld for castShadow culling. */
 export function getShadowRadius(): number {
-  return currentSettings?.shadowRadius ?? 4;
+  return useGameStore.getState().quality.shadowRadius;
 }
 
-export function getCurrentSettings(): QualitySettings | null {
-  return currentSettings;
+export function getCurrentSettings(): QualitySettings {
+  return useGameStore.getState().quality;
 }

@@ -1,6 +1,6 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID, DEFAULT_BUILD_PRESETS, presetToSlotMeta, templateToSlotMeta, PRESET_TEMPLATES, type BuildConfig, type PresetSlotMeta } from '@worldify/shared';
-import type { QualityLevel } from '../game/quality/QualityPresets';
+import { QUALITY_PRESETS, type QualityLevel, type QualitySettings } from '../game/quality/QualityPresets';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
   MATERIAL_METALNESS_OFFSET,
@@ -336,24 +336,15 @@ export interface GameState {
   // Terrain shader debug
   terrainDebugMode: TerrainDebugMode;
   
-  // Quality settings (individual controls)
+  // Quality settings.
+  // `quality` is the single source of truth for the active QualitySettings
+  // (seeded from QUALITY_PRESETS, overridden at runtime). `qualityLevel` is the
+  // selected preset name (for UI highlighting). `fov`/`renderScale` are separate
+  // user controls, not part of a preset.
   qualityLevel: QualityLevel;
-  visibilityRadius: number;
+  quality: QualitySettings;
   fov: number;
-  ssaoEnabled: boolean;
-  bloomEnabled: boolean;
-  godRaysEnabled: boolean;
-  colorCorrectionEnabled: boolean;
-  shadowsEnabled: boolean;
-  moonShadows: boolean;
-  shadowRadius: number;
-  anisotropy: number;
-  maxPixelRatio: number;
-  msaaSamples: number;
   renderScale: number;          // 0.5-1.0 — sub-native render resolution (fill-rate lever)
-  shaderNormalMaps: boolean;
-  shaderAoMaps: boolean;
-  shaderMetalnessMaps: boolean;
 
   // Dev mode - force regenerate chunks on server
   forceRegenerateChunks: boolean;
@@ -397,22 +388,10 @@ export interface GameState {
   
   // Quality actions
   setQualityLevel: (level: QualityLevel) => void;
-  setVisibilityRadius: (radius: number) => void;
+  setQuality: (settings: QualitySettings) => void;
+  updateQuality: (partial: Partial<QualitySettings>) => void;
   setFov: (fov: number) => void;
   setRenderScale: (scale: number) => void;
-  setSsaoEnabled: (enabled: boolean) => void;
-  setBloomEnabled: (enabled: boolean) => void;
-  setGodRaysEnabled: (enabled: boolean) => void;
-  setColorCorrectionEnabled: (enabled: boolean) => void;
-  setShadowsEnabled: (enabled: boolean) => void;
-  setMoonShadows: (enabled: boolean) => void;
-  setShadowRadius: (radius: number) => void;
-  setAnisotropy: (value: number) => void;
-  setMaxPixelRatio: (ratio: number) => void;
-  setMsaaSamples: (samples: number) => void;
-  setShaderNormalMaps: (enabled: boolean) => void;
-  setShaderAoMaps: (enabled: boolean) => void;
-  setShaderMetalnessMaps: (enabled: boolean) => void;
   
   // Build actions
   setBuildPreset: (presetId: number) => void;
@@ -521,24 +500,11 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Terrain debug initial state
   terrainDebugMode: 0 as TerrainDebugMode,
   
-  // Quality initial state (auto-detect will override on first load)
+  // Quality initial state (auto-detect / restore overrides on first load)
   qualityLevel: 'ultra' as QualityLevel,
-  visibilityRadius: 8,
+  quality: { ...QUALITY_PRESETS.ultra },
   fov: 90,
-  ssaoEnabled: true,
-  bloomEnabled: true,
-  godRaysEnabled: true,
-  colorCorrectionEnabled: true,
-  shadowsEnabled: true,
-  moonShadows: true,
-  shadowRadius: 5,
-  anisotropy: 8,
-  maxPixelRatio: 2,
-  msaaSamples: 4,
   renderScale: 1,
-  shaderNormalMaps: true,
-  shaderAoMaps: true,
-  shaderMetalnessMaps: true,
 
   // Dev mode initial state
   forceRegenerateChunks: false,
@@ -611,22 +577,10 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   
   // Quality actions
   setQualityLevel: (level) => set({ qualityLevel: level }),
-  setVisibilityRadius: (radius) => set({ visibilityRadius: radius }),
+  setQuality: (settings) => set({ quality: settings }),
+  updateQuality: (partial) => set((state) => ({ quality: { ...state.quality, ...partial } })),
   setFov: (fov) => set({ fov }),
   setRenderScale: (scale) => set({ renderScale: scale }),
-  setSsaoEnabled: (enabled) => set({ ssaoEnabled: enabled }),
-  setBloomEnabled: (enabled) => set({ bloomEnabled: enabled }),
-  setGodRaysEnabled: (enabled) => set({ godRaysEnabled: enabled }),
-  setColorCorrectionEnabled: (enabled) => set({ colorCorrectionEnabled: enabled }),
-  setShadowsEnabled: (enabled) => set({ shadowsEnabled: enabled }),
-  setMoonShadows: (enabled) => set({ moonShadows: enabled }),
-  setShadowRadius: (radius) => set({ shadowRadius: radius }),
-  setAnisotropy: (value) => set({ anisotropy: value }),
-  setMaxPixelRatio: (ratio) => set({ maxPixelRatio: ratio }),
-  setMsaaSamples: (samples) => set({ msaaSamples: samples }),
-  setShaderNormalMaps: (enabled) => set({ shaderNormalMaps: enabled }),
-  setShaderAoMaps: (enabled) => set({ shaderAoMaps: enabled }),
-  setShaderMetalnessMaps: (enabled) => set({ shaderMetalnessMaps: enabled }),
   
   // Build actions
   setBuildPreset: (presetId) => set((state) => ({

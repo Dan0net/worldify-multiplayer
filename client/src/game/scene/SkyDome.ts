@@ -232,7 +232,7 @@ function starLayersForQuality(): number {
  * god rays on, the god-rays sun mesh provides the disc (avoids a doubled disc).
  */
 function sunDiscEnabledValue(): number {
-  return useGameStore.getState().godRaysEnabled ? 0 : 1;
+  return useGameStore.getState().quality.godRaysEnabled ? 0 : 1;
 }
 
 // ============== Initialization ==============
@@ -282,7 +282,7 @@ export function initSkyDome(): void {
     if (state.qualityLevel !== prev.qualityLevel) {
       skyMaterial.uniforms.uStarLayers.value = starLayersForQuality();
     }
-    if (state.godRaysEnabled !== prev.godRaysEnabled) {
+    if (state.quality.godRaysEnabled !== prev.quality.godRaysEnabled) {
       skyMaterial.uniforms.uSunDiscEnabled.value = sunDiscEnabledValue();
     }
   });
