@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { PlayerLocal } from '../player/playerLocal';
-import { storeBridge } from '../../state/bridge';
+import { useGameStore } from '../../state/store';
 
 let camera: THREE.PerspectiveCamera | null = null;
 
@@ -12,7 +12,7 @@ const SPECTATOR_ROTATION_SPEED = 0.1; // radians per second
 
 export function createCamera(): THREE.PerspectiveCamera {
   camera = new THREE.PerspectiveCamera(
-    storeBridge.fov,
+    useGameStore.getState().fov,
     window.innerWidth / window.innerHeight,
     0.1,
     1000

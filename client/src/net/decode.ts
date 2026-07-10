@@ -30,7 +30,7 @@ import {
   SurfaceColumnResponse,
   RequestNack,
 } from '@worldify/shared';
-import { storeBridge } from '../state/bridge';
+import { useGameStore } from '../state/store';
 import { registerHandler, dispatch } from './MessageRegistry';
 
 // ============== Typed Event System ==============
@@ -86,19 +86,19 @@ function handleWelcome(reader: ByteReader): void {
     roomBytes.push(reader.readUint8());
   }
   const roomId = String.fromCharCode(...roomBytes);
-  storeBridge.updateRoomInfo(roomId, playerId);
+  useGameStore.getState().setRoomInfo(roomId, playerId);
 }
 
 function handleRoomInfo(reader: ByteReader): void {
   const playerCount = reader.readUint8();
-  storeBridge.updatePlayerCount(playerCount);
+  useGameStore.getState().setPlayerCount(playerCount);
 }
 
 function handleSnapshot(reader: ByteReader): void {
   const snapshot = decodeSnapshot(reader);
   
   // Update tick in store for debug display
-  storeBridge.updateServerTick(snapshot.tick);
+  useGameStore.getState().setServerTick(snapshot.tick);
   
   // Notify game core of new snapshot
   emit('snapshot', snapshot);
@@ -112,7 +112,7 @@ function handleError(reader: ByteReader): void {
 function handlePong(reader: ByteReader): void {
   const timestamp = reader.readUint32();
   const ping = Date.now() - timestamp;
-  storeBridge.updatePing(ping);
+  useGameStore.getState().setPing(ping);
 }
 
 function handleBuildCommit(reader: ByteReader): void {

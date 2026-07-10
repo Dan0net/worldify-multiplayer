@@ -16,7 +16,7 @@
  */
 
 import * as THREE from 'three';
-import { storeBridge } from '../../state/bridge';
+import { useGameStore } from '../../state/store';
 
 /** Subsystem timing keys */
 export type PerfSection =
@@ -150,7 +150,7 @@ class PerformanceStatsCollector {
     const now = performance.now();
     if (now - this.lastFlush >= FLUSH_INTERVAL_MS) {
       this.lastFlush = now;
-      storeBridge.updatePerfStats({ ...this.snapshot });
+      useGameStore.getState().setPerfStats({ ...this.snapshot });
     }
   }
 

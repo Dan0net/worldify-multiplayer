@@ -4,12 +4,13 @@
  * Integrates with the store to track loading progress and state.
  */
 
-import { storeBridge } from '../../state/bridge.js';
-import { 
+import { useGameStore } from '../../state/store.js';
+import {
   initializeMaterials,
   initializePlaceholderTextures,
-  upgradeToHighRes, 
-  isHighResCached 
+  upgradeToHighRes,
+  isHighResCached,
+  applyMaterialSettings
 } from './TerrainMaterial.js';
 import { textureCache } from './TextureCache.js';
 
@@ -42,20 +43,20 @@ class MaterialManager {
     const shouldLoadHD = userPref === 'high' || (userPref !== 'low' && hdCached);
     
     if (shouldLoadHD && hdCached) {
-      storeBridge.setTextureState('loading-high');
-      storeBridge.setTextureProgress(0);
+      useGameStore.getState().setTextureState('loading-high');
+      useGameStore.getState().setTextureProgress(0);
 
       try {
         await initializeMaterials('high', (loaded, total) => {
-          storeBridge.setTextureProgress(loaded / total);
+          useGameStore.getState().setTextureProgress(loaded / total);
         });
 
-        storeBridge.setTextureState('high');
-        storeBridge.setTextureProgress(1);
+        useGameStore.getState().setTextureState('high');
+        useGameStore.getState().setTextureProgress(1);
         this.initialized = true;
         
         // Apply material settings from store to shaders
-        storeBridge.applyCurrentMaterialSettings();
+        applyMaterialSettings(useGameStore.getState().materialSettings);
 
         console.log('Material system initialized with HD textures (user preference)');
         return;
@@ -65,25 +66,25 @@ class MaterialManager {
     }
 
     // Load low-res textures
-    storeBridge.setTextureState('loading-low');
-    storeBridge.setTextureProgress(0);
+    useGameStore.getState().setTextureState('loading-low');
+    useGameStore.getState().setTextureProgress(0);
 
     try {
       await initializeMaterials('low', (loaded, total) => {
-        storeBridge.setTextureProgress(loaded / total);
+        useGameStore.getState().setTextureProgress(loaded / total);
       });
 
-      storeBridge.setTextureState('low');
-      storeBridge.setTextureProgress(1);
+      useGameStore.getState().setTextureState('low');
+      useGameStore.getState().setTextureProgress(1);
       this.initialized = true;
       
       // Apply material settings from store to shaders
-      storeBridge.applyCurrentMaterialSettings();
+      applyMaterialSettings(useGameStore.getState().materialSettings);
 
       console.log('Material system initialized with low-res textures');
     } catch (error) {
       console.error('Failed to initialize materials:', error);
-      storeBridge.setTextureState('none');
+      useGameStore.getState().setTextureState('none');
     }
   }
 
@@ -93,24 +94,24 @@ class MaterialManager {
    */
   async upgradeToHighResolution(): Promise<void> {
     if (this.upgrading) return;
-    if (storeBridge.textureState === 'high' || storeBridge.textureState === 'loading-high') {
+    if (useGameStore.getState().textureState === 'high' || useGameStore.getState().textureState === 'loading-high') {
       return;
     }
 
     this.upgrading = true;
-    storeBridge.setTextureState('loading-high');
-    storeBridge.setTextureProgress(0);
+    useGameStore.getState().setTextureState('loading-high');
+    useGameStore.getState().setTextureProgress(0);
 
     try {
       await upgradeToHighRes((loaded, total) => {
-        storeBridge.setTextureProgress(loaded / total);
+        useGameStore.getState().setTextureProgress(loaded / total);
       });
 
-      storeBridge.setTextureState('high');
-      storeBridge.setTextureProgress(1);
+      useGameStore.getState().setTextureState('high');
+      useGameStore.getState().setTextureProgress(1);
       
       // Apply material settings from store to shaders
-      storeBridge.applyCurrentMaterialSettings();
+      applyMaterialSettings(useGameStore.getState().materialSettings);
       
       // Save user preference
       await textureCache.setUserPreference('high');
@@ -119,7 +120,7 @@ class MaterialManager {
     } catch (error) {
       console.error('Failed to upgrade to high-res textures:', error);
       // Revert to low state
-      storeBridge.setTextureState('low');
+      useGameStore.getState().setTextureState('low');
     } finally {
       this.upgrading = false;
     }
@@ -131,24 +132,24 @@ class MaterialManager {
    */
   async downgradeToLowResolution(): Promise<void> {
     if (this.upgrading) return;
-    if (storeBridge.textureState === 'low' || storeBridge.textureState === 'loading-low') {
+    if (useGameStore.getState().textureState === 'low' || useGameStore.getState().textureState === 'loading-low') {
       return;
     }
 
     this.upgrading = true;
-    storeBridge.setTextureState('loading-low');
-    storeBridge.setTextureProgress(0);
+    useGameStore.getState().setTextureState('loading-low');
+    useGameStore.getState().setTextureProgress(0);
 
     try {
       await initializeMaterials('low', (loaded, total) => {
-        storeBridge.setTextureProgress(loaded / total);
+        useGameStore.getState().setTextureProgress(loaded / total);
       });
 
-      storeBridge.setTextureState('low');
-      storeBridge.setTextureProgress(1);
+      useGameStore.getState().setTextureState('low');
+      useGameStore.getState().setTextureProgress(1);
       
       // Apply material settings from store to shaders
-      storeBridge.applyCurrentMaterialSettings();
+      applyMaterialSettings(useGameStore.getState().materialSettings);
       
       // Save user preference
       await textureCache.setUserPreference('low');
@@ -157,7 +158,7 @@ class MaterialManager {
     } catch (error) {
       console.error('Failed to downgrade to low-res textures:', error);
       // Keep high state if downgrade fails
-      storeBridge.setTextureState('high');
+      useGameStore.getState().setTextureState('high');
     } finally {
       this.upgrading = false;
     }
@@ -175,9 +176,9 @@ class MaterialManager {
    */
   getState() {
     return {
-      textureState: storeBridge.textureState,
-      progress: storeBridge.textureProgress,
-      isLoading: storeBridge.textureState === 'loading-low' || storeBridge.textureState === 'loading-high',
+      textureState: useGameStore.getState().textureState,
+      progress: useGameStore.getState().textureProgress,
+      isLoading: useGameStore.getState().textureState === 'loading-low' || useGameStore.getState().textureState === 'loading-high',
     };
   }
 }

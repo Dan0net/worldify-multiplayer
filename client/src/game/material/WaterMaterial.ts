@@ -395,6 +395,18 @@ export function setWaterQualityLow(low: boolean): void {
   if (waterMaterial) waterMaterial.needsUpdate = true;
 }
 
+/**
+ * Subscribe the water material to store water-settings changes.
+ * UI just writes the store; the shader reacts here. Returns an unsubscribe fn.
+ */
+export function subscribeWaterSettings(): () => void {
+  return useGameStore.subscribe((state, prev) => {
+    if (state.waterSettings !== prev.waterSettings) {
+      applyWaterSettings(state.waterSettings);
+    }
+  });
+}
+
 /** Apply water settings from store */
 export function applyWaterSettings(settings: {
   waveAmplitude?: number;

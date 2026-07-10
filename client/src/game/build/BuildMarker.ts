@@ -19,7 +19,8 @@ import {
   composeRotation,
   NONE_PRESET_ID,
 } from '@worldify/shared';
-import { storeBridge } from '../../state/bridge';
+import { useGameStore } from '../../state/store';
+import { getBuildPreset, getBuildRotationRadians } from '../../state/buildAccessors';
 
 /**
  * Derive a "projection size" from the snap shape.
@@ -151,8 +152,8 @@ export class BuildMarker {
     collisionMeshes: THREE.Object3D[],
     castNDC?: { x: number; y: number } | null,
   ): { hasValidTarget: boolean } {
-    const presetId = storeBridge.buildPresetId;
-    const rotationSteps = storeBridge.buildRotationSteps;
+    const presetId = useGameStore.getState().build.presetId;
+    const rotationSteps = useGameStore.getState().build.rotationSteps;
 
     // Hide if build mode disabled (None preset)
     if (presetId === NONE_PRESET_ID) {
@@ -160,7 +161,7 @@ export class BuildMarker {
       return { hasValidTarget: false };
     }
 
-    const preset = storeBridge.buildPreset;
+    const preset = getBuildPreset();
 
     // Generate a fingerprint to detect config/meta changes within the same slot
     const cfg = preset.config;
@@ -450,7 +451,7 @@ export class BuildMarker {
       yAngle = Math.atan2(-nx, -nz);
     } else {
       // Horizontal surface — keep current user rotation
-      yAngle = storeBridge.buildRotationRadians;
+      yAngle = getBuildRotationRadians();
     }
 
     // Skip update if angle hasn't changed meaningfully
@@ -482,7 +483,7 @@ export class BuildMarker {
    * otherwise returns the user's manual rotation.
    */
   getEffectiveYRadians(): number {
-    return this.autoYRadians ?? storeBridge.buildRotationRadians;
+    return this.autoYRadians ?? getBuildRotationRadians();
   }
 
   /**
@@ -650,7 +651,7 @@ export class BuildMarker {
   getWorldAABB(): { min: THREE.Vector3; max: THREE.Vector3 } | null {
     if (!this.isVisible || this.currentPresetId === NONE_PRESET_ID) return null;
 
-    const preset = storeBridge.buildPreset;
+    const preset = getBuildPreset();
     const center = this.group.position.clone();
 
     // For BASE / PROJECT, compute actual center (offset up from group position)
@@ -701,7 +702,7 @@ export class BuildMarker {
   getTargetPosition(): THREE.Vector3 | null {
     if (!this.isVisible) return null;
 
-    const preset = storeBridge.buildPreset;
+    const preset = getBuildPreset();
     const pos = this.group.position.clone();
 
     // For BASE / PROJECT, the group is at the hit point (base of the shape)

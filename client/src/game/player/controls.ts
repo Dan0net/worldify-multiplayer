@@ -13,7 +13,8 @@ import {
   GameMode,
   clamp,
 } from '@worldify/shared';
-import { storeBridge } from '../../state/bridge';
+import { useGameStore } from '../../state/store';
+import { getBuildIsEnabled } from '../../state/buildAccessors';
 import { textureCache } from '../material/TextureCache.js';
 import { isTouch } from '../deviceMode';
 
@@ -66,35 +67,35 @@ export class Controls {
     // Build preset selection (0-9)
     if (e.code >= 'Digit0' && e.code <= 'Digit9') {
       const digit = parseInt(e.code.charAt(5));
-      storeBridge.selectBuildPreset(digit);
+      useGameStore.getState().setBuildPreset(digit);
       return;
     }
 
     // Build rotation
     if (e.code === 'KeyQ') {
-      storeBridge.rotateBuild(-1);
+      useGameStore.getState().rotateBuild(-1);
       return;
     }
     if (e.code === 'KeyE') {
-      storeBridge.rotateBuild(1);
+      useGameStore.getState().rotateBuild(1);
       return;
     }
 
     // Snap toggles
     if (e.code === 'KeyG') {
-      storeBridge.toggleBuildSnapGrid();
+      useGameStore.getState().toggleBuildSnapGrid();
       return;
     }
     if (e.code === 'KeyT') {
-      storeBridge.toggleBuildSnapPoint();
+      useGameStore.getState().toggleBuildSnapPoint();
       return;
     }
 
     // Tab key: toggle build menu
     if (e.code === 'Tab') {
       e.preventDefault();
-      if (storeBridge.gameMode === GameMode.Playing) {
-        if (storeBridge.buildMenuOpen) {
+      if (useGameStore.getState().gameMode === GameMode.Playing) {
+        if (useGameStore.getState().build.menuOpen) {
           this.closeBuildMenu();
         } else {
           this.openBuildMenu();
@@ -119,17 +120,17 @@ export class Controls {
     if (!this.isPointerLocked) return;
     
     // Only handle wheel when build mode is active
-    if (storeBridge.buildIsEnabled) {
+    if (getBuildIsEnabled()) {
       e.preventDefault();
-      storeBridge.rotateBuild(e.deltaY > 0 ? 1 : -1);
+      useGameStore.getState().rotateBuild(e.deltaY > 0 ? 1 : -1);
     }
   };
 
   private onMouseDown = (e: MouseEvent): void => {
     // Right-click: toggle build menu (works both locked and unlocked while Playing)
-    if (e.button === 2 && storeBridge.gameMode === GameMode.Playing) {
+    if (e.button === 2 && useGameStore.getState().gameMode === GameMode.Playing) {
       e.preventDefault();
-      if (storeBridge.buildMenuOpen) {
+      if (useGameStore.getState().build.menuOpen) {
         this.closeBuildMenu();
       } else if (this.isPointerLocked) {
         this.openBuildMenu();
@@ -141,14 +142,14 @@ export class Controls {
     // (handles case where requestPointerLock silently fails after Escape exit)
     // But NOT when the build menu is open — allow UI clicks (debug panel, etc.)
     if (!this.isPointerLocked) {
-      if (e.button === 0 && storeBridge.gameMode === GameMode.Playing && !storeBridge.buildMenuOpen) {
+      if (e.button === 0 && useGameStore.getState().gameMode === GameMode.Playing && !useGameStore.getState().build.menuOpen) {
         this.requestPointerLock();
       }
       return;
     }
-    
+
     // Left click to place build
-    if (e.button === 0 && storeBridge.buildIsEnabled && this.onBuildPlace) {
+    if (e.button === 0 && getBuildIsEnabled() && this.onBuildPlace) {
       this.onBuildPlace();
     }
   };
@@ -161,22 +162,22 @@ export class Controls {
         this.buildMenuCausedUnlock = false;
       } else {
         // Normal pointer lock exit — close build menu if open, go to main menu
-        if (storeBridge.buildMenuOpen) {
-          storeBridge.setBuildMenuOpen(false);
+        if (useGameStore.getState().build.menuOpen) {
+          useGameStore.getState().setBuildMenuOpen(false);
         }
-        storeBridge.setGameMode(GameMode.MainMenu);
+        useGameStore.getState().setGameMode(GameMode.MainMenu);
       }
     } else {
       // Pointer lock regained — ensure build menu is closed
-      if (storeBridge.buildMenuOpen) {
-        storeBridge.setBuildMenuOpen(false);
+      if (useGameStore.getState().build.menuOpen) {
+        useGameStore.getState().setBuildMenuOpen(false);
       }
     }
   };
 
   /** Prevent browser context menu while playing */
   private onContextMenu = (e: MouseEvent): void => {
-    if (storeBridge.gameMode === GameMode.Playing) {
+    if (useGameStore.getState().gameMode === GameMode.Playing) {
       e.preventDefault();
     }
   };
@@ -184,13 +185,13 @@ export class Controls {
   /** Open the build menu overlay (releases pointer lock for cursor) */
   private openBuildMenu(): void {
     this.buildMenuCausedUnlock = true;
-    storeBridge.setBuildMenuOpen(true);
+    useGameStore.getState().setBuildMenuOpen(true);
     document.exitPointerLock();
   }
 
   /** Close the build menu overlay (re-locks pointer) */
   private closeBuildMenu(): void {
-    storeBridge.setBuildMenuOpen(false);
+    useGameStore.getState().setBuildMenuOpen(false);
     requestAnimationFrame(() => {
       document.body.requestPointerLock();
     });
@@ -243,7 +244,7 @@ export class Controls {
 
   /** Trigger a build placement (mobile reticle release). */
   triggerPlace(): void {
-    if (storeBridge.buildIsEnabled && this.onBuildPlace) {
+    if (getBuildIsEnabled() && this.onBuildPlace) {
       this.onBuildPlace();
     }
   }

@@ -39,7 +39,7 @@ import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
 import { sendBinary } from '../../net/netClient.js';
-import { storeBridge } from '../../state/bridge.js';
+import { useGameStore } from '../../state/store.js';
 import { perfStats } from '../debug/PerformanceStats.js';
 import {
   getVisibleChunks,
@@ -640,7 +640,7 @@ export class VoxelWorld implements ChunkProvider {
 
   /** True when running offline (no multiplayer server) — generate chunks locally. */
   private get isLocal(): boolean {
-    return !storeBridge.useServerChunks;
+    return !useGameStore.getState().useServerChunks;
   }
 
   private getLocalPool(): TerrainWorkerPool {
@@ -668,7 +668,7 @@ export class VoxelWorld implements ChunkProvider {
       chunkX: cx,
       chunkY: cy,
       chunkZ: cz,
-      forceRegen: storeBridge.forceRegenerateChunks,
+      forceRegen: useGameStore.getState().forceRegenerateChunks,
     });
     sendBinary(request);
   }

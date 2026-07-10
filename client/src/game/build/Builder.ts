@@ -13,7 +13,8 @@ import * as THREE from 'three';
 import { BuildMarker } from './BuildMarker';
 import { BuildPreview } from './BuildPreview';
 import { SnapManager } from './SnapManager';
-import { storeBridge } from '../../state/bridge';
+import { useGameStore } from '../../state/store';
+import { getBuildPreset, getBuildIsEnabled } from '../../state/buildAccessors';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
@@ -144,10 +145,10 @@ export class Builder {
 
     // Sync snap state from bridge
     // Only enable point snaps when snapping is toggled on AND the active preset supports snaps
-    const presetHasSnaps = storeBridge.buildIsEnabled
-      && storeBridge.buildPreset.snapShape !== BuildPresetSnapShape.NONE;
-    this.snapManager.snapPointEnabled = storeBridge.buildSnapPoint && presetHasSnaps;
-    this.snapManager.gridSnapEnabled = storeBridge.buildSnapGrid;
+    const presetHasSnaps = getBuildIsEnabled()
+      && getBuildPreset().snapShape !== BuildPresetSnapShape.NONE;
+    this.snapManager.snapPointEnabled = useGameStore.getState().build.snapPoint && presetHasSnaps;
+    this.snapManager.gridSnapEnabled = useGameStore.getState().build.snapGrid;
 
     // Get collision meshes for raycasting
     const meshes = this.meshProvider.getCollisionMeshes();
@@ -169,7 +170,7 @@ export class Builder {
     if (hasValidTarget && this.snapManager.snapPointEnabled) {
       const targetPos = this.marker.getTargetPosition();
       if (targetPos) {
-        const preset = storeBridge.buildPreset;
+        const preset = getBuildPreset();
         const rotation = composeRotation(preset, this.marker.getEffectiveYRadians());
         const snapResult = this.snapManager.trySnap(
           preset,
@@ -187,7 +188,7 @@ export class Builder {
     // Check if build shape overlaps player or camera (for modes that add solid geometry)
     // Skip check for transparent materials (player won't collide with them)
     if (hasValidTarget) {
-      const preset = storeBridge.buildPreset;
+      const preset = getBuildPreset();
       const mode = preset.config.mode;
       const materialIsTransparent = isTransparent(preset.config.material);
       if ((mode === BuildMode.ADD || mode === BuildMode.FILL) && !materialIsTransparent) {
@@ -205,7 +206,7 @@ export class Builder {
     if (hasValidTarget && this.snapManager.snapPointEnabled) {
       const finalPos = this.marker.getTargetPosition();
       if (finalPos) {
-        const preset = storeBridge.buildPreset;
+        const preset = getBuildPreset();
         const rotation = composeRotation(preset, this.marker.getEffectiveYRadians());
         this.snapManager.updateVisuals(
           preset,
@@ -216,7 +217,7 @@ export class Builder {
         );
       }
     } else if (this.snapManager.snapPointEnabled) {
-      this.snapManager.updateVisuals(storeBridge.buildPreset, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 }, EMPTY_SET, EMPTY_SET);
+      this.snapManager.updateVisuals(getBuildPreset(), { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 }, EMPTY_SET, EMPTY_SET);
     }
 
     // Fade snap markers based on distance from camera
@@ -225,8 +226,8 @@ export class Builder {
     }
 
     // Update store with valid target state and reason
-    storeBridge.setBuildHasValidTarget(hasValidTarget);
-    storeBridge.setBuildInvalidReason(invalidReason);
+    useGameStore.getState().setBuildHasValidTarget(hasValidTarget);
+    useGameStore.getState().setBuildInvalidReason(invalidReason);
 
     // Check if deferred preview can now be shown (pending group merges resolved)
     this.preview.finalizeDeferredPreview();
@@ -287,13 +288,13 @@ export class Builder {
     }
 
     // Skip if build mode disabled
-    if (!storeBridge.buildIsEnabled) {
+    if (!getBuildIsEnabled()) {
       this.preview.clearPreview();
       return;
     }
 
     // Skip if no valid target
-    if (!storeBridge.buildState.hasValidTarget) {
+    if (!useGameStore.getState().build.hasValidTarget) {
       this.preview.clearPreview();
       return;
     }
@@ -306,7 +307,7 @@ export class Builder {
     }
 
     // Get preset and rotation
-    const preset = storeBridge.buildPreset;
+    const preset = getBuildPreset();
     const rotationRadians = this.marker.getEffectiveYRadians();
 
     // Update preview with composed rotation (base + user Y)
@@ -319,15 +320,15 @@ export class Builder {
    */
   private handlePlace = (): void => {
     // Skip if build mode disabled
-    if (!storeBridge.buildIsEnabled) return;
+    if (!getBuildIsEnabled()) return;
 
     // Skip if no valid target
-    if (!storeBridge.buildState.hasValidTarget) return;
+    if (!useGameStore.getState().build.hasValidTarget) return;
 
     const targetPos = this.marker.getTargetPosition();
     if (!targetPos) return;
 
-    const preset = storeBridge.buildPreset;
+    const preset = getBuildPreset();
     const rotationRadians = this.marker.getEffectiveYRadians();
 
     // Create build intent using composed rotation (base + user Y)
@@ -340,7 +341,7 @@ export class Builder {
       config: preset.config,
     };
 
-    if (storeBridge.useServerChunks) {
+    if (useGameStore.getState().useServerChunks) {
       // Multiplayer: send intent; server validates and broadcasts a commit that
       // every client (including us) applies via GameCore.handleBuildCommit.
       const encoded = encodeVoxelBuildIntent(intent);

@@ -18,7 +18,6 @@ import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
 import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
-import { storeBridge } from '../state/bridge';
 import { getCamera } from '../game/scene/camera';
 import { formatTimeOfDay } from '../game/scene/DayNightCycle';
 
@@ -134,7 +133,7 @@ export function SpectatorOverlay() {
           <span className="text-white/70 text-sm whitespace-nowrap">View</span>
           <div className="flex gap-1 flex-1">
             {([{ label: 'Near', value: 2 }, { label: 'Close', value: 4 }, { label: 'Far', value: 6 }, { label: 'Max', value: 8 }] as const).map((opt) => (
-              <button key={opt.value} onClick={() => { storeBridge.setVisibilityRadius(opt.value); applyVisibilityRadius(opt.value); }} className={pill(visibilityRadius === opt.value)}>
+              <button key={opt.value} onClick={() => { useGameStore.getState().setVisibilityRadius(opt.value); applyVisibilityRadius(opt.value); }} className={pill(visibilityRadius === opt.value)}>
                 {opt.label}
               </button>
             ))}
@@ -148,7 +147,7 @@ export function SpectatorOverlay() {
               type="range" min={75} max={120} step={1} value={fov}
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
-                storeBridge.setFov(val);
+                useGameStore.getState().setFov(val);
                 const cam = getCamera();
                 if (cam) { cam.fov = val; cam.updateProjectionMatrix(); }
               }}
