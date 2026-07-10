@@ -262,13 +262,49 @@ function renderAndReadbackImageData(renderer: THREE.WebGLRenderer): ImageData {
   return new ImageData(new Uint8ClampedArray(dst), THUMB_SIZE, THUMB_SIZE);
 }
 
-async function encodeImageDataToBlobAndUrl(imageData: ImageData): Promise<{ url: string; blob: Blob }> {
-  const osc = new OffscreenCanvas(THUMB_SIZE, THUMB_SIZE);
-  const ctx = osc.getContext('2d')!;
+let encodeCanvas: HTMLCanvasElement | null = null;
+
+function getEncodeCanvas(): HTMLCanvasElement {
+  if (!encodeCanvas) {
+    encodeCanvas = document.createElement('canvas');
+    encodeCanvas.width = THUMB_SIZE;
+    encodeCanvas.height = THUMB_SIZE;
+  }
+  return encodeCanvas;
+}
+
+/**
+ * Encode ImageData → PNG blob + object URL.
+ *
+ * Uses a regular <canvas> + toBlob rather than OffscreenCanvas.convertToBlob:
+ * the latter is unsupported on iOS/mobile Safari, where it rejects and left
+ * every hotbar slot stuck on the fallback glyph. Falls back to toDataURL for
+ * any engine where toBlob yields null.
+ */
+function encodeImageDataToBlobAndUrl(imageData: ImageData): Promise<{ url: string; blob: Blob }> {
+  const canvas = getEncodeCanvas();
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return Promise.reject(new Error('2D context unavailable'));
   ctx.putImageData(imageData, 0, 0);
-  const blob = await osc.convertToBlob({ type: 'image/png' });
-  const url = URL.createObjectURL(blob);
-  return { url, blob };
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve({ url: URL.createObjectURL(blob), blob });
+        return;
+      }
+      // toBlob unsupported/failed — synchronous data-URL path.
+      try {
+        const dataUrl = canvas.toDataURL('image/png');
+        fetch(dataUrl)
+          .then((r) => r.blob())
+          .then((b) => resolve({ url: dataUrl, blob: b }))
+          .catch(() => resolve({ url: dataUrl, blob: new Blob() }));
+      } catch (err) {
+        reject(err);
+      }
+    }, 'image/png');
+  });
 }
 
 // ============== Voxel Grid Generation ==============
@@ -433,18 +469,28 @@ function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): bool
     return false;
   }
 
-  const imageData = renderThumbnailToImageData(entry.config, entry.rotation, renderer);
+  let imageData: ImageData | null = null;
+  try {
+    imageData = renderThumbnailToImageData(entry.config, entry.rotation, renderer);
+  } catch (err) {
+    console.warn('[thumbnail] render failed', err);
+  }
   if (!imageData) {
     for (const cb of entry.callbacks) cb(null);
     return true;
   }
 
   const { callbacks, hash } = entry;
-  encodeImageDataToBlobAndUrl(imageData).then(({ url, blob }) => {
-    thumbnailCache.set(hash, url);
-    saveToIDB(hash, blob);
-    for (const cb of callbacks) cb(url);
-  });
+  encodeImageDataToBlobAndUrl(imageData)
+    .then(({ url, blob }) => {
+      thumbnailCache.set(hash, url);
+      if (blob.size > 0) saveToIDB(hash, blob);
+      for (const cb of callbacks) cb(url);
+    })
+    .catch((err) => {
+      console.warn('[thumbnail] encode failed', err);
+      for (const cb of callbacks) cb(null);
+    });
   return true;
 }
 
@@ -541,5 +587,6 @@ export function disposeThumbnailRenderer(): void {
   voxelGrid = null;
   pixelBuf = null;
   imageDataBuf = null;
+  encodeCanvas = null;
   clearThumbnailCache();
 }
