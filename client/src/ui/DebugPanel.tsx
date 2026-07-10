@@ -192,6 +192,11 @@ export function DebugPanel() {
     toggleDebugSection,
     // Quality state
     qualityLevel,
+    quality,
+  } = useGameStore();
+
+  // Individual quality fields now live on the single `quality` slice.
+  const {
     visibilityRadius,
     ssaoEnabled,
     bloomEnabled,
@@ -206,7 +211,7 @@ export function DebugPanel() {
     shaderNormalMaps,
     shaderAoMaps,
     shaderMetalnessMaps,
-  } = useGameStore();
+  } = quality;
 
   const [cacheClearing, setCacheClearing] = useState(false);
   const [_chunksClearing, setChunksClearing] = useState(false);
@@ -232,7 +237,7 @@ export function DebugPanel() {
   const handleCycleQuality = () => {
     // Read from store directly to avoid stale closure in F8 event handler
     const currentLevel = useGameStore.getState().qualityLevel;
-    const currentVisibility = useGameStore.getState().visibilityRadius;
+    const currentVisibility = useGameStore.getState().quality.visibilityRadius;
     const next = cycleQualityLevel(currentLevel);
     syncPresetToStore(next, currentVisibility);
   };
@@ -243,14 +248,13 @@ export function DebugPanel() {
   };
 
   const handleVisibilityRadiusChange = (radius: number) => {
-    useGameStore.getState().setVisibilityRadius(radius);
-    applyVisibilityRadius(radius);
+    applyVisibilityRadius(radius); // updates quality.visibilityRadius + applies
   };
 
   const handleShaderMapToggle = (map: 'normal' | 'ao' | 'metalness', enabled: boolean) => {
-    if (map === 'normal') useGameStore.getState().setShaderNormalMaps(enabled);
-    else if (map === 'ao') useGameStore.getState().setShaderAoMaps(enabled);
-    else useGameStore.getState().setShaderMetalnessMaps(enabled);
+    if (map === 'normal') useGameStore.getState().updateQuality({ shaderNormalMaps: enabled });
+    else if (map === 'ao') useGameStore.getState().updateQuality({ shaderAoMaps: enabled });
+    else useGameStore.getState().updateQuality({ shaderMetalnessMaps: enabled });
     setShaderMapDefines({
       normalMaps: map === 'normal' ? enabled : shaderNormalMaps,
       aoMaps: map === 'ao' ? enabled : shaderAoMaps,
@@ -608,10 +612,7 @@ export function DebugPanel() {
             min={0.5}
             max={2}
             step={0.25}
-            onChange={(v) => {
-              useGameStore.getState().setMaxPixelRatio(v);
-              applyPixelRatio(v);
-            }}
+            onChange={(v) => applyPixelRatio(v)}
             formatValue={(v) => `${v}x`}
           />
           <Slider
@@ -620,19 +621,14 @@ export function DebugPanel() {
             min={1}
             max={16}
             step={1}
-            onChange={(v) => {
-              useGameStore.getState().setAnisotropy(v);
-              applyAnisotropy(v);
-            }}
+            onChange={(v) => applyAnisotropy(v)}
             formatValue={(v) => `${v}x`}
           />
           <Select
             label="MSAA"
             value={msaaSamples}
             options={msaaOptions}
-            onChange={(v) => {
-              useGameStore.getState().setMsaaSamples(v);
-            }}
+            onChange={(v) => useGameStore.getState().updateQuality({ msaaSamples: v })}
           />
         </div>
 
@@ -642,20 +638,14 @@ export function DebugPanel() {
           <Toggle
             label="Shadows"
             value={shadowsEnabled}
-            onChange={(v) => {
-              useGameStore.getState().setShadowsEnabled(v);
-              applyShadowsEnabled(v);
-            }}
+            onChange={(v) => applyShadowsEnabled(v)}
           />
           {shadowsEnabled && (
             <>
               <Toggle
                 label="Moon Shadows"
                 value={moonShadows}
-                onChange={(v) => {
-                  useGameStore.getState().setMoonShadows(v);
-                  applyMoonShadows(v);
-                }}
+                onChange={(v) => applyMoonShadows(v)}
               />
               <Slider
                 label="Shadow Radius"
@@ -663,10 +653,7 @@ export function DebugPanel() {
                 min={1}
                 max={8}
                 step={1}
-                onChange={(v) => {
-                  useGameStore.getState().setShadowRadius(v);
-                  applyShadowRadius(v);
-                }}
+                onChange={(v) => applyShadowRadius(v)}
                 formatValue={(v) => `${v} chunks`}
               />
               <Slider
@@ -689,31 +676,22 @@ export function DebugPanel() {
           <Toggle
             label="SSAO"
             value={ssaoEnabled}
-            onChange={(v) => {
-              useGameStore.getState().setSsaoEnabled(v);
-            }}
+            onChange={(v) => useGameStore.getState().updateQuality({ ssaoEnabled: v })}
           />
           <Toggle
             label="Bloom"
             value={bloomEnabled}
-            onChange={(v) => {
-              useGameStore.getState().setBloomEnabled(v);
-            }}
+            onChange={(v) => useGameStore.getState().updateQuality({ bloomEnabled: v })}
           />
           <Toggle
             label="God Rays"
             value={godRaysEnabled}
-            onChange={(v) => {
-              useGameStore.getState().setGodRaysEnabled(v);
-            }}
+            onChange={(v) => useGameStore.getState().updateQuality({ godRaysEnabled: v })}
           />
           <Toggle
             label="Color Correction"
             value={colorCorrectionEnabled}
-            onChange={(v) => {
-              useGameStore.getState().setColorCorrectionEnabled(v);
-              applyColorCorrectionEnabled(v);
-            }}
+            onChange={(v) => applyColorCorrectionEnabled(v)}
           />
         </div>
 

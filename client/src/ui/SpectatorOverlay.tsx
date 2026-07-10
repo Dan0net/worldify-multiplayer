@@ -29,7 +29,7 @@ export function SpectatorOverlay() {
   const textureState = useGameStore((s) => s.textureState);
   const textureProgress = useGameStore((s) => s.textureProgress);
   const qualityLevel = useGameStore((s) => s.qualityLevel);
-  const visibilityRadius = useGameStore((s) => s.visibilityRadius);
+  const visibilityRadius = useGameStore((s) => s.quality.visibilityRadius);
   const fov = useGameStore((s) => s.fov);
   const renderScale = useGameStore((s) => s.renderScale);
   const setRenderScale = useGameStore((s) => s.setRenderScale);
@@ -133,7 +133,7 @@ export function SpectatorOverlay() {
           <span className="text-white/70 text-sm whitespace-nowrap">View</span>
           <div className="flex gap-1 flex-1">
             {([{ label: 'Near', value: 2 }, { label: 'Close', value: 4 }, { label: 'Far', value: 6 }, { label: 'Max', value: 8 }] as const).map((opt) => (
-              <button key={opt.value} onClick={() => { useGameStore.getState().setVisibilityRadius(opt.value); applyVisibilityRadius(opt.value); }} className={pill(visibilityRadius === opt.value)}>
+              <button key={opt.value} onClick={() => applyVisibilityRadius(opt.value)} className={pill(visibilityRadius === opt.value)}>
                 {opt.label}
               </button>
             ))}
