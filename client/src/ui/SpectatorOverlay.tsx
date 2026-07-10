@@ -20,6 +20,7 @@ import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { storeBridge } from '../state/bridge';
 import { getCamera } from '../game/scene/camera';
+import { formatTimeOfDay } from '../game/scene/DayNightCycle';
 
 
 export function SpectatorOverlay() {
@@ -33,6 +34,8 @@ export function SpectatorOverlay() {
   const fov = useGameStore((s) => s.fov);
   const renderScale = useGameStore((s) => s.renderScale);
   const setRenderScale = useGameStore((s) => s.setRenderScale);
+  const timeOfDay = useGameStore((s) => s.environment.timeOfDay);
+  const setTimeOfDay = useGameStore((s) => s.setTimeOfDay);
   const [hasPlayed, setHasPlayed] = useState(false);
 
   if (gameMode !== GameMode.MainMenu) return null;
@@ -164,6 +167,18 @@ export function SpectatorOverlay() {
               className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
             />
             <span className="text-white/60 text-xs w-9 text-right">{Math.round(renderScale * 100)}%</span>
+          </div>
+        </div>
+        {/* Time of day */}
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-white/70 text-sm whitespace-nowrap">Time</span>
+          <div className="flex items-center gap-2 flex-1">
+            <input
+              type="range" min={0} max={1} step={0.005} value={timeOfDay}
+              onChange={(e) => setTimeOfDay(parseFloat(e.target.value))}
+              className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+            />
+            <span className="text-white/60 text-xs w-9 text-right tabular-nums">{formatTimeOfDay(timeOfDay)}</span>
           </div>
         </div>
       </div>

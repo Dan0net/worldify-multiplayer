@@ -42,7 +42,8 @@ uniform vec3 uMoonDirection;
 uniform vec3 uMoonColor;
 uniform float uMoonIntensity;
 uniform float uTime;
-uniform float uStarLayers;   // quality lever: 5 = full, 2 = low/medium
+uniform float uStarLayers;      // quality lever: 5 = full, 2 = low/medium
+uniform float uSunDiscEnabled;  // 1 when god rays are off (draw disc here), else 0
 
 varying vec3 vWorldDirection;
 
@@ -179,9 +180,21 @@ void main() {
   
   // Final sky gradient
   vec3 sky = mix(skyBelow, skyAbove, horizonBlend) * skyDarkening;
-  
-  // Sun/moon discs handled by god-rays mesh — only keep horizon glow
-  
+
+  // Sun / moon discs.
+  // When god rays are enabled (ultra/high) the god-rays sun mesh provides the
+  // bright disc; when they're off (medium/low) draw the discs here so the sun
+  // and moon are still visible. uSunDiscEnabled is set to !godRaysEnabled.
+  if (uSunDiscEnabled > 0.5) {
+    sky += celestialBody(worldDir, uSunDirection, uSunColor, uSunIntensity, 0.996, 0.9985, 4.0, 0.4);
+
+    float moonVisible = smoothstep(-0.1, 0.1, uMoonDirection.y) * uMoonIntensity;
+    sky += celestialBody(worldDir, uMoonDirection, uMoonColor, moonVisible, 0.994, 0.998, 8.0, 0.4);
+    // Moon rim glow
+    float moonAngle = dot(worldDir, uMoonDirection);
+    sky += uMoonColor * smoothstep(0.99, 0.994, moonAngle) * (1.0 - smoothstep(0.994, 0.998, moonAngle)) * 0.3 * moonVisible;
+  }
+
   // Sun horizon glow (only near sunset/sunrise)
   if (sunAltitude > -0.2 && sunAltitude < 0.3) {
     float glowStrength = pow(max(0.0, 1.0 - abs(sunAltitude - 0.05) / 0.25), 0.6);
@@ -212,6 +225,14 @@ let starLayersUnsub: (() => void) | null = null;
 function starLayersForQuality(): number {
   const level = useGameStore.getState().qualityLevel;
   return level === 'ultra' || level === 'high' ? 5 : 2;
+}
+
+/**
+ * Draw the sun/moon discs in the sky shader only when god rays are OFF — with
+ * god rays on, the god-rays sun mesh provides the disc (avoids a doubled disc).
+ */
+function sunDiscEnabledValue(): number {
+  return useGameStore.getState().godRaysEnabled ? 0 : 1;
 }
 
 // ============== Initialization ==============
@@ -248,16 +269,21 @@ export function initSkyDome(): void {
       uMoonIntensity: { value: 0.0 },
       uTime: { value: 0.0 },
       uStarLayers: { value: starLayersForQuality() },
+      uSunDiscEnabled: { value: sunDiscEnabledValue() },
     },
     side: THREE.BackSide,
     depthWrite: false,
   });
 
-  // Update star LOD live when the quality preset changes.
+  // Update star LOD + sun-disc visibility live when quality / god rays change.
   starLayersUnsub?.();
   starLayersUnsub = useGameStore.subscribe((state, prev) => {
-    if (state.qualityLevel !== prev.qualityLevel && skyMaterial) {
+    if (!skyMaterial) return;
+    if (state.qualityLevel !== prev.qualityLevel) {
       skyMaterial.uniforms.uStarLayers.value = starLayersForQuality();
+    }
+    if (state.godRaysEnabled !== prev.godRaysEnabled) {
+      skyMaterial.uniforms.uSunDiscEnabled.value = sunDiscEnabledValue();
     }
   });
   
