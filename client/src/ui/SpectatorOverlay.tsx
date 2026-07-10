@@ -31,6 +31,8 @@ export function SpectatorOverlay() {
   const qualityLevel = useGameStore((s) => s.qualityLevel);
   const visibilityRadius = useGameStore((s) => s.visibilityRadius);
   const fov = useGameStore((s) => s.fov);
+  const renderScale = useGameStore((s) => s.renderScale);
+  const setRenderScale = useGameStore((s) => s.setRenderScale);
   const [hasPlayed, setHasPlayed] = useState(false);
 
   if (gameMode !== GameMode.MainMenu) return null;
@@ -147,6 +149,18 @@ export function SpectatorOverlay() {
               className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
             />
             <span className="text-white/60 text-xs w-6 text-right">{fov}°</span>
+          </div>
+        </div>
+        {/* Render scale — sub-native resolution for weak GPUs / 4K */}
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-white/70 text-sm whitespace-nowrap">Resolution</span>
+          <div className="flex items-center gap-2 flex-1">
+            <input
+              type="range" min={50} max={100} step={5} value={Math.round(renderScale * 100)}
+              onChange={(e) => setRenderScale(parseInt(e.target.value, 10) / 100)}
+              className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+            />
+            <span className="text-white/60 text-xs w-9 text-right">{Math.round(renderScale * 100)}%</span>
           </div>
         </div>
       </div>

@@ -42,6 +42,7 @@ uniform vec3 uMoonDirection;
 uniform vec3 uMoonColor;
 uniform float uMoonIntensity;
 uniform float uTime;
+uniform float uStarLayers;   // quality lever: 5 = full, 2 = low/medium
 
 varying vec3 vWorldDirection;
 
@@ -115,22 +116,25 @@ float starsLayer(vec3 dir, float scale, float density, float time, float twinkle
 
 float stars(vec3 dir, float time) {
   float result = 0.0;
-  
+
   // Layer 1: Bright stars (rare) - 2x bigger, 2x denser
   result += starsLayer(dir, 30.0, 0.984, time, 0.5) * 1.0;
-  
+
   // Layer 2: Medium stars
   result += starsLayer(dir, 100.0, 0.95, time, 1.0) * 0.7;
-  
+
+  // Layers 3-5 skipped on low/medium quality (each is 9 hash evals/pixel)
+  if (uStarLayers < 3.0) return result;
+
   // Layer 3: Small stars
   result += starsLayer(dir, 150.0, 0.9, time, 2.0) * 0.5;
-  
+
   // Layer 4: Tiny stars
   result += starsLayer(dir, 220.0, 0.85, time, 3.0) * 0.35;
-  
+
   // Layer 5: Star dust
   result += starsLayer(dir, 320.0, 0.8, time, 4.0) * 0.25;
-  
+
   return result;
 }
 
@@ -202,6 +206,13 @@ void main() {
 
 let skyMesh: THREE.Mesh | null = null;
 let skyMaterial: THREE.ShaderMaterial | null = null;
+let starLayersUnsub: (() => void) | null = null;
+
+/** Star layers by quality: ultra/high get the full 5, medium/low get 2. */
+function starLayersForQuality(): number {
+  const level = useGameStore.getState().qualityLevel;
+  return level === 'ultra' || level === 'high' ? 5 : 2;
+}
 
 // ============== Initialization ==============
 
@@ -236,9 +247,18 @@ export function initSkyDome(): void {
       uMoonColor: { value: new THREE.Color(settings.moonColor ?? '#aabbdd') },
       uMoonIntensity: { value: 0.0 },
       uTime: { value: 0.0 },
+      uStarLayers: { value: starLayersForQuality() },
     },
     side: THREE.BackSide,
     depthWrite: false,
+  });
+
+  // Update star LOD live when the quality preset changes.
+  starLayersUnsub?.();
+  starLayersUnsub = useGameStore.subscribe((state, prev) => {
+    if (state.qualityLevel !== prev.qualityLevel && skyMaterial) {
+      skyMaterial.uniforms.uStarLayers.value = starLayersForQuality();
+    }
   });
   
   // Compute initial horizon color
@@ -384,7 +404,10 @@ export function updateSkyCamera(camera: THREE.Camera): void {
  */
 export function disposeSkyDome(): void {
   const scene = getScene();
-  
+
+  starLayersUnsub?.();
+  starLayersUnsub = null;
+
   if (skyMesh && scene) {
     scene.remove(skyMesh);
     skyMesh.geometry.dispose();

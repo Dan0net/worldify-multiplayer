@@ -20,13 +20,13 @@ import {
   saveQualityLevel,
   saveVisibilityRadius,
 } from './QualityPresets.js';
-import { updatePostProcessing } from '../scene/postprocessing.js';
-// MSAA is now driven by store subscription in effects.ts — no direct import needed
+// SSAO/bloom/godrays/color-correction are all driven by store subscription in effects.ts
 import { getActiveShadowLight, setMoonShadowsAllowed, updateShadowFrustumSize, applyEnvironmentSettings } from '../scene/Lighting.js';
 import {
   setShaderMapDefines,
   setTerrainAnisotropy,
 } from '../material/TerrainMaterial.js';
+import { setWaterQualityLow } from '../material/WaterMaterial.js';
 import { storeBridge } from '../../state/bridge.js';
 
 // ============== Managed References ==============
@@ -84,6 +84,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   // --- Post-processing (store-driven — effects.ts subscribes) ---
   storeBridge.setBloomEnabled(preset.bloomEnabled);
   storeBridge.setSsaoEnabled(preset.ssaoEnabled);
+  storeBridge.setGodRaysEnabled(preset.godRaysEnabled);
   applyColorCorrectionEnabled(preset.colorCorrectionEnabled);
 
   // --- Terrain material shader maps ---
@@ -92,6 +93,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     aoMaps: preset.shaderAoMaps,
     metalnessMaps: preset.shaderMetalnessMaps,
   });
+  setWaterQualityLow(!preset.waterHighQuality);
   applyAnisotropy(preset.anisotropy);
 
   // --- Visibility radius ---
@@ -111,6 +113,7 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     msaa: preset.msaaSamples,
     ssao: preset.ssaoEnabled,
     bloom: preset.bloomEnabled,
+    godRays: preset.godRaysEnabled,
     colorCorrection: preset.colorCorrectionEnabled,
     visibility: effectiveVisibility,
     normalMaps: preset.shaderNormalMaps,
@@ -134,6 +137,7 @@ export function syncQualityToStore(level: QualityLevel, customVisibility?: numbe
   storeBridge.setVisibilityRadius(vis);
   storeBridge.setSsaoEnabled(preset.ssaoEnabled);
   storeBridge.setBloomEnabled(preset.bloomEnabled);
+  storeBridge.setGodRaysEnabled(preset.godRaysEnabled);
   storeBridge.setColorCorrectionEnabled(preset.colorCorrectionEnabled);
   storeBridge.setShadowsEnabled(preset.shadowsEnabled);
   storeBridge.setMoonShadows(preset.moonShadows);
@@ -185,7 +189,8 @@ export function applyBloomEnabled(enabled: boolean): void {
 }
 
 export function applyColorCorrectionEnabled(enabled: boolean): void {
-  updatePostProcessing({ colorCorrectionEnabled: enabled });
+  // Store-driven — effects.ts subscription applies it to the live pmndrs chain
+  storeBridge.setColorCorrectionEnabled(enabled);
 }
 
 export function applyAnisotropy(value: number): void {

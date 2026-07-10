@@ -2,7 +2,6 @@ import { useEffect, useState, ReactNode } from 'react';
 import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings } from '../game/material/TerrainMaterial';
-import { updatePostProcessing } from '../game/scene/postprocessing';
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
 import { storeBridge } from '../state/bridge';
@@ -263,13 +262,9 @@ export function DebugPanel() {
   const handleEnvironmentChange = (updates: Partial<EnvironmentSettings>) => {
     setEnvironment(updates);
     applyEnvironmentSettings({ ...environment, ...updates });
-    
-    // Apply post-processing changes if any relevant settings changed
-    // (SSAO/bloom are store-driven via effects.ts — only saturation still uses old pipeline)
-    if ('saturation' in updates) {
-      updatePostProcessing(updates);
-    }
-    
+
+    // SSAO/bloom/godrays/saturation are all store-driven via effects.ts — no direct call needed.
+
     // Apply light fill changes to terrain materials
     if ('lightFillPower' in updates || 'lightFillIntensity' in updates) {
       applyLightFillSettings(updates);

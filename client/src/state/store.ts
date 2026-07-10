@@ -350,6 +350,7 @@ export interface GameState {
   anisotropy: number;
   maxPixelRatio: number;
   msaaSamples: number;
+  renderScale: number;          // 0.5-1.0 — sub-native render resolution (fill-rate lever)
   shaderNormalMaps: boolean;
   shaderAoMaps: boolean;
   shaderMetalnessMaps: boolean;
@@ -398,6 +399,7 @@ export interface GameState {
   setQualityLevel: (level: QualityLevel) => void;
   setVisibilityRadius: (radius: number) => void;
   setFov: (fov: number) => void;
+  setRenderScale: (scale: number) => void;
   setSsaoEnabled: (enabled: boolean) => void;
   setBloomEnabled: (enabled: boolean) => void;
   setGodRaysEnabled: (enabled: boolean) => void;
@@ -531,6 +533,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   anisotropy: 8,
   maxPixelRatio: 2,
   msaaSamples: 4,
+  renderScale: 1,
   shaderNormalMaps: true,
   shaderAoMaps: true,
   shaderMetalnessMaps: true,
@@ -608,6 +611,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setQualityLevel: (level) => set({ qualityLevel: level }),
   setVisibilityRadius: (radius) => set({ visibilityRadius: radius }),
   setFov: (fov) => set({ fov }),
+  setRenderScale: (scale) => set({ renderScale: scale }),
   setSsaoEnabled: (enabled) => set({ ssaoEnabled: enabled }),
   setBloomEnabled: (enabled) => set({ bloomEnabled: enabled }),
   setGodRaysEnabled: (enabled) => set({ godRaysEnabled: enabled }),
