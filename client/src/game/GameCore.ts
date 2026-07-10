@@ -36,6 +36,7 @@ import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, 
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
+import { isTouch } from './deviceMode';
 import { PlayerManager } from './PlayerManager';
 import { Builder } from './build/Builder';
 import { SpawnManager } from './spawn/SpawnManager';
@@ -133,8 +134,10 @@ export class GameCore {
       qualityLevel = detectQualityLevel(gl);
       console.log(`[Quality] Auto-detected preset: ${qualityLevel}`);
     }
-    // Store the level so UI can read it
-    const effectiveVisibility = savedVisibility ?? QUALITY_PRESETS[qualityLevel].visibilityRadius;
+    // Store the level so UI can read it. Mobile defaults to a near view
+    // distance (4 chunks) unless the user has saved a preference.
+    const effectiveVisibility = savedVisibility
+      ?? (isTouch() ? 4 : QUALITY_PRESETS[qualityLevel].visibilityRadius);
 
     // Initialize voxel terrain system
     if (scene) {

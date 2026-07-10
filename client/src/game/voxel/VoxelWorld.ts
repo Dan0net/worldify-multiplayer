@@ -230,8 +230,10 @@ export class VoxelWorld implements ChunkProvider {
   setVisibilityRadius(radius: number): void {
     if (radius === this._visibilityRadius) return;
     this._visibilityRadius = radius;
-    // Invalidate BFS cache so it recomputes with new radius
+    // Invalidate BFS cache and force a mesh-visibility/unload rescan so the
+    // change takes effect immediately even when the player isn't moving.
     this.lastBFSChunk = null;
+    this.visibilityDirty = true;
     console.log(`[VoxelWorld] Visibility radius set to ${radius}`);
   }
 

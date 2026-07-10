@@ -77,17 +77,24 @@ function HotbarSlot({
   );
 }
 
-/** Reusable hotbar strip — renders the 10 preset slots */
+/** Reusable hotbar strip — renders the preset slots (optionally limited) */
 export function HotbarStrip({
   build,
   onSelect,
+  limit,
 }: {
   build: BuildState;
   onSelect?: (presetId: number) => void;
+  /** Max slots to show; always keeps the None slot as the last item. */
+  limit?: number;
 }) {
+  const ordered = [...DEFAULT_BUILD_PRESETS.slice(1), DEFAULT_BUILD_PRESETS[0]];
+  const items = limit && limit < ordered.length
+    ? [...ordered.slice(0, limit - 1), ordered[ordered.length - 1]]
+    : ordered;
   return (
-    <div className="flex items-center gap-1 md:gap-1.5">
-      {[...DEFAULT_BUILD_PRESETS.slice(1), DEFAULT_BUILD_PRESETS[0]].map((preset) => {
+    <div className="flex items-center gap-1 md:gap-1.5" data-testid="hotbar">
+      {items.map((preset) => {
         const config = build.presetConfigs[preset.id];
         const meta = build.presetMeta[preset.id];
         const isNone = preset.id === NONE_PRESET_ID;
@@ -114,16 +121,16 @@ export function BuildToolbar() {
 
   return (
     <div
-      className={`absolute left-1/2 -translate-x-1/2 max-w-[100vw] flex items-center gap-2 pointer-events-none ${
-        isTouch ? 'top-2 flex-col-reverse' : 'bottom-4 flex-col'
+      className={`absolute left-1/2 -translate-x-1/2 max-w-[100vw] flex flex-col items-center gap-2 pointer-events-none ${
+        isTouch ? 'bottom-2' : 'bottom-4'
       }`}
     >
-      {/* Build menu: above the hotbar on desktop (bottom bar), below it on touch (top bar) */}
+      {/* Build menu pops up above the hotbar */}
       <BuildMenu />
 
-      {/* Scroll horizontally if the strip is wider than the viewport */}
-      <div className="max-w-[100vw] overflow-x-auto px-2 pointer-events-auto">
-        <HotbarStrip build={build} onSelect={setBuildPreset} />
+      {/* On touch: 5 slots, no scroll. On desktop: full strip, scroll if needed. */}
+      <div className={`max-w-[100vw] px-2 pointer-events-auto ${isTouch ? '' : 'overflow-x-auto'}`}>
+        <HotbarStrip build={build} onSelect={setBuildPreset} limit={isTouch ? 5 : undefined} />
       </div>
 
       {/* Hotkey hints (desktop only) */}

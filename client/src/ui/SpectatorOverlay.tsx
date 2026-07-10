@@ -21,13 +21,6 @@ import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/Quali
 import { storeBridge } from '../state/bridge';
 import { getCamera } from '../game/scene/camera';
 
-function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    document.exitFullscreen?.();
-  } else {
-    document.documentElement.requestFullscreen?.();
-  }
-}
 
 export function SpectatorOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
@@ -46,6 +39,7 @@ export function SpectatorOverlay() {
   const hasHD = textureState === 'high';
 
   const play = () => { setHasPlayed(true); setGameMode(GameMode.Playing); };
+  const playFullscreen = () => { document.documentElement.requestFullscreen?.(); play(); };
   const toggleHD = () => {
     if (isLoadingHD) return;
     if (hasHD) materialManager.downgradeToLowResolution();
@@ -87,9 +81,13 @@ export function SpectatorOverlay() {
                 {spawnReady ? '▶  Play Local' : '⏳  Generating…'}
               </button>
               <button
-                onClick={toggleFullscreen}
-                aria-label="Toggle fullscreen"
-                className="w-12 shrink-0 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xl flex items-center justify-center"
+                onClick={playFullscreen}
+                disabled={!spawnReady}
+                aria-label="Play fullscreen"
+                title="Play in fullscreen"
+                className={`w-12 shrink-0 rounded-xl text-white text-xl flex items-center justify-center ${
+                  spawnReady ? 'bg-white/10 hover:bg-white/20' : 'bg-white/5 text-white/40 cursor-wait'
+                }`}
               >
                 ⛶
               </button>
