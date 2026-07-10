@@ -35,16 +35,6 @@ body {
   touch-action: none;
 }
 
-/* Hide Netlify's injected deploy-preview drawer/badge on preview builds.
-   Best-effort (some of it renders in an iframe/shadow root that CSS can't
-   reach — the authoritative fix is Netlify → Deploy Previews → Drawer: off). */
-[id^="netlify"],
-[class*="netlify-badge"],
-netlify-drawer,
-iframe[src*="netlify.app"] {
-  display: none !important;
-}
-
 /* Glass-themed scrollbar */
 .scrollbar-glass::-webkit-scrollbar {
   width: 20px;

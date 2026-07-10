@@ -137,7 +137,7 @@ export class GameCore {
     // Store the level so UI can read it. Mobile defaults to a near view
     // distance (4 chunks) unless the user has saved a preference.
     const effectiveVisibility = savedVisibility
-      ?? (isTouch() ? 4 : QUALITY_PRESETS[qualityLevel].visibilityRadius);
+      ?? (isTouch() ? 2 : QUALITY_PRESETS[qualityLevel].visibilityRadius);
 
     // Initialize voxel terrain system
     if (scene) {

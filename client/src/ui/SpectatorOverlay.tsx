@@ -125,7 +125,7 @@ export function SpectatorOverlay() {
         <div className="flex items-center justify-between gap-3">
           <span className="text-white/70 text-sm whitespace-nowrap">View</span>
           <div className="flex gap-1 flex-1">
-            {([{ label: 'Near', value: 4 }, { label: 'Close', value: 8 }, { label: 'Far', value: 10 }, { label: 'Max', value: 12 }] as const).map((opt) => (
+            {([{ label: 'Near', value: 2 }, { label: 'Close', value: 4 }, { label: 'Far', value: 6 }, { label: 'Max', value: 8 }] as const).map((opt) => (
               <button key={opt.value} onClick={() => { storeBridge.setVisibilityRadius(opt.value); applyVisibilityRadius(opt.value); }} className={pill(visibilityRadius === opt.value)}>
                 {opt.label}
               </button>

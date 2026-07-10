@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import {
   VOXEL_SCALE,
   CHUNK_SIZE,
+  LIGHT_MAX,
   packVoxel,
   sdfFromConfig,
   sdfToWeight,
@@ -72,7 +73,7 @@ const thumbnailCache = new Map<string, string>();
 
 const THUMB_DB_NAME = 'worldify-thumbnail-cache';
 /** Bump this when material textures change to invalidate all cached thumbnails */
-const THUMB_DB_VERSION = 1;
+const THUMB_DB_VERSION = 2;
 const THUMB_STORE = 'thumbnails';
 
 let thumbDbPromise: Promise<IDBDatabase> | null = null;
@@ -290,7 +291,9 @@ function fillVoxelGrid(config: BuildConfig, rotation?: Quat): void {
           px = r.x; py = r.y; pz = r.z;
         }
         const sdf = sdfFromConfig({ x: px, y: py, z: pz }, config);
-        data[z * GRID_SIZE * GRID_SIZE + y * GRID_SIZE + x] = packVoxel(sdfToWeight(sdf), mat, 0);
+        // Full voxel light: the terrain shader multiplies output by voxel light,
+        // so light=0 renders thumbnails near-black.
+        data[z * GRID_SIZE * GRID_SIZE + y * GRID_SIZE + x] = packVoxel(sdfToWeight(sdf), mat, LIGHT_MAX);
       }
     }
   }

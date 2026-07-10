@@ -17,6 +17,7 @@ function useCrosshairColor(): string {
 
 export function Hud() {
   const { playerCount, roomId } = useGameStore();
+  const useServerChunks = useGameStore((s) => s.useServerChunks);
   const crosshairColor = useCrosshairColor();
   const isTouch = useIsTouch();
 
@@ -30,10 +31,12 @@ export function Hud() {
         </div>
       )}
 
-      {/* Room info - below the minimap on desktop, top-left corner on mobile */}
-      <div className="absolute top-2 left-2 md:top-[230px] md:left-auto md:right-5 py-1.5 px-2.5 md:py-2 md:px-3 bg-black/60 text-white rounded-lg text-[10px] md:text-xs whitespace-nowrap">
-        {roomId} • {playerCount} player{playerCount !== 1 ? 's' : ''}
-      </div>
+      {/* Room / player count — multiplayer only (hidden in local play) */}
+      {useServerChunks && (
+        <div className="absolute top-2 left-2 md:top-[230px] md:left-auto md:right-5 py-1.5 px-2.5 md:py-2 md:px-3 bg-black/60 text-white rounded-lg text-[10px] md:text-xs whitespace-nowrap">
+          {roomId} • {playerCount} player{playerCount !== 1 ? 's' : ''}
+        </div>
+      )}
     </>
   );
 }

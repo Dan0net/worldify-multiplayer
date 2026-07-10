@@ -22,7 +22,7 @@ const JOY_RADIUS = 55; // px of finger travel = full deflection
 const PAD_SIZE = 140;
 const KNOB = 56;
 const KNOB_MAX = (PAD_SIZE - KNOB) / 2;
-const TOUCH_LOOK_GAIN = 2.5; // touch look is slower than a mouse; amplify
+const TOUCH_LOOK_GAIN = 5; // touch look is slower than a mouse; amplify
 
 function toNDC(clientX: number, clientY: number): { x: number; y: number } {
   return {
@@ -44,6 +44,7 @@ export function MobileControls() {
   const [sprintOn, setSprintOn] = useState(false);
   const [joy, setJoy] = useState<{ dx: number; dy: number } | null>(null);
   const [lookVis, setLookVis] = useState<{ dx: number; dy: number } | null>(null);
+  const [reticlePos, setReticlePos] = useState<{ x: number; y: number } | null>(null);
 
   const joy0 = useRef<{ id: number; x: number; y: number } | null>(null);
   const look0 = useRef<{ id: number; x: number; y: number; sx: number; sy: number } | null>(null);
@@ -105,7 +106,7 @@ export function MobileControls() {
     setLookVis(null);
   };
 
-  // ---- Reticle (centre): drag to aim, release to place ----
+  // ---- Reticle (centre): drag to move the cast point; a Place button commits ----
   const onReticleDown = (e: React.PointerEvent) => {
     e.stopPropagation();
     reticleId.current = e.pointerId;
@@ -114,14 +115,14 @@ export function MobileControls() {
   const onReticleMove = (e: React.PointerEvent) => {
     if (reticleId.current !== e.pointerId) return;
     e.stopPropagation();
+    setReticlePos({ x: e.clientX, y: e.clientY }); // move the on-screen crosshair
     controls.castNDC = toNDC(e.clientX, e.clientY);
   };
   const onReticleUp = (e: React.PointerEvent) => {
     if (reticleId.current !== e.pointerId) return;
     e.stopPropagation();
     reticleId.current = null;
-    controls.triggerPlace();
-    controls.castNDC = { x: 0, y: 0 };
+    // Leave the reticle where it was dragged; placement happens via the Place button.
   };
 
   const holdJump = (on: boolean) => controls.setTouchButton(INPUT_JUMP, on);
@@ -154,14 +155,18 @@ export function MobileControls() {
       <div className={knob} style={{ right: 24 + KNOB_MAX - knobOffset(lookVis?.dx ?? 0), bottom: padBottom + KNOB_MAX - knobOffset(lookVis?.dy ?? 0), width: KNOB, height: KNOB }} />
       <div className={label} style={{ right: 24, bottom: padBottom + PAD_SIZE + 2, width: PAD_SIZE }}>LOOK</div>
 
-      {/* Build reticle (centre) */}
+      {/* Build reticle — draggable; follows the finger so the crosshair moves */}
       {buildEnabled && (
         <div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-full border-2 border-cyan-300/80 bg-cyan-300/10 pointer-events-auto"
-          style={{ touchAction: 'none' }}
+          className="absolute w-16 h-16 rounded-full border-2 border-cyan-300/80 bg-cyan-300/10 pointer-events-auto"
+          style={
+            reticlePos
+              ? { left: reticlePos.x, top: reticlePos.y, transform: 'translate(-50%,-50%)', touchAction: 'none' }
+              : { left: '50%', top: '50%', transform: 'translate(-50%,-50%)', touchAction: 'none' }
+          }
           onPointerDown={onReticleDown} onPointerMove={onReticleMove} onPointerUp={onReticleUp} onPointerCancel={onReticleUp}
         >
-          <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan-200" />
+          <div className="absolute top-1/2 left-1/2 w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan-200" />
         </div>
       )}
 
@@ -175,6 +180,7 @@ export function MobileControls() {
           <>
             <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); storeBridge.rotateBuild(-1); }} aria-label="Rotate left">⟲</button>
             <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); storeBridge.rotateBuild(1); }} aria-label="Rotate right">⟳</button>
+            <button className={`${btn} w-14 h-14 text-xl !bg-green-600/60 border-green-300`} onPointerDown={(e) => { e.preventDefault(); controls.triggerPlace(); }} aria-label="Place build">✓</button>
           </>
         )}
         <button
