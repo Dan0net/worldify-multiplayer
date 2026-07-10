@@ -54,7 +54,10 @@ export function SpectatorOverlay() {
     }`;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 overflow-y-auto py-4 px-6 bg-gradient-to-b from-black/20 to-black/50 pointer-events-none">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-gradient-to-b from-black/20 to-black/50 pointer-events-none">
+      {/* min-h-full centering wrapper: centers when it fits, scrolls from the top
+          (no clipping) when the panel is taller than the viewport — e.g. mobile landscape. */}
+      <div className="min-h-full flex flex-col items-center justify-center gap-4 py-4 px-6">
       <img src="/wrldy-logo-white.svg" alt="wrldy" className="h-14 pointer-events-none" />
 
       {/* Primary actions */}
@@ -163,6 +166,7 @@ export function SpectatorOverlay() {
             <span className="text-white/60 text-xs w-9 text-right">{Math.round(renderScale * 100)}%</span>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
