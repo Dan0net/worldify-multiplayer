@@ -25,8 +25,9 @@ import {
   JUMP_BUFFER_TIME,
   DIRECTION_SMOOTH_SPEED,
   // Movement utilities from shared
-  getWorldDirectionFromInput,
+  rotateToWorldDirection,
   lerpAngle,
+  type MovementVector,
 } from '@worldify/shared';
 import { Controls } from './controls';
 import type { VoxelIntegration } from '../voxel/VoxelIntegration';
@@ -127,6 +128,8 @@ export class PlayerLocal {
   update(deltaMs: number, controls: Controls): void {
     const dt = Math.min(deltaMs / 1000, 0.1); // Cap at 100ms to prevent spiral of death
     const buttons = controls.getButtonMask();
+    // Continuous move vector (analog joystick magnitude, or unit keyboard direction).
+    const move = controls.getMoveVector();
 
     // Use controls directly for responsive camera
     this.yaw = controls.yaw;
@@ -155,14 +158,14 @@ export class PlayerLocal {
     // Run physics in sub-steps for stability
     const deltaStep = dt / PHYSICS_STEPS;
     for (let i = 0; i < PHYSICS_STEPS; i++) {
-      this.physicsStep(deltaStep, buttons);
+      this.physicsStep(deltaStep, buttons, move);
     }
   }
 
   /**
    * Single physics sub-step
    */
-  private physicsStep(dt: number, buttons: number): void {
+  private physicsStep(dt: number, buttons: number, move: MovementVector): void {
     // Apply gravity
     if (this.isGrounded) {
       // Small downward force to keep grounded
@@ -174,9 +177,12 @@ export class PlayerLocal {
     // Apply vertical velocity
     this.position.y += this.velocity.y * dt;
 
-    // Calculate horizontal movement using shared utility
-    const worldDir = getWorldDirectionFromInput(buttons, this.yaw);
-    if (worldDir) {
+    // Calculate horizontal movement. `move` is a local-space vector whose LENGTH is
+    // the throttle (1 for keyboard, analog joystick deflection for touch) and whose
+    // direction is continuous — so touch gets variable speed + any heading.
+    const moveMag = Math.min(1, Math.hypot(move.moveX, move.moveZ));
+    if (moveMag > 0) {
+      const worldDir = rotateToWorldDirection(move.moveX, move.moveZ, this.yaw);
       // Compute target direction angle
       const targetAngle = Math.atan2(worldDir.worldX, worldDir.worldZ);
 
@@ -193,8 +199,8 @@ export class PlayerLocal {
       const smoothDirX = Math.sin(this.smoothDirAngle);
       const smoothDirZ = Math.cos(this.smoothDirAngle);
 
-      // Apply speed
-      let speed = MOVE_SPEED;
+      // Apply speed, scaled by the throttle magnitude (continuous for touch).
+      let speed = MOVE_SPEED * moveMag;
       if (buttons & INPUT_SPRINT) {
         speed *= SPRINT_MULTIPLIER;
       }

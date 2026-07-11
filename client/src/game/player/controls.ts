@@ -12,6 +12,8 @@ import {
   INPUT_SPRINT,
   GameMode,
   clamp,
+  getMovementFromButtons,
+  type MovementVector,
 } from '@worldify/shared';
 import { useGameStore } from '../../state/store';
 import { getBuildIsEnabled } from '../../state/buildAccessors';
@@ -32,6 +34,14 @@ export class Controls {
 
   /** Movement/action bits contributed by touch controls (OR-ed into getButtonMask). */
   private touchButtons = 0;
+
+  /**
+   * Analog touch move vector (local space, -1..1). Magnitude encodes joystick
+   * deflection so movement speed + direction are continuous, unlike the 8-way
+   * keyboard bits. (0,0) when the joystick is centred / not in use.
+   */
+  private touchMoveX = 0;
+  private touchMoveZ = 0;
 
   /**
    * Screen-space cast point in NDC (-1..1) for the build raycast.
@@ -237,12 +247,31 @@ export class Controls {
    * Maps to the existing 8-way direction bits via a deadzone threshold.
    */
   setTouchMove(moveX: number, moveZ: number): void {
+    // Keep the discrete bits for the server input model (buttons mask); local
+    // movement uses the analog vector below for continuous speed + direction.
     this.touchButtons &= ~(INPUT_FORWARD | INPUT_BACKWARD | INPUT_LEFT | INPUT_RIGHT);
     const t = 0.3;
     if (moveZ < -t) this.touchButtons |= INPUT_FORWARD;
     if (moveZ > t) this.touchButtons |= INPUT_BACKWARD;
     if (moveX < -t) this.touchButtons |= INPUT_LEFT;
     if (moveX > t) this.touchButtons |= INPUT_RIGHT;
+    this.touchMoveX = moveX;
+    this.touchMoveZ = moveZ;
+  }
+
+  /**
+   * Current movement vector in local space (length 0..1). Prefers the analog touch
+   * joystick (continuous speed + direction) when it's deflected past a small
+   * deadzone; otherwise falls back to the normalized 8-way keyboard direction.
+   */
+  getMoveVector(): MovementVector {
+    const mag = Math.hypot(this.touchMoveX, this.touchMoveZ);
+    if (mag > 0.15) {
+      // Clamp to the unit circle so pushing past the pad edge isn't faster.
+      const s = mag > 1 ? 1 / mag : 1;
+      return { moveX: this.touchMoveX * s, moveZ: this.touchMoveZ * s };
+    }
+    return getMovementFromButtons(this.getButtonMask());
   }
 
   /** Apply a look delta from a touch drag (same sensitivity as mouse). */
