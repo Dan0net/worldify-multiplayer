@@ -400,7 +400,11 @@ export class VoxelWorld implements ChunkProvider {
     // to avoid rebuilding the same group dozens of times during loading.
     if (this.lastPlayerChunk) {
       const { cx, cy, cz } = this.lastPlayerChunk;
+      perfStats.begin('grouper');
       this.chunkGrouper.rebuild(cx, cy, cz, (key) => this.remeshPipeline.isBusy(key));
+      perfStats.end('grouper');
+      const gs = this.chunkGrouper.getRebuildStats();
+      perfStats.setGrouperStats(gs.rebuilt, gs.reallocs);
     }
 
     // Unload chunks far outside reachable set (with +2 hysteresis buffer)

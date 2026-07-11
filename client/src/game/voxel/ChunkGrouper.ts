@@ -244,6 +244,15 @@ export class ChunkGrouper {
    * @param isBusy Returns true if a chunk key is still being processed.
    *   Groups with ANY busy chunk are skipped to avoid redundant rebuilds.
    */
+  /** Per-rebuild() counters for the perf overlay (read via getRebuildStats). */
+  private _rebuiltCount = 0;
+  private _reallocCount = 0;
+
+  /** Groups rebuilt + buffer reallocations during the last rebuild() call. */
+  getRebuildStats(): { rebuilt: number; reallocs: number } {
+    return { rebuilt: this._rebuiltCount, reallocs: this._reallocCount };
+  }
+
   rebuild(
     playerCx: number,
     playerCy: number,
@@ -251,11 +260,14 @@ export class ChunkGrouper {
     isBusy?: (chunkKey: string) => boolean,
   ): void {
     const shadowRadius = getShadowRadius();
+    this._rebuiltCount = 0;
+    this._reallocCount = 0;
 
     // === Phase 1: Priority rebuild for groups with pending suppression ===
     for (const [gk, group] of this.groups) {
       if (!group.suppressionPending || !group.dirty) continue;
       group.dirty = false;
+      this._rebuiltCount++;
       this.rebuildGroup(gk, group, playerCx, playerCy, playerCz, shadowRadius);
       this.finalizePendingSuppression(gk, group);
     }
@@ -289,6 +301,7 @@ export class ChunkGrouper {
     for (let i = 0; i < limit; i++) {
       const { gk, group } = eligible[i];
       group.dirty = false;
+      this._rebuiltCount++;
       this.rebuildGroup(gk, group, playerCx, playerCy, playerCz, shadowRadius);
     }
   }
@@ -681,6 +694,7 @@ export class ChunkGrouper {
       if (canReuse) {
         merged = existing!.geometry;
       } else {
+        this._reallocCount++;
         const vertCap = Math.ceil(totalVerts * BUFFER_GROWTH);
         const idxCap = Math.ceil(totalIndices * BUFFER_GROWTH);
 
