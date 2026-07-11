@@ -1,12 +1,14 @@
 /**
- * ExploreControls — full-screen pointer surface for the free explore camera.
+ * ExploreControls — full-screen pointer surface for explore mode.
  *
- * Desktop:  left-drag = pan, right-drag = rotate, wheel = zoom.
- * Touch:    one finger = pan, two fingers = rotate + pinch-zoom.
+ * Camera:  desktop left-drag = pan, right-drag = rotate, wheel = zoom;
+ *          touch one finger = pan, two fingers = rotate + pinch-zoom.
+ * Marker:  tap the ground places/moves the spawn marker; dragging a finger that
+ *          started ON the marker moves it along the terrain. (The floating Play
+ *          button — not a tap — starts the game.)
  *
- * Sits below the home overlay (whose buttons/panels capture their own taps) and
- * above the canvas. Taps (no drag) are reserved for the spawn-marker flow (added in
- * the next PR); this component only drives the camera.
+ * Sits below the home overlay (whose buttons capture their own taps) and above the
+ * canvas.
  */
 
 import { useRef } from 'react';
@@ -16,19 +18,49 @@ import {
   exploreCameraZoom,
   exploreCameraPinch,
 } from '../game/scene/ExploreCamera';
+import {
+  isMarkerPlaced, getMarkerBase, placeMarkerFromNDC, placeMarkerAt, raycastMarkerNDC,
+} from '../game/spawn/SpawnMarker';
+import { getCamera } from '../game/scene/camera';
 
 interface Pt { x: number; y: number; }
 
+const TAP_PX = 6;      // movement under this = a tap, not a drag
+const GRAB_PX = 55;    // tap/drag within this of the marker grabs it
+
+function toNDC(x: number, y: number): { x: number; y: number } {
+  return { x: (x / window.innerWidth) * 2 - 1, y: -(y / window.innerHeight) * 2 + 1 };
+}
+
+/** True if screen point (x,y) is within grab range of the placed marker. */
+function nearMarker(x: number, y: number): boolean {
+  const camera = getCamera();
+  if (!camera || !isMarkerPlaced()) return false;
+  const v = getMarkerBase().clone().project(camera);
+  const sx = (v.x * 0.5 + 0.5) * window.innerWidth;
+  const sy = (-v.y * 0.5 + 0.5) * window.innerHeight;
+  return Math.hypot(x - sx, y - sy) <= GRAB_PX;
+}
+
 export function ExploreControls() {
   const pointers = useRef(new Map<number, Pt>());
-  const button = useRef(0); // mouse button that started the drag (2 = right)
+  const button = useRef(0);
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
+  // Single-pointer gesture state
+  const mode = useRef<'camera' | 'marker'>('camera');
+  const moved = useRef(0); // accumulated movement (px) to distinguish tap vs drag
 
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (e.pointerType === 'mouse') button.current = e.button;
-    if (pointers.current.size === 2) pinch.current = null; // reset on second finger
+    if (pointers.current.size === 1) {
+      moved.current = 0;
+      mode.current = (e.pointerType !== 'mouse' || e.button === 0) && nearMarker(e.clientX, e.clientY)
+        ? 'marker' : 'camera';
+    } else {
+      pinch.current = null; // two fingers → camera rotate/zoom
+    }
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -38,9 +70,9 @@ export function ExploreControls() {
     const dx = e.clientX - prev.x;
     const dy = e.clientY - prev.y;
     map.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved.current += Math.hypot(dx, dy);
 
     if (map.size >= 2) {
-      // Two-finger: rotate by centroid translation + pinch-zoom by distance change.
       const [a, b] = [...map.values()];
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       const cx = (a.x + b.x) / 2;
@@ -50,6 +82,13 @@ export function ExploreControls() {
         exploreCameraPinch(dist - pinch.current.dist);
       }
       pinch.current = { dist, cx, cy };
+    } else if (mode.current === 'marker') {
+      // Drag the marker along the terrain under the finger.
+      const camera = getCamera();
+      if (camera) {
+        const hit = raycastMarkerNDC(toNDC(e.clientX, e.clientY), camera);
+        if (hit) placeMarkerAt(hit);
+      }
     } else if (e.pointerType === 'mouse' && button.current === 2) {
       exploreCameraRotate(dx, dy);
     } else {
@@ -58,8 +97,15 @@ export function ExploreControls() {
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
+    const wasSingle = pointers.current.size === 1;
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
+
+    // A tap on empty ground (camera mode, no drag) places/moves the marker there.
+    if (wasSingle && mode.current === 'camera' && moved.current < TAP_PX) {
+      const camera = getCamera();
+      if (camera) placeMarkerFromNDC(toNDC(e.clientX, e.clientY), camera);
+    }
   };
 
   const onWheel = (e: React.WheelEvent) => {

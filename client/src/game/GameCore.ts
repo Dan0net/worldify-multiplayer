@@ -17,6 +17,10 @@ import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
 import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
+import {
+  initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
+  consumeMarkerSpawn, resetMarker,
+} from './spawn/SpawnMarker';
 import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
 import { updateSkyTime, updateSkyCamera } from './scene/SkyDome';
@@ -202,9 +206,10 @@ export class GameCore {
       // Apply the quality preset (including visibility radius) and sync to store
       syncQualityToStore(qualityLevel, effectiveVisibility);
       
-      // Initialize spawn manager
+      // Initialize spawn manager + the explore-mode spawn marker gizmo
       this.spawnManager = new SpawnManager(scene);
       this.spawnManager.setTerrainProvider(this.voxelIntegration);
+      initSpawnMarker(scene, this.voxelIntegration);
       
       // Connect player manager to voxel collision system
       this.playerManager.setVoxelIntegration(this.voxelIntegration);
@@ -305,6 +310,7 @@ export class GameCore {
     useGameStore.getState().setSpawnReady(false);
     this.hasSpawnedPlayer = false;
     this.posSaveAccumMs = 0;
+    resetMarker(); // re-auto-place the spawn marker for the new world
     getMapTileCache().clear();
 
     // Re-center the orbit camera + chunk streaming on the NEW world's saved position
@@ -565,14 +571,28 @@ export class GameCore {
       this.savePlayerPosNow();
     }
 
-    // Entering Explore (boot or pause) - seed the free camera on the current center.
+    // Entering Explore (boot or pause) - seed the free camera on the current center and
+    // re-place the spawn marker there (updateExploreMode auto-places once terrain is
+    // ready), so pausing drops the marker where you are and tapping Play resumes.
     if (currentMode === GameMode.Explore) {
       initExploreCamera(this.spectatorCenter);
+      resetMarker();
+    } else {
+      setMarkerVisible(false); // hide the spawn gizmo outside explore
     }
 
-    // Entering Playing mode - calculate proper spawn position
-    if (currentMode === GameMode.Playing && !this.hasSpawnedPlayer) {
-      this.spawnPlayer();
+    // Entering Playing mode - spawn at the chosen marker if the Play button armed one
+    // (works even for a re-play after pausing); otherwise the first-time spawn logic.
+    if (currentMode === GameMode.Playing) {
+      const markerSpawn = consumeMarkerSpawn();
+      if (markerSpawn) {
+        this.playerManager.setSpawnPosition(markerSpawn);
+        controls.pitch = 0; // level look on a fresh marker spawn
+        this.hasSpawnedPlayer = true;
+        this.spawnManager?.clearDebugVisualization();
+      } else if (!this.hasSpawnedPlayer) {
+        this.spawnPlayer();
+      }
     }
   }
 
@@ -668,20 +688,12 @@ export class GameCore {
       perfStats.end('voxelUpdate');
     }
 
-    // Keep spawn-readiness fresh (used by the temporary Play button until the marker
-    // flow lands). Mirrors updateSpectatorMode's readiness logic.
-    if (this.spawnManager && !this.hasSpawnedPlayer) {
-      if (this.hasSavedSpawn) {
-        if (!useGameStore.getState().spawnReady) useGameStore.getState().setSpawnReady(true);
-      } else {
-        this.spawnManager.update();
-        const spawnReady = this.spawnManager.isSpawnReady();
-        if (spawnReady !== useGameStore.getState().spawnReady) {
-          useGameStore.getState().setSpawnReady(spawnReady);
-        }
-      }
-    } else if (this.hasSpawnedPlayer && !useGameStore.getState().spawnReady) {
-      useGameStore.getState().setSpawnReady(true);
+    // Auto-place the spawn marker at the current center (last/saved position) once its
+    // terrain is streamed, so a Play button is available immediately. The user can then
+    // tap elsewhere to relocate it. Retry each frame until it lands.
+    setMarkerVisible(true);
+    if (!isMarkerPlaced()) {
+      placeMarkerAtColumn(this.spectatorCenter.x, this.spectatorCenter.z);
     }
   }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
-import { SpectatorOverlay } from './ui/SpectatorOverlay';
+import { ExploreOverlay } from './ui/ExploreOverlay';
 import { BuildToolbar } from './ui/BuildToolbar';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
@@ -34,7 +34,7 @@ function App() {
     <>
       {/* Explore-mode camera drag/rotate/zoom surface (below the home overlay). */}
       {inGame && isExplore && <ExploreControls />}
-      <SpectatorOverlay />
+      <ExploreOverlay />
       {inGame && (
         /* Single fixed overlay for all HUD elements — one compositor layer */
         <div className="fixed inset-0 z-50 pointer-events-none">
