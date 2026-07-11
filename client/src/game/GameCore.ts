@@ -226,6 +226,12 @@ export class GameCore {
 
       // Rebuild terrain + snap points when the active world changes (world picker).
       setWorldSwitchHandler(() => this.switchLocalWorld());
+
+      // Undo last build (Ctrl/Cmd+Z or mobile button).
+      controls.onUndo = () => {
+        const keys = this.voxelIntegration.world.undoLastBuild();
+        if (keys.length > 0) this.updateMapTilesFromChunks(keys);
+      };
     }
 
     // Request pointer lock on canvas click (only when playing)

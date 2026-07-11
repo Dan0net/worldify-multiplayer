@@ -48,7 +48,7 @@ import {
   type ChunkProvider,
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
-import { getActiveWorldSeed, hasChunk, loadChunk, saveChunk } from '../world/WorldManager.js';
+import { getActiveWorldSeed, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
 /**
  * Extra chunks generated above a column's baseline surface so stamp/tree tops
@@ -1108,52 +1108,20 @@ export class VoxelWorld implements ChunkProvider {
     const modifiedKeys: string[] = [];
     const batchKeys = new Set<string>();
 
+    // Before-images (local only) so the op can be undone.
+    const undoSnapshots: ChunkSnapshot[] = [];
+
     for (const key of affectedKeys) {
       const chunk = this.chunks.get(key)!;
+
+      // Snapshot the pre-mutation voxels for undo.
+      const before = this.isLocal ? new Uint16Array(chunk.data) : null;
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {
         modifiedKeys.push(key);
-        chunk.dirty = true;
-        batchKeys.add(key);
-        
-        // Recompute visibility for modified chunk
-        chunk.visibilityBits = computeVisibility(chunk.data);
-        
-        // Relight this chunk (column pass overwrites all light, border inject + BFS re-spreads)
-        this.computeChunkSunlight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
-
-        // Cascade relighting downward — sunlight may now pass (or be blocked)
-        let belowCy = chunk.cy - 1;
-        while (true) {
-          const belowKey = chunkKey(chunk.cx, belowCy, chunk.cz);
-          const belowChunk = this.chunks.get(belowKey);
-          if (!belowChunk) break;
-          this.computeChunkSunlight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
-          belowChunk.dirty = true;
-          batchKeys.add(belowKey);
-          belowCy--;
-        }
-
-        // Cascade relighting upward — removing a floor lets light enter from below
-        const aboveKey = chunkKey(chunk.cx, chunk.cy + 1, chunk.cz);
-        const aboveChunk = this.chunks.get(aboveKey);
-        if (aboveChunk) {
-          this.computeChunkSunlight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
-          aboveChunk.dirty = true;
-          batchKeys.add(aboveKey);
-        }
-
-        // Relight face-adjacent horizontal neighbors so their border light updates.
-        for (const [dx, dy, dz] of FACE_OFFSETS_6) {
-          if (dy !== 0) continue; // vertical already handled above
-          const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
-          const nChunk = this.chunks.get(nKey);
-          if (!nChunk) continue;
-          this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
-          nChunk.dirty = true;
-          batchKeys.add(nKey);
-        }
+        if (before) undoSnapshots.push({ key, data: before });
+        this.relightModifiedChunk(chunk, batchKeys);
       }
     }
 
@@ -1167,15 +1135,88 @@ export class VoxelWorld implements ChunkProvider {
     // updates in the same frame — no boundary flash between neighbors.
     this.remeshPipeline.dispatchBatch(batchKeys);
 
-    // Persist edited chunks for the active local world (overwrites the stored copy).
+    // Persist edited chunks + record undo for the active local world.
     if (this.isLocal) {
       for (const key of modifiedKeys) {
         const chunk = this.chunks.get(key);
         if (chunk) saveChunk(key, chunk.data);
       }
+      if (undoSnapshots.length > 0) pushUndo(undoSnapshots);
     }
 
     return modifiedKeys;
+  }
+
+  /**
+   * Recompute visibility + relight a modified chunk and cascade lighting to its
+   * vertical column and horizontal face-neighbors. Shared by build + undo.
+   */
+  private relightModifiedChunk(chunk: Chunk, batchKeys: Set<string>): void {
+    chunk.dirty = true;
+    batchKeys.add(chunkKey(chunk.cx, chunk.cy, chunk.cz));
+
+    chunk.visibilityBits = computeVisibility(chunk.data);
+    this.computeChunkSunlight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
+
+    // Cascade relighting downward — sunlight may now pass (or be blocked)
+    let belowCy = chunk.cy - 1;
+    while (true) {
+      const belowKey = chunkKey(chunk.cx, belowCy, chunk.cz);
+      const belowChunk = this.chunks.get(belowKey);
+      if (!belowChunk) break;
+      this.computeChunkSunlight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
+      belowChunk.dirty = true;
+      batchKeys.add(belowKey);
+      belowCy--;
+    }
+
+    // Cascade relighting upward — removing a floor lets light enter from below
+    const aboveKey = chunkKey(chunk.cx, chunk.cy + 1, chunk.cz);
+    const aboveChunk = this.chunks.get(aboveKey);
+    if (aboveChunk) {
+      this.computeChunkSunlight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
+      aboveChunk.dirty = true;
+      batchKeys.add(aboveKey);
+    }
+
+    // Relight face-adjacent horizontal neighbors so their border light updates.
+    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
+      if (dy !== 0) continue; // vertical already handled above
+      const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
+      const nChunk = this.chunks.get(nKey);
+      if (!nChunk) continue;
+      this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+      nChunk.dirty = true;
+      batchKeys.add(nKey);
+    }
+  }
+
+  /**
+   * Undo the most recent local build op (restores chunks + persists the revert).
+   * @returns the reverted chunk keys (for map-tile refresh), or [] if nothing to undo.
+   */
+  undoLastBuild(): string[] {
+    if (!this.isLocal) return [];
+    const entry = popUndo();
+    if (!entry) return [];
+
+    const batchKeys = new Set<string>();
+    for (const snap of entry) {
+      const chunk = this.chunks.get(snap.key);
+      if (chunk) {
+        chunk.data.set(snap.data);
+        this.relightModifiedChunk(chunk, batchKeys);
+        saveChunk(snap.key, chunk.data);
+      } else {
+        // Chunk not loaded — revert the persisted copy so it reloads undone.
+        saveChunk(snap.key, snap.data);
+      }
+    }
+    if (batchKeys.size > 0) {
+      this.lastBFSChunk = null;
+      this.remeshPipeline.dispatchBatch(batchKeys);
+    }
+    return entry.map((s) => s.key);
   }
 
   /**

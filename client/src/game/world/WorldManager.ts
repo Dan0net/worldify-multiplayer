@@ -22,10 +22,11 @@ export interface WorldMeta {
 // ============== IndexedDB ==============
 
 const DB_NAME = 'worldify-worlds';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_WORLDS = 'worlds';   // keyPath 'id' → WorldMeta
 const STORE_CHUNKS = 'chunks';   // key `${worldId}:${chunkKey}` → Uint16Array
 const STORE_SNAPS = 'snaps';     // key worldId → {x,y,z}[]
+const STORE_UNDO = 'undo';       // key worldId → UndoEntry[]
 
 const ACTIVE_WORLD_KEY = 'worldify-active-world';
 const DEFAULT_SEED = 12345;
@@ -43,6 +44,7 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_WORLDS)) db.createObjectStore(STORE_WORLDS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(STORE_CHUNKS)) db.createObjectStore(STORE_CHUNKS);
       if (!db.objectStoreNames.contains(STORE_SNAPS)) db.createObjectStore(STORE_SNAPS);
+      if (!db.objectStoreNames.contains(STORE_UNDO)) db.createObjectStore(STORE_UNDO);
     };
   });
   return dbPromise;
@@ -78,6 +80,9 @@ function idbGetAll<T>(store: string): Promise<T[]> {
 let activeWorld: WorldMeta | null = null;
 /** Bare chunk keys ("cx,cy,cz") persisted for the ACTIVE world — sync existence check. */
 let persistedKeys = new Set<string>();
+/** Undo stack for the ACTIVE world (before-images of build ops), persisted to IDB. */
+let undoStack: UndoEntry[] = [];
+const UNDO_MAX = 20;
 /** Called after the active world changes so the game can rebuild the terrain. */
 let onWorldSwitch: (() => void) | null = null;
 
@@ -157,9 +162,10 @@ export async function deleteWorld(id: string): Promise<void> {
   const db = await openDB();
   // Remove meta + snaps + all chunk rows for this world.
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([STORE_WORLDS, STORE_SNAPS, STORE_CHUNKS], 'readwrite');
+    const tx = db.transaction([STORE_WORLDS, STORE_SNAPS, STORE_CHUNKS, STORE_UNDO], 'readwrite');
     tx.objectStore(STORE_WORLDS).delete(id);
     tx.objectStore(STORE_SNAPS).delete(id);
+    tx.objectStore(STORE_UNDO).delete(id);
     const chunkStore = tx.objectStore(STORE_CHUNKS);
     const range = IDBKeyRange.bound(`${id}:`, `${id}:￿`);
     const cur = chunkStore.openKeyCursor(range);
@@ -185,6 +191,7 @@ async function activate(world: WorldMeta): Promise<void> {
   try { localStorage.setItem(ACTIVE_WORLD_KEY, world.id); } catch { /* ignore */ }
   await idbPut(STORE_WORLDS, world);
   await preloadChunkKeys(world.id);
+  undoStack = (await idbGet<UndoEntry[]>(STORE_UNDO, world.id)) ?? [];
 }
 
 async function preloadChunkKeys(worldId: string): Promise<void> {
@@ -234,4 +241,31 @@ export async function loadSnapPoints(): Promise<SnapPoint[]> {
 export function saveSnapPoints(points: SnapPoint[]): void {
   if (!activeWorld) return;
   idbPut(STORE_SNAPS, points, activeWorld.id).catch(() => { /* non-critical */ });
+}
+
+// ============== Undo stack (active world) ==============
+
+/** A chunk's voxel data before a build op — enough to reverse it. */
+export interface ChunkSnapshot { key: string; data: Uint16Array; }
+export type UndoEntry = ChunkSnapshot[];
+
+export function pushUndo(entry: UndoEntry): void {
+  undoStack.push(entry);
+  while (undoStack.length > UNDO_MAX) undoStack.shift();
+  saveUndo();
+}
+
+export function popUndo(): UndoEntry | undefined {
+  const entry = undoStack.pop();
+  saveUndo();
+  return entry;
+}
+
+export function canUndo(): boolean {
+  return undoStack.length > 0;
+}
+
+function saveUndo(): void {
+  if (!activeWorld) return;
+  idbPut(STORE_UNDO, undoStack, activeWorld.id).catch(() => { /* non-critical */ });
 }
