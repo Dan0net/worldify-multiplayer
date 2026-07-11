@@ -43,7 +43,12 @@ import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime, subscribeMaterialSettings, subscribeWaterSettings } from './material';
 import { getMapTileCache } from './maptile/mapTileCacheSingleton';
 import { perfStats } from './debug/PerformanceStats';
-import { initWorlds, setWorldSwitchHandler, loadSnapPoints, saveSnapPoints } from './world/WorldManager';
+import { initWorlds, setWorldSwitchHandler, loadSnapPoints, saveSnapPoints, savePlayerPos, loadPlayerPos, setPlayerPosProvider } from './world/WorldManager';
+
+/** How often to persist the player position while Playing (ms). */
+const POS_SAVE_INTERVAL_MS = 4000;
+/** Lift restored spawns slightly above the saved Y to avoid clipping pre-collision. */
+const RESTORE_HEIGHT_OFFSET = 0.5;
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -67,6 +72,13 @@ export class GameCore {
   
   // Center point for spectator camera orbit (updated when leaving Playing mode)
   private spectatorCenter = new THREE.Vector3(0, 0, 0);
+
+  // Throttle accumulator for periodic player-position saves while Playing (ms).
+  private posSaveAccumMs = 0;
+
+  // True when the active world has a persisted position — spawn is ready immediately
+  // (no terrain raycast needed) and streaming is centered on that saved position.
+  private hasSavedSpawn = false;
 
   // Store subscription for the render-scale slider
   private renderScaleUnsub: (() => void) | null = null;
@@ -161,6 +173,12 @@ export class GameCore {
     // and its persisted chunks.
     await initWorlds();
 
+    // Center the background orbit camera + chunk streaming on the persisted player
+    // position, so the world loads AROUND where the player left off (not the origin).
+    const savedPose = loadPlayerPos();
+    this.hasSavedSpawn = savedPose !== null;
+    if (savedPose) this.spectatorCenter.set(savedPose.x, savedPose.y, savedPose.z);
+
     // Initialize voxel terrain system
     if (scene) {
       this.voxelIntegration = new VoxelIntegration(scene, {
@@ -230,6 +248,9 @@ export class GameCore {
       // Rebuild terrain + snap points when the active world changes (world picker).
       setWorldSwitchHandler(() => this.switchLocalWorld());
 
+      // Supply the current pose so WorldManager can save the OUTGOING world on switch.
+      setPlayerPosProvider(() => this.currentPlayerPose());
+
       // Undo last build (Ctrl/Cmd+Z or mobile button).
       controls.onUndo = () => {
         const keys = this.voxelIntegration.world.undoLastBuild();
@@ -255,6 +276,10 @@ export class GameCore {
     // Handle resize
     window.addEventListener('resize', this.onResize);
 
+    // Persist the player position when the tab is hidden/closed (mobile-safe).
+    window.addEventListener('pagehide', this.savePlayerPosNow);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+
     // Re-apply the drawing-buffer size whenever the render-scale slider changes.
     this.renderScaleUnsub = useGameStore.subscribe((state, prev) => {
       if (state.renderScale !== prev.renderScale) this.onResize();
@@ -278,9 +303,19 @@ export class GameCore {
   private switchLocalWorld(): void {
     useGameStore.getState().setSpawnReady(false);
     this.hasSpawnedPlayer = false;
+    this.posSaveAccumMs = 0;
     getMapTileCache().clear();
-    const playerPos = this.playerManager.getLocalPlayer().position.clone();
-    this.voxelIntegration.world.reloadLocalWorld(playerPos);
+
+    // Re-center the orbit camera + chunk streaming on the NEW world's saved position
+    // (WorldManager.activate has already loaded it). With no saved position, center on
+    // the origin — that's where SpawnManager probes for ground, so spawn resolves.
+    const savedPose = loadPlayerPos();
+    this.hasSavedSpawn = savedPose !== null;
+    const streamCenter = savedPose
+      ? new THREE.Vector3(savedPose.x, savedPose.y, savedPose.z)
+      : new THREE.Vector3(0, 0, 0);
+    this.spectatorCenter.copy(streamCenter);
+    this.voxelIntegration.world.reloadLocalWorld(streamCenter);
     // setDepositedPoints replaces the points without firing the save callback,
     // so restoring the new world's snaps doesn't overwrite them.
     const snap = this.builder.getSnapManager();
@@ -519,9 +554,10 @@ export class GameCore {
     const previousMode = this.lastGameMode;
     this.lastGameMode = currentMode;
     
-    // Leaving Playing mode - capture player position for spectator center
+    // Leaving Playing mode - capture player position for spectator center + persist it
     if (previousMode === GameMode.Playing) {
       this.spectatorCenter.copy(localPlayer.position);
+      this.savePlayerPosNow();
     }
     
     // Entering Playing mode - calculate proper spawn position
@@ -536,15 +572,38 @@ export class GameCore {
    */
   private spawnPlayer(): void {
     if (!this.spawnManager) return;
-    
-    // Use cached spawn position from spectator mode detection
-    const spawnPos = this.spawnManager.getCachedSpawnPosition();
-    this.playerManager.setSpawnPosition(spawnPos);
+
+    // Prefer the world's persisted position; fall back to terrain-raycast spawn for a
+    // fresh world. Lift slightly above the saved Y so the player doesn't clip in before
+    // the chunk under them has meshed + built a collider.
+    const saved = loadPlayerPos();
+    if (saved) {
+      this.playerManager.setSpawnPosition(new THREE.Vector3(saved.x, saved.y + RESTORE_HEIGHT_OFFSET, saved.z));
+      controls.yaw = saved.yaw;
+      controls.pitch = saved.pitch;
+    } else {
+      this.playerManager.setSpawnPosition(this.spawnManager.getCachedSpawnPosition());
+    }
     this.hasSpawnedPlayer = true;
-    
+
     // Clear spawn debug visualization now that game is starting
     this.spawnManager.clearDebugVisualization();
   }
+
+  /** Current player pose (position + look) for persistence. */
+  private currentPlayerPose(): { x: number; y: number; z: number; yaw: number; pitch: number } {
+    const p = this.playerManager.getLocalPlayer().position;
+    return { x: p.x, y: p.y, z: p.z, yaw: controls.yaw, pitch: controls.pitch };
+  }
+
+  /** Save the player's position now, if they've spawned (position is meaningful). */
+  private savePlayerPosNow = (): void => {
+    if (this.hasSpawnedPlayer) savePlayerPos(this.currentPlayerPose());
+  };
+
+  private onVisibilityChange = (): void => {
+    if (document.visibilityState === 'hidden') this.savePlayerPosNow();
+  };
 
   /**
    * Sync voxel debug state from store to VoxelDebugManager
@@ -605,12 +664,17 @@ export class GameCore {
     // Update spawn detection (only needed before first spawn; after that, player
     // respawns at their last position so terrain raycast is unnecessary)
     if (this.spawnManager && !this.hasSpawnedPlayer) {
-      this.spawnManager.update();
-      
-      // Update spawn ready state in store
-      const spawnReady = this.spawnManager.isSpawnReady();
-      if (spawnReady !== useGameStore.getState().spawnReady) {
-        useGameStore.getState().setSpawnReady(spawnReady);
+      if (this.hasSavedSpawn) {
+        // A persisted position is an absolute spawn — ready without a terrain raycast
+        // (which probes the origin and would never resolve for a far-away saved world).
+        if (!useGameStore.getState().spawnReady) useGameStore.getState().setSpawnReady(true);
+      } else {
+        this.spawnManager.update();
+        // Update spawn ready state in store
+        const spawnReady = this.spawnManager.isSpawnReady();
+        if (spawnReady !== useGameStore.getState().spawnReady) {
+          useGameStore.getState().setSpawnReady(spawnReady);
+        }
       }
     } else if (this.hasSpawnedPlayer && !useGameStore.getState().spawnReady) {
       // Already spawned before — always ready to respawn
@@ -646,6 +710,12 @@ export class GameCore {
       perfStats.end('buildPreview');
     }
 
+    // Periodically persist position so an unexpected close still resumes near here.
+    this.posSaveAccumMs += deltaMs;
+    if (this.posSaveAccumMs >= POS_SAVE_INTERVAL_MS) {
+      this.posSaveAccumMs = 0;
+      savePlayerPos(this.currentPlayerPose());
+    }
   }
 
   private onResize = (): void => {
@@ -683,7 +753,10 @@ export class GameCore {
     // Clean up effects pipeline
     disposeEffects();
 
+    this.savePlayerPosNow();
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('pagehide', this.savePlayerPosNow);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     if (this.renderScaleUnsub) { this.renderScaleUnsub(); this.renderScaleUnsub = null; }
     if (this.materialSettingsUnsub) { this.materialSettingsUnsub(); this.materialSettingsUnsub = null; }
     if (this.waterSettingsUnsub) { this.waterSettingsUnsub(); this.waterSettingsUnsub = null; }
