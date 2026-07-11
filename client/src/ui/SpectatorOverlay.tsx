@@ -12,7 +12,7 @@
  * Compact + scrollable so it fits portrait and landscape.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameStore } from '../state/store';
 import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
@@ -20,6 +20,10 @@ import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { getCamera } from '../game/scene/camera';
 import { formatTimeOfDay } from '../game/scene/DayNightCycle';
+import {
+  listWorlds, getActiveWorld, setActiveWorld, createAndActivateWorld, deleteWorld,
+  type WorldMeta,
+} from '../game/world/WorldManager';
 
 
 export function SpectatorOverlay() {
@@ -36,6 +40,34 @@ export function SpectatorOverlay() {
   const timeOfDay = useGameStore((s) => s.environment.timeOfDay);
   const setTimeOfDay = useGameStore((s) => s.setTimeOfDay);
   const [hasPlayed, setHasPlayed] = useState(false);
+
+  // World picker
+  const [worlds, setWorlds] = useState<WorldMeta[]>([]);
+  const [activeWorldId, setActiveWorldId] = useState<string | null>(null);
+  const [worldMenuOpen, setWorldMenuOpen] = useState(false);
+
+  const refreshWorlds = () => {
+    listWorlds().then((w) => {
+      setWorlds(w.slice().sort((a, b) => b.lastPlayedAt - a.lastPlayedAt));
+      setActiveWorldId(getActiveWorld()?.id ?? null);
+    });
+  };
+  useEffect(() => { refreshWorlds(); }, []);
+
+  const selectWorld = async (id: string) => {
+    await setActiveWorld(id); // triggers terrain rebuild via GameCore handler
+    refreshWorlds();
+    setWorldMenuOpen(false);
+  };
+  const newWorld = async () => {
+    await createAndActivateWorld();
+    refreshWorlds();
+    setWorldMenuOpen(false);
+  };
+  const removeWorld = async (id: string) => {
+    await deleteWorld(id);
+    refreshWorlds();
+  };
 
   if (gameMode !== GameMode.MainMenu) return null;
 
@@ -98,7 +130,48 @@ export function SpectatorOverlay() {
               >
                 ⛶
               </button>
+              <button
+                onClick={() => setWorldMenuOpen((o) => !o)}
+                aria-label="Select world"
+                title="Worlds"
+                className="w-10 shrink-0 rounded-xl text-white text-sm bg-white/10 hover:bg-white/20 flex items-center justify-center"
+              >
+                {worldMenuOpen ? '▴' : '▾'}
+              </button>
             </div>
+
+            {/* World picker */}
+            {worldMenuOpen && (
+              <div className="w-full rounded-xl bg-black/70 border border-white/10 p-2 flex flex-col gap-1">
+                {worlds.map((w) => (
+                  <div key={w.id} className="flex items-center gap-1">
+                    <button
+                      onClick={() => selectWorld(w.id)}
+                      className={`flex-1 text-left text-sm px-2 py-1.5 rounded-lg transition-colors ${
+                        w.id === activeWorldId ? 'bg-indigo-600 text-white' : 'text-white/70 hover:bg-white/10'
+                      }`}
+                    >
+                      {w.id === activeWorldId ? '● ' : ''}{w.name}
+                    </button>
+                    {worlds.length > 1 && (
+                      <button
+                        onClick={() => removeWorld(w.id)}
+                        aria-label={`Delete ${w.name}`}
+                        className="w-7 h-7 shrink-0 rounded-lg text-white/40 hover:text-red-400 hover:bg-white/10 flex items-center justify-center"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  onClick={newWorld}
+                  className="text-sm px-2 py-1.5 rounded-lg text-cyan-300 hover:bg-white/10 text-left"
+                >
+                  ＋ New World
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
