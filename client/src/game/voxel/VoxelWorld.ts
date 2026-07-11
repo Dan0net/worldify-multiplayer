@@ -165,9 +165,17 @@ export class VoxelWorld implements ChunkProvider {
       this.pendingChunks,
     );
 
-    // New/updated geometry may need its visibility evaluated
-    this.remeshPipeline.addListener(() => { this.visibilityDirty = true; });
+    // New/updated geometry may need its visibility evaluated, and invalidates the
+    // cached mesh count (getMeshCount is polled every frame for the debug overlay).
+    this.remeshPipeline.addListener(() => {
+      this.visibilityDirty = true;
+      this.meshCountDirty = true;
+    });
   }
+
+  /** Cached count of chunks with visible geometry (recomputed only when dirty). */
+  private cachedMeshCount = 0;
+  private meshCountDirty = true;
 
   /**
    * Initialize the world.
@@ -848,6 +856,7 @@ export class VoxelWorld implements ChunkProvider {
    * Then injects border light from face-adjacent neighbors and runs BFS.
    */
   private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint16Array): void {
+    perfStats.begin('lighting');
     // Check chunk above for sunlight state
     const aboveKey = chunkKey(cx, cy + 1, cz);
     const aboveChunk = this.chunks.get(aboveKey);
@@ -860,6 +869,7 @@ export class VoxelWorld implements ChunkProvider {
 
     // Combined pipeline: column pass → frontier seed → border inject → BFS
     computeAndPropagateLight(data, lightFromAbove, neighbors);
+    perfStats.end('lighting');
   }
 
   /**
@@ -968,6 +978,7 @@ export class VoxelWorld implements ChunkProvider {
     if (geo) {
       geo.dispose();
       this.geometries.delete(key);
+      this.meshCountDirty = true;
     }
 
     // Remove from remesh queue
@@ -1039,12 +1050,15 @@ export class VoxelWorld implements ChunkProvider {
    * Get the number of chunks with visible meshes.
    */
   getMeshCount(): number {
+    if (!this.meshCountDirty) return this.cachedMeshCount;
     let count = 0;
     for (const geo of this.geometries.values()) {
       if (geo.hasGeometry()) {
         count++;
       }
     }
+    this.cachedMeshCount = count;
+    this.meshCountDirty = false;
     return count;
   }
 

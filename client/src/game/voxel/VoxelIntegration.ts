@@ -13,6 +13,7 @@ import { VoxelCollision, CapsuleInfo, CapsuleCollisionResult } from './VoxelColl
 import { VoxelDebugManager } from './VoxelDebug.js';
 import type { TerrainRaycaster } from '../spawn/TerrainRaycaster.js';
 import { worldToChunk, chunkKey, COLLIDER_CHUNK_RADIUS } from '@worldify/shared';
+import { perfStats } from '../debug/PerformanceStats.js';
 
 /**
  * Configuration for the voxel integration.
@@ -66,6 +67,18 @@ export class VoxelIntegration implements TerrainRaycaster {
 
   /** Chunk keys whose mesh was updated and may need a collider rebuild */
   private pendingColliderKeys: Set<string> = new Set();
+
+  /**
+   * Chunk keys queued for a BVH collider build, drained a few per frame. Building a
+   * BoundsTree is synchronous main-thread work; a boundary cross can newly-desire up
+   * to (2r+1)³ chunks, so building them all in one frame hitches. Budgeting keeps the
+   * per-frame cost bounded — physics only needs the nearest colliders, which are built
+   * first (distance-sorted drain).
+   */
+  private colliderBuildQueue: Set<string> = new Set();
+
+  /** Max BVH collider builds per frame (each is a synchronous computeBoundsTree). */
+  private static readonly MAX_COLLIDER_BUILDS_PER_FRAME = 4;
 
   constructor(scene: THREE.Scene, config: VoxelConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -153,7 +166,7 @@ export class VoxelIntegration implements TerrainRaycaster {
         if (Math.abs(chunk.cx - pc.cx) <= COLLIDER_CHUNK_RADIUS &&
             Math.abs(chunk.cy - pc.cy) <= COLLIDER_CHUNK_RADIUS &&
             Math.abs(chunk.cz - pc.cz) <= COLLIDER_CHUNK_RADIUS) {
-          this.buildCollider(key, chunk.cx, chunk.cy, chunk.cz);
+          this.colliderBuildQueue.add(key); // build is budgeted below
         } else if (this.colliderGenerations.has(key)) {
           this.collision.removeCollider(key);
           this.colliderGenerations.delete(key);
@@ -164,33 +177,80 @@ export class VoxelIntegration implements TerrainRaycaster {
 
     // Full proximity rescan only when the player crosses a chunk boundary
     const prev = this.lastColliderPlayerChunk;
-    if (prev && prev.cx === pc.cx && prev.cy === pc.cy && prev.cz === pc.cz) return;
-    this.lastColliderPlayerChunk = { ...pc };
+    const crossed = !prev || prev.cx !== pc.cx || prev.cy !== pc.cy || prev.cz !== pc.cz;
+    if (crossed) {
+      this.lastColliderPlayerChunk = { ...pc };
 
-    // Build the set of desired chunk keys and ensure colliders are up-to-date
-    const desiredKeys = new Set<string>();
-    for (let dx = -COLLIDER_CHUNK_RADIUS; dx <= COLLIDER_CHUNK_RADIUS; dx++) {
-      for (let dy = -COLLIDER_CHUNK_RADIUS; dy <= COLLIDER_CHUNK_RADIUS; dy++) {
-        for (let dz = -COLLIDER_CHUNK_RADIUS; dz <= COLLIDER_CHUNK_RADIUS; dz++) {
-          const k = chunkKey(pc.cx + dx, pc.cy + dy, pc.cz + dz);
-          desiredKeys.add(k);
-          const geo = this.world.geometries.get(k);
-          if (!geo || !geo.hasGeometry()) continue;
-          const gen = this.colliderGenerations.get(k);
-          if (gen === undefined || gen !== geo.meshGeneration) {
-            this.buildCollider(k, pc.cx + dx, pc.cy + dy, pc.cz + dz);
+      // Queue desired chunks whose collider is missing/stale, remove those out of range.
+      const desiredKeys = new Set<string>();
+      for (let dx = -COLLIDER_CHUNK_RADIUS; dx <= COLLIDER_CHUNK_RADIUS; dx++) {
+        for (let dy = -COLLIDER_CHUNK_RADIUS; dy <= COLLIDER_CHUNK_RADIUS; dy++) {
+          for (let dz = -COLLIDER_CHUNK_RADIUS; dz <= COLLIDER_CHUNK_RADIUS; dz++) {
+            const k = chunkKey(pc.cx + dx, pc.cy + dy, pc.cz + dz);
+            desiredKeys.add(k);
+            const geo = this.world.geometries.get(k);
+            if (!geo || !geo.hasGeometry()) continue;
+            const gen = this.colliderGenerations.get(k);
+            if (gen === undefined || gen !== geo.meshGeneration) {
+              this.colliderBuildQueue.add(k); // build is budgeted below
+            }
           }
+        }
+      }
+
+      // Remove colliders outside desired set (cheap Set.has lookup, no coord parsing)
+      for (const key of this.colliderGenerations.keys()) {
+        if (!desiredKeys.has(key)) {
+          this.collision.removeCollider(key);
+          this.colliderGenerations.delete(key);
+          this.colliderBuildQueue.delete(key);
         }
       }
     }
 
-    // Remove colliders outside desired set (cheap Set.has lookup, no coord parsing)
-    for (const key of this.colliderGenerations.keys()) {
-      if (!desiredKeys.has(key)) {
-        this.collision.removeCollider(key);
-        this.colliderGenerations.delete(key);
-      }
+    this.drainColliderQueue(pc);
+  }
+
+  /**
+   * Build up to MAX_COLLIDER_BUILDS_PER_FRAME colliders from the queue, nearest first.
+   * Skips entries that are no longer valid (unloaded, out of range, or already current).
+   */
+  private drainColliderQueue(pc: { cx: number; cy: number; cz: number }): void {
+    const queue = this.colliderBuildQueue;
+    if (queue.size === 0) {
+      perfStats.setColliderQueueSize(0);
+      return;
     }
+
+    // Collect still-buildable keys with their distance to the player chunk.
+    const buildable: { key: string; cx: number; cy: number; cz: number; dist: number }[] = [];
+    for (const key of queue) {
+      const chunk = this.world.chunks.get(key);
+      const geo = this.world.geometries.get(key);
+      if (!chunk || !geo || !geo.hasGeometry()) { queue.delete(key); continue; }
+      const dcx = Math.abs(chunk.cx - pc.cx);
+      const dcy = Math.abs(chunk.cy - pc.cy);
+      const dcz = Math.abs(chunk.cz - pc.cz);
+      if (dcx > COLLIDER_CHUNK_RADIUS || dcy > COLLIDER_CHUNK_RADIUS || dcz > COLLIDER_CHUNK_RADIUS) {
+        queue.delete(key); // drifted out of range before we got to it
+        continue;
+      }
+      if (this.colliderGenerations.get(key) === geo.meshGeneration) { queue.delete(key); continue; }
+      buildable.push({ key, cx: chunk.cx, cy: chunk.cy, cz: chunk.cz, dist: Math.max(dcx, dcy, dcz) });
+    }
+
+    if (buildable.length > VoxelIntegration.MAX_COLLIDER_BUILDS_PER_FRAME) {
+      buildable.sort((a, b) => a.dist - b.dist);
+    }
+
+    const limit = Math.min(buildable.length, VoxelIntegration.MAX_COLLIDER_BUILDS_PER_FRAME);
+    for (let i = 0; i < limit; i++) {
+      const b = buildable[i];
+      this.buildCollider(b.key, b.cx, b.cy, b.cz);
+      queue.delete(b.key);
+    }
+
+    perfStats.setColliderQueueSize(queue.size);
   }
 
   /**

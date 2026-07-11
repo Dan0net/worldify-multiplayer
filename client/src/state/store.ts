@@ -53,6 +53,7 @@ export interface PerfSnapshot {
   physics: number;
   voxelUpdate: number;
   remesh: number;
+  lighting: number;
   buildPreview: number;
   players: number;
   environment: number;
@@ -66,6 +67,7 @@ export interface PerfSnapshot {
   // Voxel-specific
   remeshQueueSize: number;
   pendingChunks: number;
+  colliderQueueSize: number;
   // Memory
   jsHeapMB: number;
 }
@@ -464,10 +466,10 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   tickMs: 0,
   serverTick: 0,
   perfStats: {
-    gameUpdate: 0, physics: 0, voxelUpdate: 0, remesh: 0,
+    gameUpdate: 0, physics: 0, voxelUpdate: 0, remesh: 0, lighting: 0,
     buildPreview: 0, players: 0, environment: 0, render: 0,
     drawCalls: 0, triangles: 0, geometries: 0, textures: 0, programs: 0,
-    remeshQueueSize: 0, pendingChunks: 0, jsHeapMB: 0,
+    remeshQueueSize: 0, pendingChunks: 0, colliderQueueSize: 0, jsHeapMB: 0,
   },
   
   // Build initial state

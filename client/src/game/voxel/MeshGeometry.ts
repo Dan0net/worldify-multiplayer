@@ -17,8 +17,19 @@
  */
 
 import * as THREE from 'three';
-import { VOXEL_SCALE } from '@worldify/shared';
+import { VOXEL_SCALE, CHUNK_SIZE, MESH_MARGIN } from '@worldify/shared';
 import { SurfaceNetOutput } from './SurfaceNet.js';
+
+/**
+ * Conservative local-space extent of a chunk mesh, in world units. SurfaceNets places
+ * vertices at grid coords in [0, CHUNK_SIZE+MESH_MARGIN] × VOXEL_SCALE (never negative),
+ * so this box always contains the geometry. Used to set bounds without a per-remesh
+ * vertex scan (computeBoundingBox/Sphere iterate every vertex, on the main thread).
+ */
+const CHUNK_MESH_EXTENT = (CHUNK_SIZE + MESH_MARGIN) * VOXEL_SCALE;
+const CHUNK_BOUND_CENTER = CHUNK_MESH_EXTENT / 2;
+// Half-diagonal of the extent cube — radius from center to a far corner.
+const CHUNK_BOUND_RADIUS = Math.sqrt(3) * CHUNK_BOUND_CENTER;
 /**
  * Raw expanded mesh data - plain typed arrays, no Three.js dependency.
  * This is what gets transferred between worker and main thread.
@@ -127,8 +138,16 @@ export function createBufferGeometry(data: ExpandedMeshData): THREE.BufferGeomet
   geometry.setAttribute('materialWeights', new THREE.BufferAttribute(data.materialWeights, 3));
   geometry.setAttribute('lightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
   geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
+  // Fixed conservative bounds — avoids the per-remesh vertex scan of
+  // computeBoundingBox/computeBoundingSphere. The chunk mesh always fits this box.
+  geometry.boundingBox = new THREE.Box3(
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(CHUNK_MESH_EXTENT, CHUNK_MESH_EXTENT, CHUNK_MESH_EXTENT),
+  );
+  geometry.boundingSphere = new THREE.Sphere(
+    new THREE.Vector3(CHUNK_BOUND_CENTER, CHUNK_BOUND_CENTER, CHUNK_BOUND_CENTER),
+    CHUNK_BOUND_RADIUS,
+  );
   return geometry;
 }
 

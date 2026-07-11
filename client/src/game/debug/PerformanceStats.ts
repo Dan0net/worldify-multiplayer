@@ -24,6 +24,7 @@ export type PerfSection =
   | 'physics'        // Player physics + movement
   | 'voxelUpdate'    // VoxelWorld.update (visibility + remesh)
   | 'remesh'         // Just the remesh queue portion
+  | 'lighting'       // Sunlight column + BFS propagation (computeChunkSunlight)
   | 'buildPreview'   // Build preview meshing
   | 'players'        // Remote player interpolation
   | 'environment'    // Day/night + sky + lighting apply
@@ -37,6 +38,7 @@ export interface PerfSnapshot {
   physics: number;
   voxelUpdate: number;
   remesh: number;
+  lighting: number;
   buildPreview: number;
   players: number;
   environment: number;
@@ -52,16 +54,17 @@ export interface PerfSnapshot {
   // Voxel-specific
   remeshQueueSize: number;
   pendingChunks: number;
+  colliderQueueSize: number;
 
   // Memory (when available)
   jsHeapMB: number;
 }
 
 const EMPTY_SNAPSHOT: PerfSnapshot = {
-  gameUpdate: 0, physics: 0, voxelUpdate: 0, remesh: 0,
+  gameUpdate: 0, physics: 0, voxelUpdate: 0, remesh: 0, lighting: 0,
   buildPreview: 0, players: 0, environment: 0, render: 0,
   drawCalls: 0, triangles: 0, geometries: 0, textures: 0, programs: 0,
-  remeshQueueSize: 0, pendingChunks: 0, jsHeapMB: 0,
+  remeshQueueSize: 0, pendingChunks: 0, colliderQueueSize: 0, jsHeapMB: 0,
 };
 
 /** Rolling average window size (frames) */
@@ -73,7 +76,7 @@ const FLUSH_INTERVAL_MS = 200; // 5Hz — enough for UI, minimal React overhead
 class PerformanceStatsCollector {
   // Accumulator for rolling averages
   private accum: Record<PerfSection, number[]> = {
-    gameUpdate: [], physics: [], voxelUpdate: [], remesh: [],
+    gameUpdate: [], physics: [], voxelUpdate: [], remesh: [], lighting: [],
     buildPreview: [], players: [], environment: [], render: [],
   };
 
@@ -89,6 +92,7 @@ class PerformanceStatsCollector {
   // Additional per-frame counters (set externally)
   private _remeshQueueSize = 0;
   private _pendingChunks = 0;
+  private _colliderQueueSize = 0;
 
   /** Start timing a section */
   begin(section: PerfSection): void {
@@ -123,6 +127,11 @@ class PerformanceStatsCollector {
     this._pendingChunks = pendingChunks;
   }
 
+  /** Set collider build-queue size (called from VoxelIntegration) */
+  setColliderQueueSize(size: number): void {
+    this._colliderQueueSize = size;
+  }
+
   /** Call at the end of each frame to compute averages and flush */
   endFrame(): void {
     // Compute rolling averages
@@ -139,6 +148,7 @@ class PerformanceStatsCollector {
 
     this.snapshot.remeshQueueSize = this._remeshQueueSize;
     this.snapshot.pendingChunks = this._pendingChunks;
+    this.snapshot.colliderQueueSize = this._colliderQueueSize;
 
     // JS heap (Chrome-only)
     const mem = (performance as any).memory;

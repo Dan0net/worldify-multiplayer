@@ -71,6 +71,9 @@ export class GameCore {
   // Store subscription for the render-scale slider
   private renderScaleUnsub: (() => void) | null = null;
 
+  // Last voxel stats written to the store (change-gate to avoid per-frame re-renders)
+  private lastVoxelStats = { chunksLoaded: -1, meshesVisible: -1, debugObjects: -1 };
+
   // Store subscriptions that push material/water settings to the shaders
   private materialSettingsUnsub: (() => void) | null = null;
   private waterSettingsUnsub: (() => void) | null = null;
@@ -555,13 +558,26 @@ export class GameCore {
     // Sync wireframe mode to shared material
     setVoxelWireframe(debugState.showWireframe);
 
-    // Update voxel stats in store
+    // Update voxel stats in store — but only when a value actually changed. This
+    // write happens every frame; a bare `setVoxelStats` allocates a new object each
+    // time and re-renders every store subscriber, so gate it on change.
     const stats = this.voxelIntegration.getStats();
-    useGameStore.getState().setVoxelStats({
-      chunksLoaded: stats.chunksLoaded,
-      meshesVisible: stats.meshesVisible,
-      debugObjects: this.voxelIntegration.debug.getDebugObjectCount(),
-    });
+    const debugObjects = this.voxelIntegration.debug.getDebugObjectCount();
+    const last = this.lastVoxelStats;
+    if (
+      stats.chunksLoaded !== last.chunksLoaded ||
+      stats.meshesVisible !== last.meshesVisible ||
+      debugObjects !== last.debugObjects
+    ) {
+      last.chunksLoaded = stats.chunksLoaded;
+      last.meshesVisible = stats.meshesVisible;
+      last.debugObjects = debugObjects;
+      useGameStore.getState().setVoxelStats({
+        chunksLoaded: stats.chunksLoaded,
+        meshesVisible: stats.meshesVisible,
+        debugObjects,
+      });
+    }
   }
 
   /**
