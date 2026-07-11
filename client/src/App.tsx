@@ -5,6 +5,7 @@ import { SpectatorOverlay } from './ui/SpectatorOverlay';
 import { BuildToolbar } from './ui/BuildToolbar';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
+import { ExploreControls } from './ui/ExploreControls';
 import { useGameStore } from './state/store';
 import { useIsTouch } from './ui/useDeviceMode';
 import { createGame } from './game/createGame';
@@ -26,10 +27,13 @@ function App() {
   }, []);
 
   const isPlaying = gameMode === GameMode.Playing;
+  const isExplore = gameMode === GameMode.Explore;
   const inGame = connectionStatus === 'connected';
 
   return (
     <>
+      {/* Explore-mode camera drag/rotate/zoom surface (below the home overlay). */}
+      {inGame && isExplore && <ExploreControls />}
       <SpectatorOverlay />
       {inGame && (
         /* Single fixed overlay for all HUD elements — one compositor layer */

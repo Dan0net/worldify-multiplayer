@@ -11,6 +11,12 @@ export enum GameMode {
   /** Spectating - observing the game, camera orbits around world */
   Spectating = 'spectating',
 
+  /**
+   * Explore - home state: free 3rd-person camera the user can pan/rotate/zoom to
+   * explore the world before choosing a spawn point and playing in 1st person.
+   */
+  Explore = 'explore',
+
   /** Playing - active gameplay with FPS controls */
   Playing = 'playing',
 }

@@ -69,7 +69,8 @@ export function SpectatorOverlay() {
     refreshWorlds();
   };
 
-  if (gameMode !== GameMode.MainMenu) return null;
+  // Shown on the home screen (Explore) — redesigned into the new home UI in a later PR.
+  if (gameMode !== GameMode.Explore) return null;
 
   const isLoadingHD = textureState === 'loading-high';
   const hasHD = textureState === 'high';

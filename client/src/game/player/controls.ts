@@ -185,7 +185,7 @@ export class Controls {
         if (useGameStore.getState().build.menuOpen) {
           useGameStore.getState().setBuildMenuOpen(false);
         }
-        useGameStore.getState().setGameMode(GameMode.MainMenu);
+        useGameStore.getState().setGameMode(GameMode.Explore);
       }
     } else {
       // Pointer lock regained — ensure build menu is closed
