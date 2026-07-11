@@ -37,6 +37,8 @@ export interface VoxelDebugToggles {
   showCollisionMesh: boolean;
   showChunkCoords: boolean;
   showWireframe: boolean;
+  /** Reconcile vertex normals across chunk seams (on by default; toggle to compare). */
+  stitchSeams: boolean;
 }
 
 /** Voxel world statistics */
@@ -492,6 +494,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     showCollisionMesh: false,
     showChunkCoords: false,
     showWireframe: false,
+    stitchSeams: true,
   },
   voxelStats: {
     chunksLoaded: 0,

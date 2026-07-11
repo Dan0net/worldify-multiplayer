@@ -48,6 +48,7 @@ import {
   type ChunkProvider,
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
+import { SeamStitcher } from './SeamStitcher.js';
 import { getActiveWorldSeed, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
 /**
@@ -153,6 +154,9 @@ export class VoxelWorld implements ChunkProvider {
   /** Manages remesh queue and worker dispatch */
   readonly remeshPipeline: RemeshPipeline;
 
+  /** Reconciles vertex normals across chunk-mesh seams. */
+  readonly seamStitcher: SeamStitcher;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.meshPool = new MeshWorkerPool(VoxelWorld.MESH_WORKER_COUNT);
@@ -164,12 +168,18 @@ export class VoxelWorld implements ChunkProvider {
       this.meshPool,
       this.pendingChunks,
     );
+    this.seamStitcher = new SeamStitcher(this.geometries, (ck) => {
+      const gk = this.chunkGrouper.getGroupKey(ck);
+      if (gk) this.chunkGrouper.markGroupDirty(gk);
+    });
 
-    // New/updated geometry may need its visibility evaluated, and invalidates the
-    // cached mesh count (getMeshCount is polled every frame for the debug overlay).
-    this.remeshPipeline.addListener(() => {
+    // New/updated geometry may need its visibility evaluated, invalidates the cached
+    // mesh count (polled every frame for the debug overlay), and its seams need
+    // reconciling with neighbors.
+    this.remeshPipeline.addListener((key) => {
       this.visibilityDirty = true;
       this.meshCountDirty = true;
+      this.seamStitcher.enqueue(key);
     });
   }
 
@@ -307,6 +317,10 @@ export class VoxelWorld implements ChunkProvider {
    */
   update(playerPos: THREE.Vector3): void {
     if (!this.initialized) return;
+
+    // Reconcile seam normals for chunks meshed since last frame, BEFORE the grouper
+    // re-bakes normals into merged buffers (updateWithVisibility → chunkGrouper.rebuild).
+    this.seamStitcher.flush();
 
     // Get player's current chunk
     const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);

@@ -60,6 +60,13 @@ export interface SurfaceNetOutput {
   materials: Uint8Array;
   /** Light level per vertex (0.0-1.0, max of non-solid corners in 2x2x2 cell) */
   lights: Float32Array;
+  /**
+   * Per-vertex 6-bit boundary flag: which chunk-cell planes the vertex sits on.
+   * bit 0 = -X (cell x=0), 1 = +X (cell x=32), 2 = -Y, 3 = +Y, 4 = -Z, 5 = +Z.
+   * Used by seam-normal reconciliation to find vertices coincident with a neighbor
+   * chunk's boundary vertices.
+   */
+  boundaryFlags: Uint8Array;
   /** Number of vertices */
   vertexCount: number;
   /** Number of triangles */
@@ -141,6 +148,7 @@ const EMPTY_OUTPUT: SurfaceNetOutput = Object.freeze({
   indices: new Uint32Array(0),
   materials: new Uint8Array(0),
   lights: new Float32Array(0),
+  boundaryFlags: new Uint8Array(0),
   vertexCount: 0,
   triangleCount: 0,
 }) as SurfaceNetOutput;
@@ -163,6 +171,7 @@ interface MeshPool {
   normals: Float32Array;     // 3 floats per vertex
   materials: Uint8Array;     // 1 byte per vertex
   lights: Float32Array;      // 1 float per vertex (0.0-1.0)
+  boundaryFlags: Uint8Array; // 1 byte per vertex (6-bit boundary-plane mask)
   indices: Uint32Array;      // 3 uints per triangle
   vertCapacity: number;
   triCapacity: number;
@@ -175,6 +184,7 @@ for (let i = 0; i < MESH_COUNT; ++i) {
     normals: new Float32Array(INITIAL_VERT_CAPACITY * 3),
     materials: new Uint8Array(INITIAL_VERT_CAPACITY),
     lights: new Float32Array(INITIAL_VERT_CAPACITY),
+    boundaryFlags: new Uint8Array(INITIAL_VERT_CAPACITY),
     indices: new Uint32Array(INITIAL_TRI_CAPACITY * 3),
     vertCapacity: INITIAL_VERT_CAPACITY,
     triCapacity: INITIAL_TRI_CAPACITY,
@@ -209,6 +219,9 @@ function ensureVertCapacity(pool: MeshPool, needed: number): void {
   const newLights = new Float32Array(cap);
   newLights.set(pool.lights);
   pool.lights = newLights;
+  const newBoundary = new Uint8Array(cap);
+  newBoundary.set(pool.boundaryFlags);
+  pool.boundaryFlags = newBoundary;
   pool.vertCapacity = cap;
 }
 
@@ -437,6 +450,15 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
             pool.materials[vertIdx] = (data[maxIdxs[mt]] >> MATERIAL_SHIFT) & MATERIAL_MASK;
             // Light: max of non-solid corners, computed in the corner loop above
             pool.lights[vertIdx] = maxLight / LIGHT_MAX;
+            // Boundary-plane mask: which of the 6 chunk-cell faces this vertex sits on.
+            // Cell coords run 0..32; low face = 0, high face = highBoundary (32).
+            pool.boundaryFlags[vertIdx] =
+              (x[0] === 0 ? 1 : 0) |
+              (x[0] === highBoundary[0] ? 2 : 0) |
+              (x[1] === 0 ? 4 : 0) |
+              (x[1] === highBoundary[1] ? 8 : 0) |
+              (x[2] === 0 ? 16 : 0) |
+              (x[2] === highBoundary[2] ? 32 : 0);
             vertCounts[mt] = vertIdx + 1;
             
             // Generate faces
@@ -592,6 +614,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
       indices: pool.indices.subarray(0, tc * 3),
       materials: pool.materials.subarray(0, vc),
       lights: pool.lights.subarray(0, vc),
+      boundaryFlags: pool.boundaryFlags.subarray(0, vc),
       vertexCount: vc,
       triangleCount: tc,
     };

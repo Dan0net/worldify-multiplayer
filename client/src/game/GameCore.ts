@@ -558,6 +558,9 @@ export class GameCore {
     // Sync wireframe mode to shared material
     setVoxelWireframe(debugState.showWireframe);
 
+    // Sync seam-normal stitching toggle (default on)
+    this.voxelIntegration.world.seamStitcher.enabled = debugState.stitchSeams ?? true;
+
     // Update voxel stats in store — but only when a value actually changed. This
     // write happens every frame; a bare `setVoxelStats` allocates a new object each
     // time and re-renders every store subscriber, so gate it on change.
