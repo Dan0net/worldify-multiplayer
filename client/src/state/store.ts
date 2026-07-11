@@ -462,7 +462,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   playerId: null,
   playerCount: 0,
   ping: 0,
-  gameMode: GameMode.MainMenu, // Start in main menu
+  gameMode: GameMode.Explore, // Start in explore mode (free camera home screen)
   spawnReady: false, // Terrain not found yet
   useServerChunks: true, // Default to server chunks in multiplayer
   textureState: 'none',

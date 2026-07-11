@@ -200,7 +200,7 @@ export function MobileControls() {
 
       {/* Pause (top-right) */}
       <div className="absolute top-2 right-2 flex gap-2" style={{ paddingTop: 'env(safe-area-inset-top)', paddingRight: 'env(safe-area-inset-right)' }}>
-        <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); setGameMode(GameMode.MainMenu); }} aria-label="Menu">☰</button>
+        <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); setGameMode(GameMode.Explore); }} aria-label="Menu">☰</button>
       </div>
     </div>
   );

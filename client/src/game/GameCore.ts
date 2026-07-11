@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
+import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
 import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
 import { updateSkyTime, updateSkyCamera } from './scene/SkyDome';
@@ -333,8 +334,8 @@ export class GameCore {
   handleReconnect(): void {
     console.log('[GameCore] Handling reconnection...');
     
-    // Reset game mode to MainMenu so player sees spectator overlay
-    useGameStore.getState().setGameMode(GameMode.MainMenu);
+    // Reset game mode to Explore so player sees the home screen
+    useGameStore.getState().setGameMode(GameMode.Explore);
     
     // Reset spawn state so terrain detection starts fresh
     if (this.spawnManager) {
@@ -485,6 +486,10 @@ export class GameCore {
 
     // Update based on current game mode
     switch (gameMode) {
+      case GameMode.Explore:
+        this.updateExploreMode(camera);
+        break;
+
       case GameMode.MainMenu:
       case GameMode.Spectating:
         this.updateSpectatorMode(camera, deltaMs, elapsedTime);
@@ -559,7 +564,12 @@ export class GameCore {
       this.spectatorCenter.copy(localPlayer.position);
       this.savePlayerPosNow();
     }
-    
+
+    // Entering Explore (boot or pause) - seed the free camera on the current center.
+    if (currentMode === GameMode.Explore) {
+      initExploreCamera(this.spectatorCenter);
+    }
+
     // Entering Playing mode - calculate proper spawn position
     if (currentMode === GameMode.Playing && !this.hasSpawnedPlayer) {
       this.spawnPlayer();
@@ -639,6 +649,39 @@ export class GameCore {
         meshesVisible: stats.meshesVisible,
         debugObjects,
       });
+    }
+  }
+
+  /**
+   * Update for Explore mode — user-driven free 3rd-person camera over the world.
+   */
+  private updateExploreMode(camera: THREE.PerspectiveCamera | null): void {
+    if (camera) updateExploreCamera(camera);
+
+    // The explore target is the world stream/shadow center; keep spectatorCenter in
+    // sync so streaming, shadows, and the map follow where the user pans.
+    this.spectatorCenter.copy(getExploreTarget());
+
+    if (this.voxelIntegration) {
+      perfStats.begin('voxelUpdate');
+      this.voxelIntegration.update(this.spectatorCenter);
+      perfStats.end('voxelUpdate');
+    }
+
+    // Keep spawn-readiness fresh (used by the temporary Play button until the marker
+    // flow lands). Mirrors updateSpectatorMode's readiness logic.
+    if (this.spawnManager && !this.hasSpawnedPlayer) {
+      if (this.hasSavedSpawn) {
+        if (!useGameStore.getState().spawnReady) useGameStore.getState().setSpawnReady(true);
+      } else {
+        this.spawnManager.update();
+        const spawnReady = this.spawnManager.isSpawnReady();
+        if (spawnReady !== useGameStore.getState().spawnReady) {
+          useGameStore.getState().setSpawnReady(spawnReady);
+        }
+      }
+    } else if (this.hasSpawnedPlayer && !useGameStore.getState().spawnReady) {
+      useGameStore.getState().setSpawnReady(true);
     }
   }
 
