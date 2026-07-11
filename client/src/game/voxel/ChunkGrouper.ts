@@ -25,8 +25,11 @@ const GROUP_GRID = 4;
 /** Growth factor when a merged buffer needs to be reallocated */
 const BUFFER_GROWTH = 1.5;
 
-/** Maximum number of groups to rebuild per frame to avoid spikes */
-const MAX_REBUILDS_PER_FRAME = 8;
+/** Per-frame wall-clock budget for merging dirty groups (ms). The real limiter. */
+const REBUILD_BUDGET_MS = 2;
+
+/** Hard ceiling on group rebuilds per frame — a safety cap above the time budget. */
+const MAX_REBUILDS_PER_FRAME = 16;
 
 // ---- Interfaces ----
 
@@ -305,16 +308,21 @@ export class ChunkGrouper {
       eligible.push({ gk, group, dist: Math.max(dx, dy, dz) });
     }
 
-    if (eligible.length > MAX_REBUILDS_PER_FRAME) {
+    // Nearest-first, then drain to a wall-clock budget (with a hard ceiling) rather
+    // than a fixed count: cheap groups catch up faster, an expensive burst spreads
+    // across frames instead of spiking. Always do at least one so we make progress.
+    if (eligible.length > 1) {
       eligible.sort((a, b) => a.dist - b.dist);
     }
 
+    const budgetEnd = performance.now() + REBUILD_BUDGET_MS;
     const limit = Math.min(eligible.length, MAX_REBUILDS_PER_FRAME);
     for (let i = 0; i < limit; i++) {
       const { gk, group } = eligible[i];
       group.dirty = false;
       this._rebuiltCount++;
       this.rebuildGroup(gk, group, playerCx, playerCy, playerCz, shadowRadius);
+      if (performance.now() >= budgetEnd) break;
     }
   }
 
