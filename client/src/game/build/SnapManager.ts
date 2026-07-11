@@ -356,6 +356,22 @@ export class SnapManager {
     // Rebuild spatial hash and update visuals
     this.spatialHash.rebuild(this.depositedPoints);
     this.marker.updateDeposited(this.depositedPoints);
+    this.onDepositedChanged?.();
+  }
+
+  /** Fired whenever deposited points change (deposit / clear / restore). */
+  onDepositedChanged: (() => void) | null = null;
+
+  /** Deposited snap points as plain data (for persistence). */
+  getDepositedPoints(): { x: number; y: number; z: number }[] {
+    return this.depositedPoints.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+  }
+
+  /** Restore deposited snap points from persisted data (rebuilds hash + visuals). */
+  setDepositedPoints(points: { x: number; y: number; z: number }[]): void {
+    this.depositedPoints = points.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+    this.spatialHash.rebuild(this.depositedPoints);
+    this.marker.updateDeposited(this.depositedPoints);
   }
 
   /**
@@ -373,6 +389,7 @@ export class SnapManager {
     this.depositedPoints.length = 0;
     this.spatialHash.clear();
     this.marker.updateDeposited([]);
+    this.onDepositedChanged?.();
   }
 
   /**

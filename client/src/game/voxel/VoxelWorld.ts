@@ -48,9 +48,7 @@ import {
   type ChunkProvider,
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
-
-/** Seed for local (offline) terrain generation. Matches the server default. */
-const LOCAL_TERRAIN_SEED = 12345;
+import { getActiveWorldSeed, hasChunk, loadChunk, saveChunk } from '../world/WorldManager.js';
 
 /**
  * Extra chunks generated above a column's baseline surface so stamp/tree tops
@@ -399,7 +397,7 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
-      this.getLocalPool().requestColumn(tx, tz, (data) => this.receiveSurfaceColumnData(data));
+      this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
       console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
       return;
     }
@@ -645,9 +643,54 @@ export class VoxelWorld implements ChunkProvider {
 
   private getLocalPool(): TerrainWorkerPool {
     if (!this.localPool) {
-      this.localPool = new TerrainWorkerPool(LOCAL_TERRAIN_SEED);
+      // Seed comes from the active local world (multi-world save/load).
+      this.localPool = new TerrainWorkerPool(getActiveWorldSeed());
     }
     return this.localPool;
+  }
+
+  /**
+   * Local chunk source with persistence: use the saved chunk if this world has
+   * one, otherwise generate it off-thread and save it. Every explored chunk is
+   * materialized in IndexedDB so the world reloads identically.
+   */
+  private loadLocalChunk(cx: number, cy: number, cz: number, key: string): void {
+    if (hasChunk(key)) {
+      loadChunk(key).then((saved) => {
+        if (saved) {
+          this.receiveChunkData({ chunkX: cx, chunkY: cy, chunkZ: cz, voxelData: saved, lastBuildSeq: 0 });
+        } else {
+          this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
+        }
+      });
+    } else {
+      this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
+    }
+  }
+
+  /**
+   * Local surface-column source with persistence. The worker generates the whole
+   * column; for each chunk, prefer the saved copy, otherwise save the generated one.
+   */
+  private async handleLocalColumn(columnData: SurfaceColumnResponse): Promise<void> {
+    for (const chunk of columnData.chunks) {
+      const key = chunkKey(columnData.tx, chunk.chunkY, columnData.tz);
+      if (hasChunk(key)) {
+        const saved = await loadChunk(key);
+        if (saved) chunk.voxelData = saved;
+      } else {
+        saveChunk(key, chunk.voxelData);
+      }
+    }
+    this.receiveSurfaceColumnData(columnData);
+  }
+
+  /** Rebuild the local world from scratch (e.g. after switching active world). */
+  reloadLocalWorld(playerPos?: THREE.Vector3): void {
+    // Drop the terrain pool so it recreates with the new active-world seed.
+    this.localPool?.dispose();
+    this.localPool = null;
+    this.clearAndReload(playerPos);
   }
 
   /**
@@ -660,7 +703,7 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingChunkTimes.set(key, Date.now());
 
     if (this.isLocal) {
-      this.getLocalPool().requestChunk(cx, cy, cz, (data) => this.receiveChunkData(data));
+      this.loadLocalChunk(cx, cy, cz, key);
       return;
     }
 
@@ -1123,6 +1166,14 @@ export class VoxelWorld implements ChunkProvider {
     // Dispatch all affected chunks as one atomic batch so every mesh
     // updates in the same frame — no boundary flash between neighbors.
     this.remeshPipeline.dispatchBatch(batchKeys);
+
+    // Persist edited chunks for the active local world (overwrites the stored copy).
+    if (this.isLocal) {
+      for (const key of modifiedKeys) {
+        const chunk = this.chunks.get(key);
+        if (chunk) saveChunk(key, chunk.data);
+      }
+    }
 
     return modifiedKeys;
   }

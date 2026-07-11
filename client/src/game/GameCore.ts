@@ -43,6 +43,7 @@ import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime, subscribeMaterialSettings, subscribeWaterSettings } from './material';
 import { getMapTileCache } from './maptile/mapTileCacheSingleton';
 import { perfStats } from './debug/PerformanceStats';
+import { initWorlds, setWorldSwitchHandler, loadSnapPoints, saveSnapPoints } from './world/WorldManager';
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -152,6 +153,11 @@ export class GameCore {
     const effectiveVisibility = savedVisibility
       ?? (isTouch() ? 2 : QUALITY_PRESETS[qualityLevel].visibilityRadius);
 
+    // Restore the last-played local world (or auto-create the first one) before
+    // the terrain system starts, so it generates with the active world's seed
+    // and its persisted chunks.
+    await initWorlds();
+
     // Initialize voxel terrain system
     if (scene) {
       this.voxelIntegration = new VoxelIntegration(scene, {
@@ -212,6 +218,14 @@ export class GameCore {
         const playerPos = this.playerManager.getLocalPlayer().position.clone();
         this.voxelIntegration.clearAndReload(playerPos);
       });
+
+      // Snap-point persistence: restore this world's points, save on change.
+      const snap = this.builder.getSnapManager();
+      loadSnapPoints().then((pts) => snap.setDepositedPoints(pts));
+      snap.onDepositedChanged = () => saveSnapPoints(snap.getDepositedPoints());
+
+      // Rebuild terrain + snap points when the active world changes (world picker).
+      setWorldSwitchHandler(() => this.switchLocalWorld());
     }
 
     // Request pointer lock on canvas click (only when playing)
@@ -245,6 +259,23 @@ export class GameCore {
     // Start game loop and input loop
     this.gameLoop.start(this.update);
     this.playerManager.startInputLoop();
+  }
+
+  /**
+   * Rebuild the local world after the active world changed (world picker).
+   * Clears terrain + map tiles, regenerates with the new seed, and restores the
+   * new world's snap points. Re-gates spawn so Play waits for terrain.
+   */
+  private switchLocalWorld(): void {
+    useGameStore.getState().setSpawnReady(false);
+    this.hasSpawnedPlayer = false;
+    getMapTileCache().clear();
+    const playerPos = this.playerManager.getLocalPlayer().position.clone();
+    this.voxelIntegration.world.reloadLocalWorld(playerPos);
+    // setDepositedPoints replaces the points without firing the save callback,
+    // so restoring the new world's snaps doesn't overwrite them.
+    const snap = this.builder.getSnapManager();
+    loadSnapPoints().then((pts) => snap.setDepositedPoints(pts));
   }
 
   setLocalPlayerId(playerId: number): void {
