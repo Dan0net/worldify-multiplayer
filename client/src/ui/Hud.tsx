@@ -16,7 +16,10 @@ function useCrosshairColor(): string {
 }
 
 export function Hud() {
-  const { playerCount, roomId } = useGameStore();
+  // Field selectors (not a bare `useGameStore()`), so the HUD only re-renders when
+  // these specific values change — not on every per-frame store write (voxel stats etc.).
+  const playerCount = useGameStore((s) => s.playerCount);
+  const roomId = useGameStore((s) => s.roomId);
   const useServerChunks = useGameStore((s) => s.useServerChunks);
   const crosshairColor = useCrosshairColor();
   const isTouch = useIsTouch();

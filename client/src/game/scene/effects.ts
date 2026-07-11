@@ -314,6 +314,9 @@ export function initEffects(
  */
 function syncSunMeshPosition(): void {
   if (!sunMesh) return;
+  // The sun mesh is only consumed by the god-rays pass; skip the per-frame light
+  // lookup + matrix update entirely when god rays are disabled.
+  if (!current.godRaysEnabled) return;
   // God rays emanate from whichever celestial body is above the horizon — the
   // sun by day, the moon by night — independent of which light casts shadows.
   // (Tying this to the shadow caster meant the moon never got rays on High,

@@ -125,11 +125,23 @@ function getMoonIntensity(sunElevation: number): number {
 /**
  * Update the day-night cycle. Call each frame.
  */
+/**
+ * Last time-of-day for which we derived + applied lighting. When `timeSpeed === 0`
+ * (default) the time never changes, so the derived sun/moon/hemisphere recompute and
+ * the apply are pure waste every frame — gate them on an actual time change. Manual
+ * env edits (and auto-flag toggles) apply themselves on-change via the debug-panel
+ * subscription, so they don't depend on this per-frame path.
+ */
+let lastAppliedTime = -1;
+
 export function updateDayNightCycle(deltaMs: number): void {
   const state = useGameStore.getState();
   const env = state.environment;
 
-  if (!(env.dayNightEnabled ?? false)) return;
+  if (!(env.dayNightEnabled ?? false)) {
+    lastAppliedTime = -1; // re-apply when the cycle is re-enabled
+    return;
+  }
 
   // Advance time — the one *input* that changes. Persisted so the UI clock and
   // the time slider reflect it. (Default timeSpeed is 0, so at rest there is no
@@ -144,6 +156,18 @@ export function updateDayNightCycle(deltaMs: number): void {
   }
 
   const sunElevation = getSunElevation(time);
+
+  // Shadow-caster ownership depends on the current effective intensities. Keep this
+  // responsive every frame — it's cheap (a compare + a rare swap) — even while the
+  // expensive derived recompute + apply below is gated out on a static clock.
+  const effSunIntensity = (env.autoSunIntensity ?? true) ? getSunIntensity(sunElevation) : (env.sunIntensity ?? 3.0);
+  const effMoonIntensity = (env.autoMoonIntensity ?? true) ? getMoonIntensity(sunElevation) : (env.moonIntensity ?? 0.3);
+  updateShadowCaster(effSunIntensity, effMoonIntensity);
+
+  // Nothing else changed since last frame — the derived values would be identical.
+  if (time === lastAppliedTime) return;
+  lastAppliedTime = time;
+
   const sunAzimuth = getSunAzimuth(time);
 
   // Derived lighting *outputs*. These are applied DIRECTLY to the lights + sky
@@ -170,11 +194,6 @@ export function updateDayNightCycle(deltaMs: number): void {
   if (env.autoMoonIntensity ?? true) {
     derived.moonIntensity = getMoonIntensity(sunElevation);
   }
-
-  // Update which light casts shadows based on current intensities
-  const effectiveSunIntensity = derived.sunIntensity ?? env.sunIntensity ?? 3.0;
-  const effectiveMoonIntensity = derived.moonIntensity ?? env.moonIntensity ?? 0.3;
-  updateShadowCaster(effectiveSunIntensity, effectiveMoonIntensity);
 
   if (env.autoEnvironmentIntensity ?? true) {
     derived.environmentIntensity = getPhaseValue(time, ENVIRONMENT_INTENSITY_DAY, ENVIRONMENT_INTENSITY_NIGHT);
