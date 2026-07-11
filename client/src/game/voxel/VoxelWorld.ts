@@ -1280,8 +1280,12 @@ export class VoxelWorld implements ChunkProvider {
     // Clear preview chunk tracking
     this.previewChunks.clear();
 
-    // Reset player chunk tracking so next update triggers chunk loading
+    // Reset streaming state so the next update re-seeds the world from scratch
+    // (initial surface column + BFS). Without this a clear+reload — e.g. switching
+    // worlds — never re-requests the seeding column and nothing streams.
     this.lastPlayerChunk = null;
+    this.lastBFSChunk = null;
+    this.initialColumnRequested = false;
 
     this.initialized = false;
   }
