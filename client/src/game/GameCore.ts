@@ -433,15 +433,16 @@ export class GameCore {
     // Update wind animation for foliage
     updateWindTime(elapsedTime);
 
-    // Update day-night cycle + sky + environment
+    // Update day-night cycle + sky. updateDayNightCycle applies the derived
+    // sun/moon/hemisphere values directly to the lights + sky each frame — the
+    // store is no longer round-tripped per frame (manual env edits apply
+    // themselves on-change via the debug panel / subscriptions).
     perfStats.begin('environment');
     updateDayNightCycle(deltaMs);
     updateSkyTime(elapsedTime);
     if (camera) {
       updateSkyCamera(camera);
     }
-    const envState = useGameStore.getState().environment;
-    applyEnvironmentSettings(envState);
     perfStats.end('environment');
 
     // Update shadow camera to follow current center point
