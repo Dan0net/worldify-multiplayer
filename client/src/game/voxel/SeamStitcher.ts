@@ -105,9 +105,13 @@ export class SeamStitcher {
         if (nbrFresh && !dir.positive) continue;
 
         seams++;
-        matched += this.reconcileSeam(thisGeo, dir.thisFace, nbrGeo, dir.nbrFace, nbrFresh);
-        this.markGroupDirty(key);
-        this.markGroupDirty(nbrKey);
+        const res = this.reconcileSeam(thisGeo, dir.thisFace, nbrGeo, dir.nbrFace, nbrFresh);
+        matched += res.matched;
+        // Only re-merge a group whose normals ACTUALLY changed. A remesh that leaves
+        // the shared seam normals unchanged (the common case once a seam has settled)
+        // no longer dirties both groups every time — cutting grouper rebuild churn.
+        if (res.thisChanged) this.markGroupDirty(key);
+        if (res.nbrChanged) this.markGroupDirty(nbrKey);
       }
     }
 
@@ -121,7 +125,7 @@ export class SeamStitcher {
    * Reconcile one seam between two chunk geometries across all layers.
    * @param average when true, average both sides' normals; otherwise copy `thisGeo`'s
    *                normal into `nbrGeo` (the stale side).
-   * @returns number of matched positions (for debug).
+   * @returns matched-position count plus which side(s) had a normal actually change.
    */
   private reconcileSeam(
     thisGeo: ChunkGeometry,
@@ -129,11 +133,13 @@ export class SeamStitcher {
     nbrGeo: ChunkGeometry,
     nbrFace: number,
     average: boolean,
-  ): number {
+  ): { matched: number; thisChanged: boolean; nbrChanged: boolean } {
     const axis = thisFace >> 1;        // 0=X, 1=Y, 2=Z
     const a = (axis + 1) % 3;          // first in-plane axis
     const b = (axis + 2) % 3;          // second in-plane axis
     let matched = 0;
+    let anyThis = false;
+    let anyNbr = false;
 
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
       const tB = thisGeo.getBoundary(layer);
@@ -175,22 +181,22 @@ export class SeamStitcher {
           const len = Math.hypot(x, y, z);
           if (len > 1e-6) { x /= len; y /= len; z /= len; }
           else { x = tNrm[t0]; y = tNrm[t0 + 1]; z = tNrm[t0 + 2]; }
-          writeNormal(tNrm, tIdxs, x, y, z);
-          writeNormal(nNrm, nIdxs, x, y, z);
-          touchedThis = true;
-          touchedNbr = true;
+          // Write only the side(s) whose normal actually moved — skip no-op rewrites
+          // of an already-settled seam so its group isn't needlessly re-merged.
+          if (differs(tNrm, t0, x, y, z)) { writeNormal(tNrm, tIdxs, x, y, z); touchedThis = true; }
+          if (differs(nNrm, n0, x, y, z)) { writeNormal(nNrm, nIdxs, x, y, z); touchedNbr = true; }
         } else {
-          // Copy this chunk's normal into the stale neighbor's duplicates.
-          writeNormal(nNrm, nIdxs, tNrm[t0], tNrm[t0 + 1], tNrm[t0 + 2]);
-          touchedNbr = true;
+          // Copy this chunk's normal into the stale neighbor's duplicates (if different).
+          const x = tNrm[t0], y = tNrm[t0 + 1], z = tNrm[t0 + 2];
+          if (differs(nNrm, n0, x, y, z)) { writeNormal(nNrm, nIdxs, x, y, z); touchedNbr = true; }
         }
       }
 
-      if (touchedThis) thisGeo.markNormalsNeedUpdate(layer);
-      if (touchedNbr) nbrGeo.markNormalsNeedUpdate(layer);
+      if (touchedThis) { thisGeo.markNormalsNeedUpdate(layer); anyThis = true; }
+      if (touchedNbr) { nbrGeo.markNormalsNeedUpdate(layer); anyNbr = true; }
     }
 
-    return matched;
+    return { matched, thisChanged: anyThis, nbrChanged: anyNbr };
   }
 
   /** Map in-plane grid key → list of expanded vertex indices for one boundary face. */
@@ -215,6 +221,16 @@ export class SeamStitcher {
     }
     return map;
   }
+}
+
+/** Normals within this per-component distance are treated as unchanged. */
+const NORMAL_EPS = 1e-4;
+
+/** True if the normal at `base` differs from (x,y,z) beyond NORMAL_EPS on any axis. */
+function differs(normals: Float32Array, base: number, x: number, y: number, z: number): boolean {
+  return Math.abs(normals[base] - x) > NORMAL_EPS
+    || Math.abs(normals[base + 1] - y) > NORMAL_EPS
+    || Math.abs(normals[base + 2] - z) > NORMAL_EPS;
 }
 
 /** Write a normal to every expanded vertex index in the list. */
