@@ -17,7 +17,14 @@ export interface WorldMeta {
   seed: number;
   createdAt: number;
   lastPlayedAt: number;
+  /** Last player position + look, restored on load / world switch (optional). */
+  lastPos?: { x: number; y: number; z: number };
+  lastYaw?: number;
+  lastPitch?: number;
 }
+
+/** Player position + look snapshot for persistence. */
+export interface PlayerPose { x: number; y: number; z: number; yaw: number; pitch: number; }
 
 // ============== IndexedDB ==============
 
@@ -90,6 +97,13 @@ export function setWorldSwitchHandler(cb: () => void): void {
   onWorldSwitch = cb;
 }
 
+/** Supplies the current player pose so the OUTGOING world can be saved on switch. */
+let posProvider: (() => PlayerPose) | null = null;
+
+export function setPlayerPosProvider(cb: () => PlayerPose): void {
+  posProvider = cb;
+}
+
 // ============== World lifecycle ==============
 
 export async function initWorlds(): Promise<WorldMeta> {
@@ -150,6 +164,13 @@ export async function createAndActivateWorld(name?: string): Promise<WorldMeta> 
 /** Switch the active world and rebuild the terrain via the registered handler. */
 export async function setActiveWorld(id: string): Promise<void> {
   if (activeWorld?.id === id) return;
+  // Snapshot the OUTGOING world's player pose before we swap active worlds — activate()
+  // reassigns `activeWorld`, so this must run first (the game-side switch handler is
+  // too late). Writes the current (old) world; activate() then loads the new one's pose.
+  if (activeWorld && posProvider) {
+    const p = posProvider();
+    savePlayerPos(p);
+  }
   const world = await idbGet<WorldMeta>(STORE_WORLDS, id);
   if (!world) return;
   await activate(world);
@@ -241,6 +262,27 @@ export async function loadSnapPoints(): Promise<SnapPoint[]> {
 export function saveSnapPoints(points: SnapPoint[]): void {
   if (!activeWorld) return;
   idbPut(STORE_SNAPS, points, activeWorld.id).catch(() => { /* non-critical */ });
+}
+
+// ============== Player-pose persistence (active world) ==============
+
+/**
+ * Persist the player's position + look on the active world's meta row (fire-and-forget).
+ * Stored as fields on WorldMeta so no schema change is needed; loaded back in activate().
+ */
+export function savePlayerPos(pose: PlayerPose): void {
+  if (!activeWorld) return;
+  activeWorld.lastPos = { x: pose.x, y: pose.y, z: pose.z };
+  activeWorld.lastYaw = pose.yaw;
+  activeWorld.lastPitch = pose.pitch;
+  idbPut(STORE_WORLDS, activeWorld).catch(() => { /* non-critical */ });
+}
+
+/** The active world's saved player pose, or null if it has none (e.g. a new world). */
+export function loadPlayerPos(): PlayerPose | null {
+  const w = activeWorld;
+  if (!w || !w.lastPos) return null;
+  return { x: w.lastPos.x, y: w.lastPos.y, z: w.lastPos.z, yaw: w.lastYaw ?? 0, pitch: w.lastPitch ?? 0 };
 }
 
 // ============== Undo stack (active world) ==============
