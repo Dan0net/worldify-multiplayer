@@ -43,6 +43,9 @@ export class Controls {
   /** Callback when user clicks to place a build */
   public onBuildPlace: BuildPlaceCallback | null = null;
 
+  /** Callback to undo the last build (Ctrl/Cmd+Z, or mobile button) */
+  public onUndo: (() => void) | null = null;
+
   constructor() {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
@@ -55,6 +58,13 @@ export class Controls {
 
   private onKeyDown = (e: KeyboardEvent): void => {
     this.keys.add(e.code);
+
+    // Undo last build: Ctrl+Z / Cmd+Z
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
+      e.preventDefault();
+      this.onUndo?.();
+      return;
+    }
 
     // Debug: F6 to clear texture cache
     if (e.code === 'F6') {
@@ -240,6 +250,11 @@ export class Controls {
     this.yaw -= dx * 0.002;
     this.pitch -= dy * 0.002;
     this.pitch = clamp(this.pitch, -Math.PI / 2, Math.PI / 2);
+  }
+
+  /** Trigger an undo (mobile button). */
+  triggerUndo(): void {
+    this.onUndo?.();
   }
 
   /** Trigger a build placement (mobile reticle release). */

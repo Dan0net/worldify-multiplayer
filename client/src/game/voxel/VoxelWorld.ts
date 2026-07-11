@@ -48,9 +48,7 @@ import {
   type ChunkProvider,
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
-
-/** Seed for local (offline) terrain generation. Matches the server default. */
-const LOCAL_TERRAIN_SEED = 12345;
+import { getActiveWorldSeed, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
 /**
  * Extra chunks generated above a column's baseline surface so stamp/tree tops
@@ -399,7 +397,7 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
-      this.getLocalPool().requestColumn(tx, tz, (data) => this.receiveSurfaceColumnData(data));
+      this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
       console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
       return;
     }
@@ -645,9 +643,54 @@ export class VoxelWorld implements ChunkProvider {
 
   private getLocalPool(): TerrainWorkerPool {
     if (!this.localPool) {
-      this.localPool = new TerrainWorkerPool(LOCAL_TERRAIN_SEED);
+      // Seed comes from the active local world (multi-world save/load).
+      this.localPool = new TerrainWorkerPool(getActiveWorldSeed());
     }
     return this.localPool;
+  }
+
+  /**
+   * Local chunk source with persistence: use the saved chunk if this world has
+   * one, otherwise generate it off-thread and save it. Every explored chunk is
+   * materialized in IndexedDB so the world reloads identically.
+   */
+  private loadLocalChunk(cx: number, cy: number, cz: number, key: string): void {
+    if (hasChunk(key)) {
+      loadChunk(key).then((saved) => {
+        if (saved) {
+          this.receiveChunkData({ chunkX: cx, chunkY: cy, chunkZ: cz, voxelData: saved, lastBuildSeq: 0 });
+        } else {
+          this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
+        }
+      });
+    } else {
+      this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
+    }
+  }
+
+  /**
+   * Local surface-column source with persistence. The worker generates the whole
+   * column; for each chunk, prefer the saved copy, otherwise save the generated one.
+   */
+  private async handleLocalColumn(columnData: SurfaceColumnResponse): Promise<void> {
+    for (const chunk of columnData.chunks) {
+      const key = chunkKey(columnData.tx, chunk.chunkY, columnData.tz);
+      if (hasChunk(key)) {
+        const saved = await loadChunk(key);
+        if (saved) chunk.voxelData = saved;
+      } else {
+        saveChunk(key, chunk.voxelData);
+      }
+    }
+    this.receiveSurfaceColumnData(columnData);
+  }
+
+  /** Rebuild the local world from scratch (e.g. after switching active world). */
+  reloadLocalWorld(playerPos?: THREE.Vector3): void {
+    // Drop the terrain pool so it recreates with the new active-world seed.
+    this.localPool?.dispose();
+    this.localPool = null;
+    this.clearAndReload(playerPos);
   }
 
   /**
@@ -660,7 +703,7 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingChunkTimes.set(key, Date.now());
 
     if (this.isLocal) {
-      this.getLocalPool().requestChunk(cx, cy, cz, (data) => this.receiveChunkData(data));
+      this.loadLocalChunk(cx, cy, cz, key);
       return;
     }
 
@@ -1065,52 +1108,20 @@ export class VoxelWorld implements ChunkProvider {
     const modifiedKeys: string[] = [];
     const batchKeys = new Set<string>();
 
+    // Before-images (local only) so the op can be undone.
+    const undoSnapshots: ChunkSnapshot[] = [];
+
     for (const key of affectedKeys) {
       const chunk = this.chunks.get(key)!;
+
+      // Snapshot the pre-mutation voxels for undo.
+      const before = this.isLocal ? new Uint16Array(chunk.data) : null;
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {
         modifiedKeys.push(key);
-        chunk.dirty = true;
-        batchKeys.add(key);
-        
-        // Recompute visibility for modified chunk
-        chunk.visibilityBits = computeVisibility(chunk.data);
-        
-        // Relight this chunk (column pass overwrites all light, border inject + BFS re-spreads)
-        this.computeChunkSunlight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
-
-        // Cascade relighting downward — sunlight may now pass (or be blocked)
-        let belowCy = chunk.cy - 1;
-        while (true) {
-          const belowKey = chunkKey(chunk.cx, belowCy, chunk.cz);
-          const belowChunk = this.chunks.get(belowKey);
-          if (!belowChunk) break;
-          this.computeChunkSunlight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
-          belowChunk.dirty = true;
-          batchKeys.add(belowKey);
-          belowCy--;
-        }
-
-        // Cascade relighting upward — removing a floor lets light enter from below
-        const aboveKey = chunkKey(chunk.cx, chunk.cy + 1, chunk.cz);
-        const aboveChunk = this.chunks.get(aboveKey);
-        if (aboveChunk) {
-          this.computeChunkSunlight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
-          aboveChunk.dirty = true;
-          batchKeys.add(aboveKey);
-        }
-
-        // Relight face-adjacent horizontal neighbors so their border light updates.
-        for (const [dx, dy, dz] of FACE_OFFSETS_6) {
-          if (dy !== 0) continue; // vertical already handled above
-          const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
-          const nChunk = this.chunks.get(nKey);
-          if (!nChunk) continue;
-          this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
-          nChunk.dirty = true;
-          batchKeys.add(nKey);
-        }
+        if (before) undoSnapshots.push({ key, data: before });
+        this.relightModifiedChunk(chunk, batchKeys);
       }
     }
 
@@ -1124,7 +1135,88 @@ export class VoxelWorld implements ChunkProvider {
     // updates in the same frame — no boundary flash between neighbors.
     this.remeshPipeline.dispatchBatch(batchKeys);
 
+    // Persist edited chunks + record undo for the active local world.
+    if (this.isLocal) {
+      for (const key of modifiedKeys) {
+        const chunk = this.chunks.get(key);
+        if (chunk) saveChunk(key, chunk.data);
+      }
+      if (undoSnapshots.length > 0) pushUndo(undoSnapshots);
+    }
+
     return modifiedKeys;
+  }
+
+  /**
+   * Recompute visibility + relight a modified chunk and cascade lighting to its
+   * vertical column and horizontal face-neighbors. Shared by build + undo.
+   */
+  private relightModifiedChunk(chunk: Chunk, batchKeys: Set<string>): void {
+    chunk.dirty = true;
+    batchKeys.add(chunkKey(chunk.cx, chunk.cy, chunk.cz));
+
+    chunk.visibilityBits = computeVisibility(chunk.data);
+    this.computeChunkSunlight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
+
+    // Cascade relighting downward — sunlight may now pass (or be blocked)
+    let belowCy = chunk.cy - 1;
+    while (true) {
+      const belowKey = chunkKey(chunk.cx, belowCy, chunk.cz);
+      const belowChunk = this.chunks.get(belowKey);
+      if (!belowChunk) break;
+      this.computeChunkSunlight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
+      belowChunk.dirty = true;
+      batchKeys.add(belowKey);
+      belowCy--;
+    }
+
+    // Cascade relighting upward — removing a floor lets light enter from below
+    const aboveKey = chunkKey(chunk.cx, chunk.cy + 1, chunk.cz);
+    const aboveChunk = this.chunks.get(aboveKey);
+    if (aboveChunk) {
+      this.computeChunkSunlight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
+      aboveChunk.dirty = true;
+      batchKeys.add(aboveKey);
+    }
+
+    // Relight face-adjacent horizontal neighbors so their border light updates.
+    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
+      if (dy !== 0) continue; // vertical already handled above
+      const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
+      const nChunk = this.chunks.get(nKey);
+      if (!nChunk) continue;
+      this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+      nChunk.dirty = true;
+      batchKeys.add(nKey);
+    }
+  }
+
+  /**
+   * Undo the most recent local build op (restores chunks + persists the revert).
+   * @returns the reverted chunk keys (for map-tile refresh), or [] if nothing to undo.
+   */
+  undoLastBuild(): string[] {
+    if (!this.isLocal) return [];
+    const entry = popUndo();
+    if (!entry) return [];
+
+    const batchKeys = new Set<string>();
+    for (const snap of entry) {
+      const chunk = this.chunks.get(snap.key);
+      if (chunk) {
+        chunk.data.set(snap.data);
+        this.relightModifiedChunk(chunk, batchKeys);
+        saveChunk(snap.key, chunk.data);
+      } else {
+        // Chunk not loaded — revert the persisted copy so it reloads undone.
+        saveChunk(snap.key, snap.data);
+      }
+    }
+    if (batchKeys.size > 0) {
+      this.lastBFSChunk = null;
+      this.remeshPipeline.dispatchBatch(batchKeys);
+    }
+    return entry.map((s) => s.key);
   }
 
   /**
@@ -1188,8 +1280,12 @@ export class VoxelWorld implements ChunkProvider {
     // Clear preview chunk tracking
     this.previewChunks.clear();
 
-    // Reset player chunk tracking so next update triggers chunk loading
+    // Reset streaming state so the next update re-seeds the world from scratch
+    // (initial surface column + BFS). Without this a clear+reload — e.g. switching
+    // worlds — never re-requests the seeding column and nothing streams.
     this.lastPlayerChunk = null;
+    this.lastBFSChunk = null;
+    this.initialColumnRequested = false;
 
     this.initialized = false;
   }

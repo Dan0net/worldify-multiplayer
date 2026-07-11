@@ -175,6 +175,7 @@ export function MobileControls() {
         style={{ bottom: padBottom + PAD_SIZE + 24, paddingRight: 'env(safe-area-inset-right)' }}
       >
         <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); toggleBuildMenu(); }} aria-label="Build menu">🧱</button>
+        <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); controls.triggerUndo(); }} aria-label="Undo">↶</button>
         {buildEnabled && (
           <>
             <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(-1); }} aria-label="Rotate left">⟲</button>

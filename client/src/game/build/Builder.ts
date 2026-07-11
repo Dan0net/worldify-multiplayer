@@ -121,6 +121,11 @@ export class Builder {
     this.addedToScene = true;
   }
 
+  /** Snap manager (for snap-point persistence wiring). */
+  getSnapManager(): SnapManager {
+    return this.snapManager;
+  }
+
   /**
    * Remove the builder's visual elements from the scene.
    */
