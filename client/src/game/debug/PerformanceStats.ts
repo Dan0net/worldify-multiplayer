@@ -25,6 +25,7 @@ export type PerfSection =
   | 'voxelUpdate'    // VoxelWorld.update (visibility + remesh)
   | 'remesh'         // Just the remesh queue portion
   | 'lighting'       // Sunlight column + BFS propagation (computeChunkSunlight)
+  | 'grouper'        // ChunkGrouper.rebuild (merge bake + upload)
   | 'buildPreview'   // Build preview meshing
   | 'players'        // Remote player interpolation
   | 'environment'    // Day/night + sky + lighting apply
@@ -39,6 +40,7 @@ export interface PerfSnapshot {
   voxelUpdate: number;
   remesh: number;
   lighting: number;
+  grouper: number;
   buildPreview: number;
   players: number;
   environment: number;
@@ -55,16 +57,19 @@ export interface PerfSnapshot {
   remeshQueueSize: number;
   pendingChunks: number;
   colliderQueueSize: number;
+  groupsRebuilt: number;    // chunk-groups re-merged this frame
+  bufferReallocs: number;   // merged-buffer reallocations this frame
 
   // Memory (when available)
   jsHeapMB: number;
 }
 
 const EMPTY_SNAPSHOT: PerfSnapshot = {
-  gameUpdate: 0, physics: 0, voxelUpdate: 0, remesh: 0, lighting: 0,
+  gameUpdate: 0, physics: 0, voxelUpdate: 0, remesh: 0, lighting: 0, grouper: 0,
   buildPreview: 0, players: 0, environment: 0, render: 0,
   drawCalls: 0, triangles: 0, geometries: 0, textures: 0, programs: 0,
-  remeshQueueSize: 0, pendingChunks: 0, colliderQueueSize: 0, jsHeapMB: 0,
+  remeshQueueSize: 0, pendingChunks: 0, colliderQueueSize: 0,
+  groupsRebuilt: 0, bufferReallocs: 0, jsHeapMB: 0,
 };
 
 /** Rolling average window size (frames) */
@@ -74,11 +79,16 @@ const AVG_WINDOW = 60;
 const FLUSH_INTERVAL_MS = 200; // 5Hz — enough for UI, minimal React overhead
 
 class PerformanceStatsCollector {
-  // Accumulator for rolling averages
+  // Rolling window of PER-FRAME totals (one sample per frame, AVG_WINDOW frames).
   private accum: Record<PerfSection, number[]> = {
-    gameUpdate: [], physics: [], voxelUpdate: [], remesh: [], lighting: [],
+    gameUpdate: [], physics: [], voxelUpdate: [], remesh: [], lighting: [], grouper: [],
     buildPreview: [], players: [], environment: [], render: [],
   };
+
+  // Per-frame accumulator: sums every begin/end pair for a section within the
+  // current frame, so a section timed many times per frame (e.g. lighting — one
+  // call per chunk relight) reports its per-frame TOTAL, not a per-call average.
+  private frameSum = new Map<PerfSection, number>();
 
   // In-flight timers
   private starts = new Map<PerfSection, number>();
@@ -93,22 +103,21 @@ class PerformanceStatsCollector {
   private _remeshQueueSize = 0;
   private _pendingChunks = 0;
   private _colliderQueueSize = 0;
+  private _groupsRebuilt = 0;
+  private _bufferReallocs = 0;
 
   /** Start timing a section */
   begin(section: PerfSection): void {
     this.starts.set(section, performance.now());
   }
 
-  /** End timing a section */
+  /** End timing a section — adds to this frame's running total for the section. */
   end(section: PerfSection): void {
     const start = this.starts.get(section);
     if (start === undefined) return;
     const elapsed = performance.now() - start;
     this.starts.delete(section);
-
-    const buf = this.accum[section];
-    buf.push(elapsed);
-    if (buf.length > AVG_WINDOW) buf.shift();
+    this.frameSum.set(section, (this.frameSum.get(section) ?? 0) + elapsed);
   }
 
   /** Capture renderer.info after render call */
@@ -132,8 +141,25 @@ class PerformanceStatsCollector {
     this._colliderQueueSize = size;
   }
 
+  /** Set chunk-group rebuild stats for the frame (called from VoxelWorld). */
+  setGrouperStats(groupsRebuilt: number, bufferReallocs: number): void {
+    this._groupsRebuilt = groupsRebuilt;
+    this._bufferReallocs = bufferReallocs;
+  }
+
   /** Call at the end of each frame to compute averages and flush */
   endFrame(): void {
+    // Fold a sample for EVERY section into its rolling window each frame — using the
+    // section's per-frame total, or 0 if it did no work this frame. Pushing zeros for
+    // idle frames is what lets an intermittent section (e.g. lighting) decay back to 0
+    // when nothing is happening, instead of freezing at its last active average.
+    for (const key of Object.keys(this.accum) as PerfSection[]) {
+      const buf = this.accum[key];
+      buf.push(this.frameSum.get(key) ?? 0);
+      if (buf.length > AVG_WINDOW) buf.shift();
+    }
+    this.frameSum.clear();
+
     // Compute rolling averages
     for (const key of Object.keys(this.accum) as PerfSection[]) {
       const buf = this.accum[key];
@@ -149,6 +175,8 @@ class PerformanceStatsCollector {
     this.snapshot.remeshQueueSize = this._remeshQueueSize;
     this.snapshot.pendingChunks = this._pendingChunks;
     this.snapshot.colliderQueueSize = this._colliderQueueSize;
+    this.snapshot.groupsRebuilt = this._groupsRebuilt;
+    this.snapshot.bufferReallocs = this._bufferReallocs;
 
     // JS heap (Chrome-only)
     const mem = (performance as any).memory;

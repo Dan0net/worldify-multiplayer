@@ -433,6 +433,7 @@ export function DebugPanel() {
             <div>Voxel:</div><div className={perfStats.voxelUpdate > 4 ? 'text-yellow-400' : ''}>{perfStats.voxelUpdate.toFixed(1)}</div>
             <div>Remesh:</div><div className={perfStats.remesh > 4 ? 'text-yellow-400' : ''}>{perfStats.remesh.toFixed(1)}</div>
             <div>Lighting:</div><div className={perfStats.lighting > 4 ? 'text-yellow-400' : ''}>{perfStats.lighting.toFixed(1)}</div>
+            <div>Grouper:</div><div className={perfStats.grouper > 4 ? 'text-yellow-400' : ''}>{perfStats.grouper.toFixed(1)}</div>
             <div>Physics:</div><div>{perfStats.physics.toFixed(1)}</div>
             <div>Build:</div><div className={perfStats.buildPreview > 4 ? 'text-red-400' : ''}>{perfStats.buildPreview.toFixed(1)}</div>
             <div>Players:</div><div>{perfStats.players.toFixed(1)}</div>
@@ -456,6 +457,8 @@ export function DebugPanel() {
               <div>Remesh Q:</div><div className={perfStats.remeshQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.remeshQueueSize}</div>
               <div>Pending:</div><div>{perfStats.pendingChunks}</div>
               <div>Collider Q:</div><div className={perfStats.colliderQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.colliderQueueSize}</div>
+              <div>Groups/f:</div><div className={perfStats.groupsRebuilt > 8 ? 'text-yellow-400' : ''}>{perfStats.groupsRebuilt}</div>
+              <div>Reallocs/f:</div><div className={perfStats.bufferReallocs > 2 ? 'text-yellow-400' : ''}>{perfStats.bufferReallocs}</div>
             </div>
           </div>
 
