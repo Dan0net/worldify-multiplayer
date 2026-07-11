@@ -521,8 +521,17 @@ export function DebugPanel() {
             />
             <span>F5 Wireframe</span>
           </label>
+          <label className="flex items-center gap-2 cursor-pointer hover:text-yellow-300">
+            <input
+              type="checkbox"
+              checked={voxelDebug.stitchSeams}
+              onChange={() => toggleVoxelDebug('stitchSeams')}
+              className="accent-yellow-400"
+            />
+            <span>Seam stitch</span>
+          </label>
         </div>
-        
+
         <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
           <div className="mb-1 text-green-500 text-xs">Shader (F7-F8):</div>
           <label 

@@ -41,6 +41,13 @@ export interface ExpandedMeshData {
   materialWeights: Float32Array;
   lightLevels: Float32Array;
   indices: Uint32Array;
+  /**
+   * Boundary (seam) vertices grouped by chunk face, for normal reconciliation.
+   * CSR layout: `indices` holds expanded-vertex indices; face `f`'s slice is
+   * `indices[faceOffsets[f] .. faceOffsets[f+1]]`. Face order:
+   * [lowX, highX, lowY, highY, lowZ, highZ] (matches SurfaceNet boundaryFlags bits).
+   */
+  boundary: { indices: Uint32Array; faceOffsets: Uint32Array };
 }
 
 /**
@@ -62,16 +69,28 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
   const materialWeights = new Float32Array(expandedVertexCount * 3);
   const lightLevels = new Float32Array(expandedVertexCount);
   const indices = new Uint32Array(expandedVertexCount);
-  
+
+  // Per-face buckets of expanded-vertex indices that sit on a chunk boundary plane.
+  // Order matches SurfaceNet boundaryFlags bits: [lowX, highX, lowY, highY, lowZ, highZ].
+  const srcFlags = output.boundaryFlags;
+  const faceBuckets: number[][] = [[], [], [], [], [], []];
+  const pushBoundary = (srcIdx: number, expandedIdx: number): void => {
+    const flag = srcFlags[srcIdx];
+    if (flag === 0) return;
+    for (let f = 0; f < 6; f++) {
+      if (flag & (1 << f)) faceBuckets[f].push(expandedIdx);
+    }
+  };
+
   for (let faceIdx = 0; faceIdx < triangleCount; faceIdx++) {
     const i0 = output.indices[faceIdx * 3];
     const i1 = output.indices[faceIdx * 3 + 1];
     const i2 = output.indices[faceIdx * 3 + 2];
-    
+
     const m0 = output.materials[i0];
     const m1 = output.materials[i1];
     const m2 = output.materials[i2];
-    
+
     const v0 = faceIdx * 3;
     const v1 = faceIdx * 3 + 1;
     const v2 = faceIdx * 3 + 2;
@@ -120,9 +139,29 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
     indices[v0] = v0;
     indices[v1] = v1;
     indices[v2] = v2;
+
+    // Record boundary membership per expanded vertex (uses the source vertex's flag).
+    pushBoundary(i0, v0);
+    pushBoundary(i1, v1);
+    pushBoundary(i2, v2);
   }
-  
-  return { positions, normals, materialIds, materialWeights, lightLevels, indices };
+
+  // Flatten the 6 buckets into a single CSR array + length-7 offsets.
+  const faceOffsets = new Uint32Array(7);
+  let total = 0;
+  for (let f = 0; f < 6; f++) { faceOffsets[f] = total; total += faceBuckets[f].length; }
+  faceOffsets[6] = total;
+  const boundaryIndices = new Uint32Array(total);
+  let w = 0;
+  for (let f = 0; f < 6; f++) {
+    const b = faceBuckets[f];
+    for (let i = 0; i < b.length; i++) boundaryIndices[w++] = b[i];
+  }
+
+  return {
+    positions, normals, materialIds, materialWeights, lightLevels, indices,
+    boundary: { indices: boundaryIndices, faceOffsets },
+  };
 }
 
 /**

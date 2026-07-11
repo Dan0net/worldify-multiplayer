@@ -28,6 +28,9 @@ export class ChunkGeometry {
   /** Main meshes indexed by layer (used as geometry containers + for collision) */
   private mainMeshes: (THREE.Mesh | null)[] = [null, null, null];
 
+  /** Per-layer boundary (seam) vertex lists, for normal reconciliation. */
+  private boundaries: (ExpandedMeshData['boundary'] | null)[] = [null, null, null];
+
   /** Cached geometry array returned by getGeometries() — avoids allocation per call */
   private cachedGeoArray: (THREE.BufferGeometry | null)[] = [null, null, null];
 
@@ -133,6 +136,7 @@ export class ChunkGeometry {
         m.geometry.dispose();
         this.mainMeshes[i] = null;
       }
+      this.boundaries[i] = null;
     }
     this.disposed = true;
   }
@@ -145,7 +149,26 @@ export class ChunkGeometry {
 
     for (let i = 0; i < LAYER_COUNT; i++) {
       this.mainMeshes[i] = this.updateSlot(this.mainMeshes[i], data[i], i, worldPos);
+      this.boundaries[i] = data[i]?.boundary ?? null;
     }
+  }
+
+  // ============== Seam-normal reconciliation accessors ==============
+
+  /** Boundary (seam) vertex lists for a layer, or null if the layer is empty. */
+  getBoundary(layer: number): ExpandedMeshData['boundary'] | null {
+    return this.boundaries[layer];
+  }
+
+  /** The layer's geometry (for reading positions and reading/writing normals). */
+  getLayerGeometry(layer: number): THREE.BufferGeometry | null {
+    return this.mainMeshes[layer]?.geometry ?? null;
+  }
+
+  /** Flag a layer's normal attribute for GPU re-upload after a stitch. */
+  markNormalsNeedUpdate(layer: number): void {
+    const attr = this.mainMeshes[layer]?.geometry.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    if (attr) attr.needsUpdate = true;
   }
 
   /** Update a single mesh slot: reuse geometry swap or create/remove */
