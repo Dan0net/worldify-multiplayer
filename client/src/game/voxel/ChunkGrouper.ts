@@ -46,6 +46,13 @@ interface ChunkSlot {
   groupKey: string;
   /** Per-layer standalone scene meshes shown while the group merge is deferred */
   standaloneMeshes: (THREE.Mesh | null)[];
+  /**
+   * True iff this chunk's geometry is currently baked into a live (non-disposed)
+   * merged mesh of its group. A covered chunk must NOT also show a standalone mesh —
+   * that double-draw is the source of the seam/water flicker. Set in rebuildGroup,
+   * cleared when the chunk leaves the merged set or its group.
+   */
+  coveredByMerge: boolean;
 }
 
 /** Tracks pre-allocated buffer capacity per layer so we can reuse them. */
@@ -166,6 +173,7 @@ export class ChunkGrouper {
         slot.wx = worldPos.x;
         slot.wy = worldPos.y;
         slot.wz = worldPos.z;
+        slot.coveredByMerge = false; // left its old merged set; new group hasn't baked it
         this.addToGroup(key, gk, cx, cy, cz);
       }
     } else {
@@ -178,6 +186,7 @@ export class ChunkGrouper {
         visible: true,
         groupKey: gk,
         standaloneMeshes: [null, null, null],
+        coveredByMerge: false,
       };
       this.slots.set(key, slot);
       this.addToGroup(key, gk, cx, cy, cz);
@@ -185,10 +194,13 @@ export class ChunkGrouper {
 
     this.markGroupDirty(gk);
 
-    // Show individual chunk immediately via standalone meshes,
-    // but only if the group hasn't been merged yet (avoids z-fighting).
+    // Show this chunk immediately via a standalone mesh — but ONLY if it isn't
+    // already baked into a live merged mesh. Overlaying a standalone on a
+    // still-visible (stale) merged mesh double-draws the chunk and flickers,
+    // worst with transparent water. A covered chunk instead shows its stale merged
+    // geometry single-drawn until rebuildGroup atomically swaps in the fresh merge.
     const group = this.groups.get(gk);
-    if (group && !group.merged) {
+    if (group && !slot.coveredByMerge) {
       this.showStandalone(slot);
     }
   }
@@ -333,14 +345,16 @@ export class ChunkGrouper {
       return true;
     }
 
-    const hasMergedMesh = group.merged && group.meshes.some(m => m !== null);
+    // Require a CLEAN merged mesh (not just any live one) so a dirty/stale group
+    // still defers, exactly as before `merged` was decoupled from `dirty`.
+    const hasCleanMergedMesh = group.merged && !group.dirty && group.meshes.some(m => m !== null);
 
-    if (hasMergedMesh) {
+    if (hasCleanMergedMesh) {
       this.applySuppression(group, previewChunkKeys);
       return true;
     }
 
-    // Defer — group hasn't been merged yet
+    // Defer — group hasn't been merged yet (or is stale/dirty)
     if (!group.suppressionPending) {
       group.suppressionPending = true;
       this.pendingSuppressionCount++;
@@ -382,7 +396,10 @@ export class ChunkGrouper {
       // No valid merged mesh — show standalones for ALL visible chunks
       for (const ck of group.chunkKeys) {
         const slot = this.slots.get(ck);
-        if (slot && slot.visible) this.showStandalone(slot);
+        if (slot && slot.visible) {
+          slot.coveredByMerge = false; // not in a live merge; standalone owns the draw
+          this.showStandalone(slot);
+        }
       }
       group.dirty = true;
       group.merged = false;
@@ -394,7 +411,10 @@ export class ChunkGrouper {
     const group = this.groups.get(gk);
     if (group) {
       group.dirty = true;
-      group.merged = false;
+      // NOTE: do NOT clear `merged` here. `merged` means "a live baked mesh exists"
+      // (kept visible, single-drawn, until rebuildGroup swaps it), independent of
+      // `dirty` ("rebuild pending"). Clearing it would let updateChunk overlay a
+      // standalone on the still-visible merged mesh → the double-draw flicker.
     }
   }
 
@@ -576,6 +596,8 @@ export class ChunkGrouper {
   private removeFromGroup(chunkKey: string, gk: string): void {
     const group = this.groups.get(gk);
     if (group) group.chunkKeys.delete(chunkKey);
+    const slot = this.slots.get(chunkKey);
+    if (slot) slot.coveredByMerge = false; // no longer part of this group's merge
   }
 
   // ---- Private: standalone mesh management ----
@@ -654,7 +676,9 @@ export class ChunkGrouper {
     shadowRadius: number,
   ): void {
     this.removeGroupStandalones(group);
-    group.merged = true;
+
+    // Tracks whether any layer produced a live merged mesh this rebuild.
+    let anyLayerBuilt = false;
 
     // Collect visible chunk slots
     const visibleSlots = this.visibleSlotsBuf;
@@ -682,6 +706,7 @@ export class ChunkGrouper {
         if (existing) existing.visible = false;
         continue;
       }
+      anyLayerBuilt = true;
 
       // Check if existing GPU buffers can be reused
       const lb = group.layerBuffers[layer];
@@ -822,6 +847,15 @@ export class ChunkGrouper {
       const dz = Math.abs(group.centerCz - playerCz);
       const inShadow = dx <= shadowRadius && dy <= shadowRadius && dz <= shadowRadius;
       mesh.castShadow = layer !== LAYER_LIQUID && inShadow;
+    }
+
+    // `merged` = a live baked mesh now exists for this group (independent of `dirty`).
+    // Mark every visible chunk as covered so updateChunk won't overlay a standalone
+    // on it; non-visible chunks are not in the merge, so clear their coverage.
+    group.merged = anyLayerBuilt;
+    for (const ck of group.chunkKeys) {
+      const slot = this.slots.get(ck);
+      if (slot) slot.coveredByMerge = anyLayerBuilt && slot.visible;
     }
   }
 }
