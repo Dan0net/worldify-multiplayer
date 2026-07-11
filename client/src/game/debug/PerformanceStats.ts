@@ -149,11 +149,13 @@ class PerformanceStatsCollector {
 
   /** Call at the end of each frame to compute averages and flush */
   endFrame(): void {
-    // Fold each section's per-frame total into its rolling window (one sample per
-    // frame → the window spans AVG_WINDOW frames), then reset for the next frame.
-    for (const [section, sum] of this.frameSum) {
-      const buf = this.accum[section];
-      buf.push(sum);
+    // Fold a sample for EVERY section into its rolling window each frame — using the
+    // section's per-frame total, or 0 if it did no work this frame. Pushing zeros for
+    // idle frames is what lets an intermittent section (e.g. lighting) decay back to 0
+    // when nothing is happening, instead of freezing at its last active average.
+    for (const key of Object.keys(this.accum) as PerfSection[]) {
+      const buf = this.accum[key];
+      buf.push(this.frameSum.get(key) ?? 0);
       if (buf.length > AVG_WINDOW) buf.shift();
     }
     this.frameSum.clear();
