@@ -12,17 +12,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronUp, FastForward, Hammer, Undo2, RotateCw, Grid3x3, Check, X } from 'lucide-react';
-import { INPUT_JUMP, INPUT_SPRINT, GameMode } from '@worldify/shared';
+import { ChevronUp, FastForward, Hammer, Undo2, RotateCw, Grid3x3, Check } from 'lucide-react';
+import { INPUT_JUMP, INPUT_SPRINT } from '@worldify/shared';
 import { controls } from '../game/player/controls';
 import { useGameStore } from '../state/store';
 import { usePresetThumbnail } from './usePresetThumbnail';
 import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
-
-/** Leave fullscreen if we're in it (used when returning to the home screen). */
-function exitFullscreenIfActive(): void {
-  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => { /* ignore */ });
-}
 
 const JOY_RADIUS = 55; // px of finger travel = full deflection
 const PAD_SIZE = 140;
@@ -43,7 +38,6 @@ function knobOffset(delta: number): number {
 
 export function MobileControls() {
   const buildEnabled = useGameStore((s) => s.build.buildMode);
-  const setGameMode = useGameStore((s) => s.setGameMode);
   const toggleBuildMenu = useGameStore((s) => s.toggleBuildMenu);
   const toggleBuildMode = useGameStore((s) => s.toggleBuildMode);
   // Narrow selectors — the current build's config/rotation only change on
@@ -235,16 +229,7 @@ export function MobileControls() {
         </div>
       </div>
 
-      {/* Menu / pause (top-right) — X returns home and leaves fullscreen. */}
-      <div className="absolute top-2 right-2 flex gap-2" style={{ paddingTop: 'env(safe-area-inset-top)', paddingRight: 'env(safe-area-inset-right)' }}>
-        <button
-          className={`${btn} w-11 h-11`}
-          onPointerDown={(e) => { e.preventDefault(); exitFullscreenIfActive(); setGameMode(GameMode.Explore); }}
-          aria-label="Menu"
-        >
-          <X size={22} strokeWidth={2.4} />
-        </button>
-      </div>
+      {/* The menu (X) button lives in the top-right map cluster (MapOverlay). */}
     </div>
   );
 }

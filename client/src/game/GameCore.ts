@@ -228,6 +228,12 @@ export class GameCore {
         cache.receiveTileData(tx, tz, heights, materials);
       };
 
+      // As real chunks stream in, refresh their map tiles so procedurally-placed
+      // trees/rocks/buildings appear on the minimap (the baseline tile is stamp-free).
+      this.voxelIntegration.world.onChunkIngested = (key) => {
+        this.pendingMapChunks.add(key);
+      };
+
       // Initialize build system
       this.builder.setMeshProvider(this.voxelIntegration);
       this.builder.setVoxelWorld(this.voxelIntegration.world, scene);
@@ -392,6 +398,26 @@ export class GameCore {
     }
   };
 
+  /** Chunk keys streamed in but not yet folded into the minimap (bounded flush). */
+  private pendingMapChunks = new Set<string>();
+
+  /**
+   * Fold a bounded batch of freshly-streamed chunks into the minimap each frame.
+   * Capped so a burst of streaming can't spike a frame; the rest carry to the
+   * next frame. Grouping by tile happens in updateMapTilesFromChunks.
+   */
+  private flushMapTilesFromStreamedChunks(): void {
+    if (this.pendingMapChunks.size === 0) return;
+    const MAX_PER_FRAME = 24;
+    const batch: string[] = [];
+    for (const key of this.pendingMapChunks) {
+      batch.push(key);
+      this.pendingMapChunks.delete(key);
+      if (batch.length >= MAX_PER_FRAME) break;
+    }
+    this.updateMapTilesFromChunks(batch);
+  }
+
   /**
    * Update map tiles from modified chunks.
    * Uses the shared updateTileFromChunk function.
@@ -505,6 +531,9 @@ export class GameCore {
         this.updatePlayingMode(camera, localPlayer, deltaMs);
         break;
     }
+
+    // Refresh minimap tiles from freshly-streamed chunks (bounded per frame).
+    this.flushMapTilesFromStreamedChunks();
 
     // Always update remote players (visible in all modes)
     perfStats.begin('players');

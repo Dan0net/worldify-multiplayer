@@ -105,6 +105,14 @@ export class VoxelWorld implements ChunkProvider {
   /** Callback to notify external systems (e.g. map cache) when a tile arrives */
   onTileReceived: ((tx: number, tz: number, heights: Int16Array, materials: Uint8Array) => void) | null = null;
 
+  /**
+   * Callback fired when a chunk's voxel data is (re)ingested — i.e. real
+   * generated/streamed content, including procedural stamps (trees/rocks/
+   * buildings). Lets the minimap refresh from actual chunks, not just the
+   * stamp-free terrain baseline. Not fired on identical no-op re-sends.
+   */
+  onChunkIngested: ((chunkKey: string) => void) | null = null;
+
   /** Listeners notified when a chunk is unloaded */
   private unloadListeners: Set<(chunkKey: string) => void> = new Set();
 
@@ -864,7 +872,10 @@ export class VoxelWorld implements ChunkProvider {
 
     // Execute any build operations that were waiting for this chunk
     this.drainDeferredBuildOps();
-    
+
+    // Notify the minimap so it can capture this chunk's stamps (trees/rocks/etc.).
+    this.onChunkIngested?.(key);
+
     return chunk;
   }
 
