@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import type { BuildConfig, Quat } from '@worldify/shared';
 import { createBuildItemMeshes } from '../../ui/PresetThumbnailRenderer';
 import { FIRST_PERSON_LAYER, FIRST_PERSON_ITEM_LAYER } from './firstPersonLayer';
+import { getCamera } from './camera';
 
 let vmCamera: THREE.OrthographicCamera | null = null; // dedicated view-model camera
 let group: THREE.Group | null = null;   // arm rig; positioned in vmCamera space each frame
@@ -213,6 +214,14 @@ export function updateFirstPersonArm(opts: {
  */
 export function renderFirstPersonArm(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
   if (!group || !vmCamera || !visible) return;
+
+  // Match the main camera's orientation so the scene lights hit the arm/item the
+  // same way they'd hit the world in view — i.e. lighting responds to the player's
+  // facing + time of day. The arm stays screen-locked (it's a child at a fixed
+  // local offset) and undistorted (ortho); only the light direction relative to it
+  // changes. The object-space held-item texture is unaffected by this rotation.
+  const mainCam = getCamera();
+  if (mainCam) vmCamera.quaternion.copy(mainCam.quaternion);
 
   const prevShadowAuto = renderer.shadowMap.autoUpdate;
   renderer.shadowMap.autoUpdate = false;   // don't recompute world shadows for this pass
