@@ -83,7 +83,7 @@ function SegmentedControl<T extends string>({
             key={opt.value}
             onClick={() => onChange(opt.value)}
             className={`
-              px-2.5 py-1 rounded text-xs font-medium transition-all
+              px-3.5 py-2 rounded-lg text-sm font-medium transition-all
               ${active
                 ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-400/50'
                 : 'bg-white/5 text-white/60 border border-white/10 hover:bg-white/10 hover:text-white/80'
@@ -137,8 +137,8 @@ function AxisInput({
   const display = displayValue
     ?? (suffix ? `${Math.round(value)}${suffix}` : value.toFixed(value % 1 ? 2 : 0));
   return (
-    <div className="flex items-center gap-1 flex-1 min-w-0">
-      <span className="text-[10px] text-white/40 w-3 text-center uppercase shrink-0">{label}</span>
+    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+      <span className="text-xs text-white/40 w-4 text-center uppercase shrink-0">{label}</span>
       <input
         type="range"
         min={min}
@@ -146,11 +146,11 @@ function AxisInput({
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="flex-1 min-w-0 h-1 accent-cyan-400 bg-white/10 rounded-full appearance-none cursor-pointer
-          [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5
+        className="flex-1 min-w-0 h-2 accent-cyan-400 bg-white/10 rounded-full appearance-none cursor-pointer
+          [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
           [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyan-400 [&::-webkit-slider-thumb]:cursor-pointer"
       />
-      <span className="text-[10px] text-white/60 w-8 text-center shrink-0 tabular-nums">
+      <span className="text-xs text-white/60 w-10 text-center shrink-0 tabular-nums">
         {display}
       </span>
     </div>
@@ -170,23 +170,23 @@ function Toggle({
   description?: string;
 }) {
   return (
-    <label className="flex items-center gap-2 cursor-pointer group">
+    <label className="flex items-center gap-2.5 cursor-pointer group py-1">
       <div
         className={`
-          relative w-8 h-4 rounded-full transition-colors
+          relative w-11 h-6 rounded-full transition-colors shrink-0
           ${checked ? 'bg-cyan-500/50' : 'bg-white/10'}
         `}
         onClick={() => onChange(!checked)}
       >
         <div
           className={`
-            absolute top-0.5 w-3 h-3 rounded-full transition-all
-            ${checked ? 'left-4 bg-cyan-400' : 'left-0.5 bg-white/40'}
+            absolute top-0.5 w-5 h-5 rounded-full transition-all
+            ${checked ? 'left-[22px] bg-cyan-400' : 'left-0.5 bg-white/40'}
           `}
         />
       </div>
       <div>
-        <span className="text-xs text-white/70 group-hover:text-white/90">{label}</span>
+        <span className="text-sm text-white/70 group-hover:text-white/90">{label}</span>
         {description && (
           <span className="text-xs text-white/30 ml-1">{description}</span>
         )}
@@ -198,7 +198,7 @@ function Toggle({
 /** Section header */
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <h4 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-1.5">
+    <h4 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">
       {children}
     </h4>
   );
@@ -270,14 +270,15 @@ export function BuildConfigTab({
   }, [euler, presetId, onUpdateMeta]);
 
   return (
-    <div className="overflow-y-auto pr-1 scrollbar-thin space-y-3">
+    // Flows inside the BuildMenu's own scroll container — no nested scroll here.
+    <div className="space-y-4">
       {/* Live shape preview */}
       {thumbnailUrl && (
         <div className="flex justify-center">
           <img
             src={thumbnailUrl}
             alt="Shape preview"
-            className="w-32 h-32 rounded-lg border border-white/10 object-cover"
+            className="w-36 h-36 rounded-xl border border-white/10 object-cover bg-black/40"
             draggable={false}
           />
         </div>
@@ -348,14 +349,14 @@ export function BuildConfigTab({
           />
         </div>
         {/* Quick uniform size */}
-        <div className="flex items-center gap-1.5 mt-1.5">
-          <span className="text-[10px] text-white/30">Uniform:</span>
+        <div className="flex items-center gap-1.5 mt-2">
+          <span className="text-xs text-white/30 mr-0.5">Uniform:</span>
           {[0.71, 1, 2, 4, 8].map((s) => (
             <button
               key={s}
               onClick={() => onUpdateConfig(presetId, { size: { x: s, y: s, z: s } })}
               className={`
-                px-1.5 py-0.5 text-[10px] rounded border transition-all
+                px-3 py-1.5 text-sm rounded-lg border transition-all
                 ${size.x === s && size.y === s && size.z === s
                   ? 'border-cyan-400/50 text-cyan-300 bg-cyan-500/20'
                   : 'border-white/10 text-white/50 bg-white/5 hover:bg-white/10'
@@ -414,7 +415,7 @@ export function BuildConfigTab({
                 onClick={() => handleAlignChange(opt.value)}
                 title={opt.desc}
                 className={`
-                  px-2.5 py-1 rounded text-xs font-medium transition-all
+                  px-3.5 py-2 rounded-lg text-sm font-medium transition-all
                   ${active
                     ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-400/50'
                     : 'bg-white/5 text-white/60 border border-white/10 hover:bg-white/10 hover:text-white/80'
@@ -454,7 +455,7 @@ export function BuildConfigTab({
           <SectionHeader>Hollow</SectionHeader>
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-white/50 w-16">Thickness</span>
+              <span className="text-sm text-white/50 w-20 shrink-0">Thickness</span>
               <input
                 type="range"
                 min={0}
@@ -467,11 +468,11 @@ export function BuildConfigTab({
                     thickness: v > 0 ? v : undefined,
                   });
                 }}
-                className="flex-1 h-1.5 accent-cyan-400 bg-white/10 rounded-full appearance-none cursor-pointer
-                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 
+                className="flex-1 h-2 accent-cyan-400 bg-white/10 rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
                   [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyan-400 [&::-webkit-slider-thumb]:cursor-pointer"
               />
-              <span className="text-xs text-white/60 w-8 text-center">
+              <span className="text-sm text-white/60 w-10 text-center shrink-0">
                 {thickness ? thickness.toFixed(2) : 'Off'}
               </span>
             </div>
@@ -502,11 +503,11 @@ export function BuildConfigTab({
                   arcSweep: deg < 360 ? (deg * Math.PI) / 180 : undefined,
                 });
               }}
-              className="flex-1 h-1.5 accent-cyan-400 bg-white/10 rounded-full appearance-none cursor-pointer
-                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 
+              className="flex-1 h-2 accent-cyan-400 bg-white/10 rounded-full appearance-none cursor-pointer
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
                 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyan-400 [&::-webkit-slider-thumb]:cursor-pointer"
             />
-            <span className="text-xs text-white/60 w-10 text-center">
+            <span className="text-sm text-white/60 w-12 text-center shrink-0">
               {arcSweep ? `${Math.round((arcSweep * 180) / Math.PI)}°` : '360°'}
             </span>
           </div>

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { ExploreOverlay } from './ui/ExploreOverlay';
-import { BuildToolbar } from './ui/BuildToolbar';
+import { BuildMenu } from './ui/BuildMenu';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
 import { ExploreControls } from './ui/ExploreControls';
@@ -45,7 +45,7 @@ function App() {
           {isPlaying && (
             <>
               <Hud />
-              <BuildToolbar />
+              <BuildMenu />
               <MapOverlay />
             </>
           )}

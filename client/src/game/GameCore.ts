@@ -745,9 +745,14 @@ export class GameCore {
     localPlayer: ReturnType<PlayerManager['getLocalPlayer']>,
     deltaMs: number
   ): void {
+    // The build menu soft-pauses play: freeze the player + build preview while it's
+    // open (it takes over the whole window), but keep streaming + rendering so the
+    // world stays live behind the translucent overlay and thumbnails keep rendering.
+    const menuPaused = useGameStore.getState().build.menuOpen;
+
     // Update player physics and movement
     perfStats.begin('physics');
-    this.playerManager.updateLocalPlayer(deltaMs);
+    if (!menuPaused) this.playerManager.updateLocalPlayer(deltaMs);
     perfStats.end('physics');
 
     // Update voxel terrain around player
@@ -760,9 +765,11 @@ export class GameCore {
     // Update camera and build system
     if (camera) {
       updateCameraFromPlayer(camera, localPlayer);
-      perfStats.begin('buildPreview');
-      this.builder.update(camera, localPlayer.position);
-      perfStats.end('buildPreview');
+      if (!menuPaused) {
+        perfStats.begin('buildPreview');
+        this.builder.update(camera, localPlayer.position);
+        perfStats.end('buildPreview');
+      }
     }
 
     // Periodically persist position so an unexpected close still resumes near here.

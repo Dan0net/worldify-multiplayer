@@ -11,6 +11,7 @@ import {
   INPUT_JUMP,
   INPUT_SPRINT,
   GameMode,
+  NONE_PRESET_ID,
   clamp,
   getMovementFromButtons,
   type MovementVector,
@@ -84,10 +85,19 @@ export class Controls {
       return;
     }
 
-    // Build preset selection (0-9)
+    // Build preset selection (0-9) — quick-selects a build and enters build mode
     if (e.code >= 'Digit0' && e.code <= 'Digit9') {
       const digit = parseInt(e.code.charAt(5));
-      useGameStore.getState().setBuildPreset(digit);
+      if (digit !== NONE_PRESET_ID) {
+        useGameStore.getState().setBuildPreset(digit);
+        useGameStore.getState().setBuildMode(true);
+      }
+      return;
+    }
+
+    // Toggle build mode
+    if (e.code === 'KeyB') {
+      useGameStore.getState().toggleBuildMode();
       return;
     }
 

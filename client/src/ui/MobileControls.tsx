@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { INPUT_JUMP, INPUT_SPRINT, GameMode, NONE_PRESET_ID } from '@worldify/shared';
+import { INPUT_JUMP, INPUT_SPRINT, GameMode } from '@worldify/shared';
 import { controls } from '../game/player/controls';
 import { useGameStore } from '../state/store';
 import { useIsPortrait } from './useDeviceMode';
@@ -35,7 +35,7 @@ function knobOffset(delta: number): number {
 }
 
 export function MobileControls() {
-  const buildEnabled = useGameStore((s) => s.build.presetId !== NONE_PRESET_ID);
+  const buildEnabled = useGameStore((s) => s.build.buildMode);
   const setGameMode = useGameStore((s) => s.setGameMode);
   const toggleBuildMenu = useGameStore((s) => s.toggleBuildMenu);
   const isPortrait = useIsPortrait();
