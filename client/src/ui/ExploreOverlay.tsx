@@ -11,7 +11,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../state/store';
 import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
-import { QUALITY_LABELS, QUALITY_LEVELS } from '../game/quality/QualityPresets';
+import { QUALITY_LABELS, QUALITY_LEVELS, MSAA_OPTIONS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { getCamera } from '../game/scene/camera';
 import { formatTimeOfDay } from '../game/scene/DayNightCycle';
@@ -83,6 +83,8 @@ export function ExploreOverlay() {
   const fov = useGameStore((s) => s.fov);
   const renderScale = useGameStore((s) => s.renderScale);
   const setRenderScale = useGameStore((s) => s.setRenderScale);
+  const msaaSamples = useGameStore((s) => s.msaaSamples);
+  const setMsaaSamples = useGameStore((s) => s.setMsaaSamples);
   const timeOfDay = useGameStore((s) => s.environment.timeOfDay);
   const setTimeOfDay = useGameStore((s) => s.setTimeOfDay);
 
@@ -223,6 +225,16 @@ export function ExploreOverlay() {
                     className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                   />
                   <span className="text-white/60 text-xs w-9 text-right">{Math.round(renderScale * 100)}%</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-white/70 text-sm whitespace-nowrap">MSAA</span>
+                <div className="flex gap-1 flex-1">
+                  {MSAA_OPTIONS.map((opt) => (
+                    <button key={opt.value} onClick={() => setMsaaSamples(opt.value)} className={pill(msaaSamples === opt.value)}>
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="flex items-center justify-between gap-3">

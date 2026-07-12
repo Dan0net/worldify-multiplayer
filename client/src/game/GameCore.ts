@@ -117,7 +117,10 @@ export class GameCore {
     // updateStyle=false: the drawing buffer may be rendered below native (renderScale);
     // CSS keeps the canvas full-size so the browser upscales it (the fill-rate win).
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // DPI cap (the device-pixel lever). `renderScale` separately scales the sub-native
+    // buffer; there is no per-preset maxPixelRatio anymore.
+    const MAX_DEVICE_PIXEL_RATIO = 2;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_DEVICE_PIXEL_RATIO));
     this.renderer.setClearColor(0x87ceeb); // Sky blue
     
     // Enable shadow mapping

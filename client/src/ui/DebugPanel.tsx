@@ -1,22 +1,19 @@
 import { useEffect, useState, ReactNode } from 'react';
-import { useGameStore, TERRAIN_DEBUG_MODE_NAMES, EnvironmentSettings } from '../state/store';
+import {
+  useGameStore, TERRAIN_DEBUG_MODE_NAMES,
+  type EnvironmentSettings, type DayStageConfig, type NightStageConfig,
+} from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings } from '../game/material/TerrainMaterial';
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
-import { formatTimeOfDay, getDayPhaseLabel } from '../game/scene/DayNightCycle';
+import { formatTimeOfDay, getDayPhaseLabel, invalidateDayNight } from '../game/scene/DayNightCycle';
 import { clearAndReloadChunks } from '../state/transient';
-import { cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, type QualityLevel } from '../game/quality/QualityPresets';
 import {
-  applyVisibilityRadius,
-  applyColorCorrectionEnabled,
-  applyShadowsEnabled,
-  applyMoonShadows,
-  applyShadowRadius,
-  applyAnisotropy,
-  applyPixelRatio,
-  syncQualityToStore,
-} from '../game/quality/QualityManager';
-import { setShaderMapDefines } from '../game/material/TerrainMaterial';
+  cycleQualityLevel, QUALITY_LABELS, QUALITY_LEVELS, QUALITY_ROWS, MSAA_OPTIONS,
+  qualityMatchesPreset, type QualityLevel,
+} from '../game/quality/QualityPresets';
+import { applyQualityPatch, syncQualityToStore } from '../game/quality/QualityManager';
+import { getCamera } from '../game/scene/camera';
 import * as THREE from 'three';
 
 // ============== Collapsible Section Component ==============
@@ -166,16 +163,42 @@ function Toggle({ label, value, onChange }: ToggleProps) {
   );
 }
 
+// ============== Segmented single-select row ==============
+
+interface SegmentedRowProps {
+  label: string;
+  segments: { label: string }[];
+  active: number; // index of the active segment, or -1
+  onSelect: (index: number) => void;
+}
+
+/** A labelled row of mutually-exclusive segment buttons (Off/On, 2/4/6/8, …). */
+function SegmentedRow({ label, segments, active, onSelect }: SegmentedRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-2 mb-1">
+      <span className="text-xs whitespace-nowrap">{label}</span>
+      <div className="flex gap-0.5">
+        {segments.map((seg, i) => (
+          <button
+            key={seg.label}
+            onClick={() => onSelect(i)}
+            className={`px-1.5 py-0.5 text-[11px] rounded transition-colors ${
+              i === active ? 'bg-yellow-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            {seg.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ============== Main Debug Panel ==============
 
 export function DebugPanel() {
-  const { 
-    ping, 
-    fps, 
-    tickMs, 
-    connectionStatus, 
-    serverTick, 
-    playerCount,
+  const {
+    fps,
     perfStats,
     voxelDebug,
     voxelStats,
@@ -193,25 +216,24 @@ export function DebugPanel() {
     // Quality state
     qualityLevel,
     quality,
+    fov,
+    renderScale,
+    setRenderScale,
+    msaaSamples,
+    setMsaaSamples,
+    dayNightConfig,
+    setDayNightConfig,
   } = useGameStore();
 
-  // Individual quality fields now live on the single `quality` slice.
-  const {
-    visibilityRadius,
-    ssaoEnabled,
-    bloomEnabled,
-    godRaysEnabled,
-    colorCorrectionEnabled,
-    shadowsEnabled,
-    moonShadows,
-    shadowRadius,
-    anisotropy,
-    maxPixelRatio,
-    msaaSamples,
-    shaderNormalMaps,
-    shaderAoMaps,
-    shaderMetalnessMaps,
-  } = quality;
+  // Shader-map debug toggles still read the live quality slice.
+  const { shaderNormalMaps, shaderAoMaps, shaderMetalnessMaps } = quality;
+
+  // Whether the live quality still matches the selected preset (ignoring view distance).
+  const isCustomQuality = !qualityMatchesPreset(quality, qualityLevel);
+
+  /** Edit a day/night stage keyframe and re-derive the cycle live (no reset). */
+  const editDayStage = (u: Partial<DayStageConfig>) => { setDayNightConfig({ day: u }); invalidateDayNight(); };
+  const editNightStage = (u: Partial<NightStageConfig>) => { setDayNightConfig({ night: u }); invalidateDayNight(); };
 
   const [cacheClearing, setCacheClearing] = useState(false);
   const [_chunksClearing, setChunksClearing] = useState(false);
@@ -247,25 +269,18 @@ export function DebugPanel() {
     syncQualityToStore(level, customVisibility);
   };
 
-  const handleVisibilityRadiusChange = (radius: number) => {
-    applyVisibilityRadius(radius); // updates quality.visibilityRadius + applies
-  };
-
   const handleShaderMapToggle = (map: 'normal' | 'ao' | 'metalness', enabled: boolean) => {
-    if (map === 'normal') useGameStore.getState().updateQuality({ shaderNormalMaps: enabled });
-    else if (map === 'ao') useGameStore.getState().updateQuality({ shaderAoMaps: enabled });
-    else useGameStore.getState().updateQuality({ shaderMetalnessMaps: enabled });
-    setShaderMapDefines({
-      normalMaps: map === 'normal' ? enabled : shaderNormalMaps,
-      aoMaps: map === 'ao' ? enabled : shaderAoMaps,
-      metalnessMaps: map === 'metalness' ? enabled : shaderMetalnessMaps,
-    });
+    if (map === 'normal') applyQualityPatch({ shaderNormalMaps: enabled });
+    else if (map === 'ao') applyQualityPatch({ shaderAoMaps: enabled });
+    else applyQualityPatch({ shaderMetalnessMaps: enabled });
   };
 
-  // Apply environment changes to the scene
+  // Apply environment changes to the scene. Only the CHANGED fields are applied — never a
+  // re-push of the whole environment — so editing one setting can't clobber the day-night
+  // cycle's animated sun/moon/hemisphere state (the old reset bug).
   const handleEnvironmentChange = (updates: Partial<EnvironmentSettings>) => {
     setEnvironment(updates);
-    applyEnvironmentSettings({ ...environment, ...updates });
+    applyEnvironmentSettings(updates);
 
     // SSAO/bloom/godrays/saturation are all store-driven via effects.ts — no direct call needed.
 
@@ -347,20 +362,12 @@ export function DebugPanel() {
     setShaderDebugMode(terrainDebugMode);
   }, [terrainDebugMode]);
 
-  // Shadow map size options (0 = off)
+  // Shadow map size options (advanced/manual — quality preset drives the applied value)
   const shadowMapOptions = [
-    { label: 'Off', value: 0 },
     { label: '512', value: 512 },
     { label: '1024', value: 1024 },
     { label: '2048', value: 2048 },
     { label: '4096', value: 4096 },
-  ];
-
-  // MSAA sample count options
-  const msaaOptions = [
-    { label: 'Off', value: 0 },
-    { label: '2x', value: 2 },
-    { label: '4x', value: 4 },
   ];
 
   const debugPanelExpanded = useGameStore((s) => s.debugPanelExpanded);
@@ -381,7 +388,7 @@ export function DebugPanel() {
   }
 
   return (
-    <div className="absolute top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg max-h-[90vh] overflow-y-auto min-w-[200px] pointer-events-auto">
+    <div className="absolute top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg max-h-[calc(100dvh-200px)] overflow-y-auto min-w-[200px] pointer-events-auto">
       
       {/* Collapse button */}
       <button
@@ -393,32 +400,7 @@ export function DebugPanel() {
         <span className="text-xs">▼</span>
       </button>
 
-      {/* ============== STATS SECTION ============== */}
-      <Section
-        title="📊 Stats"
-        isOpen={debugPanelSections.stats}
-        onToggle={() => toggleDebugSection('stats')}
-      >
-        <div>Status: {connectionStatus}</div>
-        <div>Players: {playerCount}</div>
-        <div>Ping: {ping}ms</div>
-        <div>Tick: {tickMs.toFixed(1)}ms</div>
-        <div>Server: {serverTick}</div>
-        
-        <div className="mt-2 pt-2 border-t border-green-500/30">
-          <div>Chunks: {voxelStats.chunksLoaded}</div>
-          <div>Meshes: {voxelStats.meshesVisible}</div>
-          <div>Debug: {voxelStats.debugObjects}</div>
-        </div>
-        
-        <div className="mt-2 pt-2 border-t border-green-500/30">
-          <a href="/materials" className="text-green-500 hover:text-green-300 underline block">
-            Textures: {textureState}
-          </a>
-        </div>
-      </Section>
-
-      {/* ============== PERFORMANCE SECTION ============== */}
+      {/* ============== PERFORMANCE SECTION (client-side only) ============== */}
       <Section
         title="⚡ Performance"
         isOpen={debugPanelSections.performance}
@@ -426,18 +408,20 @@ export function DebugPanel() {
         color="cyan"
       >
         <div className="text-cyan-400">
-          <div className="mb-1 text-cyan-300 text-xs">Frame Timing (ms avg):</div>
           <div className="grid grid-cols-2 gap-x-3">
-            <div>Total:</div><div className={perfStats.gameUpdate > 16.6 ? 'text-red-400' : ''}>{perfStats.gameUpdate.toFixed(1)}</div>
-            <div>Render:</div><div className={perfStats.render > 8 ? 'text-yellow-400' : ''}>{perfStats.render.toFixed(1)}</div>
-            <div>Voxel:</div><div className={perfStats.voxelUpdate > 4 ? 'text-yellow-400' : ''}>{perfStats.voxelUpdate.toFixed(1)}</div>
-            <div>Remesh:</div><div className={perfStats.remesh > 4 ? 'text-yellow-400' : ''}>{perfStats.remesh.toFixed(1)}</div>
-            <div>Lighting:</div><div className={perfStats.lighting > 4 ? 'text-yellow-400' : ''}>{perfStats.lighting.toFixed(1)}</div>
-            <div>Grouper:</div><div className={perfStats.grouper > 4 ? 'text-yellow-400' : ''}>{perfStats.grouper.toFixed(1)}</div>
-            <div>Physics:</div><div>{perfStats.physics.toFixed(1)}</div>
-            <div>Build:</div><div className={perfStats.buildPreview > 4 ? 'text-red-400' : ''}>{perfStats.buildPreview.toFixed(1)}</div>
-            <div>Players:</div><div>{perfStats.players.toFixed(1)}</div>
-            <div>Env:</div><div>{perfStats.environment.toFixed(1)}</div>
+            <div>FPS:</div><div className={fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}>{fps}</div>
+            <div>Frame:</div><div className={perfStats.gameUpdate > 16.6 ? 'text-red-400' : ''}>{perfStats.gameUpdate.toFixed(1)} ms</div>
+          </div>
+
+          <div className="mt-2 pt-2 border-t border-cyan-500/30">
+            <div className="mb-1 text-cyan-300 text-xs">Frame Timing (ms avg):</div>
+            <div className="grid grid-cols-2 gap-x-3">
+              <div>Render:</div><div className={perfStats.render > 8 ? 'text-yellow-400' : ''}>{perfStats.render.toFixed(1)}</div>
+              <div>Voxel:</div><div className={perfStats.voxelUpdate > 4 ? 'text-yellow-400' : ''}>{perfStats.voxelUpdate.toFixed(1)}</div>
+              <div>Remesh:</div><div className={perfStats.remesh > 4 ? 'text-yellow-400' : ''}>{perfStats.remesh.toFixed(1)}</div>
+              <div>Lighting:</div><div className={perfStats.lighting > 4 ? 'text-yellow-400' : ''}>{perfStats.lighting.toFixed(1)}</div>
+              <div>Physics:</div><div>{perfStats.physics.toFixed(1)}</div>
+            </div>
           </div>
 
           <div className="mt-2 pt-2 border-t border-cyan-500/30">
@@ -452,21 +436,22 @@ export function DebugPanel() {
           </div>
 
           <div className="mt-2 pt-2 border-t border-cyan-500/30">
-            <div className="mb-1 text-cyan-300 text-xs">Voxel Queue:</div>
+            <div className="mb-1 text-cyan-300 text-xs">World:</div>
             <div className="grid grid-cols-2 gap-x-3">
+              <div>Chunks:</div><div>{voxelStats.chunksLoaded}</div>
+              <div>Meshes:</div><div>{voxelStats.meshesVisible}</div>
               <div>Remesh Q:</div><div className={perfStats.remeshQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.remeshQueueSize}</div>
               <div>Pending:</div><div>{perfStats.pendingChunks}</div>
               <div>Collider Q:</div><div className={perfStats.colliderQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.colliderQueueSize}</div>
-              <div>Groups/f:</div><div className={perfStats.groupsRebuilt > 8 ? 'text-yellow-400' : ''}>{perfStats.groupsRebuilt}</div>
-              <div>Reallocs/f:</div><div className={perfStats.bufferReallocs > 2 ? 'text-yellow-400' : ''}>{perfStats.bufferReallocs}</div>
             </div>
           </div>
 
-          {perfStats.jsHeapMB > 0 && (
-            <div className="mt-2 pt-2 border-t border-cyan-500/30">
-              <div>JS Heap: {perfStats.jsHeapMB} MB</div>
-            </div>
-          )}
+          <div className="mt-2 pt-2 border-t border-cyan-500/30">
+            {perfStats.jsHeapMB > 0 && <div>JS Heap: {perfStats.jsHeapMB} MB</div>}
+            <a href="/materials" className="text-cyan-500 hover:text-cyan-300 underline block">
+              Textures: {textureState}
+            </a>
+          </div>
         </div>
       </Section>
 
@@ -590,14 +575,17 @@ export function DebugPanel() {
       >
         {/* Preset Selector */}
         <div className="mb-2">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">Preset (F8)</div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-yellow-400 text-xs font-bold">Preset (F8)</span>
+            {isCustomQuality && <span className="text-[10px] text-orange-400">Custom</span>}
+          </div>
           <div className="flex gap-1">
             {QUALITY_LEVELS.map((level) => (
               <button
                 key={level}
-                onClick={() => syncPresetToStore(level, visibilityRadius)}
+                onClick={() => syncPresetToStore(level, quality.visibilityRadius)}
                 className={`flex-1 py-1 text-xs rounded transition-colors ${
-                  qualityLevel === level
+                  !isCustomQuality && qualityLevel === level
                     ? 'bg-yellow-600 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                 }`}
@@ -608,125 +596,66 @@ export function DebugPanel() {
           </div>
         </div>
 
-        {/* Rendering */}
+        {/* Preset-driven levers — one segmented control each */}
         <div className="mb-2 pt-2 border-t border-yellow-500/30">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">🖥️ Rendering</div>
-          <Slider
-            label="View Distance"
-            value={visibilityRadius}
-            min={2}
-            max={10}
-            step={1}
-            onChange={handleVisibilityRadiusChange}
-            formatValue={(v) => `${v} chunks`}
-          />
-          <Slider
-            label="Pixel Ratio"
-            value={maxPixelRatio}
-            min={0.5}
-            max={2}
-            step={0.25}
-            onChange={(v) => applyPixelRatio(v)}
-            formatValue={(v) => `${v}x`}
-          />
-          <Slider
-            label="Anisotropy"
-            value={anisotropy}
-            min={1}
-            max={16}
-            step={1}
-            onChange={(v) => applyAnisotropy(v)}
-            formatValue={(v) => `${v}x`}
-          />
-          <Select
+          {QUALITY_ROWS.map((row) => (
+            <SegmentedRow
+              key={row.key}
+              label={row.label}
+              segments={row.segments}
+              active={row.match(quality)}
+              onSelect={(i) => applyQualityPatch(row.segments[i].patch)}
+            />
+          ))}
+        </div>
+
+        {/* Independent of preset */}
+        <div className="mb-2 pt-2 border-t border-yellow-500/30">
+          <div className="text-yellow-400 text-xs mb-1 font-bold">Independent of preset</div>
+          <SegmentedRow
             label="MSAA"
-            value={msaaSamples}
-            options={msaaOptions}
-            onChange={(v) => useGameStore.getState().updateQuality({ msaaSamples: v })}
+            segments={MSAA_OPTIONS}
+            active={MSAA_OPTIONS.findIndex((o) => o.value === msaaSamples)}
+            onSelect={(i) => setMsaaSamples(MSAA_OPTIONS[i].value)}
+          />
+          <Slider
+            label="Resolution"
+            value={Math.round(renderScale * 100)}
+            min={50}
+            max={100}
+            step={5}
+            onChange={(v) => setRenderScale(v / 100)}
+            formatValue={(v) => `${v}%`}
+          />
+          <Slider
+            label="FoV"
+            value={fov}
+            min={75}
+            max={120}
+            step={1}
+            onChange={(v) => {
+              useGameStore.getState().setFov(v);
+              const cam = getCamera();
+              if (cam) { cam.fov = v; cam.updateProjectionMatrix(); }
+            }}
+            formatValue={(v) => `${v}°`}
           />
         </div>
 
-        {/* Shadows */}
+        {/* Fine-tuning + shader-map debug toggles */}
         <div className="mb-2 pt-2 border-t border-yellow-500/30">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">🌑 Shadows</div>
-          <Toggle
-            label="Shadows"
-            value={shadowsEnabled}
-            onChange={(v) => applyShadowsEnabled(v)}
+          <div className="text-yellow-400 text-xs mb-1 font-bold">Fine-tuning</div>
+          <Slider
+            label="Shadow Softness"
+            value={environment.shadowBlurRadius}
+            min={1}
+            max={25}
+            step={1}
+            onChange={(v) => handleEnvironmentChange({ shadowBlurRadius: v })}
           />
-          {shadowsEnabled && (
-            <>
-              <Toggle
-                label="Moon Shadows"
-                value={moonShadows}
-                onChange={(v) => applyMoonShadows(v)}
-              />
-              <Slider
-                label="Shadow Radius"
-                value={shadowRadius}
-                min={1}
-                max={8}
-                step={1}
-                onChange={(v) => applyShadowRadius(v)}
-                formatValue={(v) => `${v} chunks`}
-              />
-              <Slider
-                label="Shadow Softness"
-                value={environment.shadowBlurRadius}
-                min={1}
-                max={25}
-                step={1}
-                onChange={(v) => {
-                  useGameStore.getState().setEnvironment({ shadowBlurRadius: v });
-                }}
-              />
-            </>
-          )}
-        </div>
-
-        {/* Post-Processing */}
-        <div className="mb-2 pt-2 border-t border-yellow-500/30">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">✨ Post-Processing</div>
-          <Toggle
-            label="SSAO"
-            value={ssaoEnabled}
-            onChange={(v) => useGameStore.getState().updateQuality({ ssaoEnabled: v })}
-          />
-          <Toggle
-            label="Bloom"
-            value={bloomEnabled}
-            onChange={(v) => useGameStore.getState().updateQuality({ bloomEnabled: v })}
-          />
-          <Toggle
-            label="God Rays"
-            value={godRaysEnabled}
-            onChange={(v) => useGameStore.getState().updateQuality({ godRaysEnabled: v })}
-          />
-          <Toggle
-            label="Color Correction"
-            value={colorCorrectionEnabled}
-            onChange={(v) => applyColorCorrectionEnabled(v)}
-          />
-        </div>
-
-        {/* Shader Maps */}
-        <div className="mb-2 pt-2 border-t border-yellow-500/30">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">🗺️ Shader Maps</div>
-          <Toggle
-            label="Normal Maps"
-            value={shaderNormalMaps}
-            onChange={(v) => handleShaderMapToggle('normal', v)}
-          />
-          <Toggle
-            label="AO Maps"
-            value={shaderAoMaps}
-            onChange={(v) => handleShaderMapToggle('ao', v)}
-          />
-          <Toggle
-            label="Metalness Maps"
-            value={shaderMetalnessMaps}
-            onChange={(v) => handleShaderMapToggle('metalness', v)}
-          />
+          <Toggle label="Normal Maps" value={shaderNormalMaps} onChange={(v) => handleShaderMapToggle('normal', v)} />
+          <Toggle label="AO Maps" value={shaderAoMaps} onChange={(v) => handleShaderMapToggle('ao', v)} />
+          <Toggle label="Metalness Maps" value={shaderMetalnessMaps} onChange={(v) => handleShaderMapToggle('metalness', v)} />
         </div>
       </Section>
 
@@ -1015,98 +944,36 @@ export function DebugPanel() {
           />
         </div>
 
-        {/* Auto-Calculation Overrides */}
+        {/* Day stage keyframe — edits apply live via the cycle (no reset) */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🔄 Auto-Calculate</div>
-          <Toggle
-            label="Sun Position"
-            value={environment.autoSunPosition ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoSunPosition: v })}
-          />
-          <Toggle
-            label="Sun Color"
-            value={environment.autoSunColor ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoSunColor: v })}
-          />
-          <Toggle
-            label="Sun Intensity"
-            value={environment.autoSunIntensity ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoSunIntensity: v })}
-          />
-          <Toggle
-            label="Moon Position"
-            value={environment.autoMoonPosition ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoMoonPosition: v })}
-          />
-          <Toggle
-            label="Moon Intensity"
-            value={environment.autoMoonIntensity ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoMoonIntensity: v })}
-          />
-          <Toggle
-            label="Hemisphere Colors"
-            value={environment.autoHemisphereColors ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoHemisphereColors: v })}
-          />
-          <Toggle
-            label="Hemisphere Intensity"
-            value={environment.autoHemisphereIntensity ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoHemisphereIntensity: v })}
-          />
-          <Toggle
-            label="IBL Intensity"
-            value={environment.autoEnvironmentIntensity ?? true}
-            onChange={(v) => handleEnvironmentChange({ autoEnvironmentIntensity: v })}
-          />
+          <div className="text-cyan-400 text-xs mb-1 font-bold">☀️ Day Stage</div>
+          <ColorPicker label="Sun Color" value={dayNightConfig.day.sunColor} onChange={(v) => editDayStage({ sunColor: v })} />
+          <Slider label="Sun Intensity" value={dayNightConfig.day.sunIntensity} min={0} max={10} step={0.1} onChange={(v) => editDayStage({ sunIntensity: v })} />
+          <ColorPicker label="Sky" value={dayNightConfig.day.hemisphereSkyColor} onChange={(v) => editDayStage({ hemisphereSkyColor: v })} />
+          <ColorPicker label="Ground" value={dayNightConfig.day.hemisphereGroundColor} onChange={(v) => editDayStage({ hemisphereGroundColor: v })} />
+          <Slider label="Fill Intensity" value={dayNightConfig.day.hemisphereIntensity} min={0} max={5} step={0.1} onChange={(v) => editDayStage({ hemisphereIntensity: v })} />
+          <Slider label="Sky/Ambient (IBL)" value={dayNightConfig.day.environmentIntensity} min={0} max={3} step={0.05} onChange={(v) => editDayStage({ environmentIntensity: v })} />
         </div>
 
-        {/* Manual Sun Position (when auto is off) */}
-        {(environment.autoSunPosition ?? true) === false && (
-          <div className="mb-3 pt-2 border-t border-cyan-500/30">
-            <div className="text-cyan-400 text-xs mb-1 font-bold">☀️ Sun Position (Manual)</div>
-            <Slider
-              label="Azimuth"
-              value={environment.sunAzimuth ?? 135}
-              min={0}
-              max={360}
-              step={1}
-              onChange={(v) => handleEnvironmentChange({ sunAzimuth: v })}
-              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
-            />
-            <Slider
-              label="Elevation"
-              value={environment.sunElevation ?? 45}
-              min={-90}
-              max={90}
-              step={1}
-              onChange={(v) => handleEnvironmentChange({ sunElevation: v })}
-              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
-            />
-          </div>
-        )}
+        {/* Night stage keyframe */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🌙 Night Stage</div>
+          <ColorPicker label="Moon Color" value={dayNightConfig.night.moonColor} onChange={(v) => editNightStage({ moonColor: v })} />
+          <Slider label="Moon Intensity" value={dayNightConfig.night.moonIntensity} min={0} max={3} step={0.05} onChange={(v) => editNightStage({ moonIntensity: v })} />
+          <ColorPicker label="Sky" value={dayNightConfig.night.hemisphereSkyColor} onChange={(v) => editNightStage({ hemisphereSkyColor: v })} />
+          <ColorPicker label="Ground" value={dayNightConfig.night.hemisphereGroundColor} onChange={(v) => editNightStage({ hemisphereGroundColor: v })} />
+          <Slider label="Fill Intensity" value={dayNightConfig.night.hemisphereIntensity} min={0} max={5} step={0.1} onChange={(v) => editNightStage({ hemisphereIntensity: v })} />
+          <Slider label="Sky/Ambient (IBL)" value={dayNightConfig.night.environmentIntensity} min={0} max={3} step={0.05} onChange={(v) => editNightStage({ environmentIntensity: v })} />
+        </div>
 
-        {/* Manual Moon Position (when auto is off) */}
-        {(environment.autoMoonPosition ?? true) === false && (
+        {/* Manual sun/moon position — used only when the cycle is off */}
+        {(environment.dayNightEnabled ?? true) === false && (
           <div className="mb-3 pt-2 border-t border-cyan-500/30">
-            <div className="text-cyan-400 text-xs mb-1 font-bold">🌙 Moon Position (Manual)</div>
-            <Slider
-              label="Azimuth"
-              value={environment.moonAzimuth ?? 315}
-              min={0}
-              max={360}
-              step={1}
-              onChange={(v) => handleEnvironmentChange({ moonAzimuth: v })}
-              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
-            />
-            <Slider
-              label="Elevation"
-              value={environment.moonElevation ?? -45}
-              min={-90}
-              max={90}
-              step={1}
-              onChange={(v) => handleEnvironmentChange({ moonElevation: v })}
-              formatValue={(v) => `${(v ?? 0).toFixed(0)}°`}
-            />
+            <div className="text-cyan-400 text-xs mb-1 font-bold">🧭 Manual Position (cycle off)</div>
+            <Slider label="Sun Azimuth" value={environment.sunAzimuth ?? 135} min={0} max={360} step={1} onChange={(v) => handleEnvironmentChange({ sunAzimuth: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
+            <Slider label="Sun Elevation" value={environment.sunElevation ?? 45} min={-90} max={90} step={1} onChange={(v) => handleEnvironmentChange({ sunElevation: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
+            <Slider label="Moon Azimuth" value={environment.moonAzimuth ?? 315} min={0} max={360} step={1} onChange={(v) => handleEnvironmentChange({ moonAzimuth: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
+            <Slider label="Moon Elevation" value={environment.moonElevation ?? -45} min={-90} max={90} step={1} onChange={(v) => handleEnvironmentChange({ moonElevation: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
           </div>
         )}
       </Section>
@@ -1177,12 +1044,12 @@ export function DebugPanel() {
               <ColorPicker
                 label="Sky"
                 value={environment.hemisphereSkyColor ?? '#87ceeb'}
-                onChange={(v) => handleEnvironmentChange({ hemisphereSkyColor: v, autoHemisphereColors: false })}
+                onChange={(v) => handleEnvironmentChange({ hemisphereSkyColor: v })}
               />
               <ColorPicker
                 label="Ground"
                 value={environment.hemisphereGroundColor ?? '#3d5c3d'}
-                onChange={(v) => handleEnvironmentChange({ hemisphereGroundColor: v, autoHemisphereColors: false })}
+                onChange={(v) => handleEnvironmentChange({ hemisphereGroundColor: v })}
               />
               <Slider
                 label="Intensity"
@@ -1190,22 +1057,22 @@ export function DebugPanel() {
                 min={0}
                 max={10}
                 step={0.1}
-                onChange={(v) => handleEnvironmentChange({ hemisphereIntensity: v, autoHemisphereIntensity: false })}
+                onChange={(v) => handleEnvironmentChange({ hemisphereIntensity: v })}
               />
             </>
           )}
         </div>
 
-        {/* Environment/IBL */}
+        {/* Sky/Ambient Lighting (IBL) */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🌐 Environment (IBL)</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold">🌐 Sky/Ambient Lighting</div>
           <Slider
             label="Intensity"
             value={environment.environmentIntensity}
             min={0}
             max={3}
             step={0.1}
-            onChange={(v) => handleEnvironmentChange({ environmentIntensity: v, autoEnvironmentIntensity: false })}
+            onChange={(v) => handleEnvironmentChange({ environmentIntensity: v })}
           />
         </div>
 
