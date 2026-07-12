@@ -152,11 +152,12 @@ export class BuildMarker {
     collisionMeshes: THREE.Object3D[],
     castNDC?: { x: number; y: number } | null,
   ): { hasValidTarget: boolean } {
-    const presetId = useGameStore.getState().build.presetId;
-    const rotationSteps = useGameStore.getState().build.rotationSteps;
+    const buildState = useGameStore.getState().build;
+    const presetId = buildState.presetId;
+    const rotationSteps = buildState.rotationSteps;
 
-    // Hide if build mode disabled (None preset)
-    if (presetId === NONE_PRESET_ID) {
+    // Hide if build mode is off (or, defensively, the None preset is selected)
+    if (!buildState.buildMode || presetId === NONE_PRESET_ID) {
       this.hide();
       return { hasValidTarget: false };
     }

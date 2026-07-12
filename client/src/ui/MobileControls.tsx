@@ -12,10 +12,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { INPUT_JUMP, INPUT_SPRINT, GameMode, NONE_PRESET_ID } from '@worldify/shared';
+import { ChevronUp, FastForward, Hammer, Undo2, RotateCw, Grid3x3, Check } from 'lucide-react';
+import { INPUT_JUMP, INPUT_SPRINT } from '@worldify/shared';
 import { controls } from '../game/player/controls';
 import { useGameStore } from '../state/store';
-import { useIsPortrait } from './useDeviceMode';
+import { usePresetThumbnail } from './usePresetThumbnail';
+import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
 
 const JOY_RADIUS = 55; // px of finger travel = full deflection
 const PAD_SIZE = 140;
@@ -35,10 +37,14 @@ function knobOffset(delta: number): number {
 }
 
 export function MobileControls() {
-  const buildEnabled = useGameStore((s) => s.build.presetId !== NONE_PRESET_ID);
-  const setGameMode = useGameStore((s) => s.setGameMode);
+  const buildEnabled = useGameStore((s) => s.build.buildMode);
   const toggleBuildMenu = useGameStore((s) => s.toggleBuildMenu);
-  const isPortrait = useIsPortrait();
+  const toggleBuildMode = useGameStore((s) => s.toggleBuildMode);
+  // Narrow selectors — the current build's config/rotation only change on
+  // selection, not per frame (unlike hasValidTarget), so this won't thrash.
+  const currentConfig = useGameStore((s) => s.build.presetConfigs[s.build.presetId]);
+  const currentRotation = useGameStore((s) => s.build.presetMeta[s.build.presetId]?.baseRotation);
+  const buildThumb = usePresetThumbnail(currentConfig, currentRotation, { priority: THUMB_PRIORITY.HIGH });
 
   const [sprintOn, setSprintOn] = useState(false);
   const [joy, setJoy] = useState<{ dx: number; dy: number } | null>(null);
@@ -59,8 +65,8 @@ export function MobileControls() {
     };
   }, []);
 
-  // Raise the pads in portrait so the build bar sits below them.
-  const padBottom = isPortrait ? 96 : 24;
+  // The build-item bar is gone, so the pads sit low in both orientations.
+  const padBottom = 24;
 
   // ---- Move (left half) ----
   const onJoyDown = (e: React.PointerEvent) => {
@@ -131,7 +137,8 @@ export function MobileControls() {
     controls.setTouchButton(INPUT_SPRINT, next);
   };
 
-  const btn = 'pointer-events-auto flex items-center justify-center rounded-full bg-black/50 border border-white/20 text-white/90 active:bg-white/25 select-none';
+  // Round icon button — stronger contrast + consistent icon sizing than the old emoji glyphs.
+  const btn = 'pointer-events-auto flex items-center justify-center rounded-full bg-black/55 border border-white/25 text-white active:scale-90 active:bg-white/15 transition-transform shadow-lg select-none';
   const pad = 'absolute rounded-full border-2 border-white/20 bg-white/5 pointer-events-none';
   const knob = 'absolute rounded-full bg-white/40 pointer-events-none';
   const label = 'absolute text-white/40 text-[10px] pointer-events-none text-center';
@@ -169,39 +176,67 @@ export function MobileControls() {
         </div>
       )}
 
-      {/* Action buttons — ABOVE the look pad (bottom-right) */}
+      {/* Action buttons — ABOVE the look pad (bottom-right).
+          Row 1: [undo · rotate · place · build-thumbnail] (build mode) + build-mode TOGGLE.
+          Row 2: run + JUMP.  Toggle sits directly above jump; both are large. */}
       <div
-        className="absolute right-4 flex items-end gap-3"
-        style={{ bottom: padBottom + PAD_SIZE + 24, paddingRight: 'env(safe-area-inset-right)' }}
+        className="absolute right-4 flex flex-col items-end gap-2.5"
+        style={{ bottom: padBottom + PAD_SIZE + 20, paddingRight: 'env(safe-area-inset-right)' }}
       >
-        <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); toggleBuildMenu(); }} aria-label="Build menu">🧱</button>
-        <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); controls.triggerUndo(); }} aria-label="Undo">↶</button>
-        {buildEnabled && (
-          <>
-            <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(-1); }} aria-label="Rotate left">⟲</button>
-            <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(1); }} aria-label="Rotate right">⟳</button>
-            <button className={`${btn} w-14 h-14 text-xl !bg-green-600/60 border-green-300`} onPointerDown={(e) => { e.preventDefault(); controls.triggerPlace(); }} aria-label="Place build">✓</button>
-          </>
-        )}
-        <button
-          className={`${btn} w-12 h-12 text-base ${sprintOn ? '!bg-cyan-500/40 border-cyan-300' : ''}`}
-          onPointerDown={(e) => { e.preventDefault(); toggleSprint(); }}
-          aria-label="Toggle sprint"
-        >🏃</button>
-        <button
-          className={`${btn} w-16 h-16 text-2xl`}
-          onPointerDown={(e) => { e.preventDefault(); holdJump(true); }}
-          onPointerUp={(e) => { e.preventDefault(); holdJump(false); }}
-          onPointerCancel={() => holdJump(false)}
-          onPointerLeave={() => holdJump(false)}
-          aria-label="Jump"
-        >⤒</button>
+        {/* Row 1 — build extras (left of the toggle) + the toggle */}
+        <div className="flex items-center gap-2.5">
+          {buildEnabled && (
+            <>
+              <button className={`${btn} w-12 h-12`} onPointerDown={(e) => { e.preventDefault(); controls.triggerUndo(); }} aria-label="Undo">
+                <Undo2 size={22} strokeWidth={2.2} />
+              </button>
+              <button className={`${btn} w-12 h-12`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(1); }} aria-label="Rotate">
+                <RotateCw size={22} strokeWidth={2.2} />
+              </button>
+              <button className={`${btn} w-12 h-12 !bg-green-600/70 !border-green-300/70`} onPointerDown={(e) => { e.preventDefault(); controls.triggerPlace(); }} aria-label="Place build">
+                <Check size={26} strokeWidth={2.6} />
+              </button>
+              {/* Build menu — shows the current build thumbnail (same size as toggle/jump) */}
+              <button className={`${btn} w-16 h-16 overflow-hidden`} onPointerDown={(e) => { e.preventDefault(); toggleBuildMenu(); }} aria-label="Build menu">
+                {buildThumb
+                  ? <img src={buildThumb} alt="" className="w-12 h-12 object-contain" draggable={false} />
+                  : <Grid3x3 size={26} strokeWidth={2.2} />}
+              </button>
+            </>
+          )}
+          {/* Build-mode toggle — always the Hammer icon; sits directly above Jump */}
+          <button
+            className={`${btn} w-16 h-16 ${buildEnabled ? '!border-cyan-300/70 ring-2 ring-cyan-400/40' : ''}`}
+            onPointerDown={(e) => { e.preventDefault(); toggleBuildMode(); }}
+            aria-label={buildEnabled ? 'Exit build mode' : 'Enter build mode'}
+          >
+            <Hammer size={28} strokeWidth={2.2} />
+          </button>
+        </div>
+
+        {/* Row 2 — run + jump */}
+        <div className="flex items-center gap-2.5">
+          <button
+            className={`${btn} w-12 h-12 ${sprintOn ? '!bg-cyan-500/40 !border-cyan-300' : ''}`}
+            onPointerDown={(e) => { e.preventDefault(); toggleSprint(); }}
+            aria-label="Toggle run"
+          >
+            <FastForward size={22} strokeWidth={2.2} />
+          </button>
+          <button
+            className={`${btn} w-16 h-16`}
+            onPointerDown={(e) => { e.preventDefault(); holdJump(true); }}
+            onPointerUp={(e) => { e.preventDefault(); holdJump(false); }}
+            onPointerCancel={() => holdJump(false)}
+            onPointerLeave={() => holdJump(false)}
+            aria-label="Jump"
+          >
+            <ChevronUp size={30} strokeWidth={2.6} />
+          </button>
+        </div>
       </div>
 
-      {/* Pause (top-right) */}
-      <div className="absolute top-2 right-2 flex gap-2" style={{ paddingTop: 'env(safe-area-inset-top)', paddingRight: 'env(safe-area-inset-right)' }}>
-        <button className={`${btn} w-11 h-11 text-lg`} onPointerDown={(e) => { e.preventDefault(); setGameMode(GameMode.Explore); }} aria-label="Menu">☰</button>
-      </div>
+      {/* The menu (X) button lives in the top-right map cluster (MapOverlay). */}
     </div>
   );
 }

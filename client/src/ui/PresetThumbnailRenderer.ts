@@ -23,13 +23,19 @@ import {
   invertQuat,
   BuildMode,
   BuildShape,
+  DEFAULT_BUILD_PRESETS,
+  PRESET_TEMPLATES,
+  NONE_PRESET_ID,
+  presetToSlotMeta,
+  MATERIAL_NAMES,
   type BuildConfig,
   type Quat,
 } from '@worldify/shared';
 import { meshVoxelsSplit } from '../game/voxel/SurfaceNet';
 import { createGeometryFromSurfaceNet } from '../game/voxel/MeshGeometry';
-import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial } from '../game/material/TerrainMaterial';
+import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, createHeldItemMaterial } from '../game/material/TerrainMaterial';
 import { getRendererRef } from '../game/quality/QualityManager';
+import { useGameStore } from '../state/store';
 
 // ============== Constants ==============
 
@@ -37,7 +43,48 @@ const THUMB_SIZE = 256;
 const GRID_SIZE = CHUNK_SIZE + 2;
 const GRID_VOXELS = GRID_SIZE * GRID_SIZE * GRID_SIZE;
 const PIXEL_BYTES = THUMB_SIZE * THUMB_SIZE * 4;
-const MAX_RENDERS_PER_FRAME = 2;
+
+// Render budget per frame. When the build menu is open the game is soft-paused,
+// so we can spend more of the frame draining the queue for snappy thumbnails.
+const MAX_RENDERS_IDLE = 2;
+const MAX_RENDERS_MENU_OPEN = 6;
+
+/**
+ * Render-queue priority (higher drains first). Interactive previews beat visible
+ * slots, which beat the boot-time preload sweep.
+ */
+export const THUMB_PRIORITY = { PRELOAD: 0, NORMAL: 1, HIGH: 2, PREVIEW: 3 } as const;
+
+function maxRendersThisFrame(): number {
+  try {
+    return useGameStore.getState().build.menuOpen ? MAX_RENDERS_MENU_OPEN : MAX_RENDERS_IDLE;
+  } catch {
+    return MAX_RENDERS_IDLE;
+  }
+}
+
+/** Terrain textures are loaded — thumbnails would render untextured before this. */
+function texturesReady(): boolean {
+  try {
+    const s = useGameStore.getState().textureState;
+    return s === 'low' || s === 'high';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Current texture variant, folded into the cache key so low- and high-res
+ * thumbnails cache separately and switching quality re-renders instead of
+ * serving a stale variant.
+ */
+function textureVariant(): string {
+  try {
+    return useGameStore.getState().textureState === 'high' ? 'hi' : 'lo';
+  } catch {
+    return 'lo';
+  }
+}
 
 // ============== Reusable Three.js Objects ==============
 
@@ -134,6 +181,7 @@ interface PendingRender {
   config: BuildConfig;
   rotation?: Quat;
   hash: string;
+  priority: number;
   callbacks: Array<(url: string | null) => void>;
 }
 
@@ -339,6 +387,7 @@ function fillVoxelGrid(config: BuildConfig, rotation?: Quat): void {
 
 function configHash(config: BuildConfig, rotation?: Quat): string {
   return [
+    textureVariant(), // low/high textures produce different thumbnails — cache apart
     config.mode,
     config.shape,
     config.size.x, config.size.y, config.size.z,
@@ -457,6 +506,73 @@ function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefi
   return renderAndReadbackImageData(renderer);
 }
 
+// ============== Held-item mesh (first-person arm) ==============
+
+/** Camera-local target for the largest build extent — normalizes any build to one size. */
+const HELD_TARGET_SIZE = 0.26;
+
+function normalizeHeldGroup(group: THREE.Group, bbox: THREE.Box3): void {
+  const size = new THREE.Vector3();
+  bbox.getSize(size);
+  const maxExtent = Math.max(size.x, size.y, size.z) || 1;
+  group.scale.setScalar(HELD_TARGET_SIZE / maxExtent);
+}
+
+/**
+ * Build a THREE.Object3D of a BuildConfig using the same SurfaceNet pipeline as
+ * thumbnails — for the first-person held item. Solid/transparent parts use dedicated
+ * object-space terrain materials (`createHeldItemMaterial`) seeded with the loaded
+ * atlas, so the texture is static in the hand (the shared world material samples by
+ * world position and would swim as the player moves) and renders real textures (not
+ * the grey a clone would give). Drawing "on top" is handled by the caller's render
+ * layer/pass, so no depthTest tricks here. Normalized so any build (1³ or 16³)
+ * renders at the same size in the hand. The caller owns disposal of the geometries
+ * and the `userData.heldItem`-tagged materials (the liquid part reuses the shared
+ * water material — don't dispose that one).
+ */
+export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat): THREE.Object3D | null {
+  ensureSetup();
+  const group = new THREE.Group();
+
+  // SUBTRACT has no solid mesh — show the same red wireframe the thumbnail uses.
+  if (config.mode === BuildMode.SUBTRACT) {
+    const wf = buildWireframe(config, rotation);
+    wf.frustumCulled = false;
+    const c = new THREE.Vector3(); _bbox.getCenter(c);
+    wf.position.set(-c.x, -c.y, -c.z);
+    group.add(wf);
+    normalizeHeldGroup(group, _bbox);
+    return group;
+  }
+
+  fillVoxelGrid(config, rotation);
+  const { solid, transparent, liquid } = meshVoxelsSplit({ dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], data: voxelGrid! });
+  if (solid.vertexCount === 0 && transparent.vertexCount === 0 && liquid.vertexCount === 0) return null;
+
+  _bbox.makeEmpty();
+  const solidGeo = solid.vertexCount > 0 ? createGeometryFromSurfaceNet(solid) : null;
+  const transGeo = transparent.vertexCount > 0 ? createGeometryFromSurfaceNet(transparent) : null;
+  const liquidGeo = liquid.vertexCount > 0 ? createGeometryFromSurfaceNet(liquid) : null;
+  if (solidGeo) { solidGeo.computeBoundingBox(); _bbox.union(solidGeo.boundingBox!); }
+  if (transGeo) { transGeo.computeBoundingBox(); _bbox.union(transGeo.boundingBox!); }
+  if (liquidGeo) { liquidGeo.computeBoundingBox(); _bbox.union(liquidGeo.boundingBox!); }
+
+  const c = new THREE.Vector3(); _bbox.getCenter(c);
+  const addMesh = (geo: THREE.BufferGeometry | null, mat: THREE.Material) => {
+    if (!geo) return;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(-c.x, -c.y, -c.z);
+    mesh.frustumCulled = false;
+    group.add(mesh);
+  };
+  addMesh(solidGeo, solidGeo ? createHeldItemMaterial(false) : getTerrainMaterial());
+  addMesh(transGeo, transGeo ? createHeldItemMaterial(true) : getTransparentTerrainMaterial());
+  addMesh(liquidGeo, getLiquidTerrainMaterial());
+
+  normalizeHeldGroup(group, _bbox);
+  return group;
+}
+
 // ============== Queue Processing ==============
 
 function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): boolean {
@@ -494,20 +610,33 @@ function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): bool
   return true;
 }
 
+/** Remove and return the highest-priority queued entry (FIFO within a priority). */
+function takeNextEntry(): PendingRender | undefined {
+  if (renderQueue.length === 0) return undefined;
+  let bestIdx = 0;
+  for (let i = 1; i < renderQueue.length; i++) {
+    if (renderQueue[i].priority > renderQueue[bestIdx].priority) bestIdx = i;
+  }
+  return renderQueue.splice(bestIdx, 1)[0];
+}
+
 function processQueue(): void {
   queueRafId = 0;
 
   const renderer = getRendererRef();
-  if (!renderer) {
+  // Wait for the renderer AND for terrain textures — rendering earlier produces
+  // untextured thumbnails. Entries stay queued and drain once both are ready.
+  if (!renderer || !texturesReady()) {
     if (renderQueue.length > 0) {
       queueRafId = requestAnimationFrame(processQueue);
     }
     return;
   }
 
+  const budget = maxRendersThisFrame();
   let rendered = 0;
-  while (rendered < MAX_RENDERS_PER_FRAME && renderQueue.length > 0) {
-    const entry = renderQueue.shift()!;
+  while (rendered < budget && renderQueue.length > 0) {
+    const entry = takeNextEntry()!;
     if (processEntry(entry, renderer)) rendered++;
   }
 
@@ -532,6 +661,7 @@ export function queueThumbnailRender(
   config: BuildConfig,
   rotation: Quat | undefined,
   callback: (url: string | null) => void,
+  priority: number = THUMB_PRIORITY.NORMAL,
 ): void {
   const hash = configHash(config, rotation);
 
@@ -539,12 +669,16 @@ export function queueThumbnailRender(
   const cached = thumbnailCache.get(hash);
   if (cached) { callback(cached); return; }
 
-  // 2. Already queued — piggyback
+  // 2. Already queued — piggyback (and upgrade its priority if this caller needs it sooner)
   const existing = pendingByHash.get(hash);
-  if (existing) { existing.callbacks.push(callback); return; }
+  if (existing) {
+    existing.callbacks.push(callback);
+    if (priority > existing.priority) existing.priority = priority;
+    return;
+  }
 
   // 3. Try IndexedDB first, fall back to GPU queue on miss
-  const entry: PendingRender = { config, rotation, hash, callbacks: [callback] };
+  const entry: PendingRender = { config, rotation, hash, priority, callbacks: [callback] };
   pendingByHash.set(hash, entry);
 
   loadFromIDB(hash).then(url => {
@@ -558,6 +692,28 @@ export function queueThumbnailRender(
     renderQueue.push(entry);
     scheduleQueue();
   });
+}
+
+/**
+ * Warm the cache for every build preset, template, and material at boot so the
+ * build menu opens with thumbnails already rendered. Lowest priority, so it
+ * never delays an interactive thumbnail; safe to call before the renderer
+ * exists (the queue reschedules until it does). Deduped by hash.
+ */
+export function preloadPresetThumbnails(): void {
+  const enqueue = (config: BuildConfig, rotation?: Quat) =>
+    queueThumbnailRender(config, rotation, () => { /* warm cache only */ }, THUMB_PRIORITY.PRELOAD);
+
+  for (const p of DEFAULT_BUILD_PRESETS) {
+    if (p.id === NONE_PRESET_ID) continue;
+    enqueue(p.config, presetToSlotMeta(p).baseRotation);
+  }
+  for (const t of PRESET_TEMPLATES) {
+    enqueue(t.config, t.baseRotation);
+  }
+  for (let id = 0; id < MATERIAL_NAMES.length; id++) {
+    enqueue({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: id });
+  }
 }
 
 /** Invalidate all cached thumbnails (e.g. when textures reload). */

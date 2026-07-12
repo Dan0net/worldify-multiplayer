@@ -79,7 +79,9 @@ export interface PerfSnapshot {
 
 /** Build tool state */
 export interface BuildState {
-  /** Currently selected preset ID (0-9, 0 = disabled) */
+  /** Whether build mode is active (the player is building, not just walking) */
+  buildMode: boolean;
+  /** Currently selected preset ID (0-9) — the "current build item" */
   presetId: number;
   /** Current rotation in steps (0 to BUILD_ROTATION_STEPS-1) */
   rotationSteps: number;
@@ -401,6 +403,8 @@ export interface GameState {
   setRenderScale: (scale: number) => void;
   
   // Build actions
+  setBuildMode: (on: boolean) => void;
+  toggleBuildMode: () => void;
   setBuildPreset: (presetId: number) => void;
   setBuildRotation: (rotationSteps: number) => void;
   rotateBuild: (direction: number) => void;
@@ -454,6 +458,12 @@ declare global {
   }
 }
 
+/** Default build when build mode is entered — the 4×4 Brick Wall preset. */
+const firstRealPresetId = (): number =>
+  DEFAULT_BUILD_PRESETS.find((p) => p.name === 'Brick Wall')?.id
+  ?? DEFAULT_BUILD_PRESETS.find((p) => p.id !== NONE_PRESET_ID)?.id
+  ?? 0;
+
 // Use existing store if available (HMR), otherwise create new one
 export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey] ?? create<GameState>((set) => ({
   // Initial state
@@ -480,7 +490,8 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   
   // Build initial state
   build: {
-    presetId: NONE_PRESET_ID,  // Disabled by default (key 1 = None)
+    buildMode: false,   // Not building by default — walk/explore first
+    presetId: NONE_PRESET_ID,  // Becomes a real preset when build mode is entered
     rotationSteps: 0,   // No rotation
     hasValidTarget: false,
     invalidReason: null,
@@ -592,6 +603,16 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setRenderScale: (scale) => set({ renderScale: scale }),
   
   // Build actions
+  setBuildMode: (on) => set((state) => {
+    const presetId = on && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
+    // Leaving build mode also closes the menu.
+    return { build: { ...state.build, buildMode: on, presetId, menuOpen: on ? state.build.menuOpen : false } };
+  }),
+  toggleBuildMode: () => set((state) => {
+    const on = !state.build.buildMode;
+    const presetId = on && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
+    return { build: { ...state.build, buildMode: on, presetId, menuOpen: on ? state.build.menuOpen : false } };
+  }),
   setBuildPreset: (presetId) => set((state) => ({
     build: { ...state.build, presetId },
   })),
@@ -616,12 +637,18 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   toggleBuildSnapGrid: () => set((state) => ({
     build: { ...state.build, snapGrid: !state.build.snapGrid },
   })),
-  setBuildMenuOpen: (open) => set((state) => ({
-    build: { ...state.build, menuOpen: open },
-  })),
-  toggleBuildMenu: () => set((state) => ({
-    build: { ...state.build, menuOpen: !state.build.menuOpen },
-  })),
+  setBuildMenuOpen: (open) => set((state) => {
+    // Opening the menu implies build mode (you pick the current build there).
+    const buildMode = open ? true : state.build.buildMode;
+    const presetId = open && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
+    return { build: { ...state.build, menuOpen: open, buildMode, presetId } };
+  }),
+  toggleBuildMenu: () => set((state) => {
+    const open = !state.build.menuOpen;
+    const buildMode = open ? true : state.build.buildMode;
+    const presetId = open && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
+    return { build: { ...state.build, menuOpen: open, buildMode, presetId } };
+  }),
   updatePresetConfig: (presetId, updates) => set((state) => {
     const configs = [...state.build.presetConfigs];
     configs[presetId] = { ...configs[presetId], ...updates };

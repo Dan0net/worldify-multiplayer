@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
+import { initFirstPersonArm, updateFirstPersonArm, setFirstPersonArmVisible, renderFirstPersonArm } from './scene/FirstPersonArm';
 import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -153,6 +154,8 @@ export class GameCore {
     const camera = getCamera();
     if (scene && camera) {
       initEffects(this.renderer, scene, camera);
+      // The first-person arm renders with its own ortho camera (added to the scene).
+      initFirstPersonArm(scene);
     }
 
     // ---- Quality auto-detect / restore ----
@@ -226,6 +229,12 @@ export class GameCore {
       this.voxelIntegration.world.onTileReceived = (tx, tz, heights, materials) => {
         const cache = getMapTileCache();
         cache.receiveTileData(tx, tz, heights, materials);
+      };
+
+      // As real chunks stream in, refresh their map tiles so procedurally-placed
+      // trees/rocks/buildings appear on the minimap (the baseline tile is stamp-free).
+      this.voxelIntegration.world.onChunkIngested = (key) => {
+        this.pendingMapChunks.add(key);
       };
 
       // Initialize build system
@@ -392,6 +401,29 @@ export class GameCore {
     }
   };
 
+  /** Chunk keys streamed in but not yet folded into the minimap (bounded flush). */
+  private pendingMapChunks = new Set<string>();
+
+  /** Accumulating phase for the camera head-bob while walking. */
+  private headBobPhase = 0;
+
+  /**
+   * Fold a bounded batch of freshly-streamed chunks into the minimap each frame.
+   * Capped so a burst of streaming can't spike a frame; the rest carry to the
+   * next frame. Grouping by tile happens in updateMapTilesFromChunks.
+   */
+  private flushMapTilesFromStreamedChunks(): void {
+    if (this.pendingMapChunks.size === 0) return;
+    const MAX_PER_FRAME = 24;
+    const batch: string[] = [];
+    for (const key of this.pendingMapChunks) {
+      batch.push(key);
+      this.pendingMapChunks.delete(key);
+      if (batch.length >= MAX_PER_FRAME) break;
+    }
+    this.updateMapTilesFromChunks(batch);
+  }
+
   /**
    * Update map tiles from modified chunks.
    * Uses the shared updateTileFromChunk function.
@@ -506,6 +538,12 @@ export class GameCore {
         break;
     }
 
+    // The first-person arm only shows in Playing (updatePlayingMode drives it).
+    if (gameMode !== GameMode.Playing) setFirstPersonArmVisible(false);
+
+    // Refresh minimap tiles from freshly-streamed chunks (bounded per frame).
+    this.flushMapTilesFromStreamedChunks();
+
     // Always update remote players (visible in all modes)
     perfStats.begin('players');
     this.playerManager.updateRemotePlayers(deltaMs);
@@ -548,6 +586,9 @@ export class GameCore {
     if (scene && camera) {
       perfStats.begin('render');
       renderEffects(this.renderer, scene, camera, deltaMs * 0.001);
+      // Draw the first-person arm on top (own ortho camera + layers, cleared depth)
+      // so it's never occluded by water/geometry but still lit by the scene lights.
+      renderFirstPersonArm(this.renderer, scene);
       perfStats.end('render');
       perfStats.captureRendererInfo(this.renderer);
     }
@@ -745,9 +786,14 @@ export class GameCore {
     localPlayer: ReturnType<PlayerManager['getLocalPlayer']>,
     deltaMs: number
   ): void {
+    // The build menu soft-pauses play: freeze the player + build preview while it's
+    // open (it takes over the whole window), but keep streaming + rendering so the
+    // world stays live behind the translucent overlay and thumbnails keep rendering.
+    const menuPaused = useGameStore.getState().build.menuOpen;
+
     // Update player physics and movement
     perfStats.begin('physics');
-    this.playerManager.updateLocalPlayer(deltaMs);
+    if (!menuPaused) this.playerManager.updateLocalPlayer(deltaMs);
     perfStats.end('physics');
 
     // Update voxel terrain around player
@@ -760,10 +806,39 @@ export class GameCore {
     // Update camera and build system
     if (camera) {
       updateCameraFromPlayer(camera, localPlayer);
-      perfStats.begin('buildPreview');
-      this.builder.update(camera, localPlayer.position);
-      perfStats.end('buildPreview');
+      if (!menuPaused) {
+        perfStats.begin('buildPreview');
+        this.builder.update(camera, localPlayer.position);
+        perfStats.end('buildPreview');
+      }
     }
+
+    // Camera head-bob while moving — a subtle vertical bob applied to the camera
+    // position (rotation is late-latched at render, so only position is safe here).
+    // The first-person arm is a camera child, so it inherits this motion.
+    const move = controls.getMoveVector();
+    const speed = Math.hypot(move.moveX, move.moveZ);
+    let headBob = 0;
+    if (camera && !menuPaused) {
+      if (speed > 0.1) this.headBobPhase += (Math.min(deltaMs, 100) / 1000) * 9;
+      headBob = Math.sin(this.headBobPhase * 2) * 0.05 * Math.min(1, speed);
+      camera.position.y += headBob;
+    }
+
+    // First-person arm (hidden while the menu soft-pauses play).
+    const build = useGameStore.getState().build;
+    const ts = useGameStore.getState().textureState;
+    const meta = build.presetMeta[build.presetId];
+    updateFirstPersonArm({
+      visible: !menuPaused,
+      buildMode: build.buildMode,
+      config: build.presetConfigs[build.presetId],
+      rotation: meta?.baseRotation,
+      texturesReady: ts === 'low' || ts === 'high',
+      variant: ts === 'high' ? 'hi' : 'lo',
+      headBob,
+      dtMs: deltaMs,
+    });
 
     // Periodically persist position so an unexpected close still resumes near here.
     this.posSaveAccumMs += deltaMs;

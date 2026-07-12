@@ -1,12 +1,13 @@
 /**
- * BuildMenu - Full-screen overlay for build configuration
+ * BuildMenu — full-window build configuration overlay.
  *
- * Opens on Tab key or right-click while playing.
- * Two sections:
- * - Preset templates: Select a build preset (wall, floor, stairs, etc.) for the active slot
- * - Materials: Assign a material to the selected preset
+ * Opens on Tab / right-click / the mobile build-menu button while playing, and
+ * soft-pauses play (the game loop freezes the player while `menuOpen`). It takes
+ * over the whole window with a translucent scrim so the world stays visible
+ * behind it, and always shows all presets, materials, and config options for the
+ * current build. Scrolls and reflows for portrait + landscape.
  *
- * Closes on Tab, right-click, or Escape.
+ * Closes on the ✕ button, Tab, right-click, or Escape.
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -21,63 +22,16 @@ import {
   type BuildConfig,
 } from '@worldify/shared';
 import { usePresetThumbnail } from './usePresetThumbnail';
+import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
 import { BuildConfigTab } from './BuildConfigTab';
 import { isTouch } from '../game/deviceMode';
 
-// ============== Constants ==============
-
-/** Menu tab */
 type MenuTab = 'presets' | 'materials' | 'config';
 
 // ============== Sub-components ==============
 
-/** Material cube thumbnail — renders a 4×4×4 cube with the given material */
-function MaterialCubeThumb({
-  materialId,
-  isActive,
-  onSelect,
-}: {
-  materialId: number;
-  isActive: boolean;
-  onSelect: () => void;
-}) {
-  const config = useMemo<BuildConfig>(() => ({
-    shape: BuildShape.CUBE,
-    mode: BuildMode.ADD,
-    size: { x: 4, y: 4, z: 4 },
-    material: materialId,
-  }), [materialId]);
-  const thumbnailUrl = usePresetThumbnail(config);
-
-  return (
-    <button
-      onClick={onSelect}
-      className={`
-        relative flex items-center justify-center
-        w-16 h-16 md:w-24 md:h-24 rounded-xl md:rounded-2xl transition-all snap-start
-        bg-black/80
-        ${isActive
-          ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
-          : 'hover:bg-white/10'
-        }
-      `}
-    >
-      {thumbnailUrl ? (
-        <img
-          src={thumbnailUrl}
-          alt=""
-          className="w-[60px] h-[60px] md:w-[88px] md:h-[88px] object-contain"
-          draggable={false}
-        />
-      ) : (
-        <span className="text-3xl text-white/70">◼</span>
-      )}
-    </button>
-  );
-}
-
-/** Preset template button — thumbnail-only, matches toolbar slot sizing */
-function PresetButton({
+/** A thumbnail tile (preset or material) sized for comfortable tapping. */
+function ThumbTile({
   thumbnailUrl,
   isActive,
   onSelect,
@@ -89,48 +43,46 @@ function PresetButton({
   return (
     <button
       onClick={onSelect}
-      className={`
-        relative flex items-center justify-center
-        w-16 h-16 md:w-24 md:h-24 rounded-xl md:rounded-2xl transition-all snap-start
-        bg-black/80
-        ${isActive
-          ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30'
-          : 'hover:bg-white/10'
-        }
-      `}
+      className={`relative flex items-center justify-center shrink-0
+        w-20 h-20 md:w-24 md:h-24 rounded-2xl transition-all bg-black/60
+        ${isActive ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30' : 'hover:bg-white/10 active:bg-white/15'}`}
     >
       {thumbnailUrl ? (
-        <img
-          src={thumbnailUrl}
-          alt=""
-          className="w-[60px] h-[60px] md:w-[88px] md:h-[88px] object-contain"
-          draggable={false}
-        />
+        <img src={thumbnailUrl} alt="" className="w-[72px] h-[72px] md:w-[88px] md:h-[88px] object-contain" draggable={false} />
       ) : (
-        <span className="text-3xl text-white/70">◼</span>
+        <span className="text-3xl text-white/50">◼</span>
       )}
     </button>
   );
 }
 
-/** Wrapper that pairs a PresetButton with its thumbnail hook */
-function PresetButtonWithThumb({
+function PresetTile({
   template,
   isActive,
   onSelect,
 }: {
-  template: { config: import('@worldify/shared').BuildConfig; baseRotation?: import('@worldify/shared').Quat; idx: number };
+  template: { config: BuildConfig; baseRotation?: import('@worldify/shared').Quat };
   isActive: boolean;
   onSelect: () => void;
 }) {
-  const thumbnailUrl = usePresetThumbnail(template.config, template.baseRotation);
-  return (
-    <PresetButton
-      thumbnailUrl={thumbnailUrl}
-      isActive={isActive}
-      onSelect={onSelect}
-    />
-  );
+  const thumbnailUrl = usePresetThumbnail(template.config, template.baseRotation, { priority: THUMB_PRIORITY.HIGH });
+  return <ThumbTile thumbnailUrl={thumbnailUrl} isActive={isActive} onSelect={onSelect} />;
+}
+
+function MaterialTile({
+  materialId,
+  isActive,
+  onSelect,
+}: {
+  materialId: number;
+  isActive: boolean;
+  onSelect: () => void;
+}) {
+  const config = useMemo<BuildConfig>(() => ({
+    shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: materialId,
+  }), [materialId]);
+  const thumbnailUrl = usePresetThumbnail(config, undefined, { priority: THUMB_PRIORITY.HIGH });
+  return <ThumbTile thumbnailUrl={thumbnailUrl} isActive={isActive} onSelect={onSelect} />;
 }
 
 // ============== Main Component ==============
@@ -145,159 +97,117 @@ export function BuildMenu() {
 
   const { presetId, menuOpen, presetConfigs, presetMeta } = build;
 
-  // Current preset's config and meta
   const currentConfig = presetConfigs[presetId];
   const currentMeta = presetMeta[presetId];
   const currentMaterial = currentConfig?.material ?? 0;
   const isNonePreset = presetId === NONE_PRESET_ID;
   const currentTemplateName = currentMeta?.templateName ?? '';
 
-  // Tab state
   const [activeTab, setActiveTab] = useState<MenuTab>('presets');
+
+  // Current-build preview shown in the header (top priority — renders immediately).
+  const previewUrl = usePresetThumbnail(currentConfig, currentMeta?.baseRotation, { priority: THUMB_PRIORITY.PREVIEW });
 
   const handleClose = useCallback(() => {
     setBuildMenuOpen(false);
-    // Re-lock pointer after a tiny delay (browser requirement).
-    // Touch devices have no pointer lock — skip it there.
-    if (!isTouch()) {
-      requestAnimationFrame(() => {
-        document.body.requestPointerLock();
-      });
-    }
+    // Re-lock pointer after a tick (browser requirement); skip on touch.
+    if (!isTouch()) requestAnimationFrame(() => document.body.requestPointerLock());
   }, [setBuildMenuOpen]);
 
   const handleSelectMaterial = useCallback((materialId: number) => {
-    if (!isNonePreset) {
-      updatePresetConfig(presetId, { material: materialId });
-    }
+    if (!isNonePreset) updatePresetConfig(presetId, { material: materialId });
   }, [presetId, isNonePreset, updatePresetConfig]);
 
   const handleSelectTemplate = useCallback((templateIndex: number) => {
-    if (!isNonePreset) {
-      applyPresetTemplate(presetId, templateIndex);
-    }
+    if (!isNonePreset) applyPresetTemplate(presetId, templateIndex);
   }, [presetId, isNonePreset, applyPresetTemplate]);
 
-  // Prevent context menu
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-  }, []);
+  const handleContextMenu = useCallback((e: React.MouseEvent) => e.preventDefault(), []);
 
-  // Only show when playing and menu is open
-  if (gameMode !== GameMode.Playing || !menuOpen) {
-    return null;
-  }
+  if (gameMode !== GameMode.Playing || !menuOpen) return null;
+
+  const tabBtn = (tab: MenuTab, label: string) => (
+    <button
+      onClick={() => setActiveTab(tab)}
+      className={`flex-1 px-3 py-2.5 text-sm font-medium rounded-xl transition-colors
+        ${activeTab === tab ? 'bg-cyan-400/20 text-cyan-400' : 'bg-black/60 text-white/50 hover:text-white/80 hover:bg-black/80'}`}
+    >
+      {label}
+    </button>
+  );
 
   return (
-    <>
-      {/* Invisible backdrop to catch outside clicks/taps */}
-      <div
-        className="fixed inset-0 z-[99]"
-        onPointerDown={handleClose}
-        onContextMenu={handleContextMenu}
-      />
-
-      {/* Menu panel — same width as hotbar, sits directly above it */}
-      <div
-        className="relative z-[100] w-full flex flex-col max-h-[70vh] pointer-events-auto"
-        onPointerDown={(e) => e.stopPropagation()}
-        onContextMenu={handleContextMenu}
-      >
-        {/* Tab bar — own background, spaced from content */}
-        <div className="flex gap-1.5 shrink-0 mb-2">
-          <button
-            onClick={() => setActiveTab('presets')}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors
-              ${activeTab === 'presets'
-                ? 'bg-cyan-400/20 text-cyan-400'
-                : 'bg-black/80 text-white/50 hover:text-white/70 hover:bg-black/90'
-              }`}
-          >
-            Presets
-          </button>
-          <button
-            onClick={() => setActiveTab('materials')}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors
-              ${activeTab === 'materials'
-                ? 'bg-cyan-400/20 text-cyan-400'
-                : 'bg-black/80 text-white/50 hover:text-white/70 hover:bg-black/90'
-              }`}
-          >
-            Materials
-          </button>
-          <button
-            onClick={() => setActiveTab('config')}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-xl transition-colors
-              ${activeTab === 'config'
-                ? 'bg-cyan-400/20 text-cyan-400'
-                : 'bg-black/80 text-white/50 hover:text-white/70 hover:bg-black/90'
-              }`}
-          >
-            Config
-          </button>
-          {/* Close button — primary way to dismiss on touch (no Tab/right-click) */}
-          <button
-            onClick={handleClose}
-            aria-label="Close build menu"
-            className="shrink-0 px-4 py-2 text-sm font-medium rounded-xl bg-black/80 text-white/50 hover:text-white/90 hover:bg-black/90 transition-colors"
-          >
-            ✕
-          </button>
+    <div
+      className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm pointer-events-auto flex flex-col"
+      style={{
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
+      }}
+      onContextMenu={handleContextMenu}
+    >
+      {/* Header: current-build preview + tabs + close (does not scroll) */}
+      <div className="shrink-0 flex items-center gap-2 md:gap-3 p-2 md:p-3 border-b border-white/10">
+        <div className="shrink-0 w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-black/60 flex items-center justify-center overflow-hidden">
+          {previewUrl
+            ? <img src={previewUrl} alt="" className="w-[52px] h-[52px] md:w-[60px] md:h-[60px] object-contain" draggable={false} />
+            : <span className="text-2xl text-white/40">◼</span>}
         </div>
+        <div className="flex-1 flex gap-1.5 min-w-0">
+          {tabBtn('presets', 'Presets')}
+          {tabBtn('materials', 'Materials')}
+          {tabBtn('config', 'Config')}
+        </div>
+        <button
+          onClick={handleClose}
+          aria-label="Close build menu"
+          className="shrink-0 w-11 h-11 flex items-center justify-center text-xl rounded-xl bg-black/60 text-white/60 hover:text-white hover:bg-black/80 transition-colors"
+        >
+          ✕
+        </button>
+      </div>
 
-        <div className="flex flex-col flex-1 min-h-0 mb-2">
-          {isNonePreset ? (
-            <div className="flex items-center justify-center h-32 text-white/40 text-sm p-4 bg-black/80 rounded-2xl">
-              Select a build slot (keys 2-9, 0) to configure it
+      {/* Body: scrolls; reflows for portrait/landscape via the flex-wrap grids */}
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-glass p-3 md:p-4">
+        <div className="mx-auto w-full max-w-3xl">
+          {activeTab === 'presets' && (
+            <div className="flex flex-wrap gap-2 justify-center md:justify-start">
+              {PRESET_TEMPLATES.map((t, idx) => (
+                <PresetTile
+                  key={idx}
+                  template={t}
+                  isActive={currentTemplateName === t.name}
+                  onSelect={() => handleSelectTemplate(idx)}
+                />
+              ))}
             </div>
-          ) : activeTab === 'config' ? (
-            /* ---- Config Tab ---- */
-            <div className="p-4 bg-black/80 rounded-2xl">
-            {currentConfig && currentMeta ? (
-              <BuildConfigTab
-                config={currentConfig}
-                meta={currentMeta}
-                presetId={presetId}
-                onUpdateConfig={updatePresetConfig}
-                onUpdateMeta={updatePresetMeta}
-              />
-            ) : (
-              <div className="flex items-center justify-center h-32 text-white/40 text-sm">
-                No preset selected
-              </div>
-            )}
+          )}
+
+          {activeTab === 'materials' && (
+            <div className="flex flex-wrap gap-2 justify-center md:justify-start">
+              {MATERIAL_NAMES.map((_name, id) => (
+                <MaterialTile
+                  key={id}
+                  materialId={id}
+                  isActive={currentMaterial === id}
+                  onSelect={() => handleSelectMaterial(id)}
+                />
+              ))}
             </div>
-          ) : activeTab === 'presets' ? (
-            /* ---- Presets Tab ---- */
-            <div className="overflow-y-auto -mr-[20px] max-h-[300px] snap-y snap-mandatory scrollbar-glass">
-              <div className="flex flex-wrap gap-1.5">
-                {PRESET_TEMPLATES.map((t, idx) => (
-                  <PresetButtonWithThumb
-                    key={idx}
-                    template={{ ...t, idx }}
-                    isActive={currentTemplateName === t.name}
-                    onSelect={() => handleSelectTemplate(idx)}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : (
-            /* ---- Materials Tab ---- */
-            <div className="overflow-y-auto -mr-[20px] max-h-[300px] snap-y snap-mandatory scrollbar-glass">
-              <div className="flex flex-wrap gap-1.5">
-                {MATERIAL_NAMES.map((_name, id) => (
-                  <MaterialCubeThumb
-                    key={id}
-                    materialId={id}
-                    isActive={currentMaterial === id}
-                    onSelect={() => handleSelectMaterial(id)}
-                  />
-                ))}
-              </div>
-            </div>
+          )}
+
+          {activeTab === 'config' && currentConfig && currentMeta && (
+            <BuildConfigTab
+              config={currentConfig}
+              meta={currentMeta}
+              presetId={presetId}
+              onUpdateConfig={updatePresetConfig}
+              onUpdateMeta={updatePresetMeta}
+            />
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }

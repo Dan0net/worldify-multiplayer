@@ -1,59 +1,79 @@
 /**
- * MapOverlay - In-game minimap (top-right corner)
+ * MapOverlay — in-game minimap + menu button, as one integrated top-right cluster.
  *
- * Toggle with 'M' key. Zoom with Z / X.
- * All map rendering and player markers are handled by MapPanel.
+ * The minimap is framed (ring + backdrop) and locked to the *current* render
+ * distance: it zooms to `quality.visibilityRadius` so the loaded tiles always fill
+ * it. The mobile menu (X) button sits in the top-right corner of the map's bounding
+ * square, on top of the circle (the corner is outside the circle, so the map never
+ * covers it) — so the cluster is exactly one map tall and no longer overlaps the
+ * R-pad in landscape. Toggle the map with 'M'.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { X } from 'lucide-react';
 import { useGameStore } from '../state/store';
+import { GameMode, MAP_TILE_SIZE } from '@worldify/shared';
 import { MapPanel } from './MapPanel';
-import { VISIBILITY_RADIUS, MAP_TILE_SIZE } from '@worldify/shared';
-import { useIsTouch } from './useDeviceMode';
+import { useIsTouch, useIsPortrait } from './useDeviceMode';
+import { exitFullscreenIfActive } from './fullscreen';
 
-// Map viewport size in pixels (smaller on mobile)
-const MAP_VIEWPORT_SIZE = 200;
-const MAP_VIEWPORT_SIZE_MOBILE = 120;
-
-// Calculate scale to fit all tiles within VISIBILITY_RADIUS
-const TILES_ACROSS = VISIBILITY_RADIUS * 2 + 1;
-const DEFAULT_ZOOM_INDEX = 0;
+const MAP_SIZE_DESKTOP = 180;
+const MAP_SIZE_PORTRAIT = 140;   // more vertical room in portrait → bigger map
+const MAP_SIZE_LANDSCAPE = 100;  // compact so it clears the R-pad in landscape
 
 export function MapOverlay() {
   const showMapOverlay = useGameStore((s) => s.showMapOverlay);
   const toggleMapOverlay = useGameStore((s) => s.toggleMapOverlay);
-  const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
+  const setGameMode = useGameStore((s) => s.setGameMode);
+  // Live view distance — the map zooms so the loaded tiles fill it.
+  const visibilityRadius = useGameStore((s) => s.quality.visibilityRadius);
   const isTouch = useIsTouch();
+  const isPortrait = useIsPortrait();
 
-  const size = isTouch ? MAP_VIEWPORT_SIZE_MOBILE : MAP_VIEWPORT_SIZE;
-  const fitScale = size / (TILES_ACROSS * MAP_TILE_SIZE);
-  const zoomLevels = [fitScale, fitScale * 2, fitScale * 4, fitScale * 8];
+  const size = isTouch ? (isPortrait ? MAP_SIZE_PORTRAIT : MAP_SIZE_LANDSCAPE) : MAP_SIZE_DESKTOP;
+  const tilesAcross = visibilityRadius * 2 + 1;
+  const scale = size / (tilesAcross * MAP_TILE_SIZE);
 
-  // Keyboard: M toggle, Z/X zoom
+  // Keyboard: M toggles the map (desktop). Zoom is retired (locked to render distance).
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT') return;
       if (e.key === 'm' || e.key === 'M') toggleMapOverlay();
-      else if (e.key === 'z' || e.key === 'Z') setZoomIndex((p) => Math.max(0, p - 1));
-      else if (e.key === 'x' || e.key === 'X') setZoomIndex((p) => Math.min(3, p + 1));
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [toggleMapOverlay]);
 
-  if (!showMapOverlay) return null;
+  const openMenu = () => {
+    exitFullscreenIfActive();
+    setGameMode(GameMode.Explore);
+  };
 
   return (
     <div
-      className="absolute top-2 right-2 md:top-5 md:right-5"
+      className="absolute top-5 right-5"
+      style={{ width: size, height: size }}
     >
-      <MapPanel
-        width={size}
-        height={size}
-        scale={zoomLevels[zoomIndex]}
-        showMarkers
-        className="rounded-full overflow-hidden"
-      />
+      <div className="relative" style={{ width: size, height: size }}>
+        {/* Framed minimap (base layer). */}
+        {showMapOverlay && (
+          <div className="absolute inset-0 rounded-full ring-1 ring-white/25 bg-black/40 shadow-lg overflow-hidden">
+            <MapPanel width={size} height={size} scale={scale} showMarkers className="rounded-full overflow-hidden" />
+          </div>
+        )}
+
+        {/* Menu (X) button — touch only; top-right corner of the box, above the map. */}
+        {isTouch && (
+          <button
+            onPointerDown={(e) => { e.preventDefault(); openMenu(); }}
+            aria-label="Menu"
+            className="pointer-events-auto absolute top-0 right-0 z-10 w-8 h-8 flex items-center justify-center rounded-full
+              bg-black/60 ring-1 ring-white/30 text-white shadow-lg active:scale-90 transition-transform"
+          >
+            <X size={18} strokeWidth={2.6} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

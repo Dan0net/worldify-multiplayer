@@ -2,13 +2,14 @@ import { useEffect, useRef } from 'react';
 import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { ExploreOverlay } from './ui/ExploreOverlay';
-import { BuildToolbar } from './ui/BuildToolbar';
+import { BuildMenu } from './ui/BuildMenu';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
 import { ExploreControls } from './ui/ExploreControls';
 import { useGameStore } from './state/store';
 import { useIsTouch } from './ui/useDeviceMode';
 import { createGame } from './game/createGame';
+import { preloadPresetThumbnails } from './ui/PresetThumbnailRenderer';
 import { GameMode } from '@worldify/shared';
 
 function App() {
@@ -24,6 +25,9 @@ function App() {
     if (bootStarted.current) return;
     bootStarted.current = true;
     createGame('local').catch((err) => console.error('[game] local boot failed:', err));
+    // Warm the build-menu thumbnail cache in the background (lowest priority;
+    // the queue waits for the renderer to exist).
+    preloadPresetThumbnails();
   }, []);
 
   const isPlaying = gameMode === GameMode.Playing;
@@ -41,7 +45,7 @@ function App() {
           {isPlaying && (
             <>
               <Hud />
-              <BuildToolbar />
+              <BuildMenu />
               <MapOverlay />
             </>
           )}
