@@ -17,6 +17,7 @@ import {
   type PresetSlotMeta,
 } from '@worldify/shared';
 import { usePresetThumbnail } from './usePresetThumbnail';
+import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
 
 // ============== Constants ==============
 
@@ -221,8 +222,9 @@ export function BuildConfigTab({
   const { shape, mode, size, thickness, closed, arcSweep } = config;
   const { align, snapShape, autoRotateY, baseRotation } = meta;
 
-  // Live thumbnail preview of current config
-  const thumbnailUrl = usePresetThumbnail(config, meta.baseRotation);
+  // Live thumbnail preview of current config — top priority so it re-renders
+  // immediately as the user tweaks sliders (the menu takes over the window).
+  const thumbnailUrl = usePresetThumbnail(config, meta.baseRotation, { priority: THUMB_PRIORITY.PREVIEW });
 
   // Whether closed (open-ended) applies – only when there's a non-zero thickness
   const supportsClosed = (thickness ?? 0) > 0;

@@ -23,6 +23,11 @@ import {
   invertQuat,
   BuildMode,
   BuildShape,
+  DEFAULT_BUILD_PRESETS,
+  PRESET_TEMPLATES,
+  NONE_PRESET_ID,
+  presetToSlotMeta,
+  MATERIAL_NAMES,
   type BuildConfig,
   type Quat,
 } from '@worldify/shared';
@@ -30,6 +35,7 @@ import { meshVoxelsSplit } from '../game/voxel/SurfaceNet';
 import { createGeometryFromSurfaceNet } from '../game/voxel/MeshGeometry';
 import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial } from '../game/material/TerrainMaterial';
 import { getRendererRef } from '../game/quality/QualityManager';
+import { useGameStore } from '../state/store';
 
 // ============== Constants ==============
 
@@ -37,7 +43,25 @@ const THUMB_SIZE = 256;
 const GRID_SIZE = CHUNK_SIZE + 2;
 const GRID_VOXELS = GRID_SIZE * GRID_SIZE * GRID_SIZE;
 const PIXEL_BYTES = THUMB_SIZE * THUMB_SIZE * 4;
-const MAX_RENDERS_PER_FRAME = 2;
+
+// Render budget per frame. When the build menu is open the game is soft-paused,
+// so we can spend more of the frame draining the queue for snappy thumbnails.
+const MAX_RENDERS_IDLE = 2;
+const MAX_RENDERS_MENU_OPEN = 6;
+
+/**
+ * Render-queue priority (higher drains first). Interactive previews beat visible
+ * slots, which beat the boot-time preload sweep.
+ */
+export const THUMB_PRIORITY = { PRELOAD: 0, NORMAL: 1, HIGH: 2, PREVIEW: 3 } as const;
+
+function maxRendersThisFrame(): number {
+  try {
+    return useGameStore.getState().build.menuOpen ? MAX_RENDERS_MENU_OPEN : MAX_RENDERS_IDLE;
+  } catch {
+    return MAX_RENDERS_IDLE;
+  }
+}
 
 // ============== Reusable Three.js Objects ==============
 
@@ -134,6 +158,7 @@ interface PendingRender {
   config: BuildConfig;
   rotation?: Quat;
   hash: string;
+  priority: number;
   callbacks: Array<(url: string | null) => void>;
 }
 
@@ -494,6 +519,16 @@ function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): bool
   return true;
 }
 
+/** Remove and return the highest-priority queued entry (FIFO within a priority). */
+function takeNextEntry(): PendingRender | undefined {
+  if (renderQueue.length === 0) return undefined;
+  let bestIdx = 0;
+  for (let i = 1; i < renderQueue.length; i++) {
+    if (renderQueue[i].priority > renderQueue[bestIdx].priority) bestIdx = i;
+  }
+  return renderQueue.splice(bestIdx, 1)[0];
+}
+
 function processQueue(): void {
   queueRafId = 0;
 
@@ -505,9 +540,10 @@ function processQueue(): void {
     return;
   }
 
+  const budget = maxRendersThisFrame();
   let rendered = 0;
-  while (rendered < MAX_RENDERS_PER_FRAME && renderQueue.length > 0) {
-    const entry = renderQueue.shift()!;
+  while (rendered < budget && renderQueue.length > 0) {
+    const entry = takeNextEntry()!;
     if (processEntry(entry, renderer)) rendered++;
   }
 
@@ -532,6 +568,7 @@ export function queueThumbnailRender(
   config: BuildConfig,
   rotation: Quat | undefined,
   callback: (url: string | null) => void,
+  priority: number = THUMB_PRIORITY.NORMAL,
 ): void {
   const hash = configHash(config, rotation);
 
@@ -539,12 +576,16 @@ export function queueThumbnailRender(
   const cached = thumbnailCache.get(hash);
   if (cached) { callback(cached); return; }
 
-  // 2. Already queued — piggyback
+  // 2. Already queued — piggyback (and upgrade its priority if this caller needs it sooner)
   const existing = pendingByHash.get(hash);
-  if (existing) { existing.callbacks.push(callback); return; }
+  if (existing) {
+    existing.callbacks.push(callback);
+    if (priority > existing.priority) existing.priority = priority;
+    return;
+  }
 
   // 3. Try IndexedDB first, fall back to GPU queue on miss
-  const entry: PendingRender = { config, rotation, hash, callbacks: [callback] };
+  const entry: PendingRender = { config, rotation, hash, priority, callbacks: [callback] };
   pendingByHash.set(hash, entry);
 
   loadFromIDB(hash).then(url => {
@@ -558,6 +599,28 @@ export function queueThumbnailRender(
     renderQueue.push(entry);
     scheduleQueue();
   });
+}
+
+/**
+ * Warm the cache for every build preset, template, and material at boot so the
+ * build menu opens with thumbnails already rendered. Lowest priority, so it
+ * never delays an interactive thumbnail; safe to call before the renderer
+ * exists (the queue reschedules until it does). Deduped by hash.
+ */
+export function preloadPresetThumbnails(): void {
+  const enqueue = (config: BuildConfig, rotation?: Quat) =>
+    queueThumbnailRender(config, rotation, () => { /* warm cache only */ }, THUMB_PRIORITY.PRELOAD);
+
+  for (const p of DEFAULT_BUILD_PRESETS) {
+    if (p.id === NONE_PRESET_ID) continue;
+    enqueue(p.config, presetToSlotMeta(p).baseRotation);
+  }
+  for (const t of PRESET_TEMPLATES) {
+    enqueue(t.config, t.baseRotation);
+  }
+  for (let id = 0; id < MATERIAL_NAMES.length; id++) {
+    enqueue({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: id });
+  }
 }
 
 /** Invalidate all cached thumbnails (e.g. when textures reload). */
