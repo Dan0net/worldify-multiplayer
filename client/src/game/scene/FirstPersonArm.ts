@@ -1,12 +1,16 @@
 /**
  * FirstPersonArm — a Minecraft-style first-person view model.
  *
- * A low-poly arm attached to the camera (so it stays fixed in view). It holds the
- * actual SurfaceNet mesh of the current build (the same model the thumbnails use)
- * while build mode is on, and an empty hand otherwise. A punch swing fires on
- * place/dig. Movement wobble is NOT applied here — the camera head-bob (which this
- * arm inherits, being a camera child) provides it. Drawn depthTest:false + high
- * renderOrder like the world markers so it never clips into nearby geometry.
+ * A low-poly arm attached to the camera. It holds the actual SurfaceNet mesh of
+ * the current build (the same model the thumbnails use, with the real terrain
+ * materials) while build mode is on, and an empty hand otherwise. A punch swing
+ * fires on place/dig. Movement wobble comes from the camera head-bob (inherited,
+ * being a camera child).
+ *
+ * Rendering: the arm lives in the MAIN scene (so the world's day/night lights
+ * illuminate it) but on FIRST_PERSON_LAYER, excluded from the normal composed
+ * render. `renderFirstPersonArm` then draws only that layer on top of everything,
+ * with a cleared depth buffer — so it's never occluded by water/geometry.
  *
  * Module singleton, mirroring the camera/scene singletons.
  */
@@ -14,16 +18,25 @@
 import * as THREE from 'three';
 import type { BuildConfig, Quat } from '@worldify/shared';
 import { createBuildItemMeshes } from '../../ui/PresetThumbnailRenderer';
+import { FIRST_PERSON_LAYER } from './firstPersonLayer';
 
-let group: THREE.Group | null = null;   // attached to the camera
+let group: THREE.Group | null = null;   // attached to the camera; positioned each frame
 let hand: THREE.Group | null = null;    // holds the arm mesh + current build item
+let armSkinMat: THREE.MeshStandardMaterial | null = null;
 let heldItem: THREE.Object3D | null = null;
 let heldKey = '';                        // rebuild guard (config + rotation + texture variant)
 
-// Resting pose in camera-local space — low and to the right, angled up-forward.
-const REST = new THREE.Vector3(0.34, -0.5, -0.7);
+const ARM_DEPTH = 0.7;   // camera-local distance the arm sits in front of the eye
+const CORNER_X = 0.9;    // fraction of the frustum half-width → pins to the right edge
+const CORNER_Y = 0.92;   // fraction of the frustum half-height → pins to the bottom edge
 
 let swing = 0; // 1 on trigger, decays to 0
+let visible = false;
+
+/** Put an object and all descendants on the first-person layer. */
+function toFirstPersonLayer(obj: THREE.Object3D): void {
+  obj.traverse((o) => o.layers.set(FIRST_PERSON_LAYER));
+}
 
 /** Build the arm and attach it to the camera (hidden until updated). */
 export function initFirstPersonArm(camera: THREE.Camera): void {
@@ -31,26 +44,24 @@ export function initFirstPersonArm(camera: THREE.Camera): void {
 
   group = new THREE.Group();
   group.frustumCulled = false;
-  group.renderOrder = 998;
   group.visible = false;
 
   hand = new THREE.Group();
   group.add(hand);
 
-  const skinMat = new THREE.MeshStandardMaterial({
-    color: 0xd9a066, roughness: 0.85, metalness: 0.0, depthTest: false,
-    // Slight self-illumination so the hand stays readable facing away from the sun.
-    emissive: 0x3a2717, emissiveIntensity: 0.6,
+  armSkinMat = new THREE.MeshStandardMaterial({
+    color: 0xd9a066, roughness: 0.85, metalness: 0.0,
+    // Slight self-illumination so the hand keeps some form at night.
+    emissive: 0x3a2717, emissiveIntensity: 0.35,
   });
-  // Forearm — a capsule rising up-and-forward from the lower right.
-  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.5, 4, 10), skinMat);
-  arm.rotation.set(0.5, 0.25, -0.2);
-  arm.position.set(0.05, -0.05, 0.02);
-  arm.renderOrder = 998;
+  // Forearm — a capsule angling up-and-inward from the bottom-right corner.
+  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.5, 4, 10), armSkinMat);
+  arm.rotation.set(0.15, 0.0, 0.6);
+  arm.position.set(-0.04, 0.02, 0.0);
   arm.frustumCulled = false;
   hand.add(arm);
 
-  group.position.copy(REST);
+  toFirstPersonLayer(group);
   camera.add(group);
 }
 
@@ -60,25 +71,22 @@ export function triggerArmSwing(): void {
 }
 
 /** Hide the arm (non-Playing modes / menu open). */
-export function setFirstPersonArmVisible(visible: boolean): void {
-  if (group) group.visible = visible;
+export function setFirstPersonArmVisible(v: boolean): void {
+  visible = v;
+  if (group) group.visible = v;
 }
 
-function disposeObject(obj: THREE.Object3D): void {
+function disposeGeometries(obj: THREE.Object3D): void {
   obj.traverse((o) => {
-    if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
-      o.geometry.dispose();
-      const m = o.material as THREE.Material | THREE.Material[];
-      if (Array.isArray(m)) m.forEach((x) => x.dispose());
-      else m.dispose();
-    }
+    if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose();
+    // Materials are shared (terrain singletons / wireframe) — do NOT dispose here.
   });
 }
 
 function clearHeldItem(): void {
   if (heldItem && hand) {
     hand.remove(heldItem);
-    disposeObject(heldItem);
+    disposeGeometries(heldItem);
   }
   heldItem = null;
   heldKey = '';
@@ -90,9 +98,9 @@ function itemKey(config: BuildConfig, rotation: Quat | undefined, variant: strin
 }
 
 /**
- * Per-frame update. The held item is the real build mesh (rebuilt only when the
- * build or texture variant changes, and only once textures are ready so it's
- * textured).
+ * Per-frame update: anchors the arm to the bottom-right frustum corner (so it
+ * stays put across aspect/fov), applies the punch swing, and rebuilds the held
+ * build mesh only when it changes (and only once textures are ready).
  */
 export function updateFirstPersonArm(opts: {
   visible: boolean;
@@ -101,19 +109,28 @@ export function updateFirstPersonArm(opts: {
   rotation?: Quat;
   texturesReady: boolean;
   variant: string;
+  fovDeg: number;
+  aspect: number;
   dtMs: number;
 }): void {
   if (!group || !hand) return;
 
+  visible = opts.visible;
   group.visible = opts.visible;
   if (!opts.visible) return;
 
   const dt = Math.min(opts.dtMs, 100) / 1000;
 
+  // Anchor to the frustum corner: same screen position regardless of aspect/fov.
+  const halfH = ARM_DEPTH * Math.tan((opts.fovDeg * Math.PI) / 180 / 2);
+  const halfW = halfH * opts.aspect;
+  const baseX = halfW * CORNER_X;
+  const baseY = -halfH * CORNER_Y;
+
   // Punch swing (decays 1 → 0; peaks mid-decay for an out-and-back motion).
   if (swing > 0) swing = Math.max(0, swing - dt * 4.5);
   const punch = Math.sin(swing * Math.PI);
-  group.position.set(REST.x, REST.y - punch * 0.06, REST.z - punch * 0.18);
+  group.position.set(baseX, baseY - punch * 0.06, -ARM_DEPTH - punch * 0.18);
   group.rotation.set(-punch * 0.7, 0, 0);
 
   // Held item — the real build mesh, rebuilt only when it changes.
@@ -123,8 +140,9 @@ export function updateFirstPersonArm(opts: {
       clearHeldItem();
       const mesh = createBuildItemMeshes(opts.config, opts.rotation);
       if (mesh) {
-        mesh.position.set(0, 0.02, -0.32);
+        mesh.position.set(-0.16, 0.24, -0.04);
         mesh.rotation.set(0.35, 0.6, 0);
+        toFirstPersonLayer(mesh);
         hand.add(mesh);
         heldItem = mesh;
       }
@@ -135,12 +153,34 @@ export function updateFirstPersonArm(opts: {
   }
 }
 
+/**
+ * Render the arm on top of the composited frame. Draws only FIRST_PERSON_LAYER
+ * with a cleared depth buffer, using the same renderer/tone-mapping as the world.
+ * Call right after the post-processing composer.
+ */
+export function renderFirstPersonArm(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void {
+  if (!group || !visible) return;
+
+  const prevMask = camera.layers.mask;
+  const prevShadowAuto = renderer.shadowMap.autoUpdate;
+  renderer.shadowMap.autoUpdate = false;   // don't recompute world shadows for this pass
+  renderer.autoClear = false;
+  renderer.clearDepth();                    // fresh depth → arm draws over everything
+  camera.layers.set(FIRST_PERSON_LAYER);    // render ONLY the arm layer
+  renderer.render(scene, camera);
+  camera.layers.mask = prevMask;
+  renderer.autoClear = true;
+  renderer.shadowMap.autoUpdate = prevShadowAuto;
+}
+
 /** Dispose the arm resources. */
 export function disposeFirstPersonArm(): void {
   if (!group) return;
   clearHeldItem();
   group.parent?.remove(group);
-  disposeObject(group);
+  disposeGeometries(group);
+  armSkinMat?.dispose();
+  armSkinMat = null;
   group = null;
   hand = null;
 }

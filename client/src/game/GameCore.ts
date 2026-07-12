@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
-import { initFirstPersonArm, updateFirstPersonArm, setFirstPersonArmVisible } from './scene/FirstPersonArm';
+import { initFirstPersonArm, updateFirstPersonArm, setFirstPersonArmVisible, renderFirstPersonArm } from './scene/FirstPersonArm';
 import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -588,6 +588,9 @@ export class GameCore {
     if (scene && camera) {
       perfStats.begin('render');
       renderEffects(this.renderer, scene, camera, deltaMs * 0.001);
+      // Draw the first-person arm on top (its own layer, cleared depth) so it's
+      // never occluded by water/geometry but still lit by the scene lights.
+      renderFirstPersonArm(this.renderer, scene, camera);
       perfStats.end('render');
       perfStats.captureRendererInfo(this.renderer);
     }
@@ -833,6 +836,8 @@ export class GameCore {
       rotation: meta?.baseRotation,
       texturesReady: ts === 'low' || ts === 'high',
       variant: ts === 'high' ? 'hi' : 'lo',
+      fovDeg: camera?.fov ?? 75,
+      aspect: camera?.aspect ?? (window.innerWidth / window.innerHeight),
       dtMs: deltaMs,
     });
 

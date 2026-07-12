@@ -520,26 +520,20 @@ function normalizeHeldGroup(group: THREE.Group, bbox: THREE.Box3): void {
 
 /**
  * Build a THREE.Object3D of a BuildConfig using the same SurfaceNet pipeline as
- * thumbnails — for the first-person held item. Terrain materials are CLONED with
- * depthTest:false + a high renderOrder so it draws over the world without mutating
- * the shared world materials. Normalized so any build (1³ or 16³) renders at the
- * same size in the hand. The caller owns disposal (geometries + cloned materials).
+ * thumbnails — for the first-person held item. Uses the SHARED terrain materials
+ * directly (they carry the loaded atlas + compiled shader and respond to scene
+ * lights — cloning grabs placeholder textures and renders grey). Drawing "on top"
+ * is handled by the caller's dedicated render layer/pass, so no depthTest tricks
+ * here. Normalized so any build (1³ or 16³) renders at the same size in the hand.
+ * The caller owns disposal of the geometries (materials are shared — don't dispose).
  */
 export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat): THREE.Object3D | null {
   ensureSetup();
   const group = new THREE.Group();
 
-  const overlayClone = (m: THREE.Material): THREE.Material => {
-    const c = m.clone();
-    c.depthTest = false;
-    return c;
-  };
-
   // SUBTRACT has no solid mesh — show the same red wireframe the thumbnail uses.
   if (config.mode === BuildMode.SUBTRACT) {
     const wf = buildWireframe(config, rotation);
-    wf.material = overlayClone(wf.material as THREE.Material);
-    wf.renderOrder = 1000;
     wf.frustumCulled = false;
     const c = new THREE.Vector3(); _bbox.getCenter(c);
     wf.position.set(-c.x, -c.y, -c.z);
@@ -561,17 +555,16 @@ export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat): THR
   if (liquidGeo) { liquidGeo.computeBoundingBox(); _bbox.union(liquidGeo.boundingBox!); }
 
   const c = new THREE.Vector3(); _bbox.getCenter(c);
-  const addMesh = (geo: THREE.BufferGeometry | null, mat: THREE.Material, order: number) => {
+  const addMesh = (geo: THREE.BufferGeometry | null, mat: THREE.Material) => {
     if (!geo) return;
-    const mesh = new THREE.Mesh(geo, overlayClone(mat));
+    const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(-c.x, -c.y, -c.z);
-    mesh.renderOrder = order;
     mesh.frustumCulled = false;
     group.add(mesh);
   };
-  addMesh(solidGeo, getTerrainMaterial(), 1000);
-  addMesh(transGeo, getTransparentTerrainMaterial(), 1001);
-  addMesh(liquidGeo, getLiquidTerrainMaterial(), 1002);
+  addMesh(solidGeo, getTerrainMaterial());
+  addMesh(transGeo, getTransparentTerrainMaterial());
+  addMesh(liquidGeo, getLiquidTerrainMaterial());
 
   normalizeHeldGroup(group, _bbox);
   return group;
