@@ -66,7 +66,7 @@ function MarkerPlayButton() {
       ref={ref}
       onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(); }}
       style={{ position: 'fixed', transform: 'translate(-50%,-115%)', display: 'none' }}
-      className="pointer-events-auto px-4 py-2 rounded-full text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-400 text-white shadow-lg border border-white/20 whitespace-nowrap"
+      className="pointer-events-auto px-8 py-4 rounded-full text-2xl font-bold bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-400 text-white shadow-xl border border-white/25 whitespace-nowrap"
       aria-label="Play from here"
     >
       ▶ Play
