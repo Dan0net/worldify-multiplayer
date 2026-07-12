@@ -14,6 +14,7 @@ import { BuildMarker } from './BuildMarker';
 import { BuildPreview } from './BuildPreview';
 import { SnapManager } from './SnapManager';
 import { useGameStore } from '../../state/store';
+import { triggerArmSwing } from '../scene/FirstPersonArm';
 import { getBuildPreset, getBuildIsEnabled } from '../../state/buildAccessors';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
@@ -332,6 +333,9 @@ export class Builder {
 
     const targetPos = this.marker.getTargetPosition();
     if (!targetPos) return;
+
+    // Swing the first-person arm on a successful place/dig.
+    triggerArmSwing();
 
     const preset = getBuildPreset();
     const rotationRadians = this.marker.getEffectiveYRadians();

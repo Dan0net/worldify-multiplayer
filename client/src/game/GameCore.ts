@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
+import { initFirstPersonArm, updateFirstPersonArm, setFirstPersonArmVisible } from './scene/FirstPersonArm';
 import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -153,6 +154,10 @@ export class GameCore {
     const camera = getCamera();
     if (scene && camera) {
       initEffects(this.renderer, scene, camera);
+      // Add the camera to the scene graph so its children (the first-person arm)
+      // render, then attach the arm view model.
+      scene.add(camera);
+      initFirstPersonArm(camera);
     }
 
     // ---- Quality auto-detect / restore ----
@@ -532,6 +537,9 @@ export class GameCore {
         break;
     }
 
+    // The first-person arm only shows in Playing (updatePlayingMode drives it).
+    if (gameMode !== GameMode.Playing) setFirstPersonArmVisible(false);
+
     // Refresh minimap tiles from freshly-streamed chunks (bounded per frame).
     this.flushMapTilesFromStreamedChunks();
 
@@ -800,6 +808,17 @@ export class GameCore {
         perfStats.end('buildPreview');
       }
     }
+
+    // First-person arm (hidden while the menu soft-pauses play).
+    const build = useGameStore.getState().build;
+    const move = controls.getMoveVector();
+    updateFirstPersonArm({
+      visible: !menuPaused,
+      buildMode: build.buildMode,
+      materialId: build.presetConfigs[build.presetId]?.material ?? 0,
+      speed: Math.hypot(move.moveX, move.moveZ),
+      dtMs: deltaMs,
+    });
 
     // Periodically persist position so an unexpected close still resumes near here.
     this.posSaveAccumMs += deltaMs;
