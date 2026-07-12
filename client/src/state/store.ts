@@ -458,9 +458,11 @@ declare global {
   }
 }
 
-/** The first non-None preset — the default build when build mode is entered. */
+/** Default build when build mode is entered — the 4×4 Brick Wall preset. */
 const firstRealPresetId = (): number =>
-  DEFAULT_BUILD_PRESETS.find((p) => p.id !== NONE_PRESET_ID)?.id ?? 0;
+  DEFAULT_BUILD_PRESETS.find((p) => p.name === 'Brick Wall')?.id
+  ?? DEFAULT_BUILD_PRESETS.find((p) => p.id !== NONE_PRESET_ID)?.id
+  ?? 0;
 
 // Use existing store if available (HMR), otherwise create new one
 export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey] ?? create<GameState>((set) => ({

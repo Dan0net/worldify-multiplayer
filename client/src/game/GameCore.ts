@@ -820,9 +820,11 @@ export class GameCore {
     // The first-person arm is a camera child, so it inherits this motion.
     const move = controls.getMoveVector();
     const speed = Math.hypot(move.moveX, move.moveZ);
+    let headBob = 0;
     if (camera && !menuPaused) {
       if (speed > 0.1) this.headBobPhase += (Math.min(deltaMs, 100) / 1000) * 9;
-      camera.position.y += Math.sin(this.headBobPhase * 2) * 0.05 * Math.min(1, speed);
+      headBob = Math.sin(this.headBobPhase * 2) * 0.05 * Math.min(1, speed);
+      camera.position.y += headBob;
     }
 
     // First-person arm (hidden while the menu soft-pauses play).
@@ -838,6 +840,7 @@ export class GameCore {
       variant: ts === 'high' ? 'hi' : 'lo',
       fovDeg: camera?.fov ?? 75,
       aspect: camera?.aspect ?? (window.innerWidth / window.innerHeight),
+      headBob,
       dtMs: deltaMs,
     });
 

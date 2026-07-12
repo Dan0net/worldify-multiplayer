@@ -27,8 +27,26 @@ let heldItem: THREE.Object3D | null = null;
 let heldKey = '';                        // rebuild guard (config + rotation + texture variant)
 
 const ARM_DEPTH = 0.7;   // camera-local distance the arm sits in front of the eye
-const CORNER_X = 0.9;    // fraction of the frustum half-width → pins to the right edge
-const CORNER_Y = 0.92;   // fraction of the frustum half-height → pins to the bottom edge
+const CORNER_X = 0.82;   // fraction of the frustum half-width → toward the right edge
+const CORNER_Y = 0.78;   // fraction of the frustum half-height → toward the bottom edge
+// Cap the horizontal offset (in half-height units) so in wide landscape the arm
+// isn't shoved to the extreme edge where perspective distorts it — keeps a
+// consistent look across aspect ratios.
+const CORNER_X_CAP = 0.95;
+
+/**
+ * Orientation that makes the held item present the SAME face as its thumbnail.
+ * The thumbnail camera views from (-0.8, 0.6, -0.8); applying the inverse of that
+ * view orientation to the item makes the first-person camera (looking down -Z)
+ * reproduce the thumbnail angle.
+ */
+const HELD_ITEM_QUAT = new THREE.Quaternion().setFromRotationMatrix(
+  new THREE.Matrix4().lookAt(
+    new THREE.Vector3(-0.8, 0.6, -0.8),
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+  ),
+).invert();
 
 let swing = 0; // 1 on trigger, decays to 0
 let visible = false;
@@ -54,11 +72,11 @@ export function initFirstPersonArm(camera: THREE.Camera): void {
     // Slight self-illumination so the hand keeps some form at night.
     emissive: 0x3a2717, emissiveIntensity: 0.35,
   });
-  // Forearm — a capsule rising from the bottom-right corner up toward the held
-  // item, tilted back so the hand sits BEHIND the item (which draws over it).
+  // Forearm — a capsule rising from the bottom-right corner up-and-left toward the
+  // held item, tilted back so the hand sits BEHIND the item (which draws over it).
   const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.52, 4, 10), armSkinMat);
-  arm.rotation.set(-0.55, 0.1, 0.42);
-  arm.position.set(0.02, -0.06, 0.06);
+  arm.rotation.set(-0.35, 0.15, 0.62);
+  arm.position.set(-0.07, -0.04, 0.06);
   arm.frustumCulled = false;
   hand.add(arm);
 
@@ -117,6 +135,7 @@ export function updateFirstPersonArm(opts: {
   variant: string;
   fovDeg: number;
   aspect: number;
+  headBob: number;
   dtMs: number;
 }): void {
   if (!group || !hand) return;
@@ -127,16 +146,21 @@ export function updateFirstPersonArm(opts: {
 
   const dt = Math.min(opts.dtMs, 100) / 1000;
 
-  // Anchor to the frustum corner: same screen position regardless of aspect/fov.
+  // Anchor toward the bottom-right corner. X is capped in half-height units so
+  // wide landscape doesn't shove it into the distorted far edge — consistent look.
   const halfH = ARM_DEPTH * Math.tan((opts.fovDeg * Math.PI) / 180 / 2);
   const halfW = halfH * opts.aspect;
-  const baseX = halfW * CORNER_X;
+  const baseX = Math.min(halfW * CORNER_X, halfH * CORNER_X_CAP);
   const baseY = -halfH * CORNER_Y;
 
   // Punch swing (decays 1 → 0; peaks mid-decay for an out-and-back motion).
   if (swing > 0) swing = Math.max(0, swing - dt * 4.5);
   const punch = Math.sin(swing * Math.PI);
-  group.position.set(baseX, baseY - punch * 0.06, -ARM_DEPTH - punch * 0.18);
+
+  // Inverse head-bob: the arm counter-moves to the camera's head-bob (which the
+  // arm would otherwise not react to at all, being a camera child) so the hand
+  // bobs opposite the view as the player walks.
+  group.position.set(baseX, baseY - punch * 0.06 - opts.headBob, -ARM_DEPTH - punch * 0.18);
   group.rotation.set(-punch * 0.7, 0, 0);
 
   // Held item — the real build mesh, rebuilt only when it changes.
@@ -146,8 +170,8 @@ export function updateFirstPersonArm(opts: {
       clearHeldItem();
       const mesh = createBuildItemMeshes(opts.config, opts.rotation);
       if (mesh) {
-        mesh.position.set(-0.14, 0.16, -0.16);
-        mesh.rotation.set(0.35, 0.6, 0);
+        mesh.position.set(-0.2, 0.12, -0.16);
+        mesh.quaternion.copy(HELD_ITEM_QUAT); // match the thumbnail's view angle
         setLayerDeep(mesh, FIRST_PERSON_ITEM_LAYER); // drawn over the arm
         hand.add(mesh);
         heldItem = mesh;
