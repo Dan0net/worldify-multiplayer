@@ -29,10 +29,6 @@ let heldKey = '';                        // rebuild guard (config + rotation + t
 const ARM_DEPTH = 0.7;   // camera-local distance the arm sits in front of the eye
 const CORNER_X = 0.82;   // fraction of the frustum half-width → toward the right edge
 const CORNER_Y = 0.78;   // fraction of the frustum half-height → toward the bottom edge
-// Cap the horizontal offset (in half-height units) so in wide landscape the arm
-// isn't shoved to the extreme edge where perspective distorts it — keeps a
-// consistent look across aspect ratios.
-const CORNER_X_CAP = 0.95;
 
 /**
  * Orientation that makes the held item present the SAME face as its thumbnail.
@@ -72,11 +68,12 @@ export function initFirstPersonArm(camera: THREE.Camera): void {
     // Slight self-illumination so the hand keeps some form at night.
     emissive: 0x3a2717, emissiveIntensity: 0.35,
   });
-  // Forearm — a capsule rising from the bottom-right corner up-and-left toward the
-  // held item, tilted back so the hand sits BEHIND the item (which draws over it).
-  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.52, 4, 10), armSkinMat);
+  // Forearm — a shorter capsule rising from the bottom-right corner up-and-left
+  // toward the held item, tilted back so the hand sits BEHIND the item (which draws
+  // over it). Raised + shortened so the elbow isn't too low.
+  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.42, 4, 10), armSkinMat);
   arm.rotation.set(-0.35, 0.15, 0.62);
-  arm.position.set(-0.07, -0.04, 0.06);
+  arm.position.set(-0.08, 0.08, 0.06);
   arm.frustumCulled = false;
   hand.add(arm);
 
@@ -146,11 +143,11 @@ export function updateFirstPersonArm(opts: {
 
   const dt = Math.min(opts.dtMs, 100) / 1000;
 
-  // Anchor toward the bottom-right corner. X is capped in half-height units so
-  // wide landscape doesn't shove it into the distorted far edge — consistent look.
+  // Anchor to the bottom-right frustum corner (comes in from the right edge in
+  // both portrait and landscape).
   const halfH = ARM_DEPTH * Math.tan((opts.fovDeg * Math.PI) / 180 / 2);
   const halfW = halfH * opts.aspect;
-  const baseX = Math.min(halfW * CORNER_X, halfH * CORNER_X_CAP);
+  const baseX = halfW * CORNER_X;
   const baseY = -halfH * CORNER_Y;
 
   // Punch swing (decays 1 → 0; peaks mid-decay for an out-and-back motion).

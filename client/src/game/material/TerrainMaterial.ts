@@ -600,14 +600,23 @@ export function createHeldItemMaterial(isTransparent: boolean): TerrainMaterial 
   const tex = shared.getTextures();
   if (tex) mat.setTextures(tex);
 
-  // Wrap the base shader build to make tri-planar object-space (static in hand).
+  // Wrap the base shader build to make the tri-planar mapping fully OBJECT-space —
+  // both the sample position AND the projection normal. World-space sampling makes a
+  // camera-locked mesh's texture swim (position) and stretch as it rotates (normal);
+  // object-space bakes the texture to the mesh surfaces, so it renders exactly like
+  // the (unrotated) thumbnail regardless of how the item is oriented in the world.
   const baseCompile = mat.onBeforeCompile;
   mat.onBeforeCompile = (shader, renderer) => {
     baseCompile(shader, renderer);
-    shader.vertexShader = shader.vertexShader.replace(
-      /vWorldPosition = \(modelMatrix \* vec4\(position, 1\.0\)\)\.xyz;/g,
-      'vWorldPosition = position;',
-    );
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        /vWorldPosition = \(modelMatrix \* vec4\(position, 1\.0\)\)\.xyz;/g,
+        'vWorldPosition = position;',
+      )
+      .replace(
+        /vWorldNormal = normalize\(\(modelMatrix \* vec4\(normal, 0\.0\)\)\.xyz\);/g,
+        'vWorldNormal = normalize(normal);',
+      );
   };
   const baseKey = mat.customProgramCacheKey.bind(mat);
   mat.customProgramCacheKey = () => `${baseKey()}|held`;
