@@ -90,21 +90,14 @@ function renderTileToBitmap(tile: MapTileData): Promise<ImageBitmap> {
   for (let lz = 0; lz < MAP_TILE_SIZE; lz++) {
     for (let lx = 0; lx < MAP_TILE_SIZE; lx++) {
       const tileIndex = tilePixelIndex(lx, lz);
-      const height = tile.heights[tileIndex];
       const material = tile.materials[tileIndex];
 
       const rgb = MATERIAL_RGB_CACHE[material] ?? MATERIAL_RGB_CACHE[255];
-      // Height shading (hardcoded defaults matching MapRenderer)
-      const heightNorm = (height - (-32)) / (64 - (-32));
-      const brightness = Math.max(0.3, Math.min(1.0, 0.5 + heightNorm * 0.5));
-      const r = Math.round(rgb[0] * brightness);
-      const g = Math.round(rgb[1] * brightness);
-      const b = Math.round(rgb[2] * brightness);
-
+      // Full material brightness — no elevation shading (tiles read clearly on the map).
       const px = (lz * MAP_TILE_SIZE + lx) * 4;
-      data[px] = r;
-      data[px + 1] = g;
-      data[px + 2] = b;
+      data[px] = rgb[0];
+      data[px + 1] = rgb[1];
+      data[px + 2] = rgb[2];
       data[px + 3] = 255;
     }
   }
