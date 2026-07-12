@@ -154,10 +154,8 @@ export class GameCore {
     const camera = getCamera();
     if (scene && camera) {
       initEffects(this.renderer, scene, camera);
-      // Add the camera to the scene graph so its children (the first-person arm)
-      // render, then attach the arm view model.
-      scene.add(camera);
-      initFirstPersonArm(camera);
+      // The first-person arm renders with its own ortho camera (added to the scene).
+      initFirstPersonArm(scene);
     }
 
     // ---- Quality auto-detect / restore ----
@@ -588,9 +586,9 @@ export class GameCore {
     if (scene && camera) {
       perfStats.begin('render');
       renderEffects(this.renderer, scene, camera, deltaMs * 0.001);
-      // Draw the first-person arm on top (its own layer, cleared depth) so it's
-      // never occluded by water/geometry but still lit by the scene lights.
-      renderFirstPersonArm(this.renderer, scene, camera);
+      // Draw the first-person arm on top (own ortho camera + layers, cleared depth)
+      // so it's never occluded by water/geometry but still lit by the scene lights.
+      renderFirstPersonArm(this.renderer, scene);
       perfStats.end('render');
       perfStats.captureRendererInfo(this.renderer);
     }
@@ -838,8 +836,6 @@ export class GameCore {
       rotation: meta?.baseRotation,
       texturesReady: ts === 'low' || ts === 'high',
       variant: ts === 'high' ? 'hi' : 'lo',
-      fovDeg: camera?.fov ?? 75,
-      aspect: camera?.aspect ?? (window.innerWidth / window.innerHeight),
       headBob,
       dtMs: deltaMs,
     });
