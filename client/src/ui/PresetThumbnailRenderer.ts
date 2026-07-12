@@ -33,7 +33,7 @@ import {
 } from '@worldify/shared';
 import { meshVoxelsSplit } from '../game/voxel/SurfaceNet';
 import { createGeometryFromSurfaceNet } from '../game/voxel/MeshGeometry';
-import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial } from '../game/material/TerrainMaterial';
+import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, createHeldItemMaterial } from '../game/material/TerrainMaterial';
 import { getRendererRef } from '../game/quality/QualityManager';
 import { useGameStore } from '../state/store';
 
@@ -520,12 +520,15 @@ function normalizeHeldGroup(group: THREE.Group, bbox: THREE.Box3): void {
 
 /**
  * Build a THREE.Object3D of a BuildConfig using the same SurfaceNet pipeline as
- * thumbnails — for the first-person held item. Uses the SHARED terrain materials
- * directly (they carry the loaded atlas + compiled shader and respond to scene
- * lights — cloning grabs placeholder textures and renders grey). Drawing "on top"
- * is handled by the caller's dedicated render layer/pass, so no depthTest tricks
- * here. Normalized so any build (1³ or 16³) renders at the same size in the hand.
- * The caller owns disposal of the geometries (materials are shared — don't dispose).
+ * thumbnails — for the first-person held item. Solid/transparent parts use dedicated
+ * object-space terrain materials (`createHeldItemMaterial`) seeded with the loaded
+ * atlas, so the texture is static in the hand (the shared world material samples by
+ * world position and would swim as the player moves) and renders real textures (not
+ * the grey a clone would give). Drawing "on top" is handled by the caller's render
+ * layer/pass, so no depthTest tricks here. Normalized so any build (1³ or 16³)
+ * renders at the same size in the hand. The caller owns disposal of the geometries
+ * and the `userData.heldItem`-tagged materials (the liquid part reuses the shared
+ * water material — don't dispose that one).
  */
 export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat): THREE.Object3D | null {
   ensureSetup();
@@ -562,8 +565,8 @@ export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat): THR
     mesh.frustumCulled = false;
     group.add(mesh);
   };
-  addMesh(solidGeo, getTerrainMaterial());
-  addMesh(transGeo, getTransparentTerrainMaterial());
+  addMesh(solidGeo, solidGeo ? createHeldItemMaterial(false) : getTerrainMaterial());
+  addMesh(transGeo, transGeo ? createHeldItemMaterial(true) : getTransparentTerrainMaterial());
   addMesh(liquidGeo, getLiquidTerrainMaterial());
 
   normalizeHeldGroup(group, _bbox);

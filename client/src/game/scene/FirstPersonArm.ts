@@ -18,7 +18,7 @@
 import * as THREE from 'three';
 import type { BuildConfig, Quat } from '@worldify/shared';
 import { createBuildItemMeshes } from '../../ui/PresetThumbnailRenderer';
-import { FIRST_PERSON_LAYER } from './firstPersonLayer';
+import { FIRST_PERSON_LAYER, FIRST_PERSON_ITEM_LAYER } from './firstPersonLayer';
 
 let group: THREE.Group | null = null;   // attached to the camera; positioned each frame
 let hand: THREE.Group | null = null;    // holds the arm mesh + current build item
@@ -33,9 +33,9 @@ const CORNER_Y = 0.92;   // fraction of the frustum half-height → pins to the 
 let swing = 0; // 1 on trigger, decays to 0
 let visible = false;
 
-/** Put an object and all descendants on the first-person layer. */
-function toFirstPersonLayer(obj: THREE.Object3D): void {
-  obj.traverse((o) => o.layers.set(FIRST_PERSON_LAYER));
+/** Put an object and all descendants on a single layer. */
+function setLayerDeep(obj: THREE.Object3D, layer: number): void {
+  obj.traverse((o) => o.layers.set(layer));
 }
 
 /** Build the arm and attach it to the camera (hidden until updated). */
@@ -54,14 +54,15 @@ export function initFirstPersonArm(camera: THREE.Camera): void {
     // Slight self-illumination so the hand keeps some form at night.
     emissive: 0x3a2717, emissiveIntensity: 0.35,
   });
-  // Forearm — a capsule angling up-and-inward from the bottom-right corner.
-  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.5, 4, 10), armSkinMat);
-  arm.rotation.set(0.15, 0.0, 0.6);
-  arm.position.set(-0.04, 0.02, 0.0);
+  // Forearm — a capsule rising from the bottom-right corner up toward the held
+  // item, tilted back so the hand sits BEHIND the item (which draws over it).
+  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.52, 4, 10), armSkinMat);
+  arm.rotation.set(-0.55, 0.1, 0.42);
+  arm.position.set(0.02, -0.06, 0.06);
   arm.frustumCulled = false;
   hand.add(arm);
 
-  toFirstPersonLayer(group);
+  setLayerDeep(group, FIRST_PERSON_LAYER);
   camera.add(group);
 }
 
@@ -76,17 +77,22 @@ export function setFirstPersonArmVisible(v: boolean): void {
   if (group) group.visible = v;
 }
 
-function disposeGeometries(obj: THREE.Object3D): void {
+function disposeArmObject(obj: THREE.Object3D): void {
   obj.traverse((o) => {
-    if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose();
-    // Materials are shared (terrain singletons / wireframe) — do NOT dispose here.
+    if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+      o.geometry.dispose();
+      // Only dispose dedicated held-item materials; shared terrain/water/wireframe
+      // materials are reused elsewhere and must not be disposed.
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) if (m && m.userData?.heldItem) m.dispose();
+    }
   });
 }
 
 function clearHeldItem(): void {
   if (heldItem && hand) {
     hand.remove(heldItem);
-    disposeGeometries(heldItem);
+    disposeArmObject(heldItem);
   }
   heldItem = null;
   heldKey = '';
@@ -140,9 +146,9 @@ export function updateFirstPersonArm(opts: {
       clearHeldItem();
       const mesh = createBuildItemMeshes(opts.config, opts.rotation);
       if (mesh) {
-        mesh.position.set(-0.16, 0.24, -0.04);
+        mesh.position.set(-0.14, 0.16, -0.16);
         mesh.rotation.set(0.35, 0.6, 0);
-        toFirstPersonLayer(mesh);
+        setLayerDeep(mesh, FIRST_PERSON_ITEM_LAYER); // drawn over the arm
         hand.add(mesh);
         heldItem = mesh;
       }
@@ -165,9 +171,17 @@ export function renderFirstPersonArm(renderer: THREE.WebGLRenderer, scene: THREE
   const prevShadowAuto = renderer.shadowMap.autoUpdate;
   renderer.shadowMap.autoUpdate = false;   // don't recompute world shadows for this pass
   renderer.autoClear = false;
-  renderer.clearDepth();                    // fresh depth → arm draws over everything
-  camera.layers.set(FIRST_PERSON_LAYER);    // render ONLY the arm layer
+
+  // Pass 1 — the arm, over the composited world.
+  renderer.clearDepth();
+  camera.layers.set(FIRST_PERSON_LAYER);
   renderer.render(scene, camera);
+
+  // Pass 2 — the held item, over the arm (fresh depth → always on top, no z-fight).
+  renderer.clearDepth();
+  camera.layers.set(FIRST_PERSON_ITEM_LAYER);
+  renderer.render(scene, camera);
+
   camera.layers.mask = prevMask;
   renderer.autoClear = true;
   renderer.shadowMap.autoUpdate = prevShadowAuto;
@@ -178,7 +192,7 @@ export function disposeFirstPersonArm(): void {
   if (!group) return;
   clearHeldItem();
   group.parent?.remove(group);
-  disposeGeometries(group);
+  disposeArmObject(group);
   armSkinMat?.dispose();
   armSkinMat = null;
   group = null;

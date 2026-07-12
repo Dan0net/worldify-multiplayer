@@ -14,11 +14,12 @@ import { X } from 'lucide-react';
 import { useGameStore } from '../state/store';
 import { GameMode, MAP_TILE_SIZE } from '@worldify/shared';
 import { MapPanel } from './MapPanel';
-import { useIsTouch } from './useDeviceMode';
+import { useIsTouch, useIsPortrait } from './useDeviceMode';
 import { exitFullscreenIfActive } from './fullscreen';
 
 const MAP_SIZE_DESKTOP = 180;
-const MAP_SIZE_MOBILE = 92;
+const MAP_SIZE_PORTRAIT = 140;   // more vertical room in portrait → bigger map
+const MAP_SIZE_LANDSCAPE = 100;  // compact so it clears the R-pad in landscape
 
 export function MapOverlay() {
   const showMapOverlay = useGameStore((s) => s.showMapOverlay);
@@ -27,8 +28,9 @@ export function MapOverlay() {
   // Live view distance — the map zooms so the loaded tiles fill it.
   const visibilityRadius = useGameStore((s) => s.quality.visibilityRadius);
   const isTouch = useIsTouch();
+  const isPortrait = useIsPortrait();
 
-  const size = isTouch ? MAP_SIZE_MOBILE : MAP_SIZE_DESKTOP;
+  const size = isTouch ? (isPortrait ? MAP_SIZE_PORTRAIT : MAP_SIZE_LANDSCAPE) : MAP_SIZE_DESKTOP;
   const tilesAcross = visibilityRadius * 2 + 1;
   const scale = size / (tilesAcross * MAP_TILE_SIZE);
 
@@ -49,8 +51,8 @@ export function MapOverlay() {
 
   return (
     <div
-      className="absolute top-2 right-2 md:top-5 md:right-5"
-      style={{ width: size, height: size, paddingTop: 'env(safe-area-inset-top)', paddingRight: 'env(safe-area-inset-right)' }}
+      className="absolute top-5 right-5"
+      style={{ width: size, height: size }}
     >
       <div className="relative" style={{ width: size, height: size }}>
         {/* Framed minimap (base layer). */}

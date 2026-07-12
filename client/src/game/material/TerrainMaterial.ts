@@ -381,7 +381,12 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       this.needsUpdate = true;
     }
   }
-  
+
+  /** Current loaded textures (used to seed dedicated held-item materials). */
+  getTextures(): LoadedTextures | null {
+    return this.textures;
+  }
+
   setRepeatScale(scale: number): void {
     if (this._shader) {
       this._shader.uniforms.repeatScale.value = scale;
@@ -577,6 +582,38 @@ export function getTransparentTerrainMaterial(): TerrainMaterial {
 
 export function getLiquidTerrainMaterial(): WaterMaterial {
   return getWaterMaterial();
+}
+
+/**
+ * Create a DEDICATED terrain material for the first-person held item.
+ *
+ * The shared world material samples its tri-planar texture by WORLD position, so a
+ * camera-locked mesh's texture swims as the player moves. This variant samples by
+ * OBJECT position (`vWorldPosition = position`) so the texture is static in the
+ * hand — matching how the thumbnail (fixed position) looks. Seeded with the
+ * currently-loaded atlas; tagged `userData.heldItem` and owned by the caller
+ * (dispose on rebuild).
+ */
+export function createHeldItemMaterial(isTransparent: boolean): TerrainMaterial {
+  const mat = new TerrainMaterial(isTransparent);
+  const shared = isTransparent ? getTransparentTerrainMaterial() : getTerrainMaterial();
+  const tex = shared.getTextures();
+  if (tex) mat.setTextures(tex);
+
+  // Wrap the base shader build to make tri-planar object-space (static in hand).
+  const baseCompile = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    baseCompile(shader, renderer);
+    shader.vertexShader = shader.vertexShader.replace(
+      /vWorldPosition = \(modelMatrix \* vec4\(position, 1\.0\)\)\.xyz;/g,
+      'vWorldPosition = position;',
+    );
+  };
+  const baseKey = mat.customProgramCacheKey.bind(mat);
+  mat.customProgramCacheKey = () => `${baseKey()}|held`;
+
+  mat.userData.heldItem = true;
+  return mat;
 }
 
 export function getTransparentDepthMaterial(): TransparentDepthMaterial {

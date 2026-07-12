@@ -19,7 +19,7 @@ import { getScene } from './scene';
 import { setTerrainEnvMapIntensity } from '../material/TerrainMaterial';
 import { useGameStore, EnvironmentSettings } from '../../state/store';
 import { initSkyDome, updateSkyUniforms, disposeSkyDome } from './SkyDome';
-import { FIRST_PERSON_LAYER } from './firstPersonLayer';
+import { FIRST_PERSON_LAYER, FIRST_PERSON_ITEM_LAYER } from './firstPersonLayer';
 import { CHUNK_WORLD_SIZE } from '@worldify/shared';
 
 // ============== Internal State ==============
@@ -96,7 +96,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   );
   sunLight.position.copy(sunPos);
   sunLight.castShadow = true;
-  sunLight.layers.enable(FIRST_PERSON_LAYER); // also light the first-person arm
+  sunLight.layers.enable(FIRST_PERSON_LAYER); sunLight.layers.enable(FIRST_PERSON_ITEM_LAYER); // light the FP arm + held item
   configureShadowCamera(sunLight, settings);
   scene.add(sunLight);
   scene.add(sunLight.target);
@@ -114,7 +114,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   );
   moonLight.position.copy(moonPos);
   moonLight.castShadow = false;
-  moonLight.layers.enable(FIRST_PERSON_LAYER); // also light the first-person arm
+  moonLight.layers.enable(FIRST_PERSON_LAYER); moonLight.layers.enable(FIRST_PERSON_ITEM_LAYER); // light the FP arm + held item
   configureShadowCamera(moonLight, settings);
   scene.add(moonLight);
   scene.add(moonLight.target);
@@ -128,7 +128,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
       settings.hemisphereGroundColor ?? '#3d5c3d',
       settings.hemisphereIntensity ?? 1.0
     );
-    hemisphereLight.layers.enable(FIRST_PERSON_LAYER); // also light the first-person arm
+    hemisphereLight.layers.enable(FIRST_PERSON_LAYER); hemisphereLight.layers.enable(FIRST_PERSON_ITEM_LAYER); // light the FP arm + held item
     scene.add(hemisphereLight);
   }
   
