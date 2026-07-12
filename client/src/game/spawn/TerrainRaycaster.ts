@@ -13,8 +13,14 @@ import * as THREE from 'three';
  */
 export interface TerrainRaycaster {
   /**
-   * Get all collision meshes for raycasting.
+   * Get all collision meshes for raycasting (solid + transparent + liquid).
    * @returns Array of Three.js meshes
    */
   getCollisionMeshes(): THREE.Object3D[];
+
+  /**
+   * Get only the solid (collidable) meshes — excludes transparent foliage + liquid.
+   * @returns Array of Three.js meshes
+   */
+  getSolidMeshes(): THREE.Object3D[];
 }
