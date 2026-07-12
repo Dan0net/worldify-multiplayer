@@ -1,37 +1,49 @@
 /**
- * Hide the Netlify deploy-preview bar/drawer.
+ * Hide foreign UI injected into the page — chiefly Netlify's deploy-preview
+ * collaboration bar/drawer.
  *
- * On `deploy-preview-*.netlify.app` (and branch) URLs Netlify injects a
- * collaboration/deploy bar as a direct child of <body>, usually after our app has
- * mounted — so a static CSS rule alone can miss it. We combine a CSS rule (for
- * anything present in the initial HTML) with a lightweight observer on <body>'s
- * direct children that hides any Netlify-branded node as it's injected.
+ * This app owns the entire viewport: everything we render lives inside `#root`,
+ * and the WebGL canvas is `#game-canvas` (appended to <body> by GameCore). On
+ * `deploy-preview-*.netlify.app` URLs Netlify injects a *fixed, bottom-pinned*
+ * bar as a direct child of <body>, usually after mount. Our old selector only
+ * matched nodes literally containing "netlify" in their id/class/tag/src, so a
+ * generically-named (or shadow-DOM) bar slipped through — and being pinned to
+ * the bottom it overlapped and blocked our bottom controls (build hotbar,
+ * Worlds/Settings buttons).
  *
- * No-op everywhere the bar doesn't exist (local, production); safe to always call.
+ * Since we control the whole page, the robust rule is: hide every *foreign*
+ * direct child of <body> — anything that isn't our root, our canvas, or a
+ * non-visual head-ish tag (script/style/link/…). No-op on local/production
+ * where nothing foreign is injected.
  */
 
-const NETLIFY_RE = /netlify/i;
+// Our own body children + non-visual tags we must never touch.
+const KEEP_IDS = new Set(['root', 'game-canvas']);
+const KEEP_TAGS = new Set([
+  'SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE',
+  // Vite's dev-mode error overlay — keep it usable locally.
+  'VITE-ERROR-OVERLAY',
+]);
 
-function looksLikeNetlify(node: Node): boolean {
+/** A direct <body> child that isn't ours and isn't a non-visual tag. */
+function isForeign(node: Node): node is HTMLElement {
   if (!(node instanceof HTMLElement)) return false;
-  const cls = typeof node.className === 'string' ? node.className : '';
-  const src = node.getAttribute?.('src') ?? '';
-  return (
-    NETLIFY_RE.test(node.id) ||
-    NETLIFY_RE.test(cls) ||
-    NETLIFY_RE.test(node.tagName) ||
-    NETLIFY_RE.test(src)
-  );
+  if (node.id && KEEP_IDS.has(node.id)) return false;
+  if (KEEP_TAGS.has(node.tagName)) return false;
+  return true;
 }
 
 function hide(node: Node): void {
-  if (node instanceof HTMLElement && looksLikeNetlify(node)) {
+  if (isForeign(node)) {
     node.style.setProperty('display', 'none', 'important');
+    node.style.setProperty('pointer-events', 'none', 'important');
   }
 }
 
 export function hideNetlifyPreviewBar(): void {
-  // CSS for anything injected into the initial HTML / matchable by selector.
+  // Static CSS fallback for anything present in the initial HTML or matchable
+  // by a netlify-branded selector anywhere in the document (covers nested nodes
+  // the body-child observer below wouldn't see).
   const style = document.createElement('style');
   style.textContent =
     '[id*="netlify"],[class*="netlify"],iframe[src*="netlify"],netlify-drawer' +
@@ -39,7 +51,7 @@ export function hideNetlifyPreviewBar(): void {
   (document.head || document.documentElement).appendChild(style);
 
   const scanAndObserve = () => {
-    // Hide anything already appended, then watch for late injection into <body>.
+    // Hide anything foreign already present, then watch for late injection.
     document.body.childNodes.forEach(hide);
     const obs = new MutationObserver((records) => {
       for (const r of records) r.addedNodes.forEach(hide);
