@@ -177,38 +177,45 @@ export function MobileControls() {
       )}
 
       {/* Action buttons — ABOVE the look pad (bottom-right).
-          Bottom row (always): build-mode toggle · run · jump.
-          Top row (build mode only): undo · rotate · build menu · place. */}
+          Row 1: [undo · rotate · place · build-thumbnail] (build mode) + build-mode TOGGLE.
+          Row 2: run + JUMP.  Toggle sits directly above jump; both are large. */}
       <div
         className="absolute right-4 flex flex-col items-end gap-2.5"
         style={{ bottom: padBottom + PAD_SIZE + 20, paddingRight: 'env(safe-area-inset-right)' }}
       >
-        {buildEnabled && (
-          <div className="flex items-center gap-2.5">
-            <button className={`${btn} w-12 h-12`} onPointerDown={(e) => { e.preventDefault(); controls.triggerUndo(); }} aria-label="Undo">
-              <Undo2 size={22} strokeWidth={2.2} />
-            </button>
-            <button className={`${btn} w-12 h-12`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(1); }} aria-label="Rotate">
-              <RotateCw size={22} strokeWidth={2.2} />
-            </button>
-            <button className={`${btn} w-12 h-12`} onPointerDown={(e) => { e.preventDefault(); toggleBuildMenu(); }} aria-label="Build menu">
-              <Grid3x3 size={22} strokeWidth={2.2} />
-            </button>
-            <button className={`${btn} w-14 h-14 !bg-green-600/70 !border-green-300/70`} onPointerDown={(e) => { e.preventDefault(); controls.triggerPlace(); }} aria-label="Place build">
-              <Check size={28} strokeWidth={2.6} />
-            </button>
-          </div>
-        )}
+        {/* Row 1 — build extras (left of the toggle) + the toggle */}
         <div className="flex items-center gap-2.5">
+          {buildEnabled && (
+            <>
+              <button className={`${btn} w-12 h-12`} onPointerDown={(e) => { e.preventDefault(); controls.triggerUndo(); }} aria-label="Undo">
+                <Undo2 size={22} strokeWidth={2.2} />
+              </button>
+              <button className={`${btn} w-12 h-12`} onPointerDown={(e) => { e.preventDefault(); useGameStore.getState().rotateBuild(1); }} aria-label="Rotate">
+                <RotateCw size={22} strokeWidth={2.2} />
+              </button>
+              <button className={`${btn} w-12 h-12 !bg-green-600/70 !border-green-300/70`} onPointerDown={(e) => { e.preventDefault(); controls.triggerPlace(); }} aria-label="Place build">
+                <Check size={26} strokeWidth={2.6} />
+              </button>
+              {/* Build menu — shows the current build thumbnail (same size as toggle/jump) */}
+              <button className={`${btn} w-16 h-16 overflow-hidden`} onPointerDown={(e) => { e.preventDefault(); toggleBuildMenu(); }} aria-label="Build menu">
+                {buildThumb
+                  ? <img src={buildThumb} alt="" className="w-12 h-12 object-contain" draggable={false} />
+                  : <Grid3x3 size={26} strokeWidth={2.2} />}
+              </button>
+            </>
+          )}
+          {/* Build-mode toggle — always the Hammer icon; sits directly above Jump */}
           <button
-            className={`${btn} w-12 h-12 overflow-hidden ${buildEnabled ? '!border-cyan-300/70 ring-2 ring-cyan-400/40' : ''}`}
+            className={`${btn} w-16 h-16 ${buildEnabled ? '!border-cyan-300/70 ring-2 ring-cyan-400/40' : ''}`}
             onPointerDown={(e) => { e.preventDefault(); toggleBuildMode(); }}
             aria-label={buildEnabled ? 'Exit build mode' : 'Enter build mode'}
           >
-            {buildEnabled && buildThumb
-              ? <img src={buildThumb} alt="" className="w-9 h-9 object-contain" draggable={false} />
-              : <Hammer size={22} strokeWidth={2.2} />}
+            <Hammer size={28} strokeWidth={2.2} />
           </button>
+        </div>
+
+        {/* Row 2 — run + jump */}
+        <div className="flex items-center gap-2.5">
           <button
             className={`${btn} w-12 h-12 ${sprintOn ? '!bg-cyan-500/40 !border-cyan-300' : ''}`}
             onPointerDown={(e) => { e.preventDefault(); toggleSprint(); }}
