@@ -63,6 +63,29 @@ function maxRendersThisFrame(): number {
   }
 }
 
+/** Terrain textures are loaded — thumbnails would render untextured before this. */
+function texturesReady(): boolean {
+  try {
+    const s = useGameStore.getState().textureState;
+    return s === 'low' || s === 'high';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Current texture variant, folded into the cache key so low- and high-res
+ * thumbnails cache separately and switching quality re-renders instead of
+ * serving a stale variant.
+ */
+function textureVariant(): string {
+  try {
+    return useGameStore.getState().textureState === 'high' ? 'hi' : 'lo';
+  } catch {
+    return 'lo';
+  }
+}
+
 // ============== Reusable Three.js Objects ==============
 
 let thumbScene: THREE.Scene | null = null;
@@ -364,6 +387,7 @@ function fillVoxelGrid(config: BuildConfig, rotation?: Quat): void {
 
 function configHash(config: BuildConfig, rotation?: Quat): string {
   return [
+    textureVariant(), // low/high textures produce different thumbnails — cache apart
     config.mode,
     config.shape,
     config.size.x, config.size.y, config.size.z,
@@ -482,6 +506,77 @@ function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefi
   return renderAndReadbackImageData(renderer);
 }
 
+// ============== Held-item mesh (first-person arm) ==============
+
+/** Camera-local target for the largest build extent — normalizes any build to one size. */
+const HELD_TARGET_SIZE = 0.26;
+
+function normalizeHeldGroup(group: THREE.Group, bbox: THREE.Box3): void {
+  const size = new THREE.Vector3();
+  bbox.getSize(size);
+  const maxExtent = Math.max(size.x, size.y, size.z) || 1;
+  group.scale.setScalar(HELD_TARGET_SIZE / maxExtent);
+}
+
+/**
+ * Build a THREE.Object3D of a BuildConfig using the same SurfaceNet pipeline as
+ * thumbnails — for the first-person held item. Terrain materials are CLONED with
+ * depthTest:false + a high renderOrder so it draws over the world without mutating
+ * the shared world materials. Normalized so any build (1³ or 16³) renders at the
+ * same size in the hand. The caller owns disposal (geometries + cloned materials).
+ */
+export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat): THREE.Object3D | null {
+  ensureSetup();
+  const group = new THREE.Group();
+
+  const overlayClone = (m: THREE.Material): THREE.Material => {
+    const c = m.clone();
+    c.depthTest = false;
+    return c;
+  };
+
+  // SUBTRACT has no solid mesh — show the same red wireframe the thumbnail uses.
+  if (config.mode === BuildMode.SUBTRACT) {
+    const wf = buildWireframe(config, rotation);
+    wf.material = overlayClone(wf.material as THREE.Material);
+    wf.renderOrder = 1000;
+    wf.frustumCulled = false;
+    const c = new THREE.Vector3(); _bbox.getCenter(c);
+    wf.position.set(-c.x, -c.y, -c.z);
+    group.add(wf);
+    normalizeHeldGroup(group, _bbox);
+    return group;
+  }
+
+  fillVoxelGrid(config, rotation);
+  const { solid, transparent, liquid } = meshVoxelsSplit({ dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], data: voxelGrid! });
+  if (solid.vertexCount === 0 && transparent.vertexCount === 0 && liquid.vertexCount === 0) return null;
+
+  _bbox.makeEmpty();
+  const solidGeo = solid.vertexCount > 0 ? createGeometryFromSurfaceNet(solid) : null;
+  const transGeo = transparent.vertexCount > 0 ? createGeometryFromSurfaceNet(transparent) : null;
+  const liquidGeo = liquid.vertexCount > 0 ? createGeometryFromSurfaceNet(liquid) : null;
+  if (solidGeo) { solidGeo.computeBoundingBox(); _bbox.union(solidGeo.boundingBox!); }
+  if (transGeo) { transGeo.computeBoundingBox(); _bbox.union(transGeo.boundingBox!); }
+  if (liquidGeo) { liquidGeo.computeBoundingBox(); _bbox.union(liquidGeo.boundingBox!); }
+
+  const c = new THREE.Vector3(); _bbox.getCenter(c);
+  const addMesh = (geo: THREE.BufferGeometry | null, mat: THREE.Material, order: number) => {
+    if (!geo) return;
+    const mesh = new THREE.Mesh(geo, overlayClone(mat));
+    mesh.position.set(-c.x, -c.y, -c.z);
+    mesh.renderOrder = order;
+    mesh.frustumCulled = false;
+    group.add(mesh);
+  };
+  addMesh(solidGeo, getTerrainMaterial(), 1000);
+  addMesh(transGeo, getTransparentTerrainMaterial(), 1001);
+  addMesh(liquidGeo, getLiquidTerrainMaterial(), 1002);
+
+  normalizeHeldGroup(group, _bbox);
+  return group;
+}
+
 // ============== Queue Processing ==============
 
 function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): boolean {
@@ -533,7 +628,9 @@ function processQueue(): void {
   queueRafId = 0;
 
   const renderer = getRendererRef();
-  if (!renderer) {
+  // Wait for the renderer AND for terrain textures — rendering earlier produces
+  // untextured thumbnails. Entries stay queued and drain once both are ready.
+  if (!renderer || !texturesReady()) {
     if (renderQueue.length > 0) {
       queueRafId = requestAnimationFrame(processQueue);
     }
