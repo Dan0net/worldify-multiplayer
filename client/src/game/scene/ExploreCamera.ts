@@ -22,10 +22,10 @@ const MAX_PITCH = -0.12;
 const MIN_DISTANCE = 6;
 const MAX_DISTANCE = 140;
 
-const ROTATE_SPEED = 0.005;   // radians per pixel
+const ROTATE_SPEED = 0.009;   // radians per pixel
 const PAN_SPEED = 0.0016;     // world units per pixel, per unit distance
-const ZOOM_SPEED = 0.0015;    // per wheel delta unit
-const PINCH_ZOOM = 0.01;      // per pixel of pinch distance change
+const ZOOM_SPEED = 0.0007;    // per wheel delta unit
+const PINCH_ZOOM = 0.006;     // per pixel of pinch distance change
 
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _fwd = new THREE.Vector3();
