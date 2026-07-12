@@ -30,8 +30,8 @@ let heldItem: THREE.Object3D | null = null;
 let heldKey = '';                        // rebuild guard (config + rotation + texture variant)
 
 const ARM_DEPTH = 2;     // vm-camera-local Z of the arm (ortho: clip only, not size)
-const CORNER_X = 0.82;   // fraction of the ortho half-width → toward the right edge
-const CORNER_Y = 0.72;   // fraction of the ortho half-height → toward the bottom edge
+const CORNER_X = 0.9;    // fraction of the ortho half-width → toward the right edge
+const CORNER_Y = 0.9;    // fraction of the ortho half-height → toward the bottom edge
 /**
  * Overall view-model size. The ortho frustum is scaled by sqrt(w*h) (rotation-
  * invariant), so the world→pixel scale — and thus the arm's pixel size — is the
@@ -82,11 +82,12 @@ export function initFirstPersonArm(scene: THREE.Scene): void {
     // Slight self-illumination so the hand keeps some form at night.
     emissive: 0x3a2717, emissiveIntensity: 0.35,
   });
-  // Forearm — a capsule rising from the bottom-right corner up-and-left toward the
-  // held item, tilted back so the hand sits BEHIND the item (which draws over it).
-  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 1.15, 4, 10), armSkinMat);
-  arm.rotation.set(-0.35, 0.15, 0.62);
-  arm.position.set(-0.22, 0.34, 0.15);
+  // Forearm — a slim capsule (Minecraft-style) coming from the bottom-right corner,
+  // the wrist behind/below the held block (which draws over it). Tuned in an
+  // isolated harness to match Minecraft's block-in-hand layout.
+  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.72, 4, 10), armSkinMat);
+  arm.rotation.set(-0.1, 0.1, 0.66);
+  arm.position.set(0.05, -0.06, 0.1);
   arm.frustumCulled = false;
   hand.add(arm);
 
@@ -193,9 +194,9 @@ export function updateFirstPersonArm(opts: {
       clearHeldItem();
       const mesh = createBuildItemMeshes(opts.config, opts.rotation);
       if (mesh) {
-        mesh.position.set(-0.55, 0.35, -0.4);
-        mesh.quaternion.copy(HELD_ITEM_QUAT); // match the thumbnail's view angle
-        mesh.scale.multiplyScalar(2.6);        // held item is larger than its 0.26 base
+        mesh.position.set(-0.16, 0.24, -0.3);  // held in the lower-right, Minecraft-style
+        mesh.quaternion.copy(HELD_ITEM_QUAT);  // thumbnail's 3/4 view angle
+        mesh.scale.multiplyScalar(1.27);       // ~0.33 world extent (from the 0.26 base)
         setLayerDeep(mesh, FIRST_PERSON_ITEM_LAYER); // drawn over the arm
         hand.add(mesh);
         heldItem = mesh;
