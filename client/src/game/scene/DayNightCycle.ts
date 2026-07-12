@@ -5,16 +5,13 @@
  * All state is synced to the Zustand store for UI display and component access.
  */
 
-import { useGameStore, EnvironmentSettings } from '../../state/store';
+import { useGameStore, EnvironmentSettings, DayNightConfig } from '../../state/store';
 import { updateShadowCaster, applyEnvironmentSettings } from './Lighting';
 import {
   // Solar
   SUN_ELEVATION_MIN,
   SUN_ELEVATION_MAX,
-  SUN_COLOR_NOON,
   SUN_COLOR_TWILIGHT,
-  LIGHT_SUN_INTENSITY,
-  LIGHT_MOON_INTENSITY,
   SUN_GRADIENT_SUNRISE,
   SUN_GRADIENT_SUNSET,
   // Moon thresholds
@@ -22,20 +19,11 @@ import {
   MOON_THRESHOLD_FAINT,
   MOON_THRESHOLD_RISING,
   MOON_THRESHOLD_FULL,
-  // Environment
-  ENVIRONMENT_INTENSITY_DAY,
-  ENVIRONMENT_INTENSITY_NIGHT,
-  // Hemisphere
-  HEMISPHERE_SKY_DAY,
-  HEMISPHERE_SKY_NIGHT,
+  // Hemisphere transitional gradients (day/night endpoints now come from DayNightConfig)
   HEMISPHERE_SKY_GRADIENT_SUNRISE,
   HEMISPHERE_SKY_GRADIENT_SUNSET,
-  HEMISPHERE_GROUND_DAY,
   HEMISPHERE_GROUND_SUNRISE,
   HEMISPHERE_GROUND_SUNSET,
-  HEMISPHERE_GROUND_NIGHT,
-  HEMISPHERE_INTENSITY_DAY,
-  HEMISPHERE_INTENSITY_NIGHT,
   // Helpers
   lerp,
   getDayPhase,
@@ -65,12 +53,13 @@ function getSunAzimuth(time: number): number {
 }
 
 /**
- * Get sun color using multi-stop gradients for rich sunrise/sunset.
+ * Get sun color using multi-stop gradients for rich sunrise/sunset. The noon endpoint
+ * comes from the editable day stage config; twilight + gradients stay as shared constants.
  */
-function getSunColor(time: number): string {
+function getSunColor(time: number, dayColor: string): string {
   return getPhaseColorGradient(
     time,
-    SUN_COLOR_NOON,
+    dayColor,
     SUN_COLOR_TWILIGHT,
     SUN_GRADIENT_SUNRISE,
     SUN_GRADIENT_SUNSET
@@ -78,46 +67,46 @@ function getSunColor(time: number): string {
 }
 
 /**
- * Get sun intensity based on elevation.
+ * Get sun intensity based on elevation. `peak` is the editable day-stage noon intensity.
  */
-function getSunIntensity(elevation: number): number {
+function getSunIntensity(elevation: number, peak: number): number {
   if (elevation <= 0) {
     // Below horizon - fade out
     return Math.max(0, lerp(0.2, 0, -elevation / SUN_ELEVATION_MIN));
   }
   if (elevation < 20) {
     // Low angle - reduced intensity
-    return lerp(0.5, LIGHT_SUN_INTENSITY, elevation / 20);
+    return lerp(0.5, peak, elevation / 20);
   }
-  return LIGHT_SUN_INTENSITY;
+  return peak;
 }
 
 /**
- * Get moon intensity based on sun elevation.
- * Moon starts early and overlaps with sun for smooth handoff.
+ * Get moon intensity based on sun elevation. `peak` is the editable night-stage intensity.
+ * Moon starts early and overlaps with sun for a smooth handoff.
  */
-function getMoonIntensity(sunElevation: number): number {
+function getMoonIntensity(sunElevation: number, peak: number): number {
   if (sunElevation > MOON_THRESHOLD_INVISIBLE) return 0;
-  
+
   if (sunElevation > MOON_THRESHOLD_FAINT) {
     // Sun 25-45° - moon starts faintly
     const t = (MOON_THRESHOLD_INVISIBLE - sunElevation) / (MOON_THRESHOLD_INVISIBLE - MOON_THRESHOLD_FAINT);
-    return lerp(0, LIGHT_MOON_INTENSITY * 0.3, t);
+    return lerp(0, peak * 0.3, t);
   }
-  
+
   if (sunElevation > MOON_THRESHOLD_RISING) {
     // Sun 10-25° - moon ramping
     const t = (MOON_THRESHOLD_FAINT - sunElevation) / (MOON_THRESHOLD_FAINT - MOON_THRESHOLD_RISING);
-    return lerp(LIGHT_MOON_INTENSITY * 0.3, LIGHT_MOON_INTENSITY * 0.6, t);
+    return lerp(peak * 0.3, peak * 0.6, t);
   }
-  
+
   if (sunElevation > MOON_THRESHOLD_FULL) {
     // Sun -5 to 10° - final ramp
     const t = (MOON_THRESHOLD_RISING - sunElevation) / (MOON_THRESHOLD_RISING - MOON_THRESHOLD_FULL);
-    return lerp(LIGHT_MOON_INTENSITY * 0.6, LIGHT_MOON_INTENSITY, t);
+    return lerp(peak * 0.6, peak, t);
   }
-  
-  return LIGHT_MOON_INTENSITY;
+
+  return peak;
 }
 
 // ============== Main Update Function ==============
@@ -134,9 +123,19 @@ function getMoonIntensity(sunElevation: number): number {
  */
 let lastAppliedTime = -1;
 
+/**
+ * Force the next `updateDayNightCycle` to re-derive even if `timeOfDay` hasn't changed.
+ * Called when a `DayNightConfig` stage keyframe is edited, so the change applies live
+ * without waiting for the clock to advance — and without re-pushing stale env state.
+ */
+export function invalidateDayNight(): void {
+  lastAppliedTime = -1;
+}
+
 export function updateDayNightCycle(deltaMs: number): void {
   const state = useGameStore.getState();
   const env = state.environment;
+  const cfg: DayNightConfig = state.dayNightConfig;
 
   if (!(env.dayNightEnabled ?? false)) {
     lastAppliedTime = -1; // re-apply when the cycle is re-enabled
@@ -158,61 +157,42 @@ export function updateDayNightCycle(deltaMs: number): void {
   const sunElevation = getSunElevation(time);
 
   // Shadow-caster ownership depends on the current effective intensities. Keep this
-  // responsive every frame — it's cheap (a compare + a rare swap) — even while the
-  // expensive derived recompute + apply below is gated out on a static clock.
-  const effSunIntensity = (env.autoSunIntensity ?? true) ? getSunIntensity(sunElevation) : (env.sunIntensity ?? 3.0);
-  const effMoonIntensity = (env.autoMoonIntensity ?? true) ? getMoonIntensity(sunElevation) : (env.moonIntensity ?? 0.3);
+  // responsive every frame — it's cheap (a compare + a rare swap).
+  const effSunIntensity = getSunIntensity(sunElevation, cfg.day.sunIntensity);
+  const effMoonIntensity = getMoonIntensity(sunElevation, cfg.night.moonIntensity);
   updateShadowCaster(effSunIntensity, effMoonIntensity);
 
-  // Nothing else changed since last frame — the derived values would be identical.
+  // Nothing changed since last frame (static clock + unchanged config) — skip the recompute.
   if (time === lastAppliedTime) return;
   lastAppliedTime = time;
 
   const sunAzimuth = getSunAzimuth(time);
 
-  // Derived lighting *outputs*. These are applied DIRECTLY to the lights + sky
-  // (never written back to the store) — this is what removes the per-frame
-  // round-trip. Fields whose auto-flag is off are left untouched, so manual
-  // overrides (applied on-change by the debug panel) persist.
-  const derived: Partial<EnvironmentSettings> = {};
-
-  if (env.autoSunPosition ?? true) {
-    derived.sunAzimuth = sunAzimuth;
-    derived.sunElevation = sunElevation;
-  }
-  if (env.autoSunColor ?? true) {
-    derived.sunColor = getSunColor(time);
-  }
-  if (env.autoSunIntensity ?? true) {
-    derived.sunIntensity = getSunIntensity(sunElevation);
-  }
-
-  if (env.autoMoonPosition ?? true) {
-    derived.moonAzimuth = (sunAzimuth + 180) % 360;
-    derived.moonElevation = -sunElevation;
-  }
-  if (env.autoMoonIntensity ?? true) {
-    derived.moonIntensity = getMoonIntensity(sunElevation);
-  }
-
-  if (env.autoEnvironmentIntensity ?? true) {
-    derived.environmentIntensity = getPhaseValue(time, ENVIRONMENT_INTENSITY_DAY, ENVIRONMENT_INTENSITY_NIGHT);
-  }
+  // Derived lighting *outputs*, interpolated from the editable day/night stage keyframes
+  // (the single source of truth). Applied DIRECTLY to the lights + sky (never written back
+  // to the store), so there is no per-frame round-trip and no stale state to re-push.
+  const derived: Partial<EnvironmentSettings> = {
+    sunAzimuth,
+    sunElevation,
+    sunColor: getSunColor(time, cfg.day.sunColor),
+    sunIntensity: effSunIntensity,
+    moonAzimuth: (sunAzimuth + 180) % 360,
+    moonElevation: -sunElevation,
+    moonColor: cfg.night.moonColor,
+    moonIntensity: effMoonIntensity,
+    environmentIntensity: getPhaseValue(time, cfg.day.environmentIntensity, cfg.night.environmentIntensity),
+  };
 
   if (env.hemisphereEnabled ?? true) {
-    if (env.autoHemisphereColors ?? true) {
-      derived.hemisphereSkyColor = getPhaseColorGradient(
-        time, HEMISPHERE_SKY_DAY, HEMISPHERE_SKY_NIGHT,
-        HEMISPHERE_SKY_GRADIENT_SUNRISE, HEMISPHERE_SKY_GRADIENT_SUNSET
-      );
-      derived.hemisphereGroundColor = getPhaseColor(
-        time, HEMISPHERE_GROUND_DAY, HEMISPHERE_GROUND_NIGHT,
-        HEMISPHERE_GROUND_SUNRISE, HEMISPHERE_GROUND_SUNSET
-      );
-    }
-    if (env.autoHemisphereIntensity ?? true) {
-      derived.hemisphereIntensity = getPhaseValue(time, HEMISPHERE_INTENSITY_DAY, HEMISPHERE_INTENSITY_NIGHT);
-    }
+    derived.hemisphereSkyColor = getPhaseColorGradient(
+      time, cfg.day.hemisphereSkyColor, cfg.night.hemisphereSkyColor,
+      HEMISPHERE_SKY_GRADIENT_SUNRISE, HEMISPHERE_SKY_GRADIENT_SUNSET
+    );
+    derived.hemisphereGroundColor = getPhaseColor(
+      time, cfg.day.hemisphereGroundColor, cfg.night.hemisphereGroundColor,
+      HEMISPHERE_GROUND_SUNRISE, HEMISPHERE_GROUND_SUNSET
+    );
+    derived.hemisphereIntensity = getPhaseValue(time, cfg.day.hemisphereIntensity, cfg.night.hemisphereIntensity);
   }
 
   // Apply the animated values straight to the THREE lights + sky uniforms.

@@ -18,6 +18,12 @@ import {
   HEMISPHERE_SKY_DAY,
   HEMISPHERE_GROUND_DAY,
   HEMISPHERE_INTENSITY_DAY,
+  HEMISPHERE_SKY_NIGHT,
+  HEMISPHERE_GROUND_NIGHT,
+  HEMISPHERE_INTENSITY_NIGHT,
+  ENVIRONMENT_INTENSITY_DAY,
+  ENVIRONMENT_INTENSITY_NIGHT,
+  SUN_COLOR_NOON,
 } from '@worldify/shared';
 import * as THREE from 'three';
 
@@ -103,20 +109,15 @@ export interface BuildState {
 
 /** Environment/lighting settings */
 export interface EnvironmentSettings {
-  // Day-Night Cycle
-  dayNightEnabled: boolean;       // Master toggle for automatic calculations
+  // Day-Night Cycle. `dayNightEnabled` is the single master: when on, the cycle derives
+  // sun/moon/hemisphere/IBL from `timeOfDay` + the editable `DayNightConfig` stage keyframes
+  // (single source of truth — no per-field "auto" flags). When off, the manual values below
+  // are used as-is.
+  dayNightEnabled: boolean;
   timeOfDay: number;              // 0-1 normalized time
   timeSpeed: number;              // Game-minutes per real-second (0 = paused)
-  
-  // Auto-calculation overrides (when false, use manual values below)
-  autoSunPosition: boolean;       // Calculate sun position from time
-  autoSunColor: boolean;          // Calculate sun color from time
-  autoSunIntensity: boolean;      // Calculate sun intensity from time
-  autoMoonPosition: boolean;      // Calculate moon position from time
-  autoMoonIntensity: boolean;     // Calculate moon intensity from time
-  autoEnvironmentIntensity: boolean; // Calculate IBL intensity from time
-  
-  // Sun settings (manual values, or calculated when auto is enabled)
+
+  // Sun settings (manual values, or calculated when the cycle is enabled)
   sunColor: string;         // Hex color
   sunIntensity: number;     // 0-10
   sunDistance: number;      // Distance from origin for light positioning
@@ -131,8 +132,6 @@ export interface EnvironmentSettings {
   
   // Hemisphere light (sky/ground gradient)
   hemisphereEnabled: boolean;     // Toggle hemisphere light
-  autoHemisphereColors: boolean;  // Calculate colors from time
-  autoHemisphereIntensity: boolean; // Calculate intensity from time
   hemisphereSkyColor: string;     // Hex color (from above)
   hemisphereGroundColor: string;  // Hex color (from below)
   hemisphereIntensity: number;    // 0-2
@@ -171,6 +170,57 @@ export interface EnvironmentSettings {
   lightFillPower: number;       // 0.5-5, exponent for fill light curve
   lightFillIntensity: number;   // 0-1, strength of additive fill light
 }
+
+/**
+ * Editable day/night stage keyframes — the single source of truth the day-night cycle
+ * interpolates between. Editing a stage updates the scene live (the cycle re-derives) with
+ * no reset, because both the cycle and the UI read/write this one slice. Transitional
+ * sunrise/sunset gradients stay as shared constants; these are the two endpoints artists
+ * tune most.
+ */
+export interface DayStageConfig {
+  sunColor: string;
+  sunIntensity: number;         // peak sun intensity at noon
+  hemisphereSkyColor: string;
+  hemisphereGroundColor: string;
+  hemisphereIntensity: number;
+  environmentIntensity: number; // IBL / sky-ambient strength
+}
+export interface NightStageConfig {
+  moonColor: string;
+  moonIntensity: number;        // peak moon intensity
+  hemisphereSkyColor: string;
+  hemisphereGroundColor: string;
+  hemisphereIntensity: number;
+  environmentIntensity: number;
+  skyDarkness: number;          // visible-sky brightness multiplier at deep night (0-1)
+  starSize: number;             // relative star size (1 = base; larger = bigger stars)
+}
+export interface DayNightConfig {
+  day: DayStageConfig;
+  night: NightStageConfig;
+}
+
+export const DEFAULT_DAY_NIGHT_CONFIG: DayNightConfig = {
+  day: {
+    sunColor: SUN_COLOR_NOON,
+    sunIntensity: LIGHT_SUN_INTENSITY,
+    hemisphereSkyColor: HEMISPHERE_SKY_DAY,
+    hemisphereGroundColor: HEMISPHERE_GROUND_DAY,
+    hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
+    environmentIntensity: ENVIRONMENT_INTENSITY_DAY,
+  },
+  night: {
+    moonColor: LIGHT_MOON_COLOR,
+    moonIntensity: LIGHT_MOON_INTENSITY,
+    hemisphereSkyColor: HEMISPHERE_SKY_NIGHT,
+    hemisphereGroundColor: HEMISPHERE_GROUND_NIGHT,
+    hemisphereIntensity: HEMISPHERE_INTENSITY_NIGHT,
+    environmentIntensity: ENVIRONMENT_INTENSITY_NIGHT,
+    skyDarkness: 0.08,
+    starSize: 1.0,
+  },
+};
 
 /** Material shader settings for debug/tweaking */
 export interface MaterialSettings {
@@ -239,15 +289,7 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   dayNightEnabled: true,
   timeOfDay: DEFAULT_TIME_OF_DAY,
   timeSpeed: DEFAULT_TIME_SPEED,
-  
-  // All auto-calculations enabled (when dayNightEnabled is true)
-  autoSunPosition: true,
-  autoSunColor: true,
-  autoSunIntensity: true,
-  autoMoonPosition: true,
-  autoMoonIntensity: true,
-  autoEnvironmentIntensity: true,
-  
+
   sunColor: LIGHT_SUN_COLOR,
   sunIntensity: LIGHT_SUN_INTENSITY,
   sunDistance: SUN_DISTANCE,
@@ -261,8 +303,6 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   
   // Hemisphere light - enabled by default for natural outdoor lighting
   hemisphereEnabled: true,
-  autoHemisphereColors: true,
-  autoHemisphereIntensity: true,
   hemisphereSkyColor: HEMISPHERE_SKY_DAY,
   hemisphereGroundColor: HEMISPHERE_GROUND_DAY,
   hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
@@ -296,14 +336,13 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
 
 /** Debug panel section collapse state */
 export interface DebugPanelSections {
-  stats: boolean;
-  performance: boolean;
+  performance: boolean;   // merged client-side stats + frame timing
   debug: boolean;
   quality: boolean;
   materials: boolean;
   water: boolean;
   dayNightCycle: boolean;
-  environment: boolean;
+  environment: boolean;   // advanced tuning (post-FX magnitudes, manual lights)
 }
 
 export interface GameState {
@@ -354,12 +393,16 @@ export interface GameState {
   quality: QualitySettings;
   fov: number;
   renderScale: number;          // 0.5-1.0 — sub-native render resolution (fill-rate lever)
+  msaaSamples: number;          // 0/2/4 — standalone AA (composer FBO), independent of preset
 
   // Dev mode - force regenerate chunks on server
   forceRegenerateChunks: boolean;
 
   // Environment settings
   environment: EnvironmentSettings;
+
+  // Day-night stage keyframes (single source of truth for the cycle)
+  dayNightConfig: DayNightConfig;
   
   // Material shader settings
   materialSettings: MaterialSettings;
@@ -401,7 +444,8 @@ export interface GameState {
   updateQuality: (partial: Partial<QualitySettings>) => void;
   setFov: (fov: number) => void;
   setRenderScale: (scale: number) => void;
-  
+  setMsaaSamples: (samples: number) => void;
+
   // Build actions
   setBuildMode: (on: boolean) => void;
   toggleBuildMode: () => void;
@@ -431,7 +475,10 @@ export interface GameState {
   setEnvironment: (updates: Partial<EnvironmentSettings>) => void;
   setTimeOfDay: (time: number) => void;
   setTimeSpeed: (speed: number) => void;
-  
+
+  // Day-night stage config actions
+  setDayNightConfig: (updates: { day?: Partial<DayStageConfig>; night?: Partial<NightStageConfig> }) => void;
+
   // Material settings actions
   setMaterialSettings: (updates: Partial<MaterialSettings>) => void;
   resetMaterialSettings: () => void;
@@ -525,13 +572,20 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   quality: { ...QUALITY_PRESETS.ultra },
   fov: 90,
   renderScale: 1,
+  msaaSamples: 0,
 
   // Dev mode initial state
   forceRegenerateChunks: false,
 
   // Environment initial state
   environment: { ...DEFAULT_ENVIRONMENT },
-  
+
+  // Day-night stage keyframes
+  dayNightConfig: {
+    day: { ...DEFAULT_DAY_NIGHT_CONFIG.day },
+    night: { ...DEFAULT_DAY_NIGHT_CONFIG.night },
+  },
+
   // Material settings initial state
   materialSettings: { ...DEFAULT_MATERIAL_SETTINGS },
   
@@ -541,10 +595,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Debug panel starts compact (FPS only)
   debugPanelExpanded: false,
   
-  // Debug panel sections (all expanded by default)
+  // Debug panel sections (Performance open by default; rest collapsed)
   debugPanelSections: {
-    stats: true,
-    performance: false,
+    performance: true,
     debug: false,
     quality: false,
     materials: false,
@@ -601,7 +654,8 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   updateQuality: (partial) => set((state) => ({ quality: { ...state.quality, ...partial } })),
   setFov: (fov) => set({ fov }),
   setRenderScale: (scale) => set({ renderScale: scale }),
-  
+  setMsaaSamples: (samples) => set({ msaaSamples: samples }),
+
   // Build actions
   setBuildMode: (on) => set((state) => {
     const presetId = on && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
@@ -690,7 +744,14 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setTimeSpeed: (speed) => set((state) => ({
     environment: { ...state.environment, timeSpeed: Math.max(0, speed) },
   })),
-  
+
+  setDayNightConfig: (updates) => set((state) => ({
+    dayNightConfig: {
+      day: { ...state.dayNightConfig.day, ...(updates.day ?? {}) },
+      night: { ...state.dayNightConfig.night, ...(updates.night ?? {}) },
+    },
+  })),
+
   // Material settings actions
   setMaterialSettings: (updates) => set((state) => ({
     materialSettings: { ...state.materialSettings, ...updates },

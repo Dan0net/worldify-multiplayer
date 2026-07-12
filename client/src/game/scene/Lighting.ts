@@ -352,8 +352,9 @@ export function getActiveShadowLight(): THREE.DirectionalLight | null {
 // ============== Shadow Caster Swap ==============
 
 /**
- * Set whether moon is allowed to become the shadow caster.
- * Called by QualityManager when the moonShadows quality setting changes.
+ * Set whether the moon is allowed to become the shadow caster. Moon shadows are unified
+ * with the sun: QualityManager passes the quality `shadowsEnabled` flag here, so whenever
+ * shadows are on, the moon casts at night (the single caster swaps to whichever body is up).
  */
 export function setMoonShadowsAllowed(allowed: boolean): void {
   moonShadowsAllowed = allowed;

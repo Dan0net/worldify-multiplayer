@@ -49,12 +49,11 @@ interface EffectsSettings {
   godRaysEnabled: boolean;
   godRaysDecay: number;
   godRaysExposure: number;
-  colorCorrectionEnabled: boolean;
   saturation: number;              // store units: 0-2, 1.0 = neutral
 }
 
 let current: EffectsSettings = {
-  msaaSamples: 4,
+  msaaSamples: 0,
   ssaoEnabled: true,
   ssaoIntensity: 4,
   ssaoRadius: 0.1,
@@ -65,7 +64,6 @@ let current: EffectsSettings = {
   godRaysEnabled: true,
   godRaysDecay: 0.85,
   godRaysExposure: 0.3,
-  colorCorrectionEnabled: true,
   saturation: 1.0,
 };
 
@@ -89,13 +87,13 @@ function updatePassStates(): void {
   // NormalPass — only needed for SSAO
   normalPass.enabled = current.ssaoEnabled;
 
-  // Individual effect blend functions
+  // Individual effect blend functions. Colour correction is always on (not a preset lever).
   ssaoEffect.blendMode.setBlendFunction(current.ssaoEnabled ? BlendFunction.MULTIPLY : BlendFunction.SKIP);
   bloomEffect.blendMode.setBlendFunction(current.bloomEnabled ? BlendFunction.SCREEN : BlendFunction.SKIP);
-  hueSaturationEffect.blendMode.setBlendFunction(current.colorCorrectionEnabled ? BlendFunction.SRC : BlendFunction.SKIP);
+  hueSaturationEffect.blendMode.setBlendFunction(BlendFunction.SRC);
 
-  // EffectPass (SSAO + bloom + color correction)
-  const anyEffect = current.ssaoEnabled || current.bloomEnabled || current.colorCorrectionEnabled;
+  // EffectPass (SSAO + bloom + colour correction) — always enabled since colour correction is.
+  const anyEffect = true;
   effectPass.enabled = anyEffect;
 
   // God rays pass
@@ -156,7 +154,7 @@ function applySettings(next: Partial<EffectsSettings>): void {
 
   // Update pass enable states if any toggle changed
   if (next.ssaoEnabled !== undefined || next.bloomEnabled !== undefined
-    || next.godRaysEnabled !== undefined || next.colorCorrectionEnabled !== undefined) {
+    || next.godRaysEnabled !== undefined) {
     updatePassStates();
   }
 }
@@ -174,7 +172,7 @@ export function initEffects(
   const state = useGameStore.getState();
 
   composer = new EffectComposer(renderer, {
-    multisampling: Math.min(state.quality.msaaSamples, renderer.capabilities.maxSamples),
+    multisampling: Math.min(state.msaaSamples, renderer.capabilities.maxSamples),
     frameBufferType: THREE.HalfFloatType,
   });
 
@@ -261,7 +259,7 @@ export function initEffects(
 
   // Sync current state
   current = {
-    msaaSamples: state.quality.msaaSamples,
+    msaaSamples: state.msaaSamples,
     ssaoEnabled: state.quality.ssaoEnabled,
     ssaoIntensity: state.environment.ssaoIntensity,
     ssaoRadius: state.environment.ssaoRadius,
@@ -272,7 +270,6 @@ export function initEffects(
     godRaysEnabled: state.quality.godRaysEnabled,
     godRaysDecay: state.environment.godRaysDecay,
     godRaysExposure: state.environment.godRaysExposure,
-    colorCorrectionEnabled: state.quality.colorCorrectionEnabled,
     saturation: state.environment.saturation,
   };
   updatePassStates();
@@ -281,7 +278,7 @@ export function initEffects(
   unsubscribe = useGameStore.subscribe((state, prev) => {
     const changes: Partial<EffectsSettings> = {};
 
-    if (state.quality.msaaSamples !== prev.quality.msaaSamples) changes.msaaSamples = state.quality.msaaSamples;
+    if (state.msaaSamples !== prev.msaaSamples) changes.msaaSamples = state.msaaSamples;
     if (state.quality.ssaoEnabled !== prev.quality.ssaoEnabled) changes.ssaoEnabled = state.quality.ssaoEnabled;
     if (state.environment.ssaoIntensity !== prev.environment.ssaoIntensity) changes.ssaoIntensity = state.environment.ssaoIntensity;
     if (state.environment.ssaoRadius !== prev.environment.ssaoRadius) changes.ssaoRadius = state.environment.ssaoRadius;
@@ -292,7 +289,6 @@ export function initEffects(
     if (state.quality.godRaysEnabled !== prev.quality.godRaysEnabled) changes.godRaysEnabled = state.quality.godRaysEnabled;
     if (state.environment.godRaysDecay !== prev.environment.godRaysDecay) changes.godRaysDecay = state.environment.godRaysDecay;
     if (state.environment.godRaysExposure !== prev.environment.godRaysExposure) changes.godRaysExposure = state.environment.godRaysExposure;
-    if (state.quality.colorCorrectionEnabled !== prev.quality.colorCorrectionEnabled) changes.colorCorrectionEnabled = state.quality.colorCorrectionEnabled;
     if (state.environment.saturation !== prev.environment.saturation) changes.saturation = state.environment.saturation;
 
     if (Object.keys(changes).length > 0) {

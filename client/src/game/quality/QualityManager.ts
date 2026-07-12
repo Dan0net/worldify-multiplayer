@@ -53,12 +53,6 @@ export function setVisibilityRadiusCallback(cb: (radius: number) => void): void 
 
 // ============== Internal imperative appliers (no store writes) ==============
 
-function pixelRatioImpl(maxRatio: number): void {
-  if (rendererRef) {
-    rendererRef.setPixelRatio(Math.min(window.devicePixelRatio, maxRatio));
-  }
-}
-
 function shadowsImpl(enabled: boolean): void {
   if (rendererRef) {
     rendererRef.shadowMap.enabled = enabled;
@@ -97,9 +91,8 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   useGameStore.getState().setQuality(settings);
 
   // Subsystems this manager owns imperatively:
-  pixelRatioImpl(settings.maxPixelRatio);
   shadowsImpl(settings.shadowsEnabled);
-  setMoonShadowsAllowed(settings.moonShadows);
+  setMoonShadowsAllowed(settings.shadowsEnabled); // moon casts whenever shadows are on (unified with sun)
   shadowMapSizeImpl(settings.shadowMapSize);
   updateShadowFrustumSize(settings.shadowRadius);
   setShaderMapDefines({
@@ -119,22 +112,15 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   }
 
   console.log(`[Quality] Applied preset: ${level}`, {
-    pixelRatio: Math.min(window.devicePixelRatio, settings.maxPixelRatio),
     shadows: settings.shadowsEnabled,
     shadowMap: settings.shadowMapSize,
     shadowRadius: settings.shadowRadius,
-    msaa: settings.msaaSamples,
     ssao: settings.ssaoEnabled,
     bloom: settings.bloomEnabled,
     godRays: settings.godRaysEnabled,
     godRaysSamples: settings.godRaysSamples,
-    colorCorrection: settings.colorCorrectionEnabled,
     visibility: settings.visibilityRadius,
-    normalMaps: settings.shaderNormalMaps,
-    aoMaps: settings.shaderAoMaps,
-    metalness: settings.shaderMetalnessMaps,
     anisotropy: settings.anisotropy,
-    moonShadows: settings.moonShadows,
   });
 }
 
@@ -147,57 +133,48 @@ export function syncQualityToStore(level: QualityLevel, customVisibility?: numbe
   useGameStore.getState().setQualityLevel(level);
 }
 
-// ============== Individual Setting Appliers (debug panel) ==============
-// Each updates the `quality` slice AND applies its field immediately.
+// ============== Quality patch applier (segmented Quality UI) ==============
 
-export function applyPixelRatio(maxRatio: number): void {
-  useGameStore.getState().updateQuality({ maxPixelRatio: maxRatio });
-  pixelRatioImpl(maxRatio);
+/**
+ * Apply a partial `QualitySettings` change (one segment of the Quality UI) — updates the
+ * store slice, then routes each changed key to its imperative subsystem. Post-processing
+ * enables (ssao/bloom/godRaysEnabled) apply themselves via the effects.ts store
+ * subscription, so they only need the store write. This single function replaces the old
+ * per-field `applyX` appliers.
+ */
+export function applyQualityPatch(patch: Partial<QualitySettings>): void {
+  useGameStore.getState().updateQuality(patch);
+
+  if (patch.shadowsEnabled !== undefined) {
+    shadowsImpl(patch.shadowsEnabled);
+    setMoonShadowsAllowed(patch.shadowsEnabled); // moon casts whenever shadows are on
+  }
+  if (patch.shadowMapSize !== undefined) shadowMapSizeImpl(patch.shadowMapSize);
+  if (patch.shadowRadius !== undefined) updateShadowFrustumSize(patch.shadowRadius);
+  if (patch.anisotropy !== undefined) setTerrainAnisotropy(patch.anisotropy);
+  if (patch.waterHighQuality !== undefined) setWaterQualityLow(!patch.waterHighQuality);
+  if (patch.godRaysSamples !== undefined) setGodRaysSamples(patch.godRaysSamples);
+  if (
+    patch.shaderNormalMaps !== undefined
+    || patch.shaderAoMaps !== undefined
+    || patch.shaderMetalnessMaps !== undefined
+  ) {
+    const q = useGameStore.getState().quality;
+    setShaderMapDefines({
+      normalMaps: q.shaderNormalMaps,
+      aoMaps: q.shaderAoMaps,
+      metalnessMaps: q.shaderMetalnessMaps,
+    });
+  }
+  if (patch.visibilityRadius !== undefined) {
+    visibilityImpl(patch.visibilityRadius);
+    saveVisibilityRadius(patch.visibilityRadius);
+  }
 }
 
-export function applyShadowsEnabled(enabled: boolean): void {
-  useGameStore.getState().updateQuality({ shadowsEnabled: enabled });
-  shadowsImpl(enabled);
-}
-
-export function applyMoonShadows(enabled: boolean): void {
-  useGameStore.getState().updateQuality({ moonShadows: enabled });
-  setMoonShadowsAllowed(enabled);
-}
-
-export function applySsaoEnabled(enabled: boolean): void {
-  // effects.ts subscription applies it
-  useGameStore.getState().updateQuality({ ssaoEnabled: enabled });
-}
-
-export function applyBloomEnabled(enabled: boolean): void {
-  useGameStore.getState().updateQuality({ bloomEnabled: enabled });
-}
-
-export function applyColorCorrectionEnabled(enabled: boolean): void {
-  useGameStore.getState().updateQuality({ colorCorrectionEnabled: enabled });
-}
-
-export function applyMsaaSamples(samples: number): void {
-  useGameStore.getState().updateQuality({ msaaSamples: samples });
-}
-
-export function applyAnisotropy(value: number): void {
-  useGameStore.getState().updateQuality({ anisotropy: value });
-  setTerrainAnisotropy(value);
-}
-
-/** Apply just the visibility radius without changing quality level. */
+/** Apply just the visibility radius (thin wrapper — home screen View control). */
 export function applyVisibilityRadius(radius: number): void {
-  useGameStore.getState().updateQuality({ visibilityRadius: radius });
-  visibilityImpl(radius);
-  saveVisibilityRadius(radius);
-}
-
-/** Apply shadow radius (shadow frustum + per-chunk castShadow culling). */
-export function applyShadowRadius(radius: number): void {
-  useGameStore.getState().updateQuality({ shadowRadius: radius });
-  updateShadowFrustumSize(radius);
+  applyQualityPatch({ visibilityRadius: radius });
 }
 
 /** Current shadow radius in chunks. Used by VoxelWorld for castShadow culling. */
