@@ -360,6 +360,22 @@ export class VoxelIntegration implements TerrainRaycaster {
   }
 
   /**
+   * Solid (collidable) chunk meshes only — the layer the player actually collides
+   * with. Excludes transparent foliage/leaves and liquid, so a spawn raycast lands on
+   * real ground rather than a leaf or water surface.
+   */
+  getSolidMeshes(): THREE.Object3D[] {
+    const meshes: THREE.Object3D[] = [];
+    for (const geo of this.world.geometries.values()) {
+      if (geo.hasGeometry()) {
+        const solid = geo.getMesh();
+        if (solid) meshes.push(solid);
+      }
+    }
+    return meshes;
+  }
+
+  /**
    * Get statistics about the voxel system.
    */
   getStats() {

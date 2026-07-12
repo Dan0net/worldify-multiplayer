@@ -71,7 +71,7 @@ export function raycastMarkerNDC(ndc: { x: number; y: number }, camera: THREE.Ca
   _ndc.set(ndc.x, ndc.y);
   raycaster.setFromCamera(_ndc, camera);
   raycaster.far = 1000;
-  const hits = raycaster.intersectObjects(terrain.getCollisionMeshes(), false);
+  const hits = raycaster.intersectObjects(terrain.getSolidMeshes(), false);
   return hits.length > 0 ? hits[0].point.clone() : null;
 }
 
@@ -80,7 +80,7 @@ function raycastColumn(x: number, z: number): THREE.Vector3 | null {
   if (!terrain) return null;
   raycaster.set(new THREE.Vector3(x, SPAWN_RAYCAST_HEIGHT, z), _down);
   raycaster.far = SPAWN_RAYCAST_HEIGHT * 2;
-  const hits = raycaster.intersectObjects(terrain.getCollisionMeshes(), false);
+  const hits = raycaster.intersectObjects(terrain.getSolidMeshes(), false);
   return hits.length > 0 ? hits[0].point.clone() : null;
 }
 
