@@ -406,6 +406,9 @@ export class GameCore {
   /** Chunk keys streamed in but not yet folded into the minimap (bounded flush). */
   private pendingMapChunks = new Set<string>();
 
+  /** Accumulating phase for the camera head-bob while walking. */
+  private headBobPhase = 0;
+
   /**
    * Fold a bounded batch of freshly-streamed chunks into the minimap each frame.
    * Capped so a burst of streaming can't spike a frame; the rest carry to the
@@ -809,14 +812,27 @@ export class GameCore {
       }
     }
 
+    // Camera head-bob while moving — a subtle vertical bob applied to the camera
+    // position (rotation is late-latched at render, so only position is safe here).
+    // The first-person arm is a camera child, so it inherits this motion.
+    const move = controls.getMoveVector();
+    const speed = Math.hypot(move.moveX, move.moveZ);
+    if (camera && !menuPaused) {
+      if (speed > 0.1) this.headBobPhase += (Math.min(deltaMs, 100) / 1000) * 9;
+      camera.position.y += Math.sin(this.headBobPhase * 2) * 0.05 * Math.min(1, speed);
+    }
+
     // First-person arm (hidden while the menu soft-pauses play).
     const build = useGameStore.getState().build;
-    const move = controls.getMoveVector();
+    const ts = useGameStore.getState().textureState;
+    const meta = build.presetMeta[build.presetId];
     updateFirstPersonArm({
       visible: !menuPaused,
       buildMode: build.buildMode,
-      materialId: build.presetConfigs[build.presetId]?.material ?? 0,
-      speed: Math.hypot(move.moveX, move.moveZ),
+      config: build.presetConfigs[build.presetId],
+      rotation: meta?.baseRotation,
+      texturesReady: ts === 'low' || ts === 'high',
+      variant: ts === 'high' ? 'hi' : 'lo',
       dtMs: deltaMs,
     });
 
