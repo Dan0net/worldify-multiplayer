@@ -19,7 +19,9 @@ import {
   HEMISPHERE_GROUND_NIGHT,
   HEMISPHERE_INTENSITY_NIGHT,
   SUN_COLOR_NOON,
+  normalizeDayNightConfig,
   type DayNightKeyframe,
+  type DayNightConfig,
 } from '@worldify/shared';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
@@ -136,8 +138,9 @@ export interface EnvironmentSettings {
   // Color correction
   saturation: number;           // 0-2, 1.0 = no change
 
-  // Voxel sunlight fill — gamma curve applied to the sky-light channel (lifts dark areas).
-  lightFillPower: number;       // 0.1-2, exponent (lower = brighter fill)
+  // Voxel light fill curves — exponents applied to the per-vertex light channels.
+  skyFillPower: number;         // sky-light channel: <1 lifts dark areas (0.5 = sqrt)
+  blockFillPower: number;       // block-light channel: >1 = tighter drop-off (2 = square)
 
   // Block light (emitters, e.g. lava) — warm, sun-independent glow
   blockLightColor: string;      // hex colour, e.g. '#ffb050'
@@ -145,48 +148,40 @@ export interface EnvironmentSettings {
 }
 
 /**
- * `DayNightConfig` — the single source of truth for the day-night look. `keyframes` is a fixed
- * set (Night, Sunrise, Day, Sunset) with editable times + palettes; the cycle interpolates
- * between them (`sampleKeyframes`). Sun/moon *position* is a procedural time-arc scaled by the
- * global `sunHeight`; `sunDistance` is the light/mesh radius. `DayNightKeyframe` is defined in
- * `@worldify/shared`.
+ * `DayNightConfig` (defined in `@worldify/shared`) — the single source of truth for the day-night
+ * look. Sun/moon appearance + arc are global; timing is four transition-window boundaries; the four
+ * `keyframes` are the phase palettes [Night, Sunrise, Day, Sunset]. `deriveLighting(cfg, time)` is
+ * the one place that turns this into lighting.
  */
-export type { DayNightKeyframe };
-export interface DayNightConfig {
-  keyframes: DayNightKeyframe[];  // length 4, fixed index order (Night, Sunrise, Day, Sunset)
-  sunHeight: number;              // arc peak elevation (degrees) at noon
-  sunDistance: number;            // light/god-ray-mesh radius
-}
+export type { DayNightKeyframe, DayNightConfig };
 
 export const DEFAULT_DAY_NIGHT_CONFIG: DayNightConfig = {
-  sunHeight: SUN_ELEVATION_MAX,
-  sunDistance: SUN_DISTANCE,
+  sunHeight: SUN_ELEVATION_MAX, sunDistance: SUN_DISTANCE, sunSize: 1.0, sunIntensity: LIGHT_SUN_INTENSITY,
+  moonHeight: 55, moonDistance: SUN_DISTANCE, moonSize: 0.5, moonIntensity: LIGHT_MOON_INTENSITY,
+  // Long day: dawn ~04:34–06:58, dusk ~19:55–22:05 (sunset centre ≈ 21:00).
+  sunriseStart: 0.19, sunriseEnd: 0.29, sunsetStart: 0.83, sunsetEnd: 0.92,
   keyframes: [
     {
-      name: 'Night', time: 0.0,
-      sunColor: '#334466', sunIntensity: 0.0, sunSize: 1.0,
-      moonColor: LIGHT_MOON_COLOR, moonIntensity: LIGHT_MOON_INTENSITY, moonSize: 0.5,
+      name: 'Night',
+      sunColor: '#334466', moonColor: LIGHT_MOON_COLOR,
       skyZenithColor: '#0b1a33', skyHorizonColor: '#243b66', groundColor: HEMISPHERE_GROUND_NIGHT,
       hemisphereIntensity: HEMISPHERE_INTENSITY_NIGHT,
     },
     {
-      name: 'Sunrise', time: 0.25,
-      sunColor: '#ffb066', sunIntensity: 1.6, sunSize: 1.15,
-      moonColor: LIGHT_MOON_COLOR, moonIntensity: 0.1, moonSize: 0.5,
+      name: 'Sunrise',
+      sunColor: '#ffb066', moonColor: LIGHT_MOON_COLOR,
       skyZenithColor: '#5577aa', skyHorizonColor: '#ff9d5c', groundColor: '#887766',
       hemisphereIntensity: 1.0,
     },
     {
-      name: 'Day', time: 0.5,
-      sunColor: SUN_COLOR_NOON, sunIntensity: LIGHT_SUN_INTENSITY, sunSize: 1.0,
-      moonColor: LIGHT_MOON_COLOR, moonIntensity: 0.0, moonSize: 0.5,
+      name: 'Day',
+      sunColor: SUN_COLOR_NOON, moonColor: LIGHT_MOON_COLOR,
       skyZenithColor: HEMISPHERE_SKY_DAY, skyHorizonColor: '#bfe3f5', groundColor: HEMISPHERE_GROUND_DAY,
       hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
     },
     {
-      name: 'Sunset', time: 0.75,
-      sunColor: '#ff5522', sunIntensity: 1.6, sunSize: 1.25,
-      moonColor: LIGHT_MOON_COLOR, moonIntensity: 0.1, moonSize: 0.5,
+      name: 'Sunset',
+      sunColor: '#ff5522', moonColor: LIGHT_MOON_COLOR,
       skyZenithColor: '#4d3380', skyHorizonColor: '#ff6622', groundColor: '#553322',
       hemisphereIntensity: 1.0,
     },
@@ -274,7 +269,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   godRaysDecay: 0.90,
   godRaysExposure: 0.25,
   saturation: 1.2,  // Slightly boosted for more vivid colors
-  lightFillPower: 0.5,
+  skyFillPower: 0.5,    // sqrt → lifts dark sky-lit areas
+  blockFillPower: 2.0,  // square → tighter block-light drop-off
   blockLightColor: '#ffb050',
   blockLightIntensity: 1.5,
 };
@@ -423,7 +419,7 @@ export interface GameState {
 
   // Day-night config actions
   updateKeyframe: (index: number, updates: Partial<DayNightKeyframe>) => void;
-  setDayNightConfig: (updates: { sunHeight?: number; sunDistance?: number }) => void;
+  setDayNightConfig: (updates: Partial<Omit<DayNightConfig, 'keyframes'>>) => void;
 
   // Material settings actions
   setMaterialSettings: (updates: Partial<MaterialSettings>) => void;
@@ -526,10 +522,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Environment initial state
   environment: { ...DEFAULT_ENVIRONMENT },
 
-  // Day-night keyframes + global arc params
+  // Day-night config (globals + timing + phase palettes)
   dayNightConfig: {
-    sunHeight: DEFAULT_DAY_NIGHT_CONFIG.sunHeight,
-    sunDistance: DEFAULT_DAY_NIGHT_CONFIG.sunDistance,
+    ...DEFAULT_DAY_NIGHT_CONFIG,
     keyframes: DEFAULT_DAY_NIGHT_CONFIG.keyframes.map((k) => ({ ...k })),
   },
 
@@ -699,7 +694,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     return { dayNightConfig: { ...state.dayNightConfig, keyframes } };
   }),
   setDayNightConfig: (updates) => set((state) => ({
-    dayNightConfig: { ...state.dayNightConfig, ...updates },
+    dayNightConfig: normalizeDayNightConfig({ ...state.dayNightConfig, ...updates }),
   })),
 
   // Material settings actions

@@ -43,7 +43,7 @@ uniform vec3 uMoonColor;
 uniform float uMoonIntensity;
 uniform float uMoonSize;        // relative moon disc size (1 = base)
 uniform float uTime;
-uniform float uStarAngle;       // star-field rotation (radians) — tracks the moon
+uniform mat3 uStarRot;          // star-field rotation — rigid rotation about the celestial pole (tracks the moon)
 uniform float uStarLayers;      // quality lever: 5 = full, 2 = low/medium
 uniform float uSunDiscEnabled;  // 1 when god rays are off (draw disc here), else 0
 
@@ -118,9 +118,9 @@ float starsLayer(vec3 dir, float scale, float density, float time, float twinkle
 }
 
 float stars(vec3 dirIn, float time) {
-  // Rotate the whole star field about the world Y axis so it sweeps with the moon.
-  float ca = cos(uStarAngle), sa = sin(uStarAngle);
-  vec3 dir = vec3(ca * dirIn.x + sa * dirIn.z, dirIn.y, -sa * dirIn.x + ca * dirIn.z);
+  // Rotate the whole star field rigidly about the tilted celestial pole so it rises in the east
+  // and arcs across with the moon (rather than spinning about the zenith).
+  vec3 dir = uStarRot * dirIn;
 
   float result = 0.0;
 
@@ -187,14 +187,18 @@ void main() {
   // When god rays are enabled (ultra/high) the god-rays sun mesh provides the
   // bright disc; when they're off (medium/low) draw the discs here so the sun
   // and moon are still visible. uSunDiscEnabled is set to !godRaysEnabled.
+  // Sun disc — only when god rays are OFF (with god rays on the god-rays sun mesh is the disc).
   if (uSunDiscEnabled > 0.5) {
     // Disc thresholds scale with size (larger size → lower thresholds → bigger disc).
     float sunInner = 1.0 - (1.0 - 0.996) * uSunSize;
     float sunOuter = 1.0 - (1.0 - 0.9985) * uSunSize;
     sky += celestialBody(worldDir, uSunDirection, uSunColor, uSunIntensity, sunInner, sunOuter, 4.0, 0.4);
+  }
 
-    // Moon disc: opaque like the sun — gated by above-horizon visibility only (NOT the dim
-    // moon light intensity), so it reads as a solid bluish disc at night.
+  // Moon disc — ALWAYS drawn (there is no god-rays moon), so uMoonSize works at every quality.
+  // Opaque like the sun: gated by above-horizon visibility only, NOT the dim moon light intensity,
+  // so it reads as a solid bluish disc at night.
+  {
     float moonAbove = smoothstep(-0.1, 0.1, uMoonDirection.y);
     float moonInner = 1.0 - (1.0 - 0.994) * uMoonSize;
     float moonOuter = 1.0 - (1.0 - 0.998) * uMoonSize;
@@ -229,6 +233,9 @@ void main() {
 let skyMesh: THREE.Mesh | null = null;
 let skyMaterial: THREE.ShaderMaterial | null = null;
 let starLayersUnsub: (() => void) | null = null;
+
+/** Scratch matrix for the per-frame star rotation (avoids per-frame allocation). */
+const _starMat4 = new THREE.Matrix4();
 
 /** Star layers by quality: ultra/high get the full 5, medium/low get 2. */
 function starLayersForQuality(): number {
@@ -277,7 +284,7 @@ export function initSkyDome(): void {
       uMoonIntensity: { value: 0.0 },
       uMoonSize: { value: 0.5 },
       uTime: { value: 0.0 },
-      uStarAngle: { value: 0.0 },
+      uStarRot: { value: new THREE.Matrix3() },
       uStarLayers: { value: starLayersForQuality() },
       uSunDiscEnabled: { value: sunDiscEnabledValue() },
     },
@@ -346,8 +353,12 @@ export function updateSkyUniforms(d: DerivedLighting): void {
   u.uMoonSize.value = d.moonSize;
   u.uMoonDirection.value.copy(anglesToDirection(d.moonAzimuth, d.moonElevation));
 
-  // Stars rotate with the moon's azimuth.
-  u.uStarAngle.value = (d.moonAzimuth * Math.PI) / 180;
+  // Stars: rigid rotation about the tilted celestial pole (north, elevation 90−moonHeight) by one
+  // revolution per day, so the field arcs across the sky with the moon instead of spinning about
+  // the zenith.
+  const poleAxis = anglesToDirection(0, 90 - d.moonHeight);
+  _starMat4.makeRotationAxis(poleAxis, d.time * Math.PI * 2);
+  (u.uStarRot.value as THREE.Matrix3).setFromMatrix4(_starMat4);
 }
 
 /**

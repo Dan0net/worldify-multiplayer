@@ -296,9 +296,9 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       shader.uniforms.normalStrength = { value: MATERIAL_NORMAL_STRENGTH };
       shader.uniforms.blendSharpness = { value: 8.0 };
       
-      // Voxel light fill uniforms
-      shader.uniforms.lightFillPower = { value: 0.5 };
-      shader.uniforms.lightFillIntensity = { value: 2.0 };
+      // Voxel light fill curve exponents (sky lifts at <1, block tightens at >1)
+      shader.uniforms.skyFillPower = { value: 0.5 };
+      shader.uniforms.blockFillPower = { value: 2.0 };
 
       // Block-light (emitter) uniforms — defaults mirror DEFAULT_ENVIRONMENT
       // (blockLightColor '#ffb050', blockLightIntensity 1.5); live-tuned via
@@ -432,15 +432,15 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
     }
   }
   
-  setLightFillPower(value: number): void {
+  setSkyFillPower(value: number): void {
     if (this._shader) {
-      this._shader.uniforms.lightFillPower.value = value;
+      this._shader.uniforms.skyFillPower.value = value;
     }
   }
-  
-  setLightFillIntensity(value: number): void {
+
+  setBlockFillPower(value: number): void {
     if (this._shader) {
-      this._shader.uniforms.lightFillIntensity.value = value;
+      this._shader.uniforms.blockFillPower.value = value;
     }
   }
 
@@ -808,12 +808,12 @@ export function applyMaterialSettings(settings: MaterialSettingsUpdate): void {
 /**
  * Apply voxel light fill settings to all terrain materials.
  */
-export function applyLightFillSettings(settings: { lightFillPower?: number; lightFillIntensity?: number }): void {
+export function applyLightFillSettings(settings: { skyFillPower?: number; blockFillPower?: number }): void {
   const materials = [solidMaterial, transparentMaterial];
   for (const mat of materials) {
     if (!mat) continue;
-    if (settings.lightFillPower !== undefined) mat.setLightFillPower(settings.lightFillPower);
-    if (settings.lightFillIntensity !== undefined) mat.setLightFillIntensity(settings.lightFillIntensity);
+    if (settings.skyFillPower !== undefined) mat.setSkyFillPower(settings.skyFillPower);
+    if (settings.blockFillPower !== undefined) mat.setBlockFillPower(settings.blockFillPower);
   }
 }
 

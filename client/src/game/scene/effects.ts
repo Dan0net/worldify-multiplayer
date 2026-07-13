@@ -326,9 +326,10 @@ function syncSunMeshPosition(camera?: THREE.Camera): void {
     // Anchor the mesh to the CAMERA along the light direction, so it sits at a fixed
     // apparent position as the player moves (no drift). Direction is position−target.
     _godRayDir.copy(light.position).sub(light.target.position).normalize();
-    const distance = useGameStore.getState().dayNightConfig.sunDistance;
-    if (camera) sunMesh.position.copy(camera.position).addScaledVector(_godRayDir, distance);
-    else sunMesh.position.copy(_godRayDir).multiplyScalar(distance);
+    const cfg = useGameStore.getState().dayNightConfig;
+    if (camera) sunMesh.position.copy(camera.position).addScaledVector(_godRayDir, cfg.sunDistance);
+    else sunMesh.position.copy(_godRayDir).multiplyScalar(cfg.sunDistance);
+    sunMesh.scale.setScalar(cfg.sunSize); // Sun Size affects the visible god-rays sun too
     (sunMesh.material as THREE.MeshBasicMaterial).color.copy(light.color);
     sunMesh.updateMatrix();
   }

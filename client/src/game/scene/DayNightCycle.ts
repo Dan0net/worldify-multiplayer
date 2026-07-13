@@ -47,12 +47,12 @@ export function updateDayNightCycle(deltaMs: number): void {
     state.setTimeOfDay(time);
   }
 
-  const derived = deriveLighting(cfg.keyframes, time, cfg.sunHeight, cfg.sunDistance);
+  const derived = deriveLighting(cfg, time);
 
   // Shadow ownership + the pop-free fade run EVERY frame (before the static-clock early
-  // return) so a manual time-drag while paused still fades correctly. Cheap: a compare +
-  // an elevation-driven intensity ramp, with a rare map swap.
-  updateShadowCaster(derived.sunElevation, derived.sunIntensity, derived.moonIntensity);
+  // return) so a manual time-drag while paused still fades correctly. Driven purely by the
+  // derived elevations, so the swap and the fade can't disagree.
+  updateShadowCaster(derived.sunElevation, derived.moonElevation);
 
   // Nothing changed since last frame — skip the palette recompute + apply.
   if (time === lastAppliedTime) return;

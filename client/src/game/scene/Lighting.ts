@@ -137,7 +137,7 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
 
   // Seed the full lighting state from the keyframes at the current time (no first-frame flash).
   const cfg = useGameStore.getState().dayNightConfig;
-  applyDerivedLighting(deriveLighting(cfg.keyframes, settings.timeOfDay, cfg.sunHeight, cfg.sunDistance));
+  applyDerivedLighting(deriveLighting(cfg, settings.timeOfDay));
 
   console.log('[Lighting] Initialized with sun + moon + hemisphere + procedural sky (single shadow caster)');
 
@@ -195,7 +195,7 @@ export function applyDerivedLighting(d: DerivedLighting): void {
   if (moonLight) {
     moonLight.color.set(d.moonColor);
     moonLight.intensity = d.moonIntensity;
-    moonLight.position.copy(moonLight.target.position).addScaledVector(_moonDir, d.sunDistance);
+    moonLight.position.copy(moonLight.target.position).addScaledVector(_moonDir, d.moonDistance);
   }
   if (hemisphereLight) {
     hemisphereLight.color.set(d.skyZenithColor);
@@ -304,21 +304,23 @@ export function isMoonShadowsAllowed(): boolean {
  * until that intensity is ~0 — so the hard castShadow flip (which disposes/reallocates the
  * shadow map) is invisible. A hysteresis deadband avoids thrash at the crossover.
  */
-export function updateShadowCaster(sunElevation: number, sunIntensity: number, moonIntensity: number): void {
+export function updateShadowCaster(sunElevation: number, moonElevation: number): void {
   if (!sunLight || !moonLight) return;
 
-  // Desired caster with a deadband: switch only on a clear intensity lead, else hold.
+  // Desired caster by ELEVATION: whichever body is higher and above the horizon. Sun & moon cross
+  // 0° together at dawn/dusk, so the swap lands where BOTH are at the horizon — where the fade is
+  // ~0 for both — instead of when the incoming body is already high (the old dusk-pop). A small
+  // deadband avoids thrash at the crossover.
   let desired: 'sun' | 'moon';
-  if (!moonShadowsAllowed) desired = 'sun';
-  else if (moonIntensity > sunIntensity * 1.05) desired = 'moon';
-  else if (sunIntensity > moonIntensity * 1.05) desired = 'sun';
+  if (moonShadowsAllowed && moonElevation > 0 && moonElevation > sunElevation + 1) desired = 'moon';
+  else if (sunElevation > moonElevation + 1 || !moonShadowsAllowed) desired = 'sun';
   else desired = activeShadowCaster;
 
   const active = getActiveShadowLight();
   if (!active) return;
 
   // Fade level = smoothstep of the active body's elevation over the near-horizon band.
-  const activeElev = activeShadowCaster === 'sun' ? sunElevation : -sunElevation;
+  const activeElev = activeShadowCaster === 'sun' ? sunElevation : moonElevation;
   const f = Math.min(1, Math.max(0, (activeElev - SHADOW_FADE_LO) / (SHADOW_FADE_HI - SHADOW_FADE_LO)));
   active.shadow.intensity = f * f * (3 - 2 * f);
 

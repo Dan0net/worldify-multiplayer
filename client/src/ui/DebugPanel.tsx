@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   useGameStore, TERRAIN_DEBUG_MODE_NAMES, TERRAIN_DEBUG_MODE_ORDER, type TerrainDebugMode,
-  type EnvironmentSettings, type DayNightKeyframe,
+  type EnvironmentSettings, type DayNightKeyframe, type DayNightConfig,
 } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings, applyBlockLightSettings } from '../game/material/TerrainMaterial';
@@ -308,8 +308,8 @@ export function DebugPanel() {
 
   /** Edit the selected keyframe and re-derive the cycle live (no reset). */
   const editKeyframe = (u: Partial<DayNightKeyframe>) => { updateKeyframe(kfIndex, u); invalidateDayNight(); };
-  /** Edit a global cycle setting (sun height / distance) and re-derive live. */
-  const editGlobal = (u: { sunHeight?: number; sunDistance?: number }) => { setDayNightConfig(u); invalidateDayNight(); };
+  /** Edit a global cycle setting (sun/moon appearance, arc, timing) and re-derive live. */
+  const editGlobal = (u: Partial<Omit<DayNightConfig, 'keyframes'>>) => { setDayNightConfig(u); invalidateDayNight(); };
 
   const [cacheClearing, setCacheClearing] = useState(false);
   const [_chunksClearing, setChunksClearing] = useState(false);
@@ -354,8 +354,8 @@ export function DebugPanel() {
 
     // SSAO/bloom/godrays/saturation are all store-driven via effects.ts — no direct call needed.
 
-    // Apply voxel sunlight fill (gamma curve) to terrain materials
-    if ('lightFillPower' in updates) {
+    // Apply voxel light-fill curves to terrain materials
+    if ('skyFillPower' in updates || 'blockFillPower' in updates) {
       applyLightFillSettings(updates);
     }
 
@@ -1032,11 +1032,40 @@ export function DebugPanel() {
           />
         </div>
 
-        {/* Sun/moon arc — position follows the time-arc; these are the global knobs */}
+        {/* Sun — global appearance + arc (position follows the day-length arc) */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Sun Arc</div>
-          <Slider label="Sun Height" value={dayNightConfig.sunHeight} min={10} max={90} step={1} onChange={(v) => editGlobal({ sunHeight: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
-          <Slider label="Sun Distance" value={dayNightConfig.sunDistance} min={50} max={400} step={10} onChange={(v) => editGlobal({ sunDistance: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}`} />
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Sun</div>
+          <Slider label="Height" value={dayNightConfig.sunHeight} min={10} max={90} step={1} onChange={(v) => editGlobal({ sunHeight: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
+          <Slider label="Distance" value={dayNightConfig.sunDistance} min={50} max={400} step={10} onChange={(v) => editGlobal({ sunDistance: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}`} />
+          <Slider label="Size" value={dayNightConfig.sunSize} min={0.2} max={4} step={0.05} onChange={(v) => editGlobal({ sunSize: v })} />
+          <Slider label="Intensity" value={dayNightConfig.sunIntensity} min={0} max={10} step={0.1} onChange={(v) => editGlobal({ sunIntensity: v })} />
+        </div>
+
+        {/* Moon — its own global appearance + arc */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Moon size={12} /> Moon</div>
+          <Slider label="Height" value={dayNightConfig.moonHeight} min={10} max={90} step={1} onChange={(v) => editGlobal({ moonHeight: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
+          <Slider label="Distance" value={dayNightConfig.moonDistance} min={50} max={400} step={10} onChange={(v) => editGlobal({ moonDistance: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}`} />
+          <Slider label="Size" value={dayNightConfig.moonSize} min={0.2} max={4} step={0.05} onChange={(v) => editGlobal({ moonSize: v })} />
+          <Slider label="Intensity" value={dayNightConfig.moonIntensity} min={0} max={3} step={0.05} onChange={(v) => editGlobal({ moonIntensity: v })} />
+        </div>
+
+        {/* Timing — dawn/dusk transition windows; day & night hold between them */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Clock size={12} /> Timing</div>
+          <Slider label="Sunrise Start" value={dayNightConfig.sunriseStart} min={0} max={0.999} step={0.001} onChange={(v) => editGlobal({ sunriseStart: v })} formatValue={(v) => formatTimeOfDay(v)} />
+          <Slider label="Sunrise End" value={dayNightConfig.sunriseEnd} min={0} max={0.999} step={0.001} onChange={(v) => editGlobal({ sunriseEnd: v })} formatValue={(v) => formatTimeOfDay(v)} />
+          <Slider label="Sunset Start" value={dayNightConfig.sunsetStart} min={0} max={0.999} step={0.001} onChange={(v) => editGlobal({ sunsetStart: v })} formatValue={(v) => formatTimeOfDay(v)} />
+          <Slider label="Sunset End" value={dayNightConfig.sunsetEnd} min={0} max={0.999} step={0.001} onChange={(v) => editGlobal({ sunsetEnd: v })} formatValue={(v) => formatTimeOfDay(v)} />
+        </div>
+
+        {/* Voxel light fill curves + block light */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Lightbulb size={12} /> Voxel Light</div>
+          <Slider label="Sky Fill Power" value={environment.skyFillPower} min={0.25} max={2} step={0.05} onChange={(v) => handleEnvironmentChange({ skyFillPower: v })} />
+          <Slider label="Block Fill Power" value={environment.blockFillPower} min={0.25} max={4} step={0.05} onChange={(v) => handleEnvironmentChange({ blockFillPower: v })} />
+          <ColorPicker label="Block Color" value={environment.blockLightColor} onChange={(v) => handleEnvironmentChange({ blockLightColor: v })} />
+          <Slider label="Block Intensity" value={environment.blockLightIntensity} min={0} max={4} step={0.05} onChange={(v) => handleEnvironmentChange({ blockLightIntensity: v })} />
         </div>
 
         {/* Shadows */}
@@ -1047,22 +1076,9 @@ export function DebugPanel() {
           <Select label="Map Size" value={environment.shadowMapSize} options={shadowMapOptions} onChange={(v) => handleEnvironmentChange({ shadowMapSize: v })} />
         </div>
 
-        {/* Voxel sunlight fill — gamma curve on the sky-light channel (lifts dark areas) */}
-        <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Voxel Sunlight Fill</div>
-          <Slider label="Fill Power" value={environment.lightFillPower} min={0.1} max={2} step={0.05} onChange={(v) => handleEnvironmentChange({ lightFillPower: v })} />
-        </div>
-
-        {/* Block Light (emitters, e.g. lava) — warm glow independent of the sun */}
-        <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Lightbulb size={12} /> Block Light</div>
-          <ColorPicker label="Color" value={environment.blockLightColor} onChange={(v) => handleEnvironmentChange({ blockLightColor: v })} />
-          <Slider label="Intensity" value={environment.blockLightIntensity} min={0} max={4} step={0.05} onChange={(v) => handleEnvironmentChange({ blockLightIntensity: v })} />
-        </div>
-
-        {/* Keyframe editor — pick a keyframe, edit its time + full appearance palette */}
+        {/* Keyframe editor — pick a phase palette, edit its colours + fill */}
         <div className="mb-2 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sunrise size={12} /> Keyframes</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sunrise size={12} /> Palettes</div>
           <div className="flex gap-1 mb-2">
             {dayNightConfig.keyframes.map((k, i) => (
               <button
@@ -1078,13 +1094,8 @@ export function DebugPanel() {
           </div>
           {keyframe && (
             <>
-              <Slider label="Time" value={keyframe.time} min={0} max={0.999} step={0.001} onChange={(v) => editKeyframe({ time: v })} formatValue={(v) => formatTimeOfDay(v)} />
               <ColorPicker label="Sun Color" value={keyframe.sunColor} onChange={(v) => editKeyframe({ sunColor: v })} />
-              <Slider label="Sun Intensity" value={keyframe.sunIntensity} min={0} max={10} step={0.1} onChange={(v) => editKeyframe({ sunIntensity: v })} />
-              <Slider label="Sun Size" value={keyframe.sunSize} min={0.2} max={4} step={0.05} onChange={(v) => editKeyframe({ sunSize: v })} />
               <ColorPicker label="Moon Color" value={keyframe.moonColor} onChange={(v) => editKeyframe({ moonColor: v })} />
-              <Slider label="Moon Intensity" value={keyframe.moonIntensity} min={0} max={3} step={0.05} onChange={(v) => editKeyframe({ moonIntensity: v })} />
-              <Slider label="Moon Size" value={keyframe.moonSize} min={0.2} max={4} step={0.05} onChange={(v) => editKeyframe({ moonSize: v })} />
               <ColorPicker label="Sky Zenith" value={keyframe.skyZenithColor} onChange={(v) => editKeyframe({ skyZenithColor: v })} />
               <ColorPicker label="Sky Horizon" value={keyframe.skyHorizonColor} onChange={(v) => editKeyframe({ skyHorizonColor: v })} />
               <ColorPicker label="Ground" value={keyframe.groundColor} onChange={(v) => editKeyframe({ groundColor: v })} />

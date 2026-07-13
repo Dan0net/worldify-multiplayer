@@ -1,30 +1,29 @@
 /**
  * Day-Night Cycle Helpers
  *
- * Keyframe-based day-night model. The cycle is defined by an array of keyframes, each with
- * an editable time-of-day and a full appearance palette (sun/moon colour+intensity+size, sky
- * zenith/horizon/ground colours, hemisphere fill). `sampleKeyframes` interpolates the whole
- * palette for any time; sun/moon *position* is a procedural arc (not keyframed) scaled by a
- * global `sunHeight`.
+ * Keyframe-based day-night model. Four palette keyframes (Night, Sunrise, Day, Sunset) define
+ * colours; sun/moon size + intensity + arc are GLOBAL. Timing is a phase-window model: day and
+ * night hold flat, with short sunrise/sunset transitions. The sun/moon position arc is reshaped
+ * to the day length (so the sun physically rises/sets at the transition centres), and intensity
+ * is gated by elevation (0 below the horizon).
+ *
+ * `deriveLighting(cfg, time)` is the SINGLE source of all lighting math — every consumer
+ * (Lighting, SkyDome, effects, shadows) reads its `DerivedLighting` output rather than recomputing
+ * positions/intensities, so the signals can never drift apart.
  */
 
-import { smoothstep, lerp, lerpColor } from '../util/math.js';
+import { smoothstep, lerp, lerpColor, clamp } from '../util/math.js';
 
 // ============== Clock ==============
 
-/**
- * Format normalized time (0-1) as an HH:MM clock string.
- */
+/** Format normalized time (0-1) as an HH:MM clock string. */
 export function formatTimeOfDay(time: number): string {
   const hours = Math.floor(time * 24);
   const minutes = Math.floor((time * 24 - hours) * 60);
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
 }
 
-/**
- * Coarse label for the debug readout, from fixed time windows. Purely cosmetic — the real
- * look is defined by the (editable) keyframes, not these windows.
- */
+/** Coarse label for the debug readout (cosmetic). */
 export function getDayPhaseLabel(time: number): string {
   const t = ((time % 1) + 1) % 1;
   if (t < 0.2 || t >= 0.8) return '🌙 Night';
@@ -33,55 +32,57 @@ export function getDayPhaseLabel(time: number): string {
   return '🌇 Sunset';
 }
 
-// ============== Keyframes ==============
+// ============== Config types ==============
 
-/** A single day-night keyframe: a time-of-day plus the full appearance palette at that time. */
+/** A palette keyframe: the colours + fill at one phase (Night, Sunrise, Day, Sunset). */
 export interface DayNightKeyframe {
-  name: string;                // 'Night' | 'Sunrise' | 'Day' | 'Sunset' (label only)
-  time: number;                // 0..1 (editable timing)
-  sunColor: string; sunIntensity: number; sunSize: number;
-  moonColor: string; moonIntensity: number; moonSize: number;
-  skyZenithColor: string;      // top of the sky gradient (also drives the hemisphere sky colour)
-  skyHorizonColor: string;     // horizon band (authored, not derived)
-  groundColor: string;         // below-horizon / hemisphere ground colour
+  name: string;
+  sunColor: string;
+  moonColor: string;
+  skyZenithColor: string;   // top of sky gradient (also the hemisphere sky colour)
+  skyHorizonColor: string;  // authored horizon band
+  groundColor: string;      // below-horizon / hemisphere ground colour
   hemisphereIntensity: number;
 }
 
-/** The interpolated palette (a keyframe without its name/time). */
-export type SampledKeyframe = Omit<DayNightKeyframe, 'name' | 'time'>;
+/** The interpolated palette (a keyframe without its name). */
+export type SampledKeyframe = Omit<DayNightKeyframe, 'name'>;
 
 /**
- * Interpolate the keyframe palette at `time` (0..1). Keyframes may be in any order and at any
- * times — a sorted copy is taken each call and bracketing wraps across the 1.0/0.0 seam.
+ * Full day-night configuration. Sun/moon appearance + arc are global; timing is four transition
+ * boundaries; `keyframes` are the four phase palettes in fixed order [Night, Sunrise, Day, Sunset].
  */
-export function sampleKeyframes(keyframes: DayNightKeyframe[], time: number): SampledKeyframe {
-  const ks = keyframes.slice().sort((a, b) => a.time - b.time);
-  const n = ks.length;
-  const T = ((time % 1) + 1) % 1;
+export interface DayNightConfig {
+  sunHeight: number; sunDistance: number; sunSize: number; sunIntensity: number;
+  moonHeight: number; moonDistance: number; moonSize: number; moonIntensity: number;
+  sunriseStart: number; sunriseEnd: number;   // dawn transition window (0..1)
+  sunsetStart: number; sunsetEnd: number;      // dusk transition window (0..1)
+  keyframes: DayNightKeyframe[];               // [Night, Sunrise, Day, Sunset]
+}
 
-  // Bracket: `lo` = last keyframe at or before T (else the last one, wrapping); `hi` = next.
-  let lo = n - 1;
-  for (let i = 0; i < n; i++) {
-    if (ks[i].time <= T) lo = i;
-    else break;
-  }
-  const hi = (lo + 1) % n;
-  const a = ks[lo], b = ks[hi];
+/** Elevation (degrees) over which sun/moon light fades in above the horizon. */
+const HORIZON_RAMP = 8;
 
-  let gap = b.time - a.time;
-  if (gap <= 0) gap += 1;              // wrap segment across the 1.0 seam
-  let local = T - a.time;
-  if (local < 0) local += 1;
-  const t = gap < 1e-6 ? 0 : Math.min(1, Math.max(0, local / gap));
-  const s = smoothstep(0, 1, t);
+/**
+ * Clamp the window times into [0, 1) and enforce sunriseStart < sunriseEnd < sunsetStart < sunsetEnd
+ * (with a minimum gap), so the phase-window model can never be put in an impossible state. Returns a
+ * new config; leaves palettes + globals untouched.
+ */
+export function normalizeDayNightConfig(cfg: DayNightConfig): DayNightConfig {
+  const EPS = 0.001;
+  let a = clamp(cfg.sunriseStart, 0, 1 - 4 * EPS);
+  let b = clamp(cfg.sunriseEnd, a + EPS, 1 - 3 * EPS);
+  let c = clamp(cfg.sunsetStart, b + EPS, 1 - 2 * EPS);
+  let d = clamp(cfg.sunsetEnd, c + EPS, 1 - EPS);
+  return { ...cfg, sunriseStart: a, sunriseEnd: b, sunsetStart: c, sunsetEnd: d };
+}
 
+// ============== Palette sampling (phase windows with holds) ==============
+
+function blend(a: DayNightKeyframe, b: DayNightKeyframe, s: number): SampledKeyframe {
   return {
     sunColor: lerpColor(a.sunColor, b.sunColor, s),
-    sunIntensity: lerp(a.sunIntensity, b.sunIntensity, s),
-    sunSize: lerp(a.sunSize, b.sunSize, s),
     moonColor: lerpColor(a.moonColor, b.moonColor, s),
-    moonIntensity: lerp(a.moonIntensity, b.moonIntensity, s),
-    moonSize: lerp(a.moonSize, b.moonSize, s),
     skyZenithColor: lerpColor(a.skyZenithColor, b.skyZenithColor, s),
     skyHorizonColor: lerpColor(a.skyHorizonColor, b.skyHorizonColor, s),
     groundColor: lerpColor(a.groundColor, b.groundColor, s),
@@ -89,50 +90,92 @@ export function sampleKeyframes(keyframes: DayNightKeyframe[], time: number): Sa
   };
 }
 
-// ============== Position arc (procedural, not keyframed) ==============
-
 /**
- * Sun elevation (degrees) for a time of day. Noon (0.5) → +sunHeight, midnight → −sunHeight.
+ * Interpolate the palette at `time`. Day and night hold their palette flat; sunrise/sunset are
+ * short transitions that pass through the Sunrise/Sunset palette at their centre.
  */
-export function getSunElevation(time: number, sunHeight: number): number {
-  return sunHeight * Math.cos((time - 0.5) * Math.PI * 2);
+export function sampleKeyframes(cfg: DayNightConfig, time: number): SampledKeyframe {
+  const T = ((time % 1) + 1) % 1;
+  const [night, sunrise, day, sunset] = cfg.keyframes;
+  const { sunriseStart: a, sunriseEnd: b, sunsetStart: c, sunsetEnd: d } = cfg;
+
+  if (T >= b && T < c) return blend(day, day, 0);            // day hold
+  if (T >= a && T < b) {                                     // sunrise: Night→Sunrise→Day
+    const u = (T - a) / (b - a);
+    return u < 0.5 ? blend(night, sunrise, smoothstep(0, 1, u * 2))
+                   : blend(sunrise, day, smoothstep(0, 1, (u - 0.5) * 2));
+  }
+  if (T >= c && T < d) {                                     // sunset: Day→Sunset→Night
+    const u = (T - c) / (d - c);
+    return u < 0.5 ? blend(day, sunset, smoothstep(0, 1, u * 2))
+                   : blend(sunset, night, smoothstep(0, 1, (u - 0.5) * 2));
+  }
+  return blend(night, night, 0);                            // night hold (T>=d or T<a)
 }
 
-/**
- * Sun azimuth (degrees) for a time of day.
- */
+// ============== Position arc (day-length aware) ==============
+
+function windowMids(cfg: DayNightConfig): { srMid: number; ssMid: number } {
+  return { srMid: (cfg.sunriseStart + cfg.sunriseEnd) / 2, ssMid: (cfg.sunsetStart + cfg.sunsetEnd) / 2 };
+}
+
+/** Sun elevation (deg): a half-sine hump over daylight [srMid, ssMid], negative at night. */
+export function getSunElevation(cfg: DayNightConfig, time: number): number {
+  const T = ((time % 1) + 1) % 1;
+  const { srMid, ssMid } = windowMids(cfg);
+  if (T >= srMid && T < ssMid) {
+    return cfg.sunHeight * Math.sin(Math.PI * (T - srMid) / (ssMid - srMid));
+  }
+  const nightLen = (1 + srMid) - ssMid;
+  const tn = ((((T - ssMid) % 1) + 1) % 1) / nightLen;
+  return -cfg.sunHeight * Math.sin(Math.PI * tn);
+}
+
+/** Moon elevation (deg): up at night (own height), below the horizon during the day. */
+export function getMoonElevation(cfg: DayNightConfig, time: number): number {
+  const T = ((time % 1) + 1) % 1;
+  const { srMid, ssMid } = windowMids(cfg);
+  if (T >= srMid && T < ssMid) {
+    return -cfg.moonHeight * Math.sin(Math.PI * (T - srMid) / (ssMid - srMid));
+  }
+  const nightLen = (1 + srMid) - ssMid;
+  const tn = ((((T - ssMid) % 1) + 1) % 1) / nightLen;
+  return cfg.moonHeight * Math.sin(Math.PI * tn);
+}
+
+/** Sun azimuth (deg). */
 export function getSunAzimuth(time: number): number {
   return ((time * 360) + 90) % 360;
 }
 
 // ============== Derived lighting ==============
 
-/**
- * The full set of derived lighting values for a time of day: the interpolated palette plus
- * the procedural sun/moon positions. Applied straight to the scene lights + sky by the client.
- */
+/** Complete derived lighting for a time of day: palette + positions + effective intensities. */
 export interface DerivedLighting extends SampledKeyframe {
   sunAzimuth: number; sunElevation: number;
   moonAzimuth: number; moonElevation: number;
-  sunDistance: number;
+  sunIntensity: number; moonIntensity: number;   // elevation-gated (0 below horizon)
+  sunSize: number; moonSize: number;
+  sunDistance: number; moonDistance: number;
+  time: number;        // normalized 0..1 (for star rotation)
+  moonHeight: number;  // for the star-field celestial tilt
 }
 
-/**
- * Derive the complete lighting state for `time` from the keyframes + global arc params.
- * Moon is antipodal to the sun. Shared so both the per-frame cycle and the initial seed use
- * one code path.
- */
-export function deriveLighting(
-  keyframes: DayNightKeyframe[], time: number, sunHeight: number, sunDistance: number
-): DerivedLighting {
-  const palette = sampleKeyframes(keyframes, time);
-  const sunElevation = getSunElevation(time, sunHeight);
-  const sunAzimuth = getSunAzimuth(time);
+/** Derive the complete lighting state for `time`. */
+export function deriveLighting(cfg: DayNightConfig, time: number): DerivedLighting {
+  const T = ((time % 1) + 1) % 1;
+  const palette = sampleKeyframes(cfg, T);
+  const sunElevation = getSunElevation(cfg, T);
+  const moonElevation = getMoonElevation(cfg, T);
+  const sunAzimuth = getSunAzimuth(T);
   return {
     ...palette,
     sunAzimuth, sunElevation,
-    moonAzimuth: (sunAzimuth + 180) % 360,
-    moonElevation: -sunElevation,
-    sunDistance,
+    moonAzimuth: (sunAzimuth + 180) % 360, moonElevation,
+    sunIntensity: cfg.sunIntensity * smoothstep(0, HORIZON_RAMP, sunElevation),
+    moonIntensity: cfg.moonIntensity * smoothstep(0, HORIZON_RAMP, moonElevation),
+    sunSize: cfg.sunSize, moonSize: cfg.moonSize,
+    sunDistance: cfg.sunDistance, moonDistance: cfg.moonDistance,
+    time: T, moonHeight: cfg.moonHeight,
   };
 }

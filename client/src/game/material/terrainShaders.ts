@@ -153,9 +153,9 @@ export const terrainFragmentPrefix = /* glsl */ `
   uniform float normalStrength;
   uniform float blendSharpness;
   
-  // Voxel light fill uniforms
-  uniform float lightFillPower;
-  uniform float lightFillIntensity;
+  // Voxel light fill curve exponents
+  uniform float skyFillPower;    // sky-light channel (<1 lifts dark areas)
+  uniform float blockFillPower;  // block-light channel (>1 = tighter drop-off)
 
   // Block-light (emitter) uniforms
   uniform vec3 uBlockLightColor;
@@ -348,9 +348,9 @@ export const terrainNormalFragment = /* glsl */ `
 export const terrainLightFragment = /* glsl */ `
   // Sky term: scale PBR by sky light (preserves shadows + specular). Guard pow() —
   // pow(0, uniform) is undefined in GLSL and returns NaN on some GPUs.
-  vec3 skyTerm = outgoingLight * pow(max(vLightLevel, 0.001), lightFillPower);
-  // Block term: warm emitter light, independent of the sun.
-  vec3 blockTerm = diffuseColor.rgb * vBlockLight * uBlockLightColor * uBlockLightIntensity;
+  vec3 skyTerm = outgoingLight * pow(max(vLightLevel, 0.001), skyFillPower);
+  // Block term: warm emitter light, independent of the sun, with its own drop-off curve.
+  vec3 blockTerm = pow(max(vBlockLight, 0.001), blockFillPower) * uBlockLightColor * uBlockLightIntensity * diffuseColor.rgb;
   // Combine by per-channel max (sun-dominant in daylight, block-dominant in the dark).
   outgoingLight = max(skyTerm, blockTerm);
 
