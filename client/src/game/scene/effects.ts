@@ -327,9 +327,13 @@ function syncSunMeshPosition(camera?: THREE.Camera): void {
     // apparent position as the player moves (no drift). Direction is position−target.
     _godRayDir.copy(light.position).sub(light.target.position).normalize();
     const cfg = useGameStore.getState().dayNightConfig;
-    if (camera) sunMesh.position.copy(camera.position).addScaledVector(_godRayDir, cfg.sunDistance);
-    else sunMesh.position.copy(_godRayDir).multiplyScalar(cfg.sunDistance);
-    sunMesh.scale.setScalar(cfg.sunSize); // Sun Size affects the visible god-rays sun too
+    // Use the ACTIVE body's size + distance so the moon's god-ray disc matches Moon Size
+    // (not the sun's) when the moon is the body above the horizon.
+    const isMoon = light === moon;
+    const distance = isMoon ? cfg.moonDistance : cfg.sunDistance;
+    if (camera) sunMesh.position.copy(camera.position).addScaledVector(_godRayDir, distance);
+    else sunMesh.position.copy(_godRayDir).multiplyScalar(distance);
+    sunMesh.scale.setScalar(isMoon ? cfg.moonSize : cfg.sunSize);
     (sunMesh.material as THREE.MeshBasicMaterial).color.copy(light.color);
     sunMesh.updateMatrix();
   }

@@ -60,8 +60,14 @@ export interface DayNightConfig {
   keyframes: DayNightKeyframe[];               // [Night, Sunrise, Day, Sunset]
 }
 
-/** Elevation (degrees) over which sun/moon light fades in above the horizon. */
-const HORIZON_RAMP = 8;
+/**
+ * Elevation band (degrees) over which sun/moon light fades in. It starts BELOW the horizon so a
+ * body grazing the horizon still lights the scene (civil twilight) — at elevation 0 each gives
+ * ~50%, so the antipodal sun↔moon hand-off overlaps instead of going dark. Well below the horizon
+ * (≤ HORIZON_LO) intensity is still 0, so this is not the old "sun lights from under the ground".
+ */
+const HORIZON_LO = -6;
+const HORIZON_HI = 6;
 
 /**
  * Clamp the window times into [0, 1) and enforce sunriseStart < sunriseEnd < sunsetStart < sunsetEnd
@@ -172,8 +178,8 @@ export function deriveLighting(cfg: DayNightConfig, time: number): DerivedLighti
     ...palette,
     sunAzimuth, sunElevation,
     moonAzimuth: (sunAzimuth + 180) % 360, moonElevation,
-    sunIntensity: cfg.sunIntensity * smoothstep(0, HORIZON_RAMP, sunElevation),
-    moonIntensity: cfg.moonIntensity * smoothstep(0, HORIZON_RAMP, moonElevation),
+    sunIntensity: cfg.sunIntensity * smoothstep(HORIZON_LO, HORIZON_HI, sunElevation),
+    moonIntensity: cfg.moonIntensity * smoothstep(HORIZON_LO, HORIZON_HI, moonElevation),
     sunSize: cfg.sunSize, moonSize: cfg.moonSize,
     sunDistance: cfg.sunDistance, moonDistance: cfg.moonDistance,
     time: T, moonHeight: cfg.moonHeight,

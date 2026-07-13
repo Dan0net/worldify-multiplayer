@@ -8,7 +8,6 @@ import {
   MATERIAL_NORMAL_STRENGTH,
   LIGHT_SUN_INTENSITY,
   LIGHT_MOON_COLOR,
-  LIGHT_MOON_INTENSITY,
   SUN_DISTANCE,
   SUN_ELEVATION_MAX,
   DEFAULT_TIME_OF_DAY,
@@ -17,7 +16,6 @@ import {
   HEMISPHERE_GROUND_DAY,
   HEMISPHERE_INTENSITY_DAY,
   HEMISPHERE_GROUND_NIGHT,
-  HEMISPHERE_INTENSITY_NIGHT,
   SUN_COLOR_NOON,
   normalizeDayNightConfig,
   type DayNightKeyframe,
@@ -157,7 +155,7 @@ export type { DayNightKeyframe, DayNightConfig };
 
 export const DEFAULT_DAY_NIGHT_CONFIG: DayNightConfig = {
   sunHeight: SUN_ELEVATION_MAX, sunDistance: SUN_DISTANCE, sunSize: 1.0, sunIntensity: LIGHT_SUN_INTENSITY,
-  moonHeight: 55, moonDistance: SUN_DISTANCE, moonSize: 0.5, moonIntensity: LIGHT_MOON_INTENSITY,
+  moonHeight: 55, moonDistance: SUN_DISTANCE, moonSize: 0.5, moonIntensity: 0.3,
   // Long day: dawn ~04:34–06:58, dusk ~19:55–22:05 (sunset centre ≈ 21:00).
   sunriseStart: 0.19, sunriseEnd: 0.29, sunsetStart: 0.83, sunsetEnd: 0.92,
   keyframes: [
@@ -165,7 +163,7 @@ export const DEFAULT_DAY_NIGHT_CONFIG: DayNightConfig = {
       name: 'Night',
       sunColor: '#334466', moonColor: LIGHT_MOON_COLOR,
       skyZenithColor: '#0b1a33', skyHorizonColor: '#243b66', groundColor: HEMISPHERE_GROUND_NIGHT,
-      hemisphereIntensity: HEMISPHERE_INTENSITY_NIGHT,
+      hemisphereIntensity: 0,
     },
     {
       name: 'Sunrise',
