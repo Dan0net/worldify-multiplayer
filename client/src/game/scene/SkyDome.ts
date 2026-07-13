@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { getScene } from './scene';
 import { useGameStore } from '../../state/store';
+import type { DerivedLighting } from '@worldify/shared';
 
 // ============== Shader Code ==============
 
@@ -30,18 +31,19 @@ void main() {
 const fragmentShader = /* glsl */ `
 precision highp float;
 
-uniform vec3 uSkyColor;
-uniform vec3 uHorizonColor;
+uniform vec3 uSkyColor;         // zenith
+uniform vec3 uHorizonColor;     // horizon band (authored per keyframe)
 uniform vec3 uGroundColor;
-uniform vec3 uSunsetHorizonColor;
-uniform vec3 uSunsetZenithColor;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
 uniform float uSunIntensity;
+uniform float uSunSize;         // relative sun disc size (1 = base)
 uniform vec3 uMoonDirection;
 uniform vec3 uMoonColor;
 uniform float uMoonIntensity;
+uniform float uMoonSize;        // relative moon disc size (1 = base)
 uniform float uTime;
+uniform float uStarAngle;       // star-field rotation (radians) — tracks the moon
 uniform float uStarLayers;      // quality lever: 5 = full, 2 = low/medium
 uniform float uSunDiscEnabled;  // 1 when god rays are off (draw disc here), else 0
 
@@ -105,8 +107,8 @@ float starsLayer(vec3 dir, float scale, float density, float time, float twinkle
         float brightness = (starHash.x - density) / (1.0 - density);
         float twinkle = 0.5 + 0.5 * sin(time * twinkleSpeed + starHash.y * 628.0);
         
-        // Sharp falloff based on angular distance squared
-        float star = exp(-angularDistSq * scale * scale * 50.0) * brightness * twinkle;
+        // Falloff based on angular distance squared (lower constant = larger stars)
+        float star = exp(-angularDistSq * scale * scale * 22.0) * brightness * twinkle;
         result += star;
       }
     }
@@ -115,26 +117,30 @@ float starsLayer(vec3 dir, float scale, float density, float time, float twinkle
   return result;
 }
 
-float stars(vec3 dir, float time) {
+float stars(vec3 dirIn, float time) {
+  // Rotate the whole star field about the world Y axis so it sweeps with the moon.
+  float ca = cos(uStarAngle), sa = sin(uStarAngle);
+  vec3 dir = vec3(ca * dirIn.x + sa * dirIn.z, dirIn.y, -sa * dirIn.x + ca * dirIn.z);
+
   float result = 0.0;
 
   // Layer 1: Bright stars (rare) - 2x bigger, 2x denser
-  result += starsLayer(dir, 30.0, 0.984, time, 0.5) * 1.0;
+  result += starsLayer(dir, 30.0, 0.984, time, 0.5) * 1.3;
 
   // Layer 2: Medium stars
-  result += starsLayer(dir, 100.0, 0.95, time, 1.0) * 0.7;
+  result += starsLayer(dir, 100.0, 0.95, time, 1.0) * 0.9;
 
   // Layers 3-5 skipped on low/medium quality (each is 9 hash evals/pixel)
   if (uStarLayers < 3.0) return result;
 
   // Layer 3: Small stars
-  result += starsLayer(dir, 150.0, 0.9, time, 2.0) * 0.5;
+  result += starsLayer(dir, 150.0, 0.9, time, 2.0) * 0.6;
 
   // Layer 4: Tiny stars
-  result += starsLayer(dir, 220.0, 0.85, time, 3.0) * 0.35;
+  result += starsLayer(dir, 220.0, 0.85, time, 3.0) * 0.4;
 
   // Layer 5: Star dust
-  result += starsLayer(dir, 320.0, 0.8, time, 4.0) * 0.25;
+  result += starsLayer(dir, 320.0, 0.8, time, 4.0) * 0.3;
 
   return result;
 }
@@ -161,19 +167,15 @@ void main() {
   // Night darkening factor
   float nightFactor = smoothstep(0.1, -0.2, sunAltitude);
   float skyDarkening = mix(1.0, 0.08, nightFactor);
-  
-  // Dawn/dusk blend factor (peaks at sunset/sunrise)
-  float dawnDusk = pow(max(0.0, 1.0 - abs(sunAltitude) / 0.3), 0.7);
-  
+
   // Horizon blend (smooth transition above/below horizon)
   float horizonBlend = smoothstep(-0.1, 0.1, altitude);
-  
-  // Sky colors
+
+  // Sky colors — zenith↔horizon gradient; the horizon colour is authored per keyframe, so the
+  // Sunrise/Sunset keyframes carry the two-tone twilight look directly (no separate blend).
   float tSky = pow(max(0.0, altitude), 0.5);
   vec3 skyAbove = mix(uHorizonColor, uSkyColor, tSky);
-  vec3 sunsetGradient = mix(uSunsetHorizonColor, uSunsetZenithColor, pow(max(0.0, altitude), 0.4));
-  skyAbove = mix(skyAbove, sunsetGradient, dawnDusk * 0.7);
-  
+
   // Ground colors
   float tGround = pow(max(0.0, -altitude), 0.4);
   vec3 skyBelow = mix(uHorizonColor, uGroundColor, tGround);
@@ -186,13 +188,20 @@ void main() {
   // bright disc; when they're off (medium/low) draw the discs here so the sun
   // and moon are still visible. uSunDiscEnabled is set to !godRaysEnabled.
   if (uSunDiscEnabled > 0.5) {
-    sky += celestialBody(worldDir, uSunDirection, uSunColor, uSunIntensity, 0.996, 0.9985, 4.0, 0.4);
+    // Disc thresholds scale with size (larger size → lower thresholds → bigger disc).
+    float sunInner = 1.0 - (1.0 - 0.996) * uSunSize;
+    float sunOuter = 1.0 - (1.0 - 0.9985) * uSunSize;
+    sky += celestialBody(worldDir, uSunDirection, uSunColor, uSunIntensity, sunInner, sunOuter, 4.0, 0.4);
 
-    float moonVisible = smoothstep(-0.1, 0.1, uMoonDirection.y) * uMoonIntensity;
-    sky += celestialBody(worldDir, uMoonDirection, uMoonColor, moonVisible, 0.994, 0.998, 8.0, 0.4);
+    // Moon disc: opaque like the sun — gated by above-horizon visibility only (NOT the dim
+    // moon light intensity), so it reads as a solid bluish disc at night.
+    float moonAbove = smoothstep(-0.1, 0.1, uMoonDirection.y);
+    float moonInner = 1.0 - (1.0 - 0.994) * uMoonSize;
+    float moonOuter = 1.0 - (1.0 - 0.998) * uMoonSize;
+    sky += celestialBody(worldDir, uMoonDirection, uMoonColor, moonAbove, moonInner, moonOuter, 8.0, 0.5);
     // Moon rim glow
     float moonAngle = dot(worldDir, uMoonDirection);
-    sky += uMoonColor * smoothstep(0.99, 0.994, moonAngle) * (1.0 - smoothstep(0.994, 0.998, moonAngle)) * 0.3 * moonVisible;
+    sky += uMoonColor * smoothstep(moonInner - 0.004, moonInner, moonAngle) * (1.0 - smoothstep(moonInner, moonOuter, moonAngle)) * 0.3 * moonAbove;
   }
 
   // Sun horizon glow (only near sunset/sunrise)
@@ -248,26 +257,27 @@ export function initSkyDome(): void {
     return;
   }
   
-  // Large inverted sphere - position vertices become the world direction
+  // Large inverted sphere - position vertices become the world direction. All colour/direction
+  // uniforms below are placeholders — applyDerivedLighting() seeds them right after init.
   const geometry = new THREE.SphereGeometry(500, 64, 32);
-  const settings = useGameStore.getState().environment;
-  
+
   skyMaterial = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
     uniforms: {
-      uSkyColor: { value: new THREE.Color(settings.hemisphereSkyColor ?? '#87ceeb') },
-      uHorizonColor: { value: new THREE.Color('#87ceeb') },
-      uGroundColor: { value: new THREE.Color(settings.hemisphereGroundColor ?? '#3d5c3d') },
-      uSunsetHorizonColor: { value: new THREE.Color(settings.sunsetHorizonColor ?? '#ff6622') },
-      uSunsetZenithColor: { value: new THREE.Color(settings.sunsetZenithColor ?? '#4d3380') },
+      uSkyColor: { value: new THREE.Color('#87ceeb') },
+      uHorizonColor: { value: new THREE.Color('#bfe3f5') },
+      uGroundColor: { value: new THREE.Color('#3d5c3d') },
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
-      uSunColor: { value: new THREE.Color(settings.sunColor ?? '#ffcc00') },
+      uSunColor: { value: new THREE.Color('#ffcc00') },
       uSunIntensity: { value: 1.0 },
+      uSunSize: { value: 1.0 },
       uMoonDirection: { value: new THREE.Vector3(0, -1, 0) },
-      uMoonColor: { value: new THREE.Color(settings.moonColor ?? '#aabbdd') },
+      uMoonColor: { value: new THREE.Color('#aabbdd') },
       uMoonIntensity: { value: 0.0 },
+      uMoonSize: { value: 0.5 },
       uTime: { value: 0.0 },
+      uStarAngle: { value: 0.0 },
       uStarLayers: { value: starLayersForQuality() },
       uSunDiscEnabled: { value: sunDiscEnabledValue() },
     },
@@ -287,16 +297,13 @@ export function initSkyDome(): void {
     }
   });
   
-  // Compute initial horizon color
-  updateHorizonColor();
-  
   skyMesh = new THREE.Mesh(geometry, skyMaterial);
   skyMesh.renderOrder = -1000;
   scene.add(skyMesh);
-  
+
   scene.background = null;
-  updateSkyUniforms(settings);
-  
+  // Uniforms are seeded by applyDerivedLighting() immediately after initLighting().
+
   console.log('[SkyDome] Initialized procedural sky dome');
 }
 
@@ -318,93 +325,29 @@ function anglesToDirection(azimuth: number, elevation: number): THREE.Vector3 {
 }
 
 /**
- * Recompute horizon color from sky and ground colors (DRY helper).
+ * Update all sky dome uniforms from the derived day-night lighting. The horizon colour is now
+ * authored (per keyframe), not derived from sky↔ground. Star field rotates with the moon.
  */
-function updateHorizonColor(): void {
+export function updateSkyUniforms(d: DerivedLighting): void {
   if (!skyMaterial) return;
-  const uniforms = skyMaterial.uniforms;
-  uniforms.uHorizonColor.value
-    .copy(uniforms.uSkyColor.value)
-    .lerp(uniforms.uGroundColor.value, 0.3);
-}
+  const u = skyMaterial.uniforms;
 
-/**
- * Update sky dome uniforms from environment settings.
- */
-export function updateSkyUniforms(settings: Partial<{
-  hemisphereSkyColor: string;
-  hemisphereGroundColor: string;
-  sunsetHorizonColor: string;
-  sunsetZenithColor: string;
-  sunColor: string;
-  sunIntensity: number;
-  sunAzimuth: number;
-  sunElevation: number;
-  moonColor: string;
-  moonIntensity: number;
-  moonAzimuth: number;
-  moonElevation: number;
-}>): void {
-  if (!skyMaterial) return;
-  
-  const uniforms = skyMaterial.uniforms;
-  let needsHorizonUpdate = false;
-  
-  // Sky colors
-  if (settings.hemisphereSkyColor !== undefined) {
-    uniforms.uSkyColor.value.set(settings.hemisphereSkyColor);
-    needsHorizonUpdate = true;
-  }
-  
-  if (settings.hemisphereGroundColor !== undefined) {
-    uniforms.uGroundColor.value.set(settings.hemisphereGroundColor);
-    needsHorizonUpdate = true;
-  }
-  
-  if (needsHorizonUpdate) {
-    updateHorizonColor();
-  }
-  
-  // Sunset colors
-  if (settings.sunsetHorizonColor !== undefined) {
-    uniforms.uSunsetHorizonColor.value.set(settings.sunsetHorizonColor);
-  }
-  
-  if (settings.sunsetZenithColor !== undefined) {
-    uniforms.uSunsetZenithColor.value.set(settings.sunsetZenithColor);
-  }
-  
-  // Sun
-  if (settings.sunColor !== undefined) {
-    uniforms.uSunColor.value.set(settings.sunColor);
-  }
-  
-  if (settings.sunIntensity !== undefined) {
-    uniforms.uSunIntensity.value = Math.min(1.0, settings.sunIntensity / 3.0);
-  }
-  
-  if (settings.sunAzimuth !== undefined || settings.sunElevation !== undefined) {
-    const currentSettings = useGameStore.getState().environment;
-    const azimuth = settings.sunAzimuth ?? currentSettings.sunAzimuth ?? 135;
-    const elevation = settings.sunElevation ?? currentSettings.sunElevation ?? 45;
-    uniforms.uSunDirection.value.copy(anglesToDirection(azimuth, elevation));
-  }
-  
-  // Moon
-  if (settings.moonColor !== undefined) {
-    uniforms.uMoonColor.value.set(settings.moonColor);
-  }
-  
-  if (settings.moonIntensity !== undefined) {
-    uniforms.uMoonIntensity.value = settings.moonIntensity;
-  }
-  
-  if (settings.moonAzimuth !== undefined || settings.moonElevation !== undefined) {
-    const currentSettings = useGameStore.getState().environment;
-    const azimuth = settings.moonAzimuth ?? currentSettings.moonAzimuth ?? 315;
-    const elevation = settings.moonElevation ?? currentSettings.moonElevation ?? -45;
-    uniforms.uMoonDirection.value.copy(anglesToDirection(azimuth, elevation));
-  }
+  u.uSkyColor.value.set(d.skyZenithColor);
+  u.uHorizonColor.value.set(d.skyHorizonColor);
+  u.uGroundColor.value.set(d.groundColor);
+
+  u.uSunColor.value.set(d.sunColor);
+  u.uSunIntensity.value = Math.min(1.0, d.sunIntensity / 3.0);
+  u.uSunSize.value = d.sunSize;
+  u.uSunDirection.value.copy(anglesToDirection(d.sunAzimuth, d.sunElevation));
+
+  u.uMoonColor.value.set(d.moonColor);
+  u.uMoonIntensity.value = d.moonIntensity;
+  u.uMoonSize.value = d.moonSize;
+  u.uMoonDirection.value.copy(anglesToDirection(d.moonAzimuth, d.moonElevation));
+
+  // Stars rotate with the moon's azimuth.
+  u.uStarAngle.value = (d.moonAzimuth * Math.PI) / 180;
 }
 
 /**

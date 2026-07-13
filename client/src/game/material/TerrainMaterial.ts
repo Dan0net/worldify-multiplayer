@@ -584,8 +584,8 @@ let transparentDepthMaterial: TransparentDepthMaterial | null = null;
 export function getTerrainMaterial(): TerrainMaterial {
   if (!solidMaterial) {
     solidMaterial = new TerrainMaterial(false);
-    // Set envMapIntensity from store to match MaterialPreview
-    solidMaterial.envMapIntensity = useGameStore.getState().environment.environmentIntensity;
+    // No scene environment map is assigned, so envMapIntensity is inert — keep it at 1.
+    solidMaterial.envMapIntensity = 1.0;
   }
   return solidMaterial;
 }
@@ -593,8 +593,8 @@ export function getTerrainMaterial(): TerrainMaterial {
 export function getTransparentTerrainMaterial(): TerrainMaterial {
   if (!transparentMaterial) {
     transparentMaterial = new TerrainMaterial(true);
-    // Set envMapIntensity from store to match MaterialPreview
-    transparentMaterial.envMapIntensity = useGameStore.getState().environment.environmentIntensity;
+    // No scene environment map is assigned, so envMapIntensity is inert — keep it at 1.
+    transparentMaterial.envMapIntensity = 1.0;
   }
   return transparentMaterial;
 }

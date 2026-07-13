@@ -1,15 +1,16 @@
-import { useEffect, useState, ReactNode } from 'react';
+import { useEffect, useRef, useState, ReactNode } from 'react';
+import { hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '@worldify/shared';
 import {
   ChevronDown, ChevronRight, Zap, Wrench, Search, Sliders, Palette, Droplet, Waves,
-  Sparkles, Wind, Sun, Moon, Cloud, Clock, Grid3x3, Lightbulb, Compass, Sunrise, Trash2,
+  Sparkles, Wind, Sun, Moon, Clock, Grid3x3, Lightbulb, Sunrise, Trash2,
 } from 'lucide-react';
 import {
   useGameStore, TERRAIN_DEBUG_MODE_NAMES, TERRAIN_DEBUG_MODE_ORDER, type TerrainDebugMode,
-  type EnvironmentSettings, type DayStageConfig, type NightStageConfig,
+  type EnvironmentSettings, type DayNightKeyframe,
 } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
 import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings, applyBlockLightSettings } from '../game/material/TerrainMaterial';
-import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
+import { applyEnvironmentSettings } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel, invalidateDayNight } from '../game/scene/DayNightCycle';
 import { clearAndReloadChunks } from '../state/transient';
 import {
@@ -18,7 +19,6 @@ import {
 } from '../game/quality/QualityPresets';
 import { applyQualityPatch, syncQualityToStore } from '../game/quality/QualityManager';
 import { getCamera } from '../game/scene/camera';
-import * as THREE from 'three';
 
 // ============== Collapsible Section Component ==============
 
@@ -98,16 +98,83 @@ interface ColorPickerProps {
   onChange: (value: string) => void;
 }
 
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+/**
+ * Custom colour picker: a swatch that opens a popover with a hex field, a hue slider, and a
+ * 2D saturation/value square. Emits `#rrggbb` hex strings (same contract as the old native input).
+ */
 function ColorPicker({ label, value, onChange }: ColorPickerProps) {
+  const [open, setOpen] = useState(false);
+  const rgb = hexToRgb(value);
+  const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+  const svRef = useRef<HTMLDivElement>(null);
+
+  const emitHsv = (h: number, s: number, v: number) => {
+    const c = hsvToRgb(h, s, v);
+    onChange(rgbToHex(c.r, c.g, c.b));
+  };
+
+  const handleSV = (e: React.PointerEvent) => {
+    const el = svRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const s = clamp01((e.clientX - rect.left) / rect.width);
+    const v = 1 - clamp01((e.clientY - rect.top) / rect.height);
+    emitHsv(hsv.h, s, v);
+  };
+
+  const hc = hsvToRgb(hsv.h, 1, 1);
+  const hueHex = rgbToHex(hc.r, hc.g, hc.b);
+
   return (
-    <div className="flex items-center justify-between mb-1">
-      <span className="text-xs">{label}</span>
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-8 h-5 bg-transparent border border-green-500/50 rounded cursor-pointer"
-      />
+    <div className="mb-1">
+      <div className="flex items-center justify-between">
+        <span className="text-xs">{label}</span>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="w-8 h-5 rounded border border-white/30 cursor-pointer"
+          style={{ backgroundColor: value }}
+          aria-label={`${label} colour`}
+        />
+      </div>
+      {open && (
+        <div className="mt-1 p-2 rounded-lg bg-black/80 border border-white/15 flex flex-col gap-2">
+          {/* Saturation / value square */}
+          <div
+            ref={svRef}
+            className="relative w-full h-24 rounded cursor-crosshair touch-none"
+            style={{
+              backgroundColor: hueHex,
+              backgroundImage:
+                'linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent)',
+            }}
+            onPointerDown={(e) => { (e.target as HTMLElement).setPointerCapture(e.pointerId); handleSV(e); }}
+            onPointerMove={(e) => { if (e.buttons === 1) handleSV(e); }}
+          >
+            <span
+              className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full border-2 border-white shadow pointer-events-none"
+              style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%`, backgroundColor: value }}
+            />
+          </div>
+          {/* Hue slider */}
+          <input
+            type="range" min={0} max={360} step={1} value={Math.round(hsv.h)}
+            onChange={(e) => emitHsv(parseInt(e.target.value, 10), hsv.s || 1, hsv.v || 1)}
+            className="w-full h-2 rounded appearance-none cursor-pointer"
+            style={{ background: 'linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)' }}
+          />
+          {/* Hex field */}
+          <input
+            type="text" value={value}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              if (/^#[0-9a-fA-F]{6}$/.test(v)) onChange(v.toLowerCase());
+            }}
+            className="bg-black/60 border border-white/20 rounded text-xs px-1.5 py-0.5 text-white font-mono"
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -228,15 +295,21 @@ export function DebugPanel() {
     msaaSamples,
     setMsaaSamples,
     dayNightConfig,
+    updateKeyframe,
     setDayNightConfig,
   } = useGameStore();
 
   // Whether the live quality still matches the selected preset (ignoring view distance).
   const isCustomQuality = !qualityMatchesPreset(quality, qualityLevel);
 
-  /** Edit a day/night stage keyframe and re-derive the cycle live (no reset). */
-  const editDayStage = (u: Partial<DayStageConfig>) => { setDayNightConfig({ day: u }); invalidateDayNight(); };
-  const editNightStage = (u: Partial<NightStageConfig>) => { setDayNightConfig({ night: u }); invalidateDayNight(); };
+  // Which keyframe is being edited in the keyframe editor.
+  const [kfIndex, setKfIndex] = useState(0);
+  const keyframe = dayNightConfig.keyframes[kfIndex];
+
+  /** Edit the selected keyframe and re-derive the cycle live (no reset). */
+  const editKeyframe = (u: Partial<DayNightKeyframe>) => { updateKeyframe(kfIndex, u); invalidateDayNight(); };
+  /** Edit a global cycle setting (sun height / distance) and re-derive live. */
+  const editGlobal = (u: { sunHeight?: number; sunDistance?: number }) => { setDayNightConfig(u); invalidateDayNight(); };
 
   const [cacheClearing, setCacheClearing] = useState(false);
   const [_chunksClearing, setChunksClearing] = useState(false);
@@ -281,8 +354,8 @@ export function DebugPanel() {
 
     // SSAO/bloom/godrays/saturation are all store-driven via effects.ts — no direct call needed.
 
-    // Apply light fill changes to terrain materials
-    if ('lightFillPower' in updates || 'lightFillIntensity' in updates) {
+    // Apply voxel sunlight fill (gamma curve) to terrain materials
+    if ('lightFillPower' in updates) {
       applyLightFillSettings(updates);
     }
 
@@ -959,294 +1032,84 @@ export function DebugPanel() {
           />
         </div>
 
-        {/* Day stage keyframe — edits apply live via the cycle (no reset) */}
+        {/* Sun/moon arc — position follows the time-arc; these are the global knobs */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Day Stage</div>
-          <ColorPicker label="Sun Color" value={dayNightConfig.day.sunColor} onChange={(v) => editDayStage({ sunColor: v })} />
-          <Slider label="Sun Intensity" value={dayNightConfig.day.sunIntensity} min={0} max={10} step={0.1} onChange={(v) => editDayStage({ sunIntensity: v })} />
-          <ColorPicker label="Sky" value={dayNightConfig.day.hemisphereSkyColor} onChange={(v) => editDayStage({ hemisphereSkyColor: v })} />
-          <ColorPicker label="Ground" value={dayNightConfig.day.hemisphereGroundColor} onChange={(v) => editDayStage({ hemisphereGroundColor: v })} />
-          <Slider label="Fill Intensity" value={dayNightConfig.day.hemisphereIntensity} min={0} max={5} step={0.1} onChange={(v) => editDayStage({ hemisphereIntensity: v })} />
-          <Slider label="Sky/Ambient (IBL)" value={dayNightConfig.day.environmentIntensity} min={0} max={3} step={0.05} onChange={(v) => editDayStage({ environmentIntensity: v })} />
-        </div>
-
-        {/* Night stage keyframe */}
-        <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Moon size={12} /> Night Stage</div>
-          <ColorPicker label="Moon Color" value={dayNightConfig.night.moonColor} onChange={(v) => editNightStage({ moonColor: v })} />
-          <Slider label="Moon Intensity" value={dayNightConfig.night.moonIntensity} min={0} max={3} step={0.05} onChange={(v) => editNightStage({ moonIntensity: v })} />
-          <ColorPicker label="Sky" value={dayNightConfig.night.hemisphereSkyColor} onChange={(v) => editNightStage({ hemisphereSkyColor: v })} />
-          <ColorPicker label="Ground" value={dayNightConfig.night.hemisphereGroundColor} onChange={(v) => editNightStage({ hemisphereGroundColor: v })} />
-          <Slider label="Fill Intensity" value={dayNightConfig.night.hemisphereIntensity} min={0} max={5} step={0.1} onChange={(v) => editNightStage({ hemisphereIntensity: v })} />
-          <Slider label="Sky/Ambient (IBL)" value={dayNightConfig.night.environmentIntensity} min={0} max={3} step={0.05} onChange={(v) => editNightStage({ environmentIntensity: v })} />
-        </div>
-
-        {/* Manual sun/moon position — used only when the cycle is off */}
-        {(environment.dayNightEnabled ?? true) === false && (
-          <div className="mb-3 pt-2 border-t border-cyan-500/30">
-            <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Compass size={12} /> Manual Position (cycle off)</div>
-            <Slider label="Sun Azimuth" value={environment.sunAzimuth ?? 135} min={0} max={360} step={1} onChange={(v) => handleEnvironmentChange({ sunAzimuth: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
-            <Slider label="Sun Elevation" value={environment.sunElevation ?? 45} min={-90} max={90} step={1} onChange={(v) => handleEnvironmentChange({ sunElevation: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
-            <Slider label="Moon Azimuth" value={environment.moonAzimuth ?? 315} min={0} max={360} step={1} onChange={(v) => handleEnvironmentChange({ moonAzimuth: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
-            <Slider label="Moon Elevation" value={environment.moonElevation ?? -45} min={-90} max={90} step={1} onChange={(v) => handleEnvironmentChange({ moonElevation: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
-          </div>
-        )}
-      </Section>
-
-      {/* ============== ENVIRONMENT SECTION ============== */}
-      <Section
-        title="Environment"
-        icon={<Sunrise size={13} />}
-        isOpen={debugPanelSections.environment}
-        onToggle={() => toggleDebugSection('environment')}
-        color="cyan"
-      >
-        {/* Sun Settings */}
-        <div className="mb-3">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Sun</div>
-          <ColorPicker
-            label="Color"
-            value={environment.sunColor}
-            onChange={(v) => handleEnvironmentChange({ sunColor: v })}
-          />
-          <Slider
-            label="Intensity"
-            value={environment.sunIntensity}
-            min={0}
-            max={10}
-            step={0.1}
-            onChange={(v) => handleEnvironmentChange({ sunIntensity: v })}
-          />
-          <Slider
-            label="Distance"
-            value={environment.sunDistance}
-            min={50}
-            max={300}
-            step={10}
-            onChange={(v) => handleEnvironmentChange({ sunDistance: v })}
-          />
-        </div>
-
-        {/* Moon Settings */}
-        <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Moon size={12} /> Moon</div>
-          <ColorPicker
-            label="Color"
-            value={environment.moonColor}
-            onChange={(v) => handleEnvironmentChange({ moonColor: v })}
-          />
-          <Slider
-            label="Intensity"
-            value={environment.moonIntensity}
-            min={0}
-            max={5}
-            step={0.1}
-            onChange={(v) => handleEnvironmentChange({ moonIntensity: v })}
-          />
-        </div>
-
-        {/* Hemisphere Light (replaces ambient for natural outdoor lighting) */}
-        <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-cyan-400 text-xs font-bold flex items-center gap-1.5"><Cloud size={12} /> Hemisphere (Fill)</span>
-            <Toggle
-              label=""
-              value={environment.hemisphereEnabled ?? true}
-              onChange={(v) => handleEnvironmentChange({ hemisphereEnabled: v })}
-            />
-          </div>
-          {(environment.hemisphereEnabled ?? true) && (
-            <>
-              <ColorPicker
-                label="Sky"
-                value={environment.hemisphereSkyColor ?? '#87ceeb'}
-                onChange={(v) => handleEnvironmentChange({ hemisphereSkyColor: v })}
-              />
-              <ColorPicker
-                label="Ground"
-                value={environment.hemisphereGroundColor ?? '#3d5c3d'}
-                onChange={(v) => handleEnvironmentChange({ hemisphereGroundColor: v })}
-              />
-              <Slider
-                label="Intensity"
-                value={environment.hemisphereIntensity ?? 1.0}
-                min={0}
-                max={10}
-                step={0.1}
-                onChange={(v) => handleEnvironmentChange({ hemisphereIntensity: v })}
-              />
-            </>
-          )}
-        </div>
-
-        {/* Sky/Ambient Lighting (IBL) */}
-        <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Cloud size={12} /> Sky/Ambient Lighting</div>
-          <Slider
-            label="Intensity"
-            value={environment.environmentIntensity}
-            min={0}
-            max={3}
-            step={0.1}
-            onChange={(v) => handleEnvironmentChange({ environmentIntensity: v })}
-          />
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Sun Arc</div>
+          <Slider label="Sun Height" value={dayNightConfig.sunHeight} min={10} max={90} step={1} onChange={(v) => editGlobal({ sunHeight: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
+          <Slider label="Sun Distance" value={dayNightConfig.sunDistance} min={50} max={400} step={10} onChange={(v) => editGlobal({ sunDistance: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}`} />
         </div>
 
         {/* Shadows */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
           <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Moon size={12} /> Shadows</div>
-          <Slider
-            label="Bias"
-            value={environment.shadowBias}
-            min={-0.01}
-            max={0.01}
-            step={0.0001}
-            onChange={(v) => handleEnvironmentChange({ shadowBias: v })}
-            formatValue={(v) => v.toFixed(4)}
-          />
-          <Slider
-            label="Normal Bias"
-            value={environment.shadowNormalBias}
-            min={0}
-            max={0.1}
-            step={0.001}
-            onChange={(v) => handleEnvironmentChange({ shadowNormalBias: v })}
-            formatValue={(v) => v.toFixed(3)}
-          />
-          <Select
-            label="Map Size"
-            value={environment.shadowMapSize}
-            options={shadowMapOptions}
-            onChange={(v) => handleEnvironmentChange({ shadowMapSize: v })}
-          />
+          <Slider label="Bias" value={environment.shadowBias} min={-0.01} max={0.01} step={0.0001} onChange={(v) => handleEnvironmentChange({ shadowBias: v })} formatValue={(v) => v.toFixed(4)} />
+          <Slider label="Normal Bias" value={environment.shadowNormalBias} min={0} max={0.1} step={0.001} onChange={(v) => handleEnvironmentChange({ shadowNormalBias: v })} formatValue={(v) => v.toFixed(3)} />
+          <Select label="Map Size" value={environment.shadowMapSize} options={shadowMapOptions} onChange={(v) => handleEnvironmentChange({ shadowMapSize: v })} />
         </div>
 
-        {/* Tone Mapping */}
-        <div className="mb-1 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Palette size={12} /> Tone Mapping</div>
-          <Select
-            label="Type"
-            value={environment.toneMapping}
-            options={TONE_MAPPING_OPTIONS.map(o => ({ label: o.label, value: o.value as number }))}
-            onChange={(v) => handleEnvironmentChange({ toneMapping: v as THREE.ToneMapping })}
-          />
-          <Slider
-            label="Exposure"
-            value={environment.toneMappingExposure}
-            min={0.1}
-            max={3}
-            step={0.05}
-            onChange={(v) => handleEnvironmentChange({ toneMappingExposure: v })}
-          />
-        </div>
-        
-        {/* Post-Processing */}
-        <div className="mb-3">
-          <div className="text-green-400 text-xs mb-1">Post-Processing</div>
-          <Slider
-            label="SSAO Intensity"
-            value={environment.ssaoIntensity}
-            min={0}
-            max={10}
-            step={0.1}
-            onChange={(v) => handleEnvironmentChange({ ssaoIntensity: v })}
-          />
-          <Slider
-            label="SSAO Radius"
-            value={environment.ssaoRadius}
-            min={0}
-            max={0.5}
-            step={0.01}
-            onChange={(v) => handleEnvironmentChange({ ssaoRadius: v })}
-          />
-          <Slider
-            label="Bloom Intensity"
-            value={environment.bloomIntensity}
-            min={0}
-            max={3}
-            step={0.05}
-            onChange={(v) => handleEnvironmentChange({ bloomIntensity: v })}
-          />
-          <Slider
-            label="Bloom Threshold"
-            value={environment.bloomThreshold}
-            min={0}
-            max={1}
-            step={0.01}
-            onChange={(v) => handleEnvironmentChange({ bloomThreshold: v })}
-          />
-          <Slider
-            label="Bloom Radius"
-            value={environment.bloomRadius}
-            min={0}
-            max={3}
-            step={0.01}
-            onChange={(v) => handleEnvironmentChange({ bloomRadius: v })}
-          />
-          <Slider
-            label="God Rays Decay"
-            value={environment.godRaysDecay}
-            min={0}
-            max={1}
-            step={0.01}
-            onChange={(v) => handleEnvironmentChange({ godRaysDecay: v })}
-          />
-          <Slider
-            label="God Rays Exposure"
-            value={environment.godRaysExposure}
-            min={0}
-            max={1}
-            step={0.01}
-            onChange={(v) => handleEnvironmentChange({ godRaysExposure: v })}
-          />
-          <Slider
-            label="Saturation"
-            value={environment.saturation}
-            min={0}
-            max={2}
-            step={0.05}
-            onChange={(v) => handleEnvironmentChange({ saturation: v })}
-          />
-        </div>
-        
-        {/* Voxel Light Fill */}
-        <div className="mb-3">
-          <div className="text-green-400 text-xs mb-1">Voxel Light Fill</div>
-          <Slider
-            label="Fill Power"
-            value={environment.lightFillPower}
-            min={0.1}
-            max={10}
-            step={0.1}
-            onChange={(v) => handleEnvironmentChange({ lightFillPower: v })}
-          />
-          <Slider
-            label="Fill Intensity"
-            value={environment.lightFillIntensity}
-            min={0}
-            max={10}
-            step={0.1}
-            onChange={(v) => handleEnvironmentChange({ lightFillIntensity: v })}
-          />
+        {/* Voxel sunlight fill — gamma curve on the sky-light channel (lifts dark areas) */}
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Voxel Sunlight Fill</div>
+          <Slider label="Fill Power" value={environment.lightFillPower} min={0.1} max={2} step={0.05} onChange={(v) => handleEnvironmentChange({ lightFillPower: v })} />
         </div>
 
         {/* Block Light (emitters, e.g. lava) — warm glow independent of the sun */}
-        <div className="mb-3">
-          <div className="text-green-400 text-xs mb-1 flex items-center gap-1.5"><Lightbulb size={12} /> Block Light</div>
-          <ColorPicker
-            label="Color"
-            value={environment.blockLightColor}
-            onChange={(v) => handleEnvironmentChange({ blockLightColor: v })}
-          />
-          <Slider
-            label="Intensity"
-            value={environment.blockLightIntensity}
-            min={0}
-            max={4}
-            step={0.05}
-            onChange={(v) => handleEnvironmentChange({ blockLightIntensity: v })}
-          />
+        <div className="mb-3 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Lightbulb size={12} /> Block Light</div>
+          <ColorPicker label="Color" value={environment.blockLightColor} onChange={(v) => handleEnvironmentChange({ blockLightColor: v })} />
+          <Slider label="Intensity" value={environment.blockLightIntensity} min={0} max={4} step={0.05} onChange={(v) => handleEnvironmentChange({ blockLightIntensity: v })} />
         </div>
+
+        {/* Keyframe editor — pick a keyframe, edit its time + full appearance palette */}
+        <div className="mb-2 pt-2 border-t border-cyan-500/30">
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sunrise size={12} /> Keyframes</div>
+          <div className="flex gap-1 mb-2">
+            {dayNightConfig.keyframes.map((k, i) => (
+              <button
+                key={k.name}
+                onClick={() => setKfIndex(i)}
+                className={`flex-1 px-1 py-1 text-[11px] rounded cursor-pointer ${
+                  i === kfIndex ? 'bg-cyan-600 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                }`}
+              >
+                {k.name}
+              </button>
+            ))}
+          </div>
+          {keyframe && (
+            <>
+              <Slider label="Time" value={keyframe.time} min={0} max={0.999} step={0.001} onChange={(v) => editKeyframe({ time: v })} formatValue={(v) => formatTimeOfDay(v)} />
+              <ColorPicker label="Sun Color" value={keyframe.sunColor} onChange={(v) => editKeyframe({ sunColor: v })} />
+              <Slider label="Sun Intensity" value={keyframe.sunIntensity} min={0} max={10} step={0.1} onChange={(v) => editKeyframe({ sunIntensity: v })} />
+              <Slider label="Sun Size" value={keyframe.sunSize} min={0.2} max={4} step={0.05} onChange={(v) => editKeyframe({ sunSize: v })} />
+              <ColorPicker label="Moon Color" value={keyframe.moonColor} onChange={(v) => editKeyframe({ moonColor: v })} />
+              <Slider label="Moon Intensity" value={keyframe.moonIntensity} min={0} max={3} step={0.05} onChange={(v) => editKeyframe({ moonIntensity: v })} />
+              <Slider label="Moon Size" value={keyframe.moonSize} min={0.2} max={4} step={0.05} onChange={(v) => editKeyframe({ moonSize: v })} />
+              <ColorPicker label="Sky Zenith" value={keyframe.skyZenithColor} onChange={(v) => editKeyframe({ skyZenithColor: v })} />
+              <ColorPicker label="Sky Horizon" value={keyframe.skyHorizonColor} onChange={(v) => editKeyframe({ skyHorizonColor: v })} />
+              <ColorPicker label="Ground" value={keyframe.groundColor} onChange={(v) => editKeyframe({ groundColor: v })} />
+              <Slider label="Fill Intensity" value={keyframe.hemisphereIntensity} min={0} max={5} step={0.1} onChange={(v) => editKeyframe({ hemisphereIntensity: v })} />
+            </>
+          )}
+        </div>
+      </Section>
+
+      {/* ============== POST-PROCESSING SECTION ============== */}
+      <Section
+        title="Post-Processing"
+        icon={<Sparkles size={13} />}
+        isOpen={debugPanelSections.environment}
+        onToggle={() => toggleDebugSection('environment')}
+        color="cyan"
+      >
+        <Slider label="SSAO Intensity" value={environment.ssaoIntensity} min={0} max={10} step={0.1} onChange={(v) => handleEnvironmentChange({ ssaoIntensity: v })} />
+        <Slider label="SSAO Radius" value={environment.ssaoRadius} min={0} max={0.5} step={0.01} onChange={(v) => handleEnvironmentChange({ ssaoRadius: v })} />
+        <Slider label="Bloom Intensity" value={environment.bloomIntensity} min={0} max={3} step={0.05} onChange={(v) => handleEnvironmentChange({ bloomIntensity: v })} />
+        <Slider label="Bloom Threshold" value={environment.bloomThreshold} min={0} max={1} step={0.01} onChange={(v) => handleEnvironmentChange({ bloomThreshold: v })} />
+        <Slider label="Bloom Radius" value={environment.bloomRadius} min={0} max={3} step={0.01} onChange={(v) => handleEnvironmentChange({ bloomRadius: v })} />
+        <Slider label="God Rays Decay" value={environment.godRaysDecay} min={0} max={1} step={0.01} onChange={(v) => handleEnvironmentChange({ godRaysDecay: v })} />
+        <Slider label="God Rays Exposure" value={environment.godRaysExposure} min={0} max={1} step={0.01} onChange={(v) => handleEnvironmentChange({ godRaysExposure: v })} />
+        <Slider label="Saturation" value={environment.saturation} min={0} max={2} step={0.05} onChange={(v) => handleEnvironmentChange({ saturation: v })} />
       </Section>
       </div>
     </div>

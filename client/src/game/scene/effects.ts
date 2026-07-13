@@ -229,7 +229,7 @@ export function initEffects(
   sunMesh.frustumCulled = false;
   sunMesh.matrixAutoUpdate = false;
   // Position from sunLight (don't add to main scene — GodRaysEffect renders it internally)
-  syncSunMeshPosition();
+  syncSunMeshPosition(camera);
 
   // GodRaysEffect — defaults match pmndrs demo (exposure seeded from store)
   godRaysEffect = new GodRaysEffect(camera, sunMesh, {
@@ -304,11 +304,13 @@ export function initEffects(
   });
 }
 
+const _godRayDir = new THREE.Vector3();
+
 /**
  * Sync sun mesh position and color from the active light source each frame.
  * Follows whichever light currently casts shadows (sun or moon).
  */
-function syncSunMeshPosition(): void {
+function syncSunMeshPosition(camera?: THREE.Camera): void {
   if (!sunMesh) return;
   // The sun mesh is only consumed by the god-rays pass; skip the per-frame light
   // lookup + matrix update entirely when god rays are disabled.
@@ -321,7 +323,12 @@ function syncSunMeshPosition(): void {
   const moon = getMoonLight();
   const light = sun && sun.position.y >= 0 ? sun : (moon ?? sun);
   if (light) {
-    sunMesh.position.copy(light.position);
+    // Anchor the mesh to the CAMERA along the light direction, so it sits at a fixed
+    // apparent position as the player moves (no drift). Direction is position−target.
+    _godRayDir.copy(light.position).sub(light.target.position).normalize();
+    const distance = useGameStore.getState().dayNightConfig.sunDistance;
+    if (camera) sunMesh.position.copy(camera.position).addScaledVector(_godRayDir, distance);
+    else sunMesh.position.copy(_godRayDir).multiplyScalar(distance);
     (sunMesh.material as THREE.MeshBasicMaterial).color.copy(light.color);
     sunMesh.updateMatrix();
   }
@@ -337,7 +344,7 @@ export function renderEffects(
   delta: number,
 ): void {
   if (composer) {
-    syncSunMeshPosition();
+    syncSunMeshPosition(camera);
     composer.render(delta);
   } else {
     renderer.render(scene, camera);
