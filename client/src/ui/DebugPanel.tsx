@@ -225,9 +225,6 @@ export function DebugPanel() {
     setDayNightConfig,
   } = useGameStore();
 
-  // Shader-map debug toggles still read the live quality slice.
-  const { shaderNormalMaps, shaderAoMaps, shaderMetalnessMaps } = quality;
-
   // Whether the live quality still matches the selected preset (ignoring view distance).
   const isCustomQuality = !qualityMatchesPreset(quality, qualityLevel);
 
@@ -267,12 +264,6 @@ export function DebugPanel() {
   /** Apply a full quality preset and sync all individual settings to store */
   const syncPresetToStore = (level: QualityLevel, customVisibility?: number) => {
     syncQualityToStore(level, customVisibility);
-  };
-
-  const handleShaderMapToggle = (map: 'normal' | 'ao' | 'metalness', enabled: boolean) => {
-    if (map === 'normal') applyQualityPatch({ shaderNormalMaps: enabled });
-    else if (map === 'ao') applyQualityPatch({ shaderAoMaps: enabled });
-    else applyQualityPatch({ shaderMetalnessMaps: enabled });
   };
 
   // Apply environment changes to the scene. Only the CHANGED fields are applied — never a
@@ -642,7 +633,7 @@ export function DebugPanel() {
           />
         </div>
 
-        {/* Fine-tuning + shader-map debug toggles */}
+        {/* Fine-tuning */}
         <div className="mb-2 pt-2 border-t border-yellow-500/30">
           <div className="text-yellow-400 text-xs mb-1 font-bold">Fine-tuning</div>
           <Slider
@@ -653,9 +644,6 @@ export function DebugPanel() {
             step={1}
             onChange={(v) => handleEnvironmentChange({ shadowBlurRadius: v })}
           />
-          <Toggle label="Normal Maps" value={shaderNormalMaps} onChange={(v) => handleShaderMapToggle('normal', v)} />
-          <Toggle label="AO Maps" value={shaderAoMaps} onChange={(v) => handleShaderMapToggle('ao', v)} />
-          <Toggle label="Metalness Maps" value={shaderMetalnessMaps} onChange={(v) => handleShaderMapToggle('metalness', v)} />
         </div>
       </Section>
 

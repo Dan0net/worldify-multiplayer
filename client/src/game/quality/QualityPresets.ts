@@ -9,9 +9,9 @@
  * - Water quality
  *
  * Colour correction is always on (not a preset lever). MSAA, Resolution and FoV are
- * standalone user settings (see the store), not part of any preset. Normal/AO/metalness
- * shader maps are on for every preset; the debug panel keeps per-map toggles for shader
- * work, but presets never turn them off.
+ * standalone user settings (see the store), not part of any preset. Terrain detail maps
+ * (normal/AO/metalness) ramp with the preset — Off on low, Normal on medium, Full (all
+ * three) on high/ultra — surfaced as the "Detail Maps" segmented row.
  *
  * `QUALITY_ROWS` (below) is the declarative source for the segmented Quality UI: each row
  * is one labelled control whose segments carry the exact `QualitySettings` patch they
@@ -95,9 +95,9 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowRadius: 4,
     visibilityRadius: 4,
     anisotropy: 2,
-    shaderNormalMaps: true,
-    shaderAoMaps: true,
-    shaderMetalnessMaps: true,
+    shaderNormalMaps: true,    // Normal maps on from medium
+    shaderAoMaps: false,
+    shaderMetalnessMaps: false,
     waterHighQuality: false,
   },
   low: {
@@ -110,9 +110,9 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowRadius: 2,
     visibilityRadius: 2,
     anisotropy: 1,
-    shaderNormalMaps: true,
-    shaderAoMaps: true,
-    shaderMetalnessMaps: true,
+    shaderNormalMaps: false,   // no detail maps on low
+    shaderAoMaps: false,
+    shaderMetalnessMaps: false,
     waterHighQuality: false,
   },
 };
@@ -206,6 +206,17 @@ export const QUALITY_ROWS: QualityRow[] = [
       { label: 'High', patch: { waterHighQuality: true } },
     ],
     match: (q) => (q.waterHighQuality ? 1 : 0),
+  },
+  {
+    // Terrain detail maps ramp: Off (low) → Normal only (medium) → Normal+AO+Metalness (high+).
+    key: 'detailMaps',
+    label: 'Detail Maps',
+    segments: [
+      { label: 'Off', patch: { shaderNormalMaps: false, shaderAoMaps: false, shaderMetalnessMaps: false } },
+      { label: 'Normal', patch: { shaderNormalMaps: true, shaderAoMaps: false, shaderMetalnessMaps: false } },
+      { label: 'Full', patch: { shaderNormalMaps: true, shaderAoMaps: true, shaderMetalnessMaps: true } },
+    ],
+    match: (q) => (!q.shaderNormalMaps ? 0 : (q.shaderAoMaps && q.shaderMetalnessMaps ? 2 : 1)),
   },
 ];
 
