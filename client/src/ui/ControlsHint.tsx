@@ -7,9 +7,12 @@ const HINTS: { keys: string; label: string }[] = [
   { keys: 'WASD', label: 'Move' },
   { keys: 'Space', label: 'Jump' },
   { keys: 'Shift', label: 'Sprint' },
-  { keys: 'L-Click', label: 'Build' },
-  { keys: 'R-Click', label: 'Menu' },
-  { keys: 'Tab', label: 'Build Menu' },
+  { keys: 'LMB', label: 'Place' },
+  { keys: 'Tab / RMB', label: 'Build menu' },
+  { keys: 'Q / E', label: 'Rotate' },
+  { keys: 'G / T', label: 'Snap' },
+  { keys: '1–9', label: 'Select' },
+  { keys: 'Ctrl+Z', label: 'Undo' },
   { keys: 'Esc', label: 'Exit' },
 ];
 

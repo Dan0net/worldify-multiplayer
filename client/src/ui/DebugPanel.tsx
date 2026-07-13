@@ -390,18 +390,20 @@ export function DebugPanel() {
   }
 
   return (
-    <div className="absolute top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg max-h-[calc(100dvh-200px)] overflow-y-auto min-w-[200px] pointer-events-auto">
-      
-      {/* Collapse button — sticky so FPS + collapse stay visible while the panel scrolls.
-          Negative margins let the bar's background span the container's padding. */}
+    <div className="absolute top-5 left-5 bg-black/80 text-green-500 font-mono text-xs rounded-lg max-h-[calc(100dvh-200px)] min-w-[200px] pointer-events-auto flex flex-col overflow-hidden">
+
+      {/* FPS + collapse — pinned at the top (does not scroll). */}
       <button
         onClick={toggleDebugPanelExpanded}
-        className="sticky top-0 z-10 -mx-4 -mt-2.5 px-4 pt-2.5 pb-1 mb-1 w-[calc(100%+2rem)] flex items-center justify-between cursor-pointer bg-black/80 text-green-500 hover:text-green-300 transition-colors"
+        className="shrink-0 flex items-center justify-between px-4 pt-2 pb-1.5 cursor-pointer text-green-500 hover:text-green-300 transition-colors"
         title="Collapse debug panel"
       >
         <span className={`font-bold ${fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}`}>{fps} FPS</span>
         <ChevronDown size={13} />
       </button>
+
+      {/* Scrollable body — starts below the FPS row, thin scrollbar. */}
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-compact px-4 pb-2.5">
 
       {/* ============== PERFORMANCE SECTION (client-side only) ============== */}
       {/* FPS is shown in the sticky header above — not duplicated here. */}
@@ -1246,6 +1248,7 @@ export function DebugPanel() {
           />
         </div>
       </Section>
+      </div>
     </div>
   );
 }

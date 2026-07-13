@@ -95,12 +95,6 @@ export class Controls {
       return;
     }
 
-    // Toggle build mode
-    if (e.code === 'KeyB') {
-      useGameStore.getState().toggleBuildMode();
-      return;
-    }
-
     // Build rotation
     if (e.code === 'KeyQ') {
       useGameStore.getState().rotateBuild(-1);
@@ -121,16 +115,10 @@ export class Controls {
       return;
     }
 
-    // Tab key: toggle build menu
+    // Tab: not building → open the build menu; building → exit build mode.
     if (e.code === 'Tab') {
       e.preventDefault();
-      if (useGameStore.getState().gameMode === GameMode.Playing) {
-        if (useGameStore.getState().build.menuOpen) {
-          this.closeBuildMenu();
-        } else {
-          this.openBuildMenu();
-        }
-      }
+      this.toggleBuildOrMenu();
       return;
     }
   };
@@ -157,14 +145,10 @@ export class Controls {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
-    // Right-click: toggle build menu (works both locked and unlocked while Playing)
+    // Right-click: same as Tab — not building → open the build menu; building → exit build.
     if (e.button === 2 && useGameStore.getState().gameMode === GameMode.Playing) {
       e.preventDefault();
-      if (useGameStore.getState().build.menuOpen) {
-        this.closeBuildMenu();
-      } else if (this.isPointerLocked) {
-        this.openBuildMenu();
-      }
+      this.toggleBuildOrMenu();
       return;
     }
 
@@ -219,12 +203,22 @@ export class Controls {
     document.exitPointerLock();
   }
 
-  /** Close the build menu overlay (re-locks pointer) */
-  private closeBuildMenu(): void {
-    useGameStore.getState().setBuildMenuOpen(false);
-    requestAnimationFrame(() => {
-      document.body.requestPointerLock();
-    });
+  /**
+   * Tab / right-click: not building → open the build palette; already building → exit
+   * build mode. The store couples the two (opening the menu turns build mode on; turning
+   * build mode off closes the menu), so this stays a clean two-branch toggle.
+   */
+  private toggleBuildOrMenu(): void {
+    const store = useGameStore.getState();
+    if (store.gameMode !== GameMode.Playing) return;
+    if (store.build.buildMode) {
+      const wasMenuOpen = store.build.menuOpen;
+      store.setBuildMode(false); // also closes the menu
+      // An open menu had released the pointer for the cursor — re-lock on exit.
+      if (wasMenuOpen && !isTouch()) requestAnimationFrame(() => document.body.requestPointerLock());
+    } else {
+      this.openBuildMenu();
+    }
   }
 
   requestPointerLock(): void {

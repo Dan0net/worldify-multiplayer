@@ -75,7 +75,7 @@ function MarkerPlayButton() {
   return (
     <div
       ref={ref}
-      style={{ position: 'fixed', transform: 'translate(-50%,-115%)', display: 'none' }}
+      style={{ position: 'fixed', transform: 'translate(-50%,-100%)', display: 'none' }}
       className="pointer-events-auto flex items-stretch rounded-full overflow-hidden shadow-xl border border-white/25 bg-indigo-600"
     >
       <button
@@ -83,7 +83,7 @@ function MarkerPlayButton() {
         className="px-8 py-4 md:px-10 md:py-5 text-2xl md:text-3xl font-bold text-white hover:bg-indigo-500 active:bg-indigo-400 flex items-center gap-2 whitespace-nowrap cursor-pointer transition-colors"
         aria-label="Play from here"
       >
-        <Play size={touch ? 22 : 26} fill="currentColor" /> Play
+        <Play size={touch ? 22 : 26} fill="currentColor" /> <span className="leading-none">Play</span>
       </button>
       {!touch && (
         <button
@@ -156,18 +156,17 @@ export function ExploreOverlay() {
       active ? 'text-white bg-indigo-600' : 'text-white/60 bg-white/10 hover:bg-white/20'
     }`;
   const bottomBtn = (active: boolean) =>
-    `pointer-events-auto cursor-pointer whitespace-nowrap flex items-center justify-center gap-2 px-5 py-2.5 md:px-6 md:py-3 rounded-xl text-sm md:text-base font-semibold shadow-lg transition-colors ${
-      active ? 'bg-indigo-600 text-white' : 'bg-black/50 text-white hover:bg-black/70 border border-white/15'
+    `pointer-events-auto cursor-pointer whitespace-nowrap flex items-center justify-center gap-2 px-6 py-3 md:px-8 md:py-4 rounded-2xl text-2xl md:text-3xl font-bold shadow-lg transition-colors border ${
+      active ? 'bg-indigo-600 text-white border-transparent' : 'bg-black/50 text-white hover:bg-black/70 border-white/15'
     }`;
 
   return (
     <div className="fixed inset-0 z-50 pointer-events-none">
-      {/* Logo — top center, vertically centered on the FPS counter pill (top-left, whose
-          centre sits ~34px down). translate-y-1/2 keeps it centred regardless of logo height. */}
+      {/* Logo — top center, same top offset as the FPS counter pill (top-5). */}
       <img
         src="/wrldy-logo-white.svg"
         alt="wrldy"
-        className="absolute top-[34px] left-1/2 -translate-x-1/2 -translate-y-1/2 h-12 md:h-16 pointer-events-none drop-shadow-lg"
+        className="absolute top-5 left-1/2 -translate-x-1/2 h-12 md:h-16 pointer-events-none drop-shadow-lg"
       />
 
       {/* Marker-tracking Play button */}
@@ -298,10 +297,10 @@ export function ExploreOverlay() {
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         <button className={bottomBtn(panel === 'worlds')} onClick={() => setPanel((p) => (p === 'worlds' ? 'none' : 'worlds'))}>
-          <Globe size={18} /> {activeWorldName}
+          <Globe size={26} /> <span className="leading-none">{activeWorldName}</span>
         </button>
         <button className={bottomBtn(panel === 'settings')} onClick={() => setPanel((p) => (p === 'settings' ? 'none' : 'settings'))}>
-          <Settings size={18} /> Settings
+          <Settings size={26} /> <span className="leading-none">Settings</span>
         </button>
       </div>
 

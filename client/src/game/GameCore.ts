@@ -56,6 +56,11 @@ const POS_SAVE_INTERVAL_MS = 4000;
 /** Lift restored spawns slightly above the saved Y to avoid clipping pre-collision. */
 const RESTORE_HEIGHT_OFFSET = 0.5;
 
+/** Cubic ease-in-out (0→1) for the explore↔first-person camera glides. */
+function easeInOut(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
 
@@ -421,9 +426,12 @@ export class GameCore {
   private headBobPhase = 0;
 
   /** Brief camera glide from the explore view to the first-person pose on entering Playing. */
-  private cameraIntroMs = 0; // remaining transition time (ms); 0 = inactive
+  private cameraIntroMs = 0; // enter (explore→FP) glide remaining (ms); 0 = inactive
   private cameraIntroFromPos = new THREE.Vector3();
   private cameraIntroFromQuat = new THREE.Quaternion();
+  private cameraOutroMs = 0; // exit (FP→explore) glide remaining (ms); 0 = inactive
+  private cameraOutroFromPos = new THREE.Vector3();
+  private cameraOutroFromQuat = new THREE.Quaternion();
   private introTmpPos = new THREE.Vector3();
   private introTmpQuat = new THREE.Quaternion();
   private static readonly CAMERA_INTRO_DURATION_MS = 450;
@@ -546,7 +554,7 @@ export class GameCore {
     // Update based on current game mode
     switch (gameMode) {
       case GameMode.Explore:
-        this.updateExploreMode(camera);
+        this.updateExploreMode(camera, deltaMs);
         break;
 
       case GameMode.MainMenu:
@@ -638,6 +646,16 @@ export class GameCore {
     // re-place the spawn marker there (updateExploreMode auto-places once terrain is
     // ready), so pausing drops the marker where you are and tapping Play resumes.
     if (currentMode === GameMode.Explore) {
+      // Smooth camera-out: glide from the current first-person pose to the explore view.
+      if (previousMode === GameMode.Playing) {
+        const cam = getCamera();
+        if (cam) {
+          this.cameraOutroFromPos.copy(cam.position);
+          this.cameraOutroFromQuat.copy(cam.quaternion);
+          this.cameraOutroMs = GameCore.CAMERA_INTRO_DURATION_MS;
+          this.cameraIntroMs = 0; // cancel any in-flight enter glide
+        }
+      }
       initExploreCamera(this.spectatorCenter);
       resetMarker();
     } else {
@@ -752,8 +770,20 @@ export class GameCore {
   /**
    * Update for Explore mode — user-driven free 3rd-person camera over the world.
    */
-  private updateExploreMode(camera: THREE.PerspectiveCamera | null): void {
+  private updateExploreMode(camera: THREE.PerspectiveCamera | null, deltaMs: number): void {
     if (camera) updateExploreCamera(camera);
+
+    // Brief first-person→explore glide on exiting play: blend from the captured FP pose
+    // toward the explore pose (which updateExploreCamera just wrote into the camera).
+    if (camera && this.cameraOutroMs > 0) {
+      this.cameraOutroMs = Math.max(0, this.cameraOutroMs - deltaMs);
+      const t = 1 - this.cameraOutroMs / GameCore.CAMERA_INTRO_DURATION_MS;
+      const eased = easeInOut(t);
+      this.introTmpPos.copy(camera.position);
+      this.introTmpQuat.copy(camera.quaternion);
+      camera.position.copy(this.cameraOutroFromPos).lerp(this.introTmpPos, eased);
+      camera.quaternion.copy(this.cameraOutroFromQuat).slerp(this.introTmpQuat, eased);
+    }
 
     // The explore target is the world stream/shadow center; keep spectatorCenter in
     // sync so streaming, shadows, and the map follow where the user pans.
@@ -847,7 +877,7 @@ export class GameCore {
       if (this.cameraIntroMs > 0) {
         this.cameraIntroMs = Math.max(0, this.cameraIntroMs - deltaMs);
         const t = 1 - this.cameraIntroMs / GameCore.CAMERA_INTRO_DURATION_MS;
-        const eased = t * t * (3 - 2 * t); // smoothstep
+        const eased = easeInOut(t);
         this.introTmpPos.copy(camera.position);
         this.introTmpQuat.copy(camera.quaternion);
         camera.position.copy(this.cameraIntroFromPos).lerp(this.introTmpPos, eased);
