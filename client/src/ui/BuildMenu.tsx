@@ -138,7 +138,7 @@ export function BuildMenu() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm pointer-events-auto flex flex-col"
+      className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm pointer-events-auto flex md:items-center md:justify-center"
       style={{
         paddingTop: 'env(safe-area-inset-top)',
         paddingBottom: 'env(safe-area-inset-bottom)',
@@ -147,6 +147,8 @@ export function BuildMenu() {
       }}
       onContextMenu={handleContextMenu}
     >
+      {/* Full-screen on mobile; a centered card sized to the content grid on desktop. */}
+      <div className="flex flex-col w-full h-full md:w-[min(92vw,44rem)] md:h-auto md:max-h-[82vh] md:rounded-2xl md:border md:border-white/10 md:bg-neutral-900/95 md:shadow-2xl overflow-hidden">
       {/* Header: current-build preview + tabs + close (does not scroll) */}
       <div className="shrink-0 flex items-center gap-2 md:gap-3 p-2 md:p-3 border-b border-white/10">
         <div className="shrink-0 w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-black/60 flex items-center justify-center overflow-hidden">
@@ -207,6 +209,7 @@ export function BuildMenu() {
             />
           )}
         </div>
+      </div>
       </div>
     </div>
   );

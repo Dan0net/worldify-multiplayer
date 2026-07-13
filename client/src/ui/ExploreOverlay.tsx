@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
+import { Globe, Settings, Play, Plus, X, Maximize, Check } from 'lucide-react';
 import { useGameStore } from '../state/store';
 import { GameMode } from '@worldify/shared';
 import { materialManager } from '../game/material';
@@ -16,35 +17,39 @@ import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/Quali
 import { getCamera } from '../game/scene/camera';
 import { formatTimeOfDay } from '../game/scene/DayNightCycle';
 import { isTouch } from '../game/deviceMode';
+import { controls } from '../game/player/controls';
+import { requestFullscreen } from './fullscreen';
+import { NewWorldDialog } from './NewWorldDialog';
 import { isMarkerPlaced, getMarkerTop, armMarkerSpawn } from '../game/spawn/SpawnMarker';
 import {
   listWorlds, getActiveWorld, setActiveWorld, createAndActivateWorld, deleteWorld,
-  type WorldMeta,
+  subscribeWorldsChanged, type WorldMeta,
 } from '../game/world/WorldManager';
 
 /** Play button that tracks the top of the spawn marker in screen space. */
 function MarkerPlayButton() {
-  const ref = useRef<HTMLButtonElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const touch = isTouch();
 
   useEffect(() => {
     let raf = 0;
     const v = { x: 0, y: 0, z: 0 } as { x: number; y: number; z: number };
     const tick = () => {
-      const btn = ref.current;
+      const el = ref.current;
       const cam = getCamera();
-      if (btn && cam && isMarkerPlaced()) {
+      if (el && cam && isMarkerPlaced()) {
         const p = getMarkerTop().clone().project(cam);
         v.x = p.x; v.y = p.y; v.z = p.z;
         const onScreen = v.z < 1 && v.x >= -1 && v.x <= 1 && v.y >= -1 && v.y <= 1;
         if (onScreen) {
-          btn.style.display = '';
-          btn.style.left = `${(v.x * 0.5 + 0.5) * window.innerWidth}px`;
-          btn.style.top = `${(-v.y * 0.5 + 0.5) * window.innerHeight}px`;
+          el.style.display = '';
+          el.style.left = `${(v.x * 0.5 + 0.5) * window.innerWidth}px`;
+          el.style.top = `${(-v.y * 0.5 + 0.5) * window.innerHeight}px`;
         } else {
-          btn.style.display = 'none';
+          el.style.display = 'none';
         }
-      } else if (btn) {
-        btn.style.display = 'none';
+      } else if (el) {
+        el.style.display = 'none';
       }
       raf = requestAnimationFrame(tick);
     };
@@ -52,25 +57,45 @@ function MarkerPlayButton() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const play = () => {
+  const play = async (withFullscreen: boolean) => {
     armMarkerSpawn();
-    if (isTouch()) {
-      const fs = document.documentElement.requestFullscreen?.();
-      fs?.catch(() => { /* ignore */ });
+    if (touch) {
+      // Mobile: enter fullscreen FIRST and wait for it, so the browser finishes the
+      // fullscreen animation before the play-mode camera transition begins (no black flash).
+      await requestFullscreen();
+      useGameStore.getState().setGameMode(GameMode.Playing);
+      return;
     }
+    // Desktop: lock the pointer within this gesture; optionally go fullscreen too.
+    if (withFullscreen) requestFullscreen();
+    controls.requestPointerLock();
     useGameStore.getState().setGameMode(GameMode.Playing);
   };
 
   return (
-    <button
+    <div
       ref={ref}
-      onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(); }}
       style={{ position: 'fixed', transform: 'translate(-50%,-115%)', display: 'none' }}
-      className="pointer-events-auto px-8 py-4 rounded-full text-2xl font-bold bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-400 text-white shadow-xl border border-white/25 whitespace-nowrap"
-      aria-label="Play from here"
+      className="pointer-events-auto flex items-stretch rounded-full overflow-hidden shadow-xl border border-white/25 bg-indigo-600"
     >
-      ▶ Play
-    </button>
+      <button
+        onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(false); }}
+        className="px-8 py-4 md:px-10 md:py-5 text-2xl md:text-3xl font-bold text-white hover:bg-indigo-500 active:bg-indigo-400 flex items-center gap-2 whitespace-nowrap cursor-pointer transition-colors"
+        aria-label="Play from here"
+      >
+        <Play size={touch ? 22 : 26} fill="currentColor" /> Play
+      </button>
+      {!touch && (
+        <button
+          onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(true); }}
+          className="px-4 border-l border-white/20 text-white bg-indigo-700 hover:bg-indigo-600 flex items-center cursor-pointer transition-colors"
+          aria-label="Play fullscreen"
+          title="Play in fullscreen"
+        >
+          <Maximize size={22} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -91,6 +116,7 @@ export function ExploreOverlay() {
   const [panel, setPanel] = useState<'none' | 'worlds' | 'settings'>('none');
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
   const [activeWorldId, setActiveWorldId] = useState<string | null>(null);
+  const [showNewWorld, setShowNewWorld] = useState(false);
 
   const refreshWorlds = () => {
     listWorlds().then((w) => {
@@ -98,7 +124,14 @@ export function ExploreOverlay() {
       setActiveWorldId(getActiveWorld()?.id ?? null);
     });
   };
-  useEffect(() => { refreshWorlds(); }, []);
+  // Refresh on mount and whenever the world list / active world changes (e.g. once the
+  // local world finishes booting after this overlay first mounts).
+  useEffect(() => {
+    refreshWorlds();
+    return subscribeWorldsChanged(refreshWorlds);
+  }, []);
+
+  const activeWorldName = worlds.find((w) => w.id === activeWorldId)?.name ?? 'Worlds';
 
   if (gameMode !== GameMode.Explore) return null;
 
@@ -110,26 +143,31 @@ export function ExploreOverlay() {
     else materialManager.upgradeToHighResolution();
   };
   const selectWorld = async (id: string) => { await setActiveWorld(id); refreshWorlds(); setPanel('none'); };
-  const newWorld = async () => { await createAndActivateWorld(); refreshWorlds(); setPanel('none'); };
   const removeWorld = async (id: string) => { await deleteWorld(id); refreshWorlds(); };
+  const createWorld = async (name: string, seed: number) => {
+    setShowNewWorld(false);
+    await createAndActivateWorld(name, seed);
+    refreshWorlds();
+    setPanel('none');
+  };
 
   const pill = (active: boolean) =>
     `py-1 flex-1 text-xs rounded-lg transition-colors text-center cursor-pointer ${
       active ? 'text-white bg-indigo-600' : 'text-white/60 bg-white/10 hover:bg-white/20'
     }`;
   const bottomBtn = (active: boolean) =>
-    `pointer-events-auto px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg transition-colors ${
+    `pointer-events-auto cursor-pointer whitespace-nowrap flex items-center justify-center gap-2 px-5 py-2.5 md:px-6 md:py-3 rounded-xl text-sm md:text-base font-semibold shadow-lg transition-colors ${
       active ? 'bg-indigo-600 text-white' : 'bg-black/50 text-white hover:bg-black/70 border border-white/15'
     }`;
 
   return (
     <div className="fixed inset-0 z-50 pointer-events-none">
-      {/* Logo — top center, clear of the debug/FPS counter (top-left) */}
+      {/* Logo — top center, vertically centered on the FPS counter pill (top-left, whose
+          centre sits ~34px down). translate-y-1/2 keeps it centred regardless of logo height. */}
       <img
         src="/wrldy-logo-white.svg"
         alt="wrldy"
-        className="absolute top-3 left-1/2 -translate-x-1/2 h-10 pointer-events-none drop-shadow-lg"
-        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+        className="absolute top-[34px] left-1/2 -translate-x-1/2 -translate-y-1/2 h-12 md:h-16 pointer-events-none drop-shadow-lg"
       />
 
       {/* Marker-tracking Play button */}
@@ -144,25 +182,26 @@ export function ExploreOverlay() {
                 <div key={w.id} className="flex items-center gap-1">
                   <button
                     onClick={() => selectWorld(w.id)}
-                    className={`flex-1 text-left text-sm px-2 py-1.5 rounded-lg transition-colors ${
+                    className={`flex-1 flex items-center gap-1.5 text-left text-sm px-2 py-1.5 rounded-lg transition-colors cursor-pointer ${
                       w.id === activeWorldId ? 'bg-indigo-600 text-white' : 'text-white/70 hover:bg-white/10'
                     }`}
                   >
-                    {w.id === activeWorldId ? '● ' : ''}{w.name}
+                    {w.id === activeWorldId && <Check size={14} className="shrink-0" />}
+                    {w.name}
                   </button>
                   {worlds.length > 1 && (
                     <button
                       onClick={() => removeWorld(w.id)}
                       aria-label={`Delete ${w.name}`}
-                      className="w-7 h-7 shrink-0 rounded-lg text-white/40 hover:text-red-400 hover:bg-white/10 flex items-center justify-center"
+                      className="w-7 h-7 shrink-0 rounded-lg text-white/40 hover:text-red-400 hover:bg-white/10 flex items-center justify-center cursor-pointer"
                     >
-                      ✕
+                      <X size={15} />
                     </button>
                   )}
                 </div>
               ))}
-              <button onClick={newWorld} className="text-sm px-2 py-1.5 rounded-lg text-cyan-300 hover:bg-white/10 text-left">
-                ＋ New World
+              <button onClick={() => setShowNewWorld(true)} className="flex items-center gap-1.5 text-sm px-2 py-1.5 rounded-lg text-cyan-300 hover:bg-white/10 text-left cursor-pointer">
+                <Plus size={15} /> New World
               </button>
             </div>
           )}
@@ -253,18 +292,23 @@ export function ExploreOverlay() {
         </div>
       )}
 
-      {/* Bottom bar: Worlds + Settings */}
+      {/* Bottom bar: Worlds + Settings — full-width 2-col grid on mobile, centred row on desktop */}
       <div
-        className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-3"
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 grid grid-cols-2 gap-3 w-[calc(100vw-2rem)] md:flex md:w-auto"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         <button className={bottomBtn(panel === 'worlds')} onClick={() => setPanel((p) => (p === 'worlds' ? 'none' : 'worlds'))}>
-          🌐 Worlds
+          <Globe size={18} /> {activeWorldName}
         </button>
         <button className={bottomBtn(panel === 'settings')} onClick={() => setPanel((p) => (p === 'settings' ? 'none' : 'settings'))}>
-          ⚙ Settings
+          <Settings size={18} /> Settings
         </button>
       </div>
+
+      {/* New-world prompt (name + seed) */}
+      {showNewWorld && (
+        <NewWorldDialog onCancel={() => setShowNewWorld(false)} onCreate={createWorld} />
+      )}
     </div>
   );
 }

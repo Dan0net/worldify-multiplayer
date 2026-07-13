@@ -55,8 +55,11 @@ export const PLACEHOLDER_NORMAL = { r: 128, g: 128, b: 255 };
 /** Default time of day (0-1, 0.375 = 9:00am morning light) */
 export const DEFAULT_TIME_OF_DAY = 0.375;
 
-/** Default time speed in game-minutes per real-second (0 = paused) */
-export const DEFAULT_TIME_SPEED = 0;
+/**
+ * Default time speed in game-minutes per real-second.
+ * 1.2 = one full day (1440 game-min) every 20 real minutes (1200 s). 0 = paused.
+ */
+export const DEFAULT_TIME_SPEED = 1.2;
 
 /** Sun orbital elevation range (degrees) */
 export const SUN_ELEVATION_MIN = -20; // Below horizon at midnight
