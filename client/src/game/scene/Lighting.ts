@@ -41,8 +41,13 @@ let shadowFrustumSize = 40;
 /** Shadow camera far plane */
 const SHADOW_FAR = 200;
 
-/** Extra margin (meters) beyond visibility radius for shadow frustum */
-const SHADOW_MARGIN = 8;
+/**
+ * Extra margin (meters) beyond the shadow radius for the shadow frustum. Chunk-groups are
+ * 4×4×4 chunks and cull by group *center*, so a casting group's geometry reaches ~2 chunks
+ * (16m) past the radius; the margin must cover that (16m) plus a chunk of safety so edge
+ * groups aren't clipped out of the shadow camera.
+ */
+const SHADOW_MARGIN = 24;
 
 // ============== Position Calculation ==============
 
