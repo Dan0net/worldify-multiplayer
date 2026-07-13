@@ -439,7 +439,7 @@ export class GameCore {
   private cameraOutroFromQuat = new THREE.Quaternion();
   private introTmpPos = new THREE.Vector3();
   private introTmpQuat = new THREE.Quaternion();
-  private static readonly CAMERA_INTRO_DURATION_MS = 450;
+  private static readonly CAMERA_INTRO_DURATION_MS = 1350;
 
   /**
    * Fold a bounded batch of freshly-streamed chunks into the minimap each frame.

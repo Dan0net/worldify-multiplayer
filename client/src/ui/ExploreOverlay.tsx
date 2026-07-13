@@ -172,9 +172,14 @@ export function ExploreOverlay() {
       {/* Marker-tracking Play button */}
       <MarkerPlayButton />
 
-      {/* Panels (open above the bottom bar) */}
+      {/* Bottom stack: an open panel sits directly above the Worlds/Settings bar with a
+          constant gap (the flex gap), regardless of the button size. */}
+      <div
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3 w-[calc(100vw-2rem)] md:w-auto"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
       {panel !== 'none' && (
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-24 md:bottom-32 w-[min(92vw,22rem)] pointer-events-auto">
+        <div className="w-[min(92vw,22rem)] pointer-events-auto">
           {panel === 'worlds' && (
             <div className="rounded-2xl bg-black/80 border border-white/10 p-2 flex flex-col gap-1">
               {worlds.map((w) => (
@@ -291,17 +296,15 @@ export function ExploreOverlay() {
         </div>
       )}
 
-      {/* Bottom bar: Worlds + Settings — full-width 2-col grid on mobile, centred row on desktop */}
-      <div
-        className="absolute bottom-4 left-1/2 -translate-x-1/2 grid grid-cols-2 gap-3 w-[calc(100vw-2rem)] md:flex md:w-auto"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
-      >
-        <button className={bottomBtn(panel === 'worlds')} onClick={() => setPanel((p) => (p === 'worlds' ? 'none' : 'worlds'))}>
-          <Globe size={26} /> <span className="leading-none">{activeWorldName}</span>
-        </button>
-        <button className={bottomBtn(panel === 'settings')} onClick={() => setPanel((p) => (p === 'settings' ? 'none' : 'settings'))}>
-          <Settings size={26} /> <span className="leading-none">Settings</span>
-        </button>
+        {/* Worlds + Settings bar — full-width 2-col grid on mobile, centred row on desktop */}
+        <div className="grid grid-cols-2 gap-3 w-full md:flex md:w-auto">
+          <button className={bottomBtn(panel === 'worlds')} onClick={() => setPanel((p) => (p === 'worlds' ? 'none' : 'worlds'))}>
+            <Globe size={26} /> <span className="leading-none">{activeWorldName}</span>
+          </button>
+          <button className={bottomBtn(panel === 'settings')} onClick={() => setPanel((p) => (p === 'settings' ? 'none' : 'settings'))}>
+            <Settings size={26} /> <span className="leading-none">Settings</span>
+          </button>
+        </div>
       </div>
 
       {/* New-world prompt (name + seed) */}

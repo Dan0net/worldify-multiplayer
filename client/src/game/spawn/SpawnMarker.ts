@@ -10,6 +10,9 @@
  */
 
 import * as THREE from 'three';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { PLAYER_HEIGHT, SPAWN_HEIGHT_OFFSET, SPAWN_RAYCAST_HEIGHT } from '@worldify/shared';
 import type { TerrainRaycaster } from './TerrainRaycaster';
 
@@ -21,6 +24,12 @@ const MARKER_COLOR = 0x38e8ff;
 let scene: THREE.Scene | null = null;
 let terrain: TerrainRaycaster | null = null;
 let group: THREE.Group | null = null;
+let lineMaterial: LineMaterial | null = null;
+
+/** Keep the fat-line's screen-space width correct across viewport resizes. */
+function updateLineResolution(): void {
+  lineMaterial?.resolution.set(window.innerWidth, window.innerHeight);
+}
 
 let placed = false;
 let armed = false;                        // Play requested → next Playing entry uses the marker
@@ -51,17 +60,20 @@ export function initSpawnMarker(s: THREE.Scene, t: TerrainRaycaster): void {
   ring.frustumCulled = false;
   group.add(ring);
 
-  const lineMat = new THREE.LineBasicMaterial({
-    color: MARKER_COLOR, transparent: true, opacity: 0.85, depthTest: false,
+  // Fat line so the vertical marker has real thickness (2px, matching the Play-button
+  // outline) — plain THREE.Line ignores linewidth in WebGL and always renders 1px.
+  lineMaterial = new LineMaterial({
+    color: MARKER_COLOR, linewidth: 2, transparent: true, opacity: 0.85, depthTest: false,
   });
-  const lineGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, LINE_HEIGHT, 0),
-  ]);
-  const line = new THREE.Line(lineGeo, lineMat);
+  lineMaterial.resolution.set(window.innerWidth, window.innerHeight);
+  const lineGeo = new LineGeometry();
+  lineGeo.setPositions([0, 0, 0, 0, LINE_HEIGHT, 0]);
+  const line = new Line2(lineGeo, lineMaterial);
   line.renderOrder = 999;
   line.frustumCulled = false;
   group.add(line);
 
+  window.addEventListener('resize', updateLineResolution);
   scene.add(group);
 }
 
