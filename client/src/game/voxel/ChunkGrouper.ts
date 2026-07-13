@@ -268,6 +268,28 @@ export class ChunkGrouper {
     return { rebuilt: this._rebuiltCount, reallocs: this._reallocCount };
   }
 
+  /**
+   * Set `castShadow` on a group's built meshes from the player's chunk distance. A group
+   * casts when its center is within `shadowRadius` chunks (Chebyshev). Liquid never casts.
+   * Called every frame for all groups (tracks the player) and after a group is rebuilt.
+   */
+  private applyGroupShadowCulling(
+    group: ChunkGroup,
+    playerCx: number,
+    playerCy: number,
+    playerCz: number,
+    shadowRadius: number,
+  ): void {
+    const dx = Math.abs(group.centerCx - playerCx);
+    const dy = Math.abs(group.centerCy - playerCy);
+    const dz = Math.abs(group.centerCz - playerCz);
+    const inShadow = dx <= shadowRadius && dy <= shadowRadius && dz <= shadowRadius;
+    for (let layer = 0; layer < group.meshes.length; layer++) {
+      const mesh = group.meshes[layer];
+      if (mesh) mesh.castShadow = layer !== LAYER_LIQUID && inShadow;
+    }
+  }
+
   rebuild(
     playerCx: number,
     playerCy: number,
@@ -277,6 +299,16 @@ export class ChunkGrouper {
     const shadowRadius = getShadowRadius();
     this._rebuiltCount = 0;
     this._reallocCount = 0;
+
+    // Refresh per-group shadow-casting from the CURRENT player position every frame.
+    // rebuildGroup only sets castShadow when a group is actually re-merged, so on stable
+    // terrain a group's flag would otherwise stay frozen at whatever the player distance was
+    // when it last rebuilt — shadows near the radius edge popped in/out (or never appeared
+    // until an unrelated rebuild). This cheap pass (distance compare + bool per built mesh)
+    // keeps the shadow set tracking the player.
+    for (const group of this.groups.values()) {
+      this.applyGroupShadowCulling(group, playerCx, playerCy, playerCz, shadowRadius);
+    }
 
     // === Phase 1: Priority rebuild for groups with pending suppression ===
     for (const [gk, group] of this.groups) {
@@ -848,14 +880,10 @@ export class ChunkGrouper {
         existing!.visible = true;
       }
 
-      // Shadow distance culling per group
-      const mesh = group.meshes[layer]!;
-      const dx = Math.abs(group.centerCx - playerCx);
-      const dy = Math.abs(group.centerCy - playerCy);
-      const dz = Math.abs(group.centerCz - playerCz);
-      const inShadow = dx <= shadowRadius && dy <= shadowRadius && dz <= shadowRadius;
-      mesh.castShadow = layer !== LAYER_LIQUID && inShadow;
     }
+
+    // Shadow-casting for the freshly built meshes (same rule as the per-frame refresh).
+    this.applyGroupShadowCulling(group, playerCx, playerCy, playerCz, shadowRadius);
 
     // `merged` = a live baked mesh now exists for this group (independent of `dirty`).
     // Mark every visible chunk as covered so updateChunk won't overlay a standalone
