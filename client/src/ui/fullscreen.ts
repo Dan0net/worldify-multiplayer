@@ -9,6 +9,13 @@ export function exitFullscreenIfActive(): void {
   if (document.fullscreenElement) document.exitFullscreen?.().catch(() => { /* ignore */ });
 }
 
-export function requestFullscreen(): void {
-  document.documentElement.requestFullscreen?.().catch(() => { /* ignore */ });
+/**
+ * Enter fullscreen. Returns a promise that resolves once the browser has entered
+ * (or immediately if unavailable/failed), so callers can sequence work after it —
+ * e.g. mobile waits for fullscreen before starting the play-mode camera transition.
+ */
+export function requestFullscreen(): Promise<void> {
+  const el = document.documentElement;
+  if (!el.requestFullscreen) return Promise.resolve();
+  return el.requestFullscreen().catch(() => { /* ignore */ });
 }

@@ -21,6 +21,8 @@ export interface WorldMeta {
   lastPos?: { x: number; y: number; z: number };
   lastYaw?: number;
   lastPitch?: number;
+  /** Persisted time-of-day (0-1), restored on load / world switch (optional). */
+  timeOfDay?: number;
 }
 
 /** Player position + look snapshot for persistence. */
@@ -106,6 +108,25 @@ export function setPlayerPosProvider(cb: () => PlayerPose): void {
   posProvider = cb;
 }
 
+/** Supplies the current time-of-day so the OUTGOING world can be saved on switch. */
+let timeProvider: (() => number) | null = null;
+
+export function setTimeOfDayProvider(cb: () => number): void {
+  timeProvider = cb;
+}
+
+/** Listeners notified when the world list or active world changes (for UI refresh). */
+const worldsChangedCbs = new Set<() => void>();
+
+export function subscribeWorldsChanged(cb: () => void): () => void {
+  worldsChangedCbs.add(cb);
+  return () => { worldsChangedCbs.delete(cb); };
+}
+
+function notifyWorldsChanged(): void {
+  for (const cb of worldsChangedCbs) { try { cb(); } catch { /* ignore */ } }
+}
+
 // ============== World lifecycle ==============
 
 export async function initWorlds(): Promise<WorldMeta> {
@@ -143,12 +164,22 @@ export function getActiveWorldSeed(): number {
   return activeWorld?.seed ?? DEFAULT_SEED;
 }
 
+/** A fresh random world seed (31-bit), matching createWorld's default. */
+export function randomWorldSeed(): number {
+  return Math.floor(Math.random() * 0x7fffffff);
+}
+
+/** The default name a new world would get ("World N"), for pre-filling the create dialog. */
+export async function nextWorldName(): Promise<string> {
+  return `World ${(await listWorlds()).length + 1}`;
+}
+
 export async function createWorld(name?: string, seed?: number): Promise<WorldMeta> {
   const existing = await listWorlds();
   const world: WorldMeta = {
     id: crypto.randomUUID(),
-    name: name ?? `World ${existing.length + 1}`,
-    seed: seed ?? Math.floor(Math.random() * 0x7fffffff),
+    name: name?.trim() || `World ${existing.length + 1}`,
+    seed: seed ?? randomWorldSeed(),
     createdAt: Date.now(),
     lastPlayedAt: Date.now(),
   };
@@ -157,8 +188,8 @@ export async function createWorld(name?: string, seed?: number): Promise<WorldMe
 }
 
 /** Create a new world AND make it active (rebuilds terrain). */
-export async function createAndActivateWorld(name?: string): Promise<WorldMeta> {
-  const world = await createWorld(name);
+export async function createAndActivateWorld(name?: string, seed?: number): Promise<WorldMeta> {
+  const world = await createWorld(name, seed);
   await setActiveWorld(world.id);
   return world;
 }
@@ -172,6 +203,9 @@ export async function setActiveWorld(id: string): Promise<void> {
   if (activeWorld && posProvider) {
     const p = posProvider();
     savePlayerPos(p);
+  }
+  if (activeWorld && timeProvider) {
+    saveTimeOfDay(timeProvider());
   }
   const world = await idbGet<WorldMeta>(STORE_WORLDS, id);
   if (!world) return;
@@ -215,6 +249,7 @@ async function activate(world: WorldMeta): Promise<void> {
   await idbPut(STORE_WORLDS, world);
   await preloadChunkKeys(world.id);
   undoStack = (await idbGet<UndoEntry[]>(STORE_UNDO, world.id)) ?? [];
+  notifyWorldsChanged();
 }
 
 async function preloadChunkKeys(worldId: string): Promise<void> {
@@ -288,6 +323,18 @@ export function loadPlayerPos(): PlayerPose | null {
   const w = activeWorld;
   if (!w || !w.lastPos) return null;
   return { x: w.lastPos.x, y: w.lastPos.y, z: w.lastPos.z, yaw: w.lastYaw ?? 0, pitch: w.lastPitch ?? 0 };
+}
+
+/** Persist the active world's time-of-day (0-1), fire-and-forget. */
+export function saveTimeOfDay(timeOfDay: number): void {
+  if (!activeWorld) return;
+  activeWorld.timeOfDay = timeOfDay;
+  idbPut(STORE_WORLDS, activeWorld).catch(() => { /* non-critical */ });
+}
+
+/** The active world's saved time-of-day, or null if it has none. */
+export function loadTimeOfDay(): number | null {
+  return activeWorld?.timeOfDay ?? null;
 }
 
 // ============== Undo stack (active world) ==============

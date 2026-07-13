@@ -70,11 +70,13 @@ export class Controls {
   private onKeyDown = (e: KeyboardEvent): void => {
     this.keys.add(e.code);
 
-    // Undo last build: Ctrl+Z / Cmd+Z
-    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
-      e.preventDefault();
-      this.onUndo?.();
-      return;
+    // Undo last build: Z (Playing only, so typing 'z' in menus/dialogs doesn't undo)
+    if (e.code === 'KeyZ') {
+      if (useGameStore.getState().gameMode === GameMode.Playing) {
+        e.preventDefault();
+        this.onUndo?.();
+        return;
+      }
     }
 
     // Debug: F6 to clear texture cache
@@ -92,12 +94,6 @@ export class Controls {
         useGameStore.getState().setBuildPreset(digit);
         useGameStore.getState().setBuildMode(true);
       }
-      return;
-    }
-
-    // Toggle build mode
-    if (e.code === 'KeyB') {
-      useGameStore.getState().toggleBuildMode();
       return;
     }
 
@@ -121,16 +117,10 @@ export class Controls {
       return;
     }
 
-    // Tab key: toggle build menu
+    // Tab: not building → open the build menu; building → exit build mode.
     if (e.code === 'Tab') {
       e.preventDefault();
-      if (useGameStore.getState().gameMode === GameMode.Playing) {
-        if (useGameStore.getState().build.menuOpen) {
-          this.closeBuildMenu();
-        } else {
-          this.openBuildMenu();
-        }
-      }
+      this.toggleBuildOrMenu();
       return;
     }
   };
@@ -157,14 +147,10 @@ export class Controls {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
-    // Right-click: toggle build menu (works both locked and unlocked while Playing)
+    // Right-click: same as Tab — not building → open the build menu; building → exit build.
     if (e.button === 2 && useGameStore.getState().gameMode === GameMode.Playing) {
       e.preventDefault();
-      if (useGameStore.getState().build.menuOpen) {
-        this.closeBuildMenu();
-      } else if (this.isPointerLocked) {
-        this.openBuildMenu();
-      }
+      this.toggleBuildOrMenu();
       return;
     }
 
@@ -219,12 +205,25 @@ export class Controls {
     document.exitPointerLock();
   }
 
-  /** Close the build menu overlay (re-locks pointer) */
-  private closeBuildMenu(): void {
-    useGameStore.getState().setBuildMenuOpen(false);
-    requestAnimationFrame(() => {
-      document.body.requestPointerLock();
-    });
+  /**
+   * Tab / right-click: not building → open the build palette; already building → exit
+   * build mode. The store couples the two (opening the menu turns build mode on; turning
+   * build mode off closes the menu), so this stays a clean two-branch toggle.
+   */
+  private toggleBuildOrMenu(): void {
+    const store = useGameStore.getState();
+    if (store.gameMode !== GameMode.Playing) return;
+    if (store.build.menuOpen) {
+      // Menu open → close it but STAY in build mode (setBuildMenuOpen(false) keeps buildMode).
+      store.setBuildMenuOpen(false);
+      if (!isTouch()) requestAnimationFrame(() => document.body.requestPointerLock());
+    } else if (store.build.buildMode) {
+      // Building with the menu closed → exit build mode.
+      store.setBuildMode(false);
+    } else {
+      // Not building → open the palette.
+      this.openBuildMenu();
+    }
   }
 
   requestPointerLock(): void {

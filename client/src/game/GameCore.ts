@@ -49,12 +49,17 @@ import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime, subscribeMaterialSettings, subscribeWaterSettings } from './material';
 import { getMapTileCache } from './maptile/mapTileCacheSingleton';
 import { perfStats } from './debug/PerformanceStats';
-import { initWorlds, setWorldSwitchHandler, loadSnapPoints, saveSnapPoints, savePlayerPos, loadPlayerPos, setPlayerPosProvider } from './world/WorldManager';
+import { initWorlds, setWorldSwitchHandler, loadSnapPoints, saveSnapPoints, savePlayerPos, loadPlayerPos, setPlayerPosProvider, saveTimeOfDay, loadTimeOfDay, setTimeOfDayProvider } from './world/WorldManager';
 
 /** How often to persist the player position while Playing (ms). */
 const POS_SAVE_INTERVAL_MS = 4000;
 /** Lift restored spawns slightly above the saved Y to avoid clipping pre-collision. */
 const RESTORE_HEIGHT_OFFSET = 0.5;
+
+/** Cubic ease-in-out (0→1) for the explore↔first-person camera glides. */
+function easeInOut(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 export class GameCore {
   private renderer!: THREE.WebGLRenderer;
@@ -184,6 +189,10 @@ export class GameCore {
     // and its persisted chunks.
     await initWorlds();
 
+    // Restore this world's persisted time-of-day (falls back to the default cycle time).
+    const savedTod = loadTimeOfDay();
+    if (savedTod !== null) useGameStore.getState().setTimeOfDay(savedTod);
+
     // Center the background orbit camera + chunk streaming on the persisted player
     // position, so the world loads AROUND where the player left off (not the origin).
     const savedPose = loadPlayerPos();
@@ -269,10 +278,18 @@ export class GameCore {
       // Supply the current pose so WorldManager can save the OUTGOING world on switch.
       setPlayerPosProvider(() => this.currentPlayerPose());
 
-      // Undo last build (Ctrl/Cmd+Z or mobile button).
+      // Supply the current time-of-day so it's saved per world on switch.
+      setTimeOfDayProvider(() => useGameStore.getState().environment.timeOfDay);
+
+      // Undo last build (Z, or mobile button).
       controls.onUndo = () => {
         const keys = this.voxelIntegration.world.undoLastBuild();
-        if (keys.length > 0) this.updateMapTilesFromChunks(keys);
+        if (keys.length > 0) {
+          // Mirror the place path: hand the active preview off as a commit so the reverted
+          // chunk's remesh clears the stale preview mesh + restores the suppressed group.
+          this.builder.commitPreview();
+          this.updateMapTilesFromChunks(keys);
+        }
       };
     }
 
@@ -334,6 +351,9 @@ export class GameCore {
       ? new THREE.Vector3(savedPose.x, savedPose.y, savedPose.z)
       : new THREE.Vector3(0, 0, 0);
     this.spectatorCenter.copy(streamCenter);
+    // Restore the new world's persisted time-of-day (WorldManager.activate loaded it).
+    const savedTod = loadTimeOfDay();
+    if (savedTod !== null) useGameStore.getState().setTimeOfDay(savedTod);
     this.voxelIntegration.world.reloadLocalWorld(streamCenter);
     // setDepositedPoints replaces the points without firing the save callback,
     // so restoring the new world's snaps doesn't overwrite them.
@@ -409,6 +429,17 @@ export class GameCore {
 
   /** Accumulating phase for the camera head-bob while walking. */
   private headBobPhase = 0;
+
+  /** Brief camera glide from the explore view to the first-person pose on entering Playing. */
+  private cameraIntroMs = 0; // enter (explore→FP) glide remaining (ms); 0 = inactive
+  private cameraIntroFromPos = new THREE.Vector3();
+  private cameraIntroFromQuat = new THREE.Quaternion();
+  private cameraOutroMs = 0; // exit (FP→explore) glide remaining (ms); 0 = inactive
+  private cameraOutroFromPos = new THREE.Vector3();
+  private cameraOutroFromQuat = new THREE.Quaternion();
+  private introTmpPos = new THREE.Vector3();
+  private introTmpQuat = new THREE.Quaternion();
+  private static readonly CAMERA_INTRO_DURATION_MS = 1350;
 
   /**
    * Fold a bounded batch of freshly-streamed chunks into the minimap each frame.
@@ -528,7 +559,7 @@ export class GameCore {
     // Update based on current game mode
     switch (gameMode) {
       case GameMode.Explore:
-        this.updateExploreMode(camera);
+        this.updateExploreMode(camera, deltaMs);
         break;
 
       case GameMode.MainMenu:
@@ -580,7 +611,8 @@ export class GameCore {
     // rendering, so any mousemove events that arrived during the update phase
     // (physics, environment, shadows, etc.) are reflected this frame rather than
     // being deferred to the next one.
-    if (gameMode === GameMode.Playing && camera) {
+    // (Suppressed during the intro glide, which owns the camera orientation.)
+    if (gameMode === GameMode.Playing && camera && this.cameraIntroMs === 0) {
       camera.rotation.set(controls.pitch, controls.yaw, 0);
     }
 
@@ -619,6 +651,16 @@ export class GameCore {
     // re-place the spawn marker there (updateExploreMode auto-places once terrain is
     // ready), so pausing drops the marker where you are and tapping Play resumes.
     if (currentMode === GameMode.Explore) {
+      // Smooth camera-out: glide from the current first-person pose to the explore view.
+      if (previousMode === GameMode.Playing) {
+        const cam = getCamera();
+        if (cam) {
+          this.cameraOutroFromPos.copy(cam.position);
+          this.cameraOutroFromQuat.copy(cam.quaternion);
+          this.cameraOutroMs = GameCore.CAMERA_INTRO_DURATION_MS;
+          this.cameraIntroMs = 0; // cancel any in-flight enter glide
+        }
+      }
       initExploreCamera(this.spectatorCenter);
       resetMarker();
     } else {
@@ -636,6 +678,18 @@ export class GameCore {
         this.spawnManager?.clearDebugVisualization();
       } else if (!this.hasSpawnedPlayer) {
         this.spawnPlayer();
+      }
+
+      // Start a brief camera glide from the explore view to the first-person pose, so
+      // entering play reads as a smooth move rather than a hard cut. Capture the current
+      // (explore) camera pose as the start; the end is tracked live from the player.
+      if (previousMode === GameMode.Explore) {
+        const cam = getCamera();
+        if (cam) {
+          this.cameraIntroFromPos.copy(cam.position);
+          this.cameraIntroFromQuat.copy(cam.quaternion);
+          this.cameraIntroMs = GameCore.CAMERA_INTRO_DURATION_MS;
+        }
       }
     }
   }
@@ -673,6 +727,8 @@ export class GameCore {
   /** Save the player's position now, if they've spawned (position is meaningful). */
   private savePlayerPosNow = (): void => {
     if (this.hasSpawnedPlayer) savePlayerPos(this.currentPlayerPose());
+    // Time-of-day advances in every mode, so persist it regardless of spawn state.
+    saveTimeOfDay(useGameStore.getState().environment.timeOfDay);
   };
 
   private onVisibilityChange = (): void => {
@@ -719,8 +775,20 @@ export class GameCore {
   /**
    * Update for Explore mode — user-driven free 3rd-person camera over the world.
    */
-  private updateExploreMode(camera: THREE.PerspectiveCamera | null): void {
+  private updateExploreMode(camera: THREE.PerspectiveCamera | null, deltaMs: number): void {
     if (camera) updateExploreCamera(camera);
+
+    // Brief first-person→explore glide on exiting play: blend from the captured FP pose
+    // toward the explore pose (which updateExploreCamera just wrote into the camera).
+    if (camera && this.cameraOutroMs > 0) {
+      this.cameraOutroMs = Math.max(0, this.cameraOutroMs - deltaMs);
+      const t = 1 - this.cameraOutroMs / GameCore.CAMERA_INTRO_DURATION_MS;
+      const eased = easeInOut(t);
+      this.introTmpPos.copy(camera.position);
+      this.introTmpQuat.copy(camera.quaternion);
+      camera.position.copy(this.cameraOutroFromPos).lerp(this.introTmpPos, eased);
+      camera.quaternion.copy(this.cameraOutroFromQuat).slerp(this.introTmpQuat, eased);
+    }
 
     // The explore target is the world stream/shadow center; keep spectatorCenter in
     // sync so streaming, shadows, and the map follow where the user pans.
@@ -809,6 +877,17 @@ export class GameCore {
     // Update camera and build system
     if (camera) {
       updateCameraFromPlayer(camera, localPlayer);
+      // Brief explore→first-person glide: blend from the captured explore pose toward
+      // the live FP pose (which updateCameraFromPlayer just wrote into the camera).
+      if (this.cameraIntroMs > 0) {
+        this.cameraIntroMs = Math.max(0, this.cameraIntroMs - deltaMs);
+        const t = 1 - this.cameraIntroMs / GameCore.CAMERA_INTRO_DURATION_MS;
+        const eased = easeInOut(t);
+        this.introTmpPos.copy(camera.position);
+        this.introTmpQuat.copy(camera.quaternion);
+        camera.position.copy(this.cameraIntroFromPos).lerp(this.introTmpPos, eased);
+        camera.quaternion.copy(this.cameraIntroFromQuat).slerp(this.introTmpQuat, eased);
+      }
       if (!menuPaused) {
         perfStats.begin('buildPreview');
         this.builder.update(camera, localPlayer.position);
@@ -822,7 +901,8 @@ export class GameCore {
     const move = controls.getMoveVector();
     const speed = Math.hypot(move.moveX, move.moveZ);
     let headBob = 0;
-    if (camera && !menuPaused) {
+    // Skip head-bob during the intro glide so it doesn't fight the tween.
+    if (camera && !menuPaused && this.cameraIntroMs === 0) {
       if (speed > 0.1) this.headBobPhase += (Math.min(deltaMs, 100) / 1000) * 9;
       headBob = Math.sin(this.headBobPhase * 2) * 0.05 * Math.min(1, speed);
       camera.position.y += headBob;

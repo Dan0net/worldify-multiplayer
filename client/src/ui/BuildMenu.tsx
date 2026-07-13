@@ -43,8 +43,8 @@ function ThumbTile({
   return (
     <button
       onClick={onSelect}
-      className={`relative flex items-center justify-center shrink-0
-        w-20 h-20 md:w-24 md:h-24 rounded-2xl transition-all bg-black/60
+      className={`relative flex items-center justify-center shrink-0 cursor-pointer
+        w-20 h-20 md:w-24 md:h-24 rounded-2xl bg-black/60
         ${isActive ? 'ring-2 ring-cyan-400 shadow-lg shadow-cyan-400/30' : 'hover:bg-white/10 active:bg-white/15'}`}
     >
       {thumbnailUrl ? (
@@ -129,7 +129,7 @@ export function BuildMenu() {
   const tabBtn = (tab: MenuTab, label: string) => (
     <button
       onClick={() => setActiveTab(tab)}
-      className={`flex-1 px-3 py-2.5 text-sm font-medium rounded-xl transition-colors
+      className={`flex-1 px-3 py-2.5 text-sm font-medium rounded-xl cursor-pointer
         ${activeTab === tab ? 'bg-cyan-400/20 text-cyan-400' : 'bg-black/60 text-white/50 hover:text-white/80 hover:bg-black/80'}`}
     >
       {label}
@@ -138,7 +138,7 @@ export function BuildMenu() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm pointer-events-auto flex flex-col"
+      className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm pointer-events-auto flex md:items-center md:justify-center"
       style={{
         paddingTop: 'env(safe-area-inset-top)',
         paddingBottom: 'env(safe-area-inset-bottom)',
@@ -146,9 +146,13 @@ export function BuildMenu() {
         paddingRight: 'env(safe-area-inset-right)',
       }}
       onContextMenu={handleContextMenu}
+      onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
-      {/* Header: current-build preview + tabs + close (does not scroll) */}
-      <div className="shrink-0 flex items-center gap-2 md:gap-3 p-2 md:p-3 border-b border-white/10">
+      {/* Full-screen on mobile; on desktop a card that fits its content (a fixed 6-column
+          tile grid), so the header bar spans exactly the tile-grid width — not wider. */}
+      <div className="flex flex-col w-full h-full md:w-fit md:max-w-[92vw] md:h-auto md:max-h-[82vh] md:rounded-2xl md:border md:border-white/10 md:bg-neutral-900/95 md:shadow-2xl overflow-hidden">
+      {/* Header: current-build preview + tabs (does not scroll) */}
+      <div className="shrink-0 flex items-center gap-2 md:gap-3 p-2 md:px-4 md:py-3 border-b border-white/10">
         <div className="shrink-0 w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-black/60 flex items-center justify-center overflow-hidden">
           {previewUrl
             ? <img src={previewUrl} alt="" className="w-[52px] h-[52px] md:w-[60px] md:h-[60px] object-contain" draggable={false} />
@@ -159,20 +163,13 @@ export function BuildMenu() {
           {tabBtn('materials', 'Materials')}
           {tabBtn('config', 'Config')}
         </div>
-        <button
-          onClick={handleClose}
-          aria-label="Close build menu"
-          className="shrink-0 w-11 h-11 flex items-center justify-center text-xl rounded-xl bg-black/60 text-white/60 hover:text-white hover:bg-black/80 transition-colors"
-        >
-          ✕
-        </button>
       </div>
 
-      {/* Body: scrolls; reflows for portrait/landscape via the flex-wrap grids */}
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-glass p-3 md:p-4">
-        <div className="mx-auto w-full max-w-3xl">
+      {/* Body: scrolls; thin scrollbar so the fixed 6-col grid fits the card width exactly. */}
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-compact p-3 md:p-4">
+        <div className="mx-auto w-full md:w-fit">
           {activeTab === 'presets' && (
-            <div className="flex flex-wrap gap-2 justify-center md:justify-start">
+            <div className="flex flex-wrap gap-2 justify-center md:grid md:grid-cols-6 md:justify-items-start">
               {PRESET_TEMPLATES.map((t, idx) => (
                 <PresetTile
                   key={idx}
@@ -185,7 +182,7 @@ export function BuildMenu() {
           )}
 
           {activeTab === 'materials' && (
-            <div className="flex flex-wrap gap-2 justify-center md:justify-start">
+            <div className="flex flex-wrap gap-2 justify-center md:grid md:grid-cols-6 md:justify-items-start">
               {MATERIAL_NAMES.map((_name, id) => (
                 <MaterialTile
                   key={id}
@@ -198,15 +195,18 @@ export function BuildMenu() {
           )}
 
           {activeTab === 'config' && currentConfig && currentMeta && (
-            <BuildConfigTab
-              config={currentConfig}
-              meta={currentMeta}
-              presetId={presetId}
-              onUpdateConfig={updatePresetConfig}
-              onUpdateMeta={updatePresetMeta}
-            />
+            <div className="md:w-[616px] max-w-full">
+              <BuildConfigTab
+                config={currentConfig}
+                meta={currentMeta}
+                presetId={presetId}
+                onUpdateConfig={updatePresetConfig}
+                onUpdateMeta={updatePresetMeta}
+              />
+            </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

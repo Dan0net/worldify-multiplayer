@@ -11,7 +11,7 @@
  * canvas.
  */
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   exploreCameraPan,
   exploreCameraRotate,
@@ -49,11 +49,13 @@ export function ExploreControls() {
   // Single-pointer gesture state
   const mode = useRef<'camera' | 'marker'>('camera');
   const moved = useRef(0); // accumulated movement (px) to distinguish tap vs drag
+  // Desktop cursor: hand (grab) over the world, closed hand (grabbing) while dragging.
+  const [dragging, setDragging] = useState(false);
 
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (e.pointerType === 'mouse') button.current = e.button;
+    if (e.pointerType === 'mouse') { button.current = e.button; setDragging(true); }
     if (pointers.current.size === 1) {
       moved.current = 0;
       mode.current = (e.pointerType !== 'mouse' || e.button === 0) && nearMarker(e.clientX, e.clientY)
@@ -100,6 +102,7 @@ export function ExploreControls() {
     const wasSingle = pointers.current.size === 1;
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
+    if (pointers.current.size === 0) setDragging(false);
 
     // A tap on empty ground (camera mode, no drag) places/moves the marker there.
     if (wasSingle && mode.current === 'camera' && moved.current < TAP_PX) {
@@ -115,7 +118,7 @@ export function ExploreControls() {
   return (
     <div
       className="fixed inset-0 z-30"
-      style={{ touchAction: 'none' }}
+      style={{ touchAction: 'none', cursor: dragging ? 'grabbing' : 'grab' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

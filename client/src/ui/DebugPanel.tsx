@@ -1,5 +1,9 @@
 import { useEffect, useState, ReactNode } from 'react';
 import {
+  ChevronDown, ChevronRight, Zap, Wrench, Search, Sliders, Palette, Droplet, Waves,
+  Sparkles, Wind, Sun, Moon, Cloud, Clock, Grid3x3, Lightbulb, Compass, Sunrise, Trash2,
+} from 'lucide-react';
+import {
   useGameStore, TERRAIN_DEBUG_MODE_NAMES, TERRAIN_DEBUG_MODE_ORDER, type TerrainDebugMode,
   type EnvironmentSettings, type DayStageConfig, type NightStageConfig,
 } from '../state/store';
@@ -20,27 +24,28 @@ import * as THREE from 'three';
 
 interface SectionProps {
   title: string;
+  icon?: ReactNode;
   isOpen: boolean;
   onToggle: () => void;
   children: ReactNode;
   color?: string;
 }
 
-function Section({ title, isOpen, onToggle, children, color = 'green' }: SectionProps) {
+function Section({ title, icon, isOpen, onToggle, children, color = 'green' }: SectionProps) {
   const colorClasses: Record<string, string> = {
     green: 'text-green-500 hover:text-green-300',
     yellow: 'text-yellow-500 hover:text-yellow-300',
     cyan: 'text-cyan-500 hover:text-cyan-300',
   };
-  
+
   return (
     <div className="mt-2">
       <button
         onClick={onToggle}
-        className={`w-full flex items-center justify-between py-1 px-0 text-left cursor-pointer ${colorClasses[color] || colorClasses.green} transition-colors`}
+        className={`w-full flex items-center justify-between py-1 px-0 text-left cursor-pointer ${colorClasses[color] || colorClasses.green}`}
       >
-        <span className="font-bold">{title}</span>
-        <span className="text-xs">{isOpen ? '▼' : '▶'}</span>
+        <span className="font-bold flex items-center gap-1.5">{icon}{title}</span>
+        {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
       {isOpen && (
         <div className="pl-2 border-l border-green-500/30">
@@ -149,7 +154,7 @@ function Toggle({ label, value, onChange }: ToggleProps) {
       <span className="text-xs">{label}</span>
       <button
         onClick={() => onChange(!value)}
-        className={`w-10 h-5 rounded-full relative transition-colors ${
+        className={`w-10 h-5 rounded-full relative ${
           value ? 'bg-green-600' : 'bg-gray-600'
         }`}
       >
@@ -182,7 +187,7 @@ function SegmentedRow({ label, segments, active, onSelect }: SegmentedRowProps) 
           <button
             key={seg.label}
             onClick={() => onSelect(i)}
-            className={`px-1.5 py-0.5 text-[11px] rounded transition-colors ${
+            className={`px-1.5 py-0.5 text-[11px] rounded ${
               i === active ? 'bg-yellow-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
             }`}
           >
@@ -374,39 +379,43 @@ export function DebugPanel() {
   if (!debugPanelExpanded) {
     return (
       <div
-        className="absolute top-5 left-5 py-1.5 px-3 bg-black/80 text-green-500 font-mono text-xs rounded-lg cursor-pointer hover:bg-black/90 transition-colors select-none pointer-events-auto"
+        className="absolute top-5 left-5 py-1.5 px-3 bg-black/80 text-green-500 font-mono text-xs rounded-lg cursor-pointer hover:bg-black/90 select-none pointer-events-auto flex items-center gap-2"
         onClick={toggleDebugPanelExpanded}
         title="Click to expand debug panel"
       >
         <span className={fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}>{fps} FPS</span>
-        <span className="ml-2 text-green-500/50">▶</span>
+        <ChevronRight size={13} className="text-green-500/50" />
       </div>
     );
   }
 
   return (
-    <div className="absolute top-5 left-5 py-2.5 px-4 bg-black/80 text-green-500 font-mono text-xs rounded-lg max-h-[calc(100dvh-200px)] overflow-y-auto min-w-[200px] pointer-events-auto">
-      
-      {/* Collapse button */}
+    <div className="absolute top-5 left-5 bg-black/80 text-green-500 font-mono text-xs rounded-lg max-h-[calc(100dvh-200px)] min-w-[200px] pointer-events-auto flex flex-col overflow-hidden">
+
+      {/* FPS + collapse — pinned at the top (does not scroll). */}
       <button
         onClick={toggleDebugPanelExpanded}
-        className="w-full flex items-center justify-between mb-1 cursor-pointer text-green-500 hover:text-green-300 transition-colors"
+        className="shrink-0 flex items-center justify-between px-4 pt-2 pb-1.5 cursor-pointer text-green-500 hover:text-green-300"
         title="Collapse debug panel"
       >
         <span className={`font-bold ${fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}`}>{fps} FPS</span>
-        <span className="text-xs">▼</span>
+        <ChevronDown size={13} />
       </button>
 
+      {/* Scrollable body — starts below the FPS row, thin scrollbar. */}
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-compact px-4 pb-2.5">
+
       {/* ============== PERFORMANCE SECTION (client-side only) ============== */}
+      {/* FPS is shown in the sticky header above — not duplicated here. */}
       <Section
-        title="⚡ Performance"
+        title="Performance"
+        icon={<Zap size={13} />}
         isOpen={debugPanelSections.performance}
         onToggle={() => toggleDebugSection('performance')}
         color="cyan"
       >
         <div className="text-cyan-400">
           <div className="grid grid-cols-2 gap-x-3">
-            <div>FPS:</div><div className={fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}>{fps}</div>
             <div>Frame:</div><div className={perfStats.gameUpdate > 16.6 ? 'text-red-400' : ''}>{perfStats.gameUpdate.toFixed(1)} ms</div>
           </div>
 
@@ -454,7 +463,8 @@ export function DebugPanel() {
 
       {/* ============== DEBUG SECTION ============== */}
       <Section
-        title="🔧 Debug"
+        title="Debug"
+        icon={<Wrench size={13} />}
         isOpen={debugPanelSections.debug}
         onToggle={() => toggleDebugSection('debug')}
         color="yellow"
@@ -520,8 +530,8 @@ export function DebugPanel() {
         <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
           <div className="mb-1 text-green-500 text-xs">Shader (F7-F8):</div>
           <div className="flex items-center gap-2">
-            <span className="w-4 h-4 flex items-center justify-center">
-              {terrainDebugMode > 0 ? '🔍' : '○'}
+            <span className={`w-4 h-4 flex items-center justify-center ${terrainDebugMode > 0 ? 'text-yellow-300' : 'text-yellow-300/30'}`}>
+              <Search size={14} />
             </span>
             <select
               value={terrainDebugMode}
@@ -539,7 +549,7 @@ export function DebugPanel() {
             className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
             onClick={handleCycleQuality}
           >
-            <span className="w-4 h-4 flex items-center justify-center">⚡</span>
+            <span className="w-4 h-4 flex items-center justify-center"><Zap size={14} /></span>
             <span>F8 Quality: {QUALITY_LABELS[qualityLevel]}</span>
           </label>
         </div>
@@ -550,8 +560,8 @@ export function DebugPanel() {
             className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
             onClick={handleClearTextureCache}
           >
-            <span className="w-4 h-4 flex items-center justify-center text-red-400">
-              {cacheClearing ? '⏳' : '✕'}
+            <span className={`w-4 h-4 flex items-center justify-center text-red-400 ${cacheClearing ? 'animate-pulse' : ''}`}>
+              <Trash2 size={14} />
             </span>
             <span>Clear Texture Cache</span>
           </label>
@@ -572,7 +582,8 @@ export function DebugPanel() {
 
       {/* ============== QUALITY SECTION ============== */}
       <Section
-        title="⚡ Quality"
+        title="Quality"
+        icon={<Sliders size={13} />}
         isOpen={debugPanelSections.quality}
         onToggle={() => toggleDebugSection('quality')}
         color="yellow"
@@ -588,7 +599,7 @@ export function DebugPanel() {
               <button
                 key={level}
                 onClick={() => syncPresetToStore(level, quality.visibilityRadius)}
-                className={`flex-1 py-1 text-xs rounded transition-colors ${
+                className={`flex-1 py-1 text-xs rounded ${
                   !isCustomQuality && qualityLevel === level
                     ? 'bg-yellow-600 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
@@ -662,14 +673,15 @@ export function DebugPanel() {
 
       {/* ============== MATERIALS SECTION ============== */}
       <Section
-        title="🎨 Materials"
+        title="Materials"
+        icon={<Palette size={13} />}
         isOpen={debugPanelSections.materials}
         onToggle={() => toggleDebugSection('materials')}
         color="yellow"
       >
         {/* Texture Multipliers */}
         <div className="mb-3">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">📐 Texture Adjustments</div>
+          <div className="text-yellow-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sliders size={12} /> Texture Adjustments</div>
           <Slider
             label="Roughness"
             value={materialSettings.roughnessMultiplier}
@@ -706,7 +718,7 @@ export function DebugPanel() {
         
         {/* Tri-planar Blending */}
         <div className="mb-3 pt-2 border-t border-yellow-500/30">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">🔲 Tri-Planar Blending</div>
+          <div className="text-yellow-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Grid3x3 size={12} /> Tri-Planar Blending</div>
           <Slider
             label="Blend Sharpness"
             value={materialSettings.blendSharpness}
@@ -727,7 +739,7 @@ export function DebugPanel() {
         
         {/* Wind Animation */}
         <div className="mb-3 pt-2 border-t border-yellow-500/30">
-          <div className="text-yellow-400 text-xs mb-1 font-bold">🍃 Wind Animation</div>
+          <div className="text-yellow-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Wind size={12} /> Wind Animation</div>
           <Slider
             label="Strength"
             value={materialSettings.windStrength}
@@ -767,14 +779,15 @@ export function DebugPanel() {
 
       {/* ============== WATER SECTION ============== */}
       <Section
-        title="💧 Water"
+        title="Water"
+        icon={<Droplet size={13} />}
         isOpen={debugPanelSections.water ?? false}
         onToggle={() => toggleDebugSection('water')}
         color="cyan"
       >
         {/* Wave Animation */}
         <div className="mb-3">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🌊 Waves</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Waves size={12} /> Waves</div>
           <Slider
             label="Amplitude"
             value={waterSettings.waveAmplitude}
@@ -803,7 +816,7 @@ export function DebugPanel() {
         
         {/* Surface Effects */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">✨ Surface</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sparkles size={12} /> Surface</div>
           <Slider
             label="Normal Strength"
             value={waterSettings.normalStrength}
@@ -864,7 +877,7 @@ export function DebugPanel() {
         
         {/* Color Tint */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🎨 Tint</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Palette size={12} /> Tint</div>
           <Slider
             label="Red"
             value={waterSettings.waterTint[0]}
@@ -904,7 +917,8 @@ export function DebugPanel() {
 
       {/* ============== DAY-NIGHT CYCLE SECTION ============== */}
       <Section
-        title="🌓 Day-Night Cycle"
+        title="Day-Night Cycle"
+        icon={<Moon size={13} />}
         isOpen={debugPanelSections.dayNightCycle ?? false}
         onToggle={() => toggleDebugSection('dayNightCycle')}
         color="cyan"
@@ -920,7 +934,7 @@ export function DebugPanel() {
 
         {/* Time Display and Controls */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🕐 Time</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Clock size={12} /> Time</div>
           <div className="text-center mb-1">
             <span className="text-yellow-400 text-lg">{formatTimeOfDay(environment.timeOfDay)}</span>
             <span className="text-cyan-300 text-xs ml-2">{getDayPhaseLabel(environment.timeOfDay)}</span>
@@ -947,7 +961,7 @@ export function DebugPanel() {
 
         {/* Day stage keyframe — edits apply live via the cycle (no reset) */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">☀️ Day Stage</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Day Stage</div>
           <ColorPicker label="Sun Color" value={dayNightConfig.day.sunColor} onChange={(v) => editDayStage({ sunColor: v })} />
           <Slider label="Sun Intensity" value={dayNightConfig.day.sunIntensity} min={0} max={10} step={0.1} onChange={(v) => editDayStage({ sunIntensity: v })} />
           <ColorPicker label="Sky" value={dayNightConfig.day.hemisphereSkyColor} onChange={(v) => editDayStage({ hemisphereSkyColor: v })} />
@@ -958,7 +972,7 @@ export function DebugPanel() {
 
         {/* Night stage keyframe */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🌙 Night Stage</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Moon size={12} /> Night Stage</div>
           <ColorPicker label="Moon Color" value={dayNightConfig.night.moonColor} onChange={(v) => editNightStage({ moonColor: v })} />
           <Slider label="Moon Intensity" value={dayNightConfig.night.moonIntensity} min={0} max={3} step={0.05} onChange={(v) => editNightStage({ moonIntensity: v })} />
           <ColorPicker label="Sky" value={dayNightConfig.night.hemisphereSkyColor} onChange={(v) => editNightStage({ hemisphereSkyColor: v })} />
@@ -970,7 +984,7 @@ export function DebugPanel() {
         {/* Manual sun/moon position — used only when the cycle is off */}
         {(environment.dayNightEnabled ?? true) === false && (
           <div className="mb-3 pt-2 border-t border-cyan-500/30">
-            <div className="text-cyan-400 text-xs mb-1 font-bold">🧭 Manual Position (cycle off)</div>
+            <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Compass size={12} /> Manual Position (cycle off)</div>
             <Slider label="Sun Azimuth" value={environment.sunAzimuth ?? 135} min={0} max={360} step={1} onChange={(v) => handleEnvironmentChange({ sunAzimuth: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
             <Slider label="Sun Elevation" value={environment.sunElevation ?? 45} min={-90} max={90} step={1} onChange={(v) => handleEnvironmentChange({ sunElevation: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
             <Slider label="Moon Azimuth" value={environment.moonAzimuth ?? 315} min={0} max={360} step={1} onChange={(v) => handleEnvironmentChange({ moonAzimuth: v })} formatValue={(v) => `${(v ?? 0).toFixed(0)}°`} />
@@ -981,14 +995,15 @@ export function DebugPanel() {
 
       {/* ============== ENVIRONMENT SECTION ============== */}
       <Section
-        title="🌅 Environment"
+        title="Environment"
+        icon={<Sunrise size={13} />}
         isOpen={debugPanelSections.environment}
         onToggle={() => toggleDebugSection('environment')}
         color="cyan"
       >
         {/* Sun Settings */}
         <div className="mb-3">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">☀️ Sun</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Sun size={12} /> Sun</div>
           <ColorPicker
             label="Color"
             value={environment.sunColor}
@@ -1014,7 +1029,7 @@ export function DebugPanel() {
 
         {/* Moon Settings */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🌙 Moon</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Moon size={12} /> Moon</div>
           <ColorPicker
             label="Color"
             value={environment.moonColor}
@@ -1033,7 +1048,7 @@ export function DebugPanel() {
         {/* Hemisphere Light (replaces ambient for natural outdoor lighting) */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-cyan-400 text-xs font-bold">🌐 Hemisphere (Fill)</span>
+            <span className="text-cyan-400 text-xs font-bold flex items-center gap-1.5"><Cloud size={12} /> Hemisphere (Fill)</span>
             <Toggle
               label=""
               value={environment.hemisphereEnabled ?? true}
@@ -1066,7 +1081,7 @@ export function DebugPanel() {
 
         {/* Sky/Ambient Lighting (IBL) */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🌐 Sky/Ambient Lighting</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Cloud size={12} /> Sky/Ambient Lighting</div>
           <Slider
             label="Intensity"
             value={environment.environmentIntensity}
@@ -1079,7 +1094,7 @@ export function DebugPanel() {
 
         {/* Shadows */}
         <div className="mb-3 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🌑 Shadows</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Moon size={12} /> Shadows</div>
           <Slider
             label="Bias"
             value={environment.shadowBias}
@@ -1108,7 +1123,7 @@ export function DebugPanel() {
 
         {/* Tone Mapping */}
         <div className="mb-1 pt-2 border-t border-cyan-500/30">
-          <div className="text-cyan-400 text-xs mb-1 font-bold">🎨 Tone Mapping</div>
+          <div className="text-cyan-400 text-xs mb-1 font-bold flex items-center gap-1.5"><Palette size={12} /> Tone Mapping</div>
           <Select
             label="Type"
             value={environment.toneMapping}
@@ -1217,7 +1232,7 @@ export function DebugPanel() {
 
         {/* Block Light (emitters, e.g. lava) — warm glow independent of the sun */}
         <div className="mb-3">
-          <div className="text-green-400 text-xs mb-1">💡 Block Light</div>
+          <div className="text-green-400 text-xs mb-1 flex items-center gap-1.5"><Lightbulb size={12} /> Block Light</div>
           <ColorPicker
             label="Color"
             value={environment.blockLightColor}
@@ -1233,6 +1248,7 @@ export function DebugPanel() {
           />
         </div>
       </Section>
+      </div>
     </div>
   );
 }

@@ -83,7 +83,7 @@ function SegmentedControl<T extends string>({
             key={opt.value}
             onClick={() => onChange(opt.value)}
             className={`
-              px-3.5 py-2 rounded-lg text-sm font-medium transition-all
+              px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer
               ${active
                 ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-400/50'
                 : 'bg-white/5 text-white/60 border border-white/10 hover:bg-white/10 hover:text-white/80'
@@ -356,7 +356,7 @@ export function BuildConfigTab({
               key={s}
               onClick={() => onUpdateConfig(presetId, { size: { x: s, y: s, z: s } })}
               className={`
-                px-3 py-1.5 text-sm rounded-lg border transition-all
+                px-3 py-1.5 text-sm rounded-lg border cursor-pointer
                 ${size.x === s && size.y === s && size.z === s
                   ? 'border-cyan-400/50 text-cyan-300 bg-cyan-500/20'
                   : 'border-white/10 text-white/50 bg-white/5 hover:bg-white/10'
@@ -415,7 +415,7 @@ export function BuildConfigTab({
                 onClick={() => handleAlignChange(opt.value)}
                 title={opt.desc}
                 className={`
-                  px-3.5 py-2 rounded-lg text-sm font-medium transition-all
+                  px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer
                   ${active
                     ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-400/50'
                     : 'bg-white/5 text-white/60 border border-white/10 hover:bg-white/10 hover:text-white/80'

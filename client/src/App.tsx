@@ -3,6 +3,7 @@ import { Hud } from './ui/Hud';
 import { DebugPanel } from './ui/DebugPanel';
 import { ExploreOverlay } from './ui/ExploreOverlay';
 import { BuildMenu } from './ui/BuildMenu';
+import { ControlsHint } from './ui/ControlsHint';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
 import { ExploreControls } from './ui/ExploreControls';
@@ -47,6 +48,7 @@ function App() {
               <Hud />
               <BuildMenu />
               <MapOverlay />
+              {!isTouch && <ControlsHint />}
             </>
           )}
           <DebugPanel />
