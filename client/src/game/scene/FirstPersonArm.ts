@@ -225,6 +225,7 @@ export function renderFirstPersonArm(renderer: THREE.WebGLRenderer, scene: THREE
   if (mainCam) vmCamera.quaternion.copy(mainCam.quaternion);
 
   const prevShadowAuto = renderer.shadowMap.autoUpdate;
+  const prevAutoClear = renderer.autoClear;
   renderer.shadowMap.autoUpdate = false;   // don't recompute world shadows for this pass
   renderer.autoClear = false;
 
@@ -238,7 +239,12 @@ export function renderFirstPersonArm(renderer: THREE.WebGLRenderer, scene: THREE
   vmCamera.layers.set(FIRST_PERSON_ITEM_LAYER);
   renderer.render(scene, vmCamera);
 
-  renderer.autoClear = true;
+  // Restore renderer state EXACTLY as it was. The pmndrs EffectComposer keeps
+  // `autoClear = false` and does its own per-pass clearing; hardcoding it back to `true`
+  // here (the original bug) let the composer auto-clear the GodRaysEffect's internal
+  // occlusion targets on the next frame, so the sun disc lost its occlusion mask and the
+  // whole bright sky leaked into the rays — the blue full-frame wash seen in first-person.
+  renderer.autoClear = prevAutoClear;
   renderer.shadowMap.autoUpdate = prevShadowAuto;
 }
 
