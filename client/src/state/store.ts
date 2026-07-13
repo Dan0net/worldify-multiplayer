@@ -33,7 +33,14 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 export type TextureLoadingState = 'none' | 'loading-low' | 'low' | 'loading-high' | 'high';
 
 /** Terrain shader debug modes */
-export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'SkyLight', 'Albedo', 'Normal', 'AO', 'Roughness', 'Metalness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'MatHue', 'BlockLight'] as const;
+export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Sunlight', 'Albedo', 'Normal', 'AO', 'Roughness', 'Metalness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'MatHue', 'BlockLight'] as const;
+
+/**
+ * Display order for the debug-mode selector — decoupled from the numeric mode values
+ * (which map to shader branches) so BlockLight can sit right after Sunlight without
+ * renumbering the shader. Values index into TERRAIN_DEBUG_MODE_NAMES.
+ */
+export const TERRAIN_DEBUG_MODE_ORDER: readonly TerrainDebugMode[] = [0, 1, 12, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 
 /** Voxel debug visualization toggles */

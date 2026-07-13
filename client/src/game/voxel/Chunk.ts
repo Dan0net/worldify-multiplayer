@@ -30,6 +30,13 @@ export class Chunk extends ChunkData {
   dirty: boolean = true;
 
   /**
+   * Cached: does this chunk currently hold any block light (emitter or propagated)?
+   * Set by the lighting pass; used to cheaply gate incremental block-light relights so
+   * ordinary edits far from emitters skip the multi-chunk block recompute.
+   */
+  hasBlockLight: boolean = false;
+
+  /**
    * 6-bit bitmask: bit i set ⇒ face i has non-solid voxels in its margin strip,
    * meaning a surface crossing may exist and the neighbor chunk is needed for stitching.
    * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.

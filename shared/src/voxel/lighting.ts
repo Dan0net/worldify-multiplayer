@@ -412,24 +412,28 @@ export function computeAndPropagateLight(
   data: Uint32Array,
   lightFromAbove: Uint8Array | null,
   neighbors: (Uint32Array | null)[],
+): boolean {
+  computeSkyLight(data, lightFromAbove, neighbors);
+  // Independent emitter-driven light in the high bits. Reuses the same bfsQueue
+  // sequentially — the sky BFS has fully drained it. Returns whether any block
+  // light ended up present (used to gate incremental relights).
+  return computeBlockLight(data, neighbors);
+}
+
+/**
+ * Compute only the SKY-light channel (in-place): column pass → frontier seed →
+ * border inject → BFS. Sky light is anchored by the sun column, so it is
+ * order-independent across chunks and safe to recompute per chunk in any order.
+ */
+export function computeSkyLight(
+  data: Uint32Array,
+  lightFromAbove: Uint8Array | null,
+  neighbors: (Uint32Array | null)[],
 ): void {
-  // ---- SKY channel ----
-  // Step 1: Column pass — writes light top-down + fills litBottom[] for frontier detection
   computeSunlightColumns(data, lightFromAbove);
-
-  // Step 2: Seed column frontier voxels from shadow-height differences (O(CHUNK_SIZE²))
   let tail = seedColumnFrontiers(data, 0);
-
-  // Step 3: Border inject — seeds injected voxels directly into the queue
   tail = injectBorderLight(data, neighbors, tail);
-
-  // Step 4: BFS from pre-collected seeds (skips the full-volume frontier scan)
   propagateLight(data, tail);
-
-  // ---- BLOCK channel ----
-  // Independent emitter-driven light in the high bits (bit 16). Reuses the same
-  // bfsQueue sequentially — the sky BFS above has fully drained it.
-  computeBlockLight(data, neighbors);
 }
 
 /**
@@ -480,36 +484,53 @@ function injectBorderBlockLight(
   return tail;
 }
 
+/** Zero the block-light field across a whole chunk (leaves sky/material/weight intact). */
+export function clearBlockLight(data: Uint32Array): void {
+  for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
+    if ((data[i] & BLOCK_LIGHT_FIELD) !== 0) data[i] &= BLOCK_LIGHT_CLEAR;
+  }
+}
+
+/** True if the chunk contains any emitting voxel (block-light source). */
+export function chunkHasEmitter(data: Uint32Array): boolean {
+  for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
+    if (VOXEL_EMISSION[(data[i] & VOXEL_STATIC_MASK) >> LIGHT_BITS] > 0) return true;
+  }
+  return false;
+}
+
 /**
- * Compute the block-light channel (in-place, high bits of the word).
+ * Propagate the block-light channel (in-place) WITHOUT clearing first — monotonic
+ * (max-merge, only ever raises values). Stamps emitters, injects from loaded neighbor
+ * borders, and floods −1/step (blocked by opaque solids, same as sky light).
  *
- * Block light is emitter-driven only (VOXEL_EMISSION LUT, e.g. lava), sun-independent.
- * A full clear pass zeroes stale block light (so removing an emitter darkens correctly —
- * the max-merge BFS can never lower a value on its own), then emitters + neighbor borders
- * seed the same −1/step BFS as sky light. Opaque solids block propagation identically.
+ * Because it never lowers a value, it is safe to run repeatedly to a fixed point across
+ * a multi-chunk region (see VoxelWorld.relightBlockRegion): clear the whole region once,
+ * then propagate until a full pass raises nothing. Removing a source therefore darkens
+ * correctly (the clear does the lowering; propagate only rebuilds from live sources).
  *
- * @param data      Chunk voxel data (modified in-place — only the block field changes)
- * @param neighbors 6 face-adjacent neighbor data arrays (null if not loaded)
+ * @returns true if this pass raised any voxel's block light.
  */
-export function computeBlockLight(data: Uint32Array, neighbors: (Uint32Array | null)[]): void {
+export function propagateBlockLight(data: Uint32Array, neighbors: (Uint32Array | null)[]): boolean {
   let head = 0;
   let tail = 0;
+  let changed = false;
 
-  // Pass 1: clear stale block light + stamp emitters (single O(N) sweep).
+  // Stamp emitters (max-merge against whatever is already there).
   for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
     const voxel = data[i];
     const emission = VOXEL_EMISSION[(voxel & VOXEL_STATIC_MASK) >> LIGHT_BITS];
-    if (emission > 0) {
+    if (emission > 0 && emission > ((voxel >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK)) {
       data[i] = (voxel & BLOCK_LIGHT_CLEAR) | (emission << BLOCK_LIGHT_SHIFT);
       bfsQueue[tail++] = i;
-    } else if ((voxel & BLOCK_LIGHT_FIELD) !== 0) {
-      // Had stale block light and is not an emitter — clear it.
-      data[i] = voxel & BLOCK_LIGHT_CLEAR;
+      changed = true;
     }
   }
 
-  // Pass 2: inject block light from loaded neighbor borders.
-  tail = injectBorderBlockLight(data, neighbors, tail);
+  // Inject block light from loaded neighbor borders.
+  const injectedTail = injectBorderBlockLight(data, neighbors, tail);
+  if (injectedTail !== tail) changed = true;
+  tail = injectedTail;
 
   // BFS — spread block light, −1 per step, max-merge, blocked by opaque solids.
   while (head < tail) {
@@ -531,7 +552,22 @@ export function computeBlockLight(data: Uint32Array, neighbors: (Uint32Array | n
       if (newLight > ((nVoxel >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK)) {
         data[nIdx] = (nVoxel & BLOCK_LIGHT_CLEAR) | (newLight << BLOCK_LIGHT_SHIFT);
         bfsQueue[tail++] = nIdx;
+        changed = true;
       }
     }
   }
+
+  return changed;
+}
+
+/**
+ * Compute the block-light channel for a single chunk in isolation (clear + propagate).
+ * Correct on its own; for a multi-chunk incremental update after an edit, use the
+ * region-based clear-once/propagate-to-fixed-point flow instead (VoxelWorld).
+ *
+ * @returns true if the chunk ended up with any block light.
+ */
+export function computeBlockLight(data: Uint32Array, neighbors: (Uint32Array | null)[]): boolean {
+  clearBlockLight(data);
+  return propagateBlockLight(data, neighbors);
 }

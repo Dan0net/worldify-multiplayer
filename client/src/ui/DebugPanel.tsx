@@ -1,6 +1,6 @@
 import { useEffect, useState, ReactNode } from 'react';
 import {
-  useGameStore, TERRAIN_DEBUG_MODE_NAMES,
+  useGameStore, TERRAIN_DEBUG_MODE_NAMES, TERRAIN_DEBUG_MODE_ORDER, type TerrainDebugMode,
   type EnvironmentSettings, type DayStageConfig, type NightStageConfig,
 } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
@@ -206,6 +206,7 @@ export function DebugPanel() {
     textureState,
     terrainDebugMode,
     cycleTerrainDebugMode,
+    setTerrainDebugMode,
     forceRegenerateChunks,
     environment,
     setEnvironment,
@@ -518,15 +519,22 @@ export function DebugPanel() {
 
         <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
           <div className="mb-1 text-green-500 text-xs">Shader (F7-F8):</div>
-          <label 
-            className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
-            onClick={cycleTerrainDebugMode}
-          >
+          <div className="flex items-center gap-2">
             <span className="w-4 h-4 flex items-center justify-center">
               {terrainDebugMode > 0 ? '🔍' : '○'}
             </span>
-            <span>F7 {TERRAIN_DEBUG_MODE_NAMES[terrainDebugMode]}</span>
-          </label>
+            <select
+              value={terrainDebugMode}
+              onChange={(e) => setTerrainDebugMode(Number(e.target.value) as TerrainDebugMode)}
+              className="flex-1 bg-black/60 border border-green-500/40 rounded px-1 py-0.5 text-yellow-300 text-xs cursor-pointer"
+            >
+              {TERRAIN_DEBUG_MODE_ORDER.map((m) => (
+                <option key={m} value={m} className="bg-black text-yellow-300">
+                  {TERRAIN_DEBUG_MODE_NAMES[m]}
+                </option>
+              ))}
+            </select>
+          </div>
           <label 
             className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
             onClick={handleCycleQuality}
