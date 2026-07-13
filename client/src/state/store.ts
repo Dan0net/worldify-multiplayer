@@ -33,8 +33,8 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 export type TextureLoadingState = 'none' | 'loading-low' | 'low' | 'loading-high' | 'high';
 
 /** Terrain shader debug modes */
-export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'VoxelLight', 'Albedo', 'Normal', 'AO', 'Roughness', 'Metalness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'MatHue'] as const;
-export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
+export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'SkyLight', 'Albedo', 'Normal', 'AO', 'Roughness', 'Metalness', 'TriBlend', 'MatIDs', 'MatWeights', 'WorldNormal', 'MatHue', 'BlockLight'] as const;
+export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 
 /** Voxel debug visualization toggles */
 export interface VoxelDebugToggles {
@@ -169,6 +169,10 @@ export interface EnvironmentSettings {
   // Voxel light fill
   lightFillPower: number;       // 0.5-5, exponent for fill light curve
   lightFillIntensity: number;   // 0-1, strength of additive fill light
+
+  // Block light (emitters, e.g. lava) — warm, sun-independent glow
+  blockLightColor: string;      // hex colour, e.g. '#ffb050'
+  blockLightIntensity: number;  // 0-4, brightness multiplier of the block-light term
 }
 
 /**
@@ -332,6 +336,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   saturation: 1.2,  // Slightly boosted for more vivid colors
   lightFillPower: 0.5,
   lightFillIntensity: 2.0,
+  blockLightColor: '#ffb050',
+  blockLightIntensity: 1.5,
 };
 
 /** Debug panel section collapse state */
@@ -645,7 +651,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Terrain debug actions
   setTerrainDebugMode: (mode) => set({ terrainDebugMode: mode }),
   cycleTerrainDebugMode: () => set((state) => ({
-    terrainDebugMode: ((state.terrainDebugMode + 1) % 12) as TerrainDebugMode,
+    terrainDebugMode: ((state.terrainDebugMode + 1) % 13) as TerrainDebugMode,
   })),
   
   // Quality actions

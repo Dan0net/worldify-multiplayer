@@ -28,7 +28,7 @@ export interface ChunkStore {
  * Async chunk generation function signature.
  * Injected by StorageManager when a worker pool is available.
  */
-export type AsyncChunkGenerator = (cx: number, cy: number, cz: number) => Promise<Uint16Array>;
+export type AsyncChunkGenerator = (cx: number, cy: number, cz: number) => Promise<Uint32Array>;
 
 /**
  * Provides chunks for a room, creating them on demand with terrain generation.

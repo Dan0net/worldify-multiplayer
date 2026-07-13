@@ -35,13 +35,13 @@ const MAX_CHUNKS_ABOVE = 4;
 export class LocalTerrainSource {
   private readonly gen: TerrainGenerator;
   /** Cache raw generated chunk data so tile scanning and chunk requests agree. */
-  private readonly cache = new Map<string, Uint16Array>();
+  private readonly cache = new Map<string, Uint32Array>();
 
   constructor(seed: number) {
     this.gen = new TerrainGenerator({ seed });
   }
 
-  private rawChunk(cx: number, cy: number, cz: number): Uint16Array {
+  private rawChunk(cx: number, cy: number, cz: number): Uint32Array {
     const key = `${cx},${cy},${cz}`;
     let data = this.cache.get(key);
     if (!data) {
@@ -98,7 +98,7 @@ export class LocalTerrainSource {
     const minCy = terrainMinCy - CHUNKS_BELOW_SURFACE;
 
     const chunks: SurfaceColumnChunk[] = [];
-    const chunkDatas: Array<{ cy: number; data: Uint16Array }> = [];
+    const chunkDatas: Array<{ cy: number; data: Uint32Array }> = [];
 
     for (let cy = minCy; cy <= terrainMaxCy + MAX_CHUNKS_ABOVE; cy++) {
       const data = this.rawChunk(tx, cy, tz);

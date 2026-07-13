@@ -16,6 +16,10 @@ import {
   MATERIAL_MAX,
   LIGHT_MASK,
   LIGHT_MAX,
+  BLOCK_LIGHT_SHIFT,
+  BLOCK_LIGHT_MASK,
+  BLOCK_LIGHT_MAX,
+  BLOCK_LIGHT_CLEAR,
   SURFACE_PACKED_THRESHOLD,
 } from './constants.js';
 import { MATERIAL_TYPE_LUT } from '../materials/Materials.js';
@@ -26,6 +30,7 @@ export interface UnpackedVoxel {
   weight: number;
   material: number;
   light: number;
+  blockLight: number;
 }
 
 export interface ChunkCoord {
@@ -49,11 +54,13 @@ export interface WorldCoord {
 // ============== Voxel Packing/Unpacking ==============
 
 /**
- * Pack weight, material, and light into a 16-bit voxel value.
+ * Pack weight, material, and (sky) light into a voxel word.
+ * The block-light field (bit 16) is left 0 — block light is stamped separately
+ * by the lighting pass, not at pack time.
  * @param weight - Weight value from -0.5 to +0.5 (surface at 0)
  * @param material - Material ID from 0 to 127
- * @param light - Light level from 0 to 31
- * @returns Packed 16-bit voxel value
+ * @param light - Sky light level from 0 to 31
+ * @returns Packed voxel word (low 16 bits)
  */
 export function packVoxel(weight: number, material: number, light: number): number {
   // Normalize weight from [-0.5, 0.5] to [0, 15]
@@ -79,6 +86,7 @@ export function unpackVoxel(packed: number): UnpackedVoxel {
     weight: getWeight(packed),
     material: getMaterial(packed),
     light: getLight(packed),
+    blockLight: getBlockLight(packed),
   };
 }
 
@@ -99,10 +107,17 @@ export function getMaterial(packed: number): number {
 }
 
 /**
- * Extract light level from packed voxel (0-31).
+ * Extract sky light level from packed voxel (0-31).
  */
 export function getLight(packed: number): number {
   return packed & LIGHT_MASK;
+}
+
+/**
+ * Extract block-light level from packed voxel (0-31).
+ */
+export function getBlockLight(packed: number): number {
+  return (packed >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK;
 }
 
 /**
@@ -127,10 +142,10 @@ export function isVoxelSolid(packed: number): boolean {
  * Uses raw bit operations on the packed data — no float conversion.
  * Short-circuits as soon as a crossing is detected.
  * 
- * @param data Flat packed voxel data (Uint16Array)
+ * @param data Flat packed voxel data (Uint32Array)
  * @returns true if a surface crossing exists in the data
  */
-export function hasSurfaceCrossing(data: Uint16Array): boolean {
+export function hasSurfaceCrossing(data: Uint32Array): boolean {
   let hasInside = false;
   let hasOutside = false;
   // Track first material type seen among solid voxels (-1 = none yet)
@@ -202,6 +217,16 @@ export function setMaterial(packed: number, material: number): number {
  */
 export function setLight(packed: number, light: number): number {
   return (packed & ~LIGHT_MASK) | (Math.max(0, Math.min(LIGHT_MAX, light | 0)));
+}
+
+/**
+ * Create a new packed voxel with updated block light, preserving all other fields.
+ * Uses bit ops — clears the block-light bits (at BLOCK_LIGHT_SHIFT) and sets new ones.
+ * The `>>> 0` normalises the result to an unsigned 32-bit value.
+ */
+export function setBlockLight(packed: number, blockLight: number): number {
+  const clamped = Math.max(0, Math.min(BLOCK_LIGHT_MAX, blockLight | 0));
+  return ((packed & BLOCK_LIGHT_CLEAR) | (clamped << BLOCK_LIGHT_SHIFT)) >>> 0;
 }
 
 // ============== Coordinate Conversions ==============

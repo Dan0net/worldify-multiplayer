@@ -24,7 +24,7 @@ import {
  */
 export class Chunk extends ChunkData {
   /** Temporary data buffer for preview (not persisted) */
-  tempData: Uint16Array | null = null;
+  tempData: Uint32Array | null = null;
 
   /** Whether the chunk needs to be remeshed */
   dirty: boolean = true;
@@ -181,7 +181,7 @@ export class Chunk extends ChunkData {
 
   copyToTemp(): void {
     if (!this.tempData) {
-      this.tempData = new Uint16Array(VOXELS_PER_CHUNK);
+      this.tempData = new Uint32Array(VOXELS_PER_CHUNK);
     }
     this.tempData.set(this.data);
   }

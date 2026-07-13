@@ -100,7 +100,7 @@ let wireframeMat: THREE.LineBasicMaterial | null = null;
 
 // ============== Reusable Buffers ==============
 
-let voxelGrid: Uint16Array | null = null;
+let voxelGrid: Uint32Array | null = null;
 let pixelBuf: Uint8Array | null = null;
 let imageDataBuf: ImageData | null = null;
 
@@ -215,7 +215,7 @@ function ensureSetup(): void {
     opacity: 0.9,
   });
 
-  voxelGrid = new Uint16Array(GRID_VOXELS);
+  voxelGrid = new Uint32Array(GRID_VOXELS);
   pixelBuf = new Uint8Array(PIXEL_BYTES);
   imageDataBuf = new ImageData(THUMB_SIZE, THUMB_SIZE);
 }

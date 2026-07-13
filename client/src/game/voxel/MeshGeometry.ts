@@ -40,6 +40,7 @@ export interface ExpandedMeshData {
   materialIds: Float32Array;
   materialWeights: Float32Array;
   lightLevels: Float32Array;
+  blockLightLevels: Float32Array;
   indices: Uint32Array;
   /**
    * Boundary (seam) vertices grouped by chunk face, for normal reconciliation.
@@ -68,6 +69,7 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
   const materialIds = new Float32Array(expandedVertexCount * 3);
   const materialWeights = new Float32Array(expandedVertexCount * 3);
   const lightLevels = new Float32Array(expandedVertexCount);
+  const blockLightLevels = new Float32Array(expandedVertexCount);
   const indices = new Uint32Array(expandedVertexCount);
 
   // Per-face buckets of expanded-vertex indices that sit on a chunk boundary plane.
@@ -135,7 +137,12 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
     lightLevels[v0] = output.lights[i0];
     lightLevels[v1] = output.lights[i1];
     lightLevels[v2] = output.lights[i2];
-    
+
+    // Block light levels (1 float per expanded vertex)
+    blockLightLevels[v0] = output.blockLights[i0];
+    blockLightLevels[v1] = output.blockLights[i1];
+    blockLightLevels[v2] = output.blockLights[i2];
+
     indices[v0] = v0;
     indices[v1] = v1;
     indices[v2] = v2;
@@ -159,7 +166,7 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
   }
 
   return {
-    positions, normals, materialIds, materialWeights, lightLevels, indices,
+    positions, normals, materialIds, materialWeights, lightLevels, blockLightLevels, indices,
     boundary: { indices: boundaryIndices, faceOffsets },
   };
 }
@@ -176,6 +183,7 @@ export function createBufferGeometry(data: ExpandedMeshData): THREE.BufferGeomet
   geometry.setAttribute('materialIds', new THREE.BufferAttribute(data.materialIds, 3));
   geometry.setAttribute('materialWeights', new THREE.BufferAttribute(data.materialWeights, 3));
   geometry.setAttribute('lightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
+  geometry.setAttribute('blockLight', new THREE.BufferAttribute(data.blockLightLevels, 1));
   geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
   // Fixed conservative bounds — avoids the per-remesh vertex scan of
   // computeBoundingBox/computeBoundingSphere. The chunk mesh always fits this box.

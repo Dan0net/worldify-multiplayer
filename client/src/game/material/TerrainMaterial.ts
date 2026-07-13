@@ -299,7 +299,13 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       // Voxel light fill uniforms
       shader.uniforms.lightFillPower = { value: 0.5 };
       shader.uniforms.lightFillIntensity = { value: 2.0 };
-      
+
+      // Block-light (emitter) uniforms — defaults mirror DEFAULT_ENVIRONMENT
+      // (blockLightColor '#ffb050', blockLightIntensity 1.5); live-tuned via
+      // applyBlockLightSettings from the debug panel.
+      shader.uniforms.uBlockLightColor = { value: new THREE.Color(0xffb050) };
+      shader.uniforms.uBlockLightIntensity = { value: 1.5 };
+
       // Quality-driven shader defines
       // CRITICAL: shader.defines is a direct reference to material.defines.
       // We must explicitly DELETE defines when they should be off, otherwise
@@ -437,7 +443,19 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       this._shader.uniforms.lightFillIntensity.value = value;
     }
   }
-  
+
+  setBlockLightColor(hex: string): void {
+    if (this._shader) {
+      (this._shader.uniforms.uBlockLightColor.value as THREE.Color).set(hex);
+    }
+  }
+
+  setBlockLightIntensity(value: number): void {
+    if (this._shader) {
+      this._shader.uniforms.uBlockLightIntensity.value = value;
+    }
+  }
+
   setNormalStrength(value: number): void {
     if (this._shader) {
       this._shader.uniforms.normalStrength.value = value;
@@ -482,6 +500,7 @@ export const TERRAIN_DEBUG_MODES = {
   MATERIAL_WEIGHTS: 9,
   WORLD_NORMAL: 10,
   MATERIAL_HUE: 11,
+  BLOCK_LIGHT: 12,
 } as const;
 
 export type TerrainDebugMode = typeof TERRAIN_DEBUG_MODES[keyof typeof TERRAIN_DEBUG_MODES];
@@ -799,6 +818,18 @@ export function applyLightFillSettings(settings: { lightFillPower?: number; ligh
 }
 
 /**
+ * Apply block-light (emitter) colour + intensity to all terrain materials (live, no remesh).
+ */
+export function applyBlockLightSettings(settings: { blockLightColor?: string; blockLightIntensity?: number }): void {
+  const materials = [solidMaterial, transparentMaterial];
+  for (const mat of materials) {
+    if (!mat) continue;
+    if (settings.blockLightColor !== undefined) mat.setBlockLightColor(settings.blockLightColor);
+    if (settings.blockLightIntensity !== undefined) mat.setBlockLightIntensity(settings.blockLightIntensity);
+  }
+}
+
+/**
  * Set repeat scale for all terrain materials.
  */
 export function setTerrainRepeatScale(scale: number): void {
@@ -967,6 +998,7 @@ if (typeof window !== 'undefined') {
     materialWeights: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_WEIGHTS),
     worldNormal: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.WORLD_NORMAL),
     materialHue: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.MATERIAL_HUE),
+    blockLight: () => setTerrainDebugMode(TERRAIN_DEBUG_MODES.BLOCK_LIGHT),
     // Diagnostic tools
     diagnose: diagnoseTextures,
     forceReupload: forceReuploadTextures,

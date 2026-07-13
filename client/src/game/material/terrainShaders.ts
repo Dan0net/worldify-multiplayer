@@ -12,12 +12,14 @@ export const materialAttributesVertex = /* glsl */ `
   attribute vec3 materialIds;
   attribute vec3 materialWeights;
   attribute float lightLevel;
-  
+  attribute float blockLight;
+
   flat varying vec3 vMaterialIds;
   varying vec3 vMaterialWeights;
   varying vec3 vWorldPosition;
   varying vec3 vWorldNormal;
   varying float vLightLevel;
+  varying float vBlockLight;
 `;
 
 /** Material varying assignments (vertex suffix) */
@@ -25,6 +27,7 @@ export const materialVaryingsSuffix = /* glsl */ `
   vMaterialIds = materialIds;
   vMaterialWeights = materialWeights;
   vLightLevel = lightLevel;
+  vBlockLight = blockLight;
   vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
   vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
 `;
@@ -56,6 +59,7 @@ const fragmentVaryings = /* glsl */ `
   varying vec3 vWorldPosition;
   varying vec3 vWorldNormal;
   varying float vLightLevel;
+  varying float vBlockLight;
 `;
 
 /** Tri-planar and material blending core functions */
@@ -152,7 +156,11 @@ export const terrainFragmentPrefix = /* glsl */ `
   // Voxel light fill uniforms
   uniform float lightFillPower;
   uniform float lightFillIntensity;
-  
+
+  // Block-light (emitter) uniforms
+  uniform vec3 uBlockLightColor;
+  uniform float uBlockLightIntensity;
+
   ${fragmentVaryings}
   
   // Precomputed blend weights - set once in main(), reused everywhere
@@ -332,14 +340,19 @@ export const terrainNormalFragment = /* glsl */ `
 // ============== Voxel Light Attenuation ==============
 
 /** Applied right before opaque_fragment — voxel light controls brightness.
- *  PBR is scaled by voxel light (shadows/specular preserved), plus an additive
- *  fill term so caves aren't pitch black despite PBR shadow darkness. */
+ *  Two independent channels combined by per-channel max:
+ *   - Sky term: PBR scaled by sky light (shadows/specular preserved, time-of-day driven).
+ *   - Block term: warm emitter light, sun-independent, so lit areas glow at night / in caves.
+ *  max() means the sun wins in daylight (look unchanged) and block wins only where the sky
+ *  term is dim — never over-brightening surfaces lit by both. */
 export const terrainLightFragment = /* glsl */ `
-  // Scale PBR by voxel light (preserves shadows + specular)
-  outgoingLight *= pow(max(vLightLevel, 0.001), lightFillPower);
-  // Additive fill: albedo × voxel light bypasses PBR shadow darkness
-  // Guard pow() — pow(0, uniform) is undefined in GLSL and returns NaN on some GPUs
-  // outgoingLight += diffuseColor.rgb * pow(max(vLightLevel, 0.001), lightFillPower) * lightFillIntensity;
+  // Sky term: scale PBR by sky light (preserves shadows + specular). Guard pow() —
+  // pow(0, uniform) is undefined in GLSL and returns NaN on some GPUs.
+  vec3 skyTerm = outgoingLight * pow(max(vLightLevel, 0.001), lightFillPower);
+  // Block term: warm emitter light, independent of the sun.
+  vec3 blockTerm = diffuseColor.rgb * vBlockLight * uBlockLightColor * uBlockLightIntensity;
+  // Combine by per-channel max (sun-dominant in daylight, block-dominant in the dark).
+  outgoingLight = max(skyTerm, blockTerm);
 
   #ifdef OPAQUE
   diffuseColor.a = 1.0;
@@ -359,7 +372,7 @@ export const terrainDebugFragment = /* glsl */ `
   
   if (debugMode > 0) {
     if (debugMode == 1) {
-      // VOXEL_LIGHT: Visualize per-vertex voxel light level as grayscale
+      // SKY_LIGHT: per-vertex sky light level as grayscale
       gl_FragColor = vec4(vec3(vLightLevel), 1.0);
     } else if (debugMode == 2) {
       gl_FragColor = vec4(sRGBToLinear(sampleMaterialBlend(mapArray).rgb), 1.0);
@@ -388,6 +401,9 @@ export const terrainDebugFragment = /* glsl */ `
       gl_FragColor = vec4(gMatBlend, 1.0);
     } else if (debugMode == 10) {
       gl_FragColor = vec4(vWorldNormal * 0.5 + 0.5, 1.0);
+    } else if (debugMode == 12) {
+      // BLOCK_LIGHT: per-vertex block (emitter) light level as grayscale — no sunlight
+      gl_FragColor = vec4(vec3(vBlockLight), 1.0);
     }
   }
 `;

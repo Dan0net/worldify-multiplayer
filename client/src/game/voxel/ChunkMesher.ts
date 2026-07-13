@@ -30,11 +30,11 @@ const CS = CHUNK_SIZE;                       // 32
 const CS_SQ = CS * CS;                       // 1024
 
 // Reusable expanded grid buffer for sync path (avoids allocation per chunk)
-let syncGrid: Uint16Array | null = null;
+let syncGrid: Uint32Array | null = null;
 
-function getSyncGrid(): Uint16Array {
+function getSyncGrid(): Uint32Array {
   if (!syncGrid) {
-    syncGrid = new Uint16Array(GRID_SIZE * GRID_SIZE * GRID_SIZE);
+    syncGrid = new Uint32Array(GRID_SIZE * GRID_SIZE * GRID_SIZE);
   }
   return syncGrid;
 }
@@ -52,7 +52,7 @@ function expandChunkData(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
   useTemp: boolean,
-  grid: Uint16Array
+  grid: Uint32Array
 ): void {
   const dataArray = (useTemp && chunk.tempData) ? chunk.tempData : chunk.data;
   
@@ -69,7 +69,7 @@ function expandChunkData(
   
   // === Phase 2: Look up the 7 high-side neighbor data arrays once ===
   const cx = chunk.cx, cy = chunk.cy, cz = chunk.cz;
-  const getNeighborData = (ncx: number, ncy: number, ncz: number): Uint16Array | null => {
+  const getNeighborData = (ncx: number, ncy: number, ncz: number): Uint32Array | null => {
     const n = neighbors.get(chunkKey(ncx, ncy, ncz));
     if (!n) return null;
     return (useTemp && n.tempData) ? n.tempData : n.data;
@@ -98,7 +98,7 @@ function expandChunkData(
     const ly = oy ? my - CS : my;
     const lz = oz ? mz - CS : mz;
 
-    let src: Uint16Array | null;
+    let src: Uint32Array | null;
     if (ox && oy && oz) {
       src = nPXYZ;
     } else if (ox && oy) {
@@ -225,7 +225,7 @@ function getSkipHighBoundary(
 export function expandChunkToGrid(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
-  grid: Uint16Array,
+  grid: Uint32Array,
   useTemp: boolean = false,
 ): [boolean, boolean, boolean] {
   expandChunkData(chunk, neighbors, useTemp, grid);

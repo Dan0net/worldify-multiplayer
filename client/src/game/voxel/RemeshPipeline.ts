@@ -169,7 +169,7 @@ export class RemeshPipeline {
   dispatchBatch(keys: Set<string>): void {
     const batchItems: Array<{
       chunkKey: string;
-      grid: Uint16Array;
+      grid: Uint32Array;
       skipHighBoundary: [boolean, boolean, boolean];
     }> = [];
 

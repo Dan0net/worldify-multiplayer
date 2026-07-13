@@ -1,7 +1,7 @@
 /**
  * meshWorker - Web Worker for off-thread voxel mesh generation
  * 
- * Receives an expanded 34³ voxel grid (Uint16Array), runs SurfaceNet + geometry
+ * Receives an expanded 34³ voxel grid (Uint32Array), runs SurfaceNet + geometry
  * expansion, returns raw typed arrays. The grid buffer is returned for recycling.
  * All typed arrays are transferred (zero-copy).
  */
@@ -14,7 +14,7 @@ import { GRID_SIZE } from '@worldify/shared';
 export interface MeshWorkerRequest {
   id: number;
   chunkKey: string;
-  grid: Uint16Array;
+  grid: Uint32Array;
   skipHighBoundary: [boolean, boolean, boolean];
 }
 
@@ -25,7 +25,7 @@ export type MeshSlotData = ExpandedMeshData | null;
 export interface MeshWorkerResponse {
   id: number;
   chunkKey: string;
-  grid: Uint16Array;  // returned for recycling
+  grid: Uint32Array;  // returned for recycling
   solid: MeshSlotData;
   transparent: MeshSlotData;
   liquid: MeshSlotData;
@@ -63,6 +63,7 @@ self.onmessage = (e: MessageEvent<MeshWorkerRequest>) => {
         slot.materialIds.buffer as ArrayBuffer,
         slot.materialWeights.buffer as ArrayBuffer,
         slot.lightLevels.buffer as ArrayBuffer,
+        slot.blockLightLevels.buffer as ArrayBuffer,
         slot.indices.buffer as ArrayBuffer,
         slot.boundary.indices.buffer as ArrayBuffer,
         slot.boundary.faceOffsets.buffer as ArrayBuffer,

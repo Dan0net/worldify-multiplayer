@@ -60,7 +60,7 @@ export class StampPlacer {
    * Apply multiple stamp placements to chunk data
    * Modifies the data array in place
    * 
-   * @param data - Chunk voxel data (CHUNK_SIZE^3 Uint16Array)
+   * @param data - Chunk voxel data (CHUNK_SIZE^3 Uint32Array)
    * @param cx - Chunk X coordinate
    * @param cy - Chunk Y coordinate
    * @param cz - Chunk Z coordinate
@@ -68,7 +68,7 @@ export class StampPlacer {
    * @param heightSampler - Function to get terrain height
    */
   applyStamps(
-    data: Uint16Array,
+    data: Uint32Array,
     cx: number,
     cy: number,
     cz: number,
@@ -106,7 +106,7 @@ export class StampPlacer {
    * Apply a single stamp to chunk data
    */
   private applyStamp(
-    data: Uint16Array,
+    data: Uint32Array,
     placement: StampPlacement,
     chunkVoxelX: number,
     chunkVoxelY: number,

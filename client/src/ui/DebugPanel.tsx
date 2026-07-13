@@ -4,7 +4,7 @@ import {
   type EnvironmentSettings, type DayStageConfig, type NightStageConfig,
 } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
-import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings } from '../game/material/TerrainMaterial';
+import { setTerrainDebugMode as setShaderDebugMode, applyLightFillSettings, applyBlockLightSettings } from '../game/material/TerrainMaterial';
 import { applyEnvironmentSettings, TONE_MAPPING_OPTIONS } from '../game/scene/Lighting';
 import { formatTimeOfDay, getDayPhaseLabel, invalidateDayNight } from '../game/scene/DayNightCycle';
 import { clearAndReloadChunks } from '../state/transient';
@@ -278,6 +278,11 @@ export function DebugPanel() {
     // Apply light fill changes to terrain materials
     if ('lightFillPower' in updates || 'lightFillIntensity' in updates) {
       applyLightFillSettings(updates);
+    }
+
+    // Apply block-light (emitter) colour/intensity to terrain materials (live, no remesh)
+    if ('blockLightColor' in updates || 'blockLightIntensity' in updates) {
+      applyBlockLightSettings(updates);
     }
   };
 
@@ -1199,6 +1204,24 @@ export function DebugPanel() {
             max={10}
             step={0.1}
             onChange={(v) => handleEnvironmentChange({ lightFillIntensity: v })}
+          />
+        </div>
+
+        {/* Block Light (emitters, e.g. lava) — warm glow independent of the sun */}
+        <div className="mb-3">
+          <div className="text-green-400 text-xs mb-1">💡 Block Light</div>
+          <ColorPicker
+            label="Color"
+            value={environment.blockLightColor}
+            onChange={(v) => handleEnvironmentChange({ blockLightColor: v })}
+          />
+          <Slider
+            label="Intensity"
+            value={environment.blockLightIntensity}
+            min={0}
+            max={4}
+            step={0.05}
+            onChange={(v) => handleEnvironmentChange({ blockLightIntensity: v })}
           />
         </div>
       </Section>

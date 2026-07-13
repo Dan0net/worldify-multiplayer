@@ -27,16 +27,16 @@ export interface SerializedChunkData {
   cx: number;
   cy: number;
   cz: number;
-  /** Base64-encoded Uint16Array data */
+  /** Base64-encoded Uint32Array data */
   data: string;
 }
 
 // ============== Encoding Utilities ==============
 
 /**
- * Encode a Uint16Array to base64 string.
+ * Encode a Uint32Array to base64 string.
  */
-export function encodeChunkData(data: Uint16Array): string {
+export function encodeChunkData(data: Uint32Array): string {
   const bytes = new Uint8Array(data.buffer);
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
@@ -46,23 +46,23 @@ export function encodeChunkData(data: Uint16Array): string {
 }
 
 /**
- * Decode a base64 string to Uint16Array.
+ * Decode a base64 string to Uint32Array.
  */
-export function decodeChunkData(base64: string): Uint16Array {
+export function decodeChunkData(base64: string): Uint32Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  return new Uint16Array(bytes.buffer);
+  return new Uint32Array(bytes.buffer);
 }
 
 // ============== ChunkData Class ==============
 
 /**
  * A chunk of voxel terrain data.
- * Stores 32×32×32 voxels as packed 16-bit values.
- * 
+ * Stores 32×32×32 voxels as packed 32-bit values.
+ *
  * This is the shared base class with single-chunk operations.
  * Client extends this with temp data and multi-chunk features.
  */
@@ -73,7 +73,7 @@ export class ChunkData {
   readonly cz: number;
 
   /** Packed voxel data (32×32×32 = 32,768 voxels) */
-  readonly data: Uint16Array;
+  readonly data: Uint32Array;
 
   /** Unique key for this chunk's coordinates */
   readonly key: string;
@@ -93,7 +93,7 @@ export class ChunkData {
     this.cx = cx;
     this.cy = cy;
     this.cz = cz;
-    this.data = new Uint16Array(VOXELS_PER_CHUNK);
+    this.data = new Uint32Array(VOXELS_PER_CHUNK);
     this.key = chunkKey(cx, cy, cz);
   }
 

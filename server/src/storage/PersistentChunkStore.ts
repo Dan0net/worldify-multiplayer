@@ -132,11 +132,11 @@ export class PersistentChunkStore implements ChunkStore {
 
   /**
    * Serialize a chunk to a buffer.
-   * Format: cx (int32) | cy (int32) | cz (int32) | data (Uint16Array as bytes)
+   * Format: cx (int32) | cy (int32) | cz (int32) | data (Uint32Array as bytes)
    */
   private serializeChunk(chunk: ChunkData): Buffer {
-    // 12 bytes for coords + 2 bytes per voxel
-    const buffer = Buffer.alloc(12 + VOXELS_PER_CHUNK * 2);
+    // 12 bytes for coords + 4 bytes per voxel
+    const buffer = Buffer.alloc(12 + VOXELS_PER_CHUNK * 4);
 
     buffer.writeInt32LE(chunk.cx, 0);
     buffer.writeInt32LE(chunk.cy, 4);
@@ -161,10 +161,19 @@ export class PersistentChunkStore implements ChunkStore {
 
     const chunk = new ChunkData(cx, cy, cz);
 
-    // Copy voxel data
+    // Copy voxel data.
     const voxelBytes = buffer.subarray(12);
-    const uint8View = new Uint8Array(chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
-    voxelBytes.copy(uint8View);
+    if (voxelBytes.length === VOXELS_PER_CHUNK * 2) {
+      // Legacy 16-bit record — widen element-wise into the 32-bit word (block/spare
+      // bits become 0; light is recomputed client-side anyway). Read LE per voxel to
+      // stay alignment-safe regardless of the LevelDB buffer's byte offset.
+      for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
+        chunk.data[i] = buffer.readUInt16LE(12 + i * 2);
+      }
+    } else {
+      const uint8View = new Uint8Array(chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
+      voxelBytes.copy(uint8View);
+    }
 
     return chunk;
   }

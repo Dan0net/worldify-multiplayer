@@ -61,7 +61,7 @@ const SURFACE_CHUNK_MARGIN = 1;
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
 /** Fast typed-array equality check (same length assumed). */
-function arraysEqual(a: Uint16Array, b: Uint16Array): boolean {
+function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return false;
@@ -448,7 +448,7 @@ export class VoxelWorld implements ChunkProvider {
    *
    * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
    */
-  static computeFaceSurfaceMask(data: Uint16Array): number {
+  static computeFaceSurfaceMask(data: Uint32Array): number {
     const CS = CHUNK_SIZE;
     let mask = 0;
     for (let face = 0; face < 6; face++) {
@@ -798,7 +798,7 @@ export class VoxelWorld implements ChunkProvider {
    * Internal helper to ingest chunk data (shared by receiveChunkData and receiveSurfaceColumnData).
    * @returns The chunk that was created/updated
    */
-  private ingestChunkData(cx: number, cy: number, cz: number, voxelData: Uint16Array, lastBuildSeq: number = 0): Chunk {
+  private ingestChunkData(cx: number, cy: number, cz: number, voxelData: Uint32Array, lastBuildSeq: number = 0): Chunk {
     const key = chunkKey(cx, cy, cz);
     
     // Remove from pending
@@ -884,7 +884,7 @@ export class VoxelWorld implements ChunkProvider {
    * Checks chunk-above data to determine sky exposure.
    * Then injects border light from face-adjacent neighbors and runs BFS.
    */
-  private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint16Array): void {
+  private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint32Array): void {
     perfStats.begin('lighting');
     // Check chunk above for sunlight state
     const aboveKey = chunkKey(cx, cy + 1, cz);
@@ -892,7 +892,7 @@ export class VoxelWorld implements ChunkProvider {
     const lightFromAbove = getSunlitAbove(aboveChunk?.data);
 
     // Gather face-adjacent neighbor data for border light injection
-    const neighbors: (Uint16Array | null)[] = FACE_OFFSETS_6.map(
+    const neighbors: (Uint32Array | null)[] = FACE_OFFSETS_6.map(
       ([dx, dy, dz]) => this.chunks.get(chunkKey(cx + dx, cy + dy, cz + dz))?.data ?? null,
     );
 
@@ -1158,7 +1158,7 @@ export class VoxelWorld implements ChunkProvider {
       const chunk = this.chunks.get(key)!;
 
       // Snapshot the pre-mutation voxels for undo.
-      const before = this.isLocal ? new Uint16Array(chunk.data) : null;
+      const before = this.isLocal ? new Uint32Array(chunk.data) : null;
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {
