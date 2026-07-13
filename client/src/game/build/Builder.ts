@@ -372,6 +372,17 @@ export class Builder {
   };
 
   /**
+   * Hand the current build preview off as a commit: moves the previewed chunks into the
+   * pending-commit set so the next remesh clears the stale preview mesh and restores the
+   * (preview-suppressed) group. Used by undo — it mutates voxels + dispatches a remesh but,
+   * unlike a place, otherwise never notifies the preview system, so the reverted chunk would
+   * stay hidden behind the old preview mesh. No-op when no preview is active.
+   */
+  commitPreview(): void {
+    this.preview.holdPreview();
+  }
+
+  /**
    * Get the build marker.
    */
   getMarker(): BuildMarker {

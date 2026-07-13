@@ -42,7 +42,7 @@ function Section({ title, icon, isOpen, onToggle, children, color = 'green' }: S
     <div className="mt-2">
       <button
         onClick={onToggle}
-        className={`w-full flex items-center justify-between py-1 px-0 text-left cursor-pointer ${colorClasses[color] || colorClasses.green} transition-colors`}
+        className={`w-full flex items-center justify-between py-1 px-0 text-left cursor-pointer ${colorClasses[color] || colorClasses.green}`}
       >
         <span className="font-bold flex items-center gap-1.5">{icon}{title}</span>
         {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -154,7 +154,7 @@ function Toggle({ label, value, onChange }: ToggleProps) {
       <span className="text-xs">{label}</span>
       <button
         onClick={() => onChange(!value)}
-        className={`w-10 h-5 rounded-full relative transition-colors ${
+        className={`w-10 h-5 rounded-full relative ${
           value ? 'bg-green-600' : 'bg-gray-600'
         }`}
       >
@@ -187,7 +187,7 @@ function SegmentedRow({ label, segments, active, onSelect }: SegmentedRowProps) 
           <button
             key={seg.label}
             onClick={() => onSelect(i)}
-            className={`px-1.5 py-0.5 text-[11px] rounded transition-colors ${
+            className={`px-1.5 py-0.5 text-[11px] rounded ${
               i === active ? 'bg-yellow-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
             }`}
           >
@@ -379,7 +379,7 @@ export function DebugPanel() {
   if (!debugPanelExpanded) {
     return (
       <div
-        className="absolute top-5 left-5 py-1.5 px-3 bg-black/80 text-green-500 font-mono text-xs rounded-lg cursor-pointer hover:bg-black/90 transition-colors select-none pointer-events-auto flex items-center gap-2"
+        className="absolute top-5 left-5 py-1.5 px-3 bg-black/80 text-green-500 font-mono text-xs rounded-lg cursor-pointer hover:bg-black/90 select-none pointer-events-auto flex items-center gap-2"
         onClick={toggleDebugPanelExpanded}
         title="Click to expand debug panel"
       >
@@ -395,7 +395,7 @@ export function DebugPanel() {
       {/* FPS + collapse — pinned at the top (does not scroll). */}
       <button
         onClick={toggleDebugPanelExpanded}
-        className="shrink-0 flex items-center justify-between px-4 pt-2 pb-1.5 cursor-pointer text-green-500 hover:text-green-300 transition-colors"
+        className="shrink-0 flex items-center justify-between px-4 pt-2 pb-1.5 cursor-pointer text-green-500 hover:text-green-300"
         title="Collapse debug panel"
       >
         <span className={`font-bold ${fps < 30 ? 'text-red-400' : fps < 55 ? 'text-yellow-400' : ''}`}>{fps} FPS</span>
@@ -599,7 +599,7 @@ export function DebugPanel() {
               <button
                 key={level}
                 onClick={() => syncPresetToStore(level, quality.visibilityRadius)}
-                className={`flex-1 py-1 text-xs rounded transition-colors ${
+                className={`flex-1 py-1 text-xs rounded ${
                   !isCustomQuality && qualityLevel === level
                     ? 'bg-yellow-600 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600'

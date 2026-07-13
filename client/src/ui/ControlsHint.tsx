@@ -9,10 +9,10 @@ const HINTS: { keys: string; label: string }[] = [
   { keys: 'Shift', label: 'Sprint' },
   { keys: 'LMB', label: 'Place' },
   { keys: 'Tab / RMB', label: 'Build menu' },
-  { keys: 'Q / E', label: 'Rotate' },
+  { keys: 'Q / E / Wheel', label: 'Rotate' },
   { keys: 'G / T', label: 'Snap' },
   { keys: '1–9', label: 'Select' },
-  { keys: 'Ctrl+Z', label: 'Undo' },
+  { keys: 'Z', label: 'Undo' },
   { keys: 'Esc', label: 'Exit' },
 ];
 

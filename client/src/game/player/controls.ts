@@ -70,11 +70,13 @@ export class Controls {
   private onKeyDown = (e: KeyboardEvent): void => {
     this.keys.add(e.code);
 
-    // Undo last build: Ctrl+Z / Cmd+Z
-    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
-      e.preventDefault();
-      this.onUndo?.();
-      return;
+    // Undo last build: Z (Playing only, so typing 'z' in menus/dialogs doesn't undo)
+    if (e.code === 'KeyZ') {
+      if (useGameStore.getState().gameMode === GameMode.Playing) {
+        e.preventDefault();
+        this.onUndo?.();
+        return;
+      }
     }
 
     // Debug: F6 to clear texture cache
@@ -211,12 +213,15 @@ export class Controls {
   private toggleBuildOrMenu(): void {
     const store = useGameStore.getState();
     if (store.gameMode !== GameMode.Playing) return;
-    if (store.build.buildMode) {
-      const wasMenuOpen = store.build.menuOpen;
-      store.setBuildMode(false); // also closes the menu
-      // An open menu had released the pointer for the cursor — re-lock on exit.
-      if (wasMenuOpen && !isTouch()) requestAnimationFrame(() => document.body.requestPointerLock());
+    if (store.build.menuOpen) {
+      // Menu open → close it but STAY in build mode (setBuildMenuOpen(false) keeps buildMode).
+      store.setBuildMenuOpen(false);
+      if (!isTouch()) requestAnimationFrame(() => document.body.requestPointerLock());
+    } else if (store.build.buildMode) {
+      // Building with the menu closed → exit build mode.
+      store.setBuildMode(false);
     } else {
+      // Not building → open the palette.
       this.openBuildMenu();
     }
   }

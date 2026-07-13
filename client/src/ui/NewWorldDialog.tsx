@@ -32,7 +32,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
     'w-full rounded-lg bg-black/50 border border-white/15 px-3 py-2 text-sm text-white ' +
     'outline-none focus:border-indigo-400';
   const btn = (primary: boolean) =>
-    `px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer transition-colors ${
+    `px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${
       primary ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-white/10 hover:bg-white/20 text-white/80'
     }`;
 

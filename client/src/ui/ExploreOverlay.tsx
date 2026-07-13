@@ -76,11 +76,11 @@ function MarkerPlayButton() {
     <div
       ref={ref}
       style={{ position: 'fixed', transform: 'translate(-50%,-100%)', display: 'none' }}
-      className="pointer-events-auto flex items-stretch rounded-full overflow-hidden shadow-xl border border-white/25 bg-indigo-600"
+      className="pointer-events-auto flex items-stretch rounded-full overflow-hidden shadow-xl border-2 border-[#38e8ff] bg-indigo-600"
     >
       <button
         onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(false); }}
-        className="px-8 py-4 md:px-10 md:py-5 text-2xl md:text-3xl font-bold text-white hover:bg-indigo-500 active:bg-indigo-400 flex items-center gap-2 whitespace-nowrap cursor-pointer transition-colors"
+        className="px-8 py-4 md:px-10 md:py-5 text-2xl md:text-3xl font-bold text-white hover:bg-indigo-500 active:bg-indigo-400 flex items-center gap-2 whitespace-nowrap cursor-pointer"
         aria-label="Play from here"
       >
         <Play size={touch ? 22 : 26} fill="currentColor" /> <span className="leading-none">Play</span>
@@ -88,7 +88,7 @@ function MarkerPlayButton() {
       {!touch && (
         <button
           onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(true); }}
-          className="px-4 border-l border-white/20 text-white bg-indigo-700 hover:bg-indigo-600 flex items-center cursor-pointer transition-colors"
+          className="px-4 border-l border-[#38e8ff]/50 text-white bg-indigo-700 hover:bg-indigo-600 flex items-center cursor-pointer"
           aria-label="Play fullscreen"
           title="Play in fullscreen"
         >
@@ -152,11 +152,11 @@ export function ExploreOverlay() {
   };
 
   const pill = (active: boolean) =>
-    `py-1 flex-1 text-xs rounded-lg transition-colors text-center cursor-pointer ${
+    `py-1 flex-1 text-xs rounded-lg text-center cursor-pointer ${
       active ? 'text-white bg-indigo-600' : 'text-white/60 bg-white/10 hover:bg-white/20'
     }`;
   const bottomBtn = (active: boolean) =>
-    `pointer-events-auto cursor-pointer whitespace-nowrap flex items-center justify-center gap-2 px-6 py-3 md:px-8 md:py-4 rounded-2xl text-2xl md:text-3xl font-bold shadow-lg transition-colors border ${
+    `pointer-events-auto cursor-pointer whitespace-nowrap flex items-center justify-center gap-2 px-6 py-3 md:px-8 md:py-4 rounded-2xl text-2xl md:text-3xl font-bold shadow-lg border ${
       active ? 'bg-indigo-600 text-white border-transparent' : 'bg-black/50 text-white hover:bg-black/70 border-white/15'
     }`;
 
@@ -174,14 +174,14 @@ export function ExploreOverlay() {
 
       {/* Panels (open above the bottom bar) */}
       {panel !== 'none' && (
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-20 w-[min(92vw,22rem)] pointer-events-auto">
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-24 md:bottom-32 w-[min(92vw,22rem)] pointer-events-auto">
           {panel === 'worlds' && (
             <div className="rounded-2xl bg-black/80 border border-white/10 p-2 flex flex-col gap-1">
               {worlds.map((w) => (
                 <div key={w.id} className="flex items-center gap-1">
                   <button
                     onClick={() => selectWorld(w.id)}
-                    className={`flex-1 flex items-center gap-1.5 text-left text-sm px-2 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                    className={`flex-1 flex items-center gap-1.5 text-left text-sm px-2 py-1.5 rounded-lg cursor-pointer ${
                       w.id === activeWorldId ? 'bg-indigo-600 text-white' : 'text-white/70 hover:bg-white/10'
                     }`}
                   >

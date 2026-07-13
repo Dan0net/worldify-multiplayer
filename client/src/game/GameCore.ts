@@ -281,10 +281,15 @@ export class GameCore {
       // Supply the current time-of-day so it's saved per world on switch.
       setTimeOfDayProvider(() => useGameStore.getState().environment.timeOfDay);
 
-      // Undo last build (Ctrl/Cmd+Z or mobile button).
+      // Undo last build (Z, or mobile button).
       controls.onUndo = () => {
         const keys = this.voxelIntegration.world.undoLastBuild();
-        if (keys.length > 0) this.updateMapTilesFromChunks(keys);
+        if (keys.length > 0) {
+          // Mirror the place path: hand the active preview off as a commit so the reverted
+          // chunk's remesh clears the stale preview mesh + restores the suppressed group.
+          this.builder.commitPreview();
+          this.updateMapTilesFromChunks(keys);
+        }
       };
     }
 
