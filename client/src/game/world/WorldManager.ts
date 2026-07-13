@@ -29,9 +29,11 @@ export interface PlayerPose { x: number; y: number; z: number; yaw: number; pitc
 // ============== IndexedDB ==============
 
 const DB_NAME = 'worldify-worlds';
-const DB_VERSION = 2;
+// v3: voxel word widened 16-bit → 32-bit. Old Uint16Array chunk records are
+// migrated lazily on load (see loadChunk) — no onupgradeneeded rewrite needed.
+const DB_VERSION = 3;
 const STORE_WORLDS = 'worlds';   // keyPath 'id' → WorldMeta
-const STORE_CHUNKS = 'chunks';   // key `${worldId}:${chunkKey}` → Uint16Array
+const STORE_CHUNKS = 'chunks';   // key `${worldId}:${chunkKey}` → Uint32Array
 const STORE_SNAPS = 'snaps';     // key worldId → {x,y,z}[]
 const STORE_UNDO = 'undo';       // key worldId → UndoEntry[]
 
@@ -237,17 +239,20 @@ export function hasChunk(key: string): boolean {
   return persistedKeys.has(key);
 }
 
-export async function loadChunk(key: string): Promise<Uint16Array | null> {
+export async function loadChunk(key: string): Promise<Uint32Array | null> {
   if (!activeWorld) return null;
-  const buf = await idbGet<Uint16Array>(STORE_CHUNKS, `${activeWorld.id}:${key}`);
-  return buf ?? null;
+  const buf = await idbGet<Uint16Array | Uint32Array>(STORE_CHUNKS, `${activeWorld.id}:${key}`);
+  if (!buf) return null;
+  // Migrate legacy 16-bit records: widen element-wise into 32-bit words (block/spare
+  // bits become 0; both light channels are recomputed client-side on ingest anyway).
+  return buf.BYTES_PER_ELEMENT === 4 ? (buf as Uint32Array) : new Uint32Array(buf);
 }
 
 /** Fire-and-forget save (clones the data — chunk.data is mutated in place). */
-export function saveChunk(key: string, data: Uint16Array): void {
+export function saveChunk(key: string, data: Uint32Array): void {
   if (!activeWorld) return;
   persistedKeys.add(key);
-  idbPut(STORE_CHUNKS, new Uint16Array(data), `${activeWorld.id}:${key}`).catch(() => { /* non-critical */ });
+  idbPut(STORE_CHUNKS, new Uint32Array(data), `${activeWorld.id}:${key}`).catch(() => { /* non-critical */ });
 }
 
 // ============== Snap-point persistence (active world) ==============
@@ -288,7 +293,7 @@ export function loadPlayerPos(): PlayerPose | null {
 // ============== Undo stack (active world) ==============
 
 /** A chunk's voxel data before a build op — enough to reverse it. */
-export interface ChunkSnapshot { key: string; data: Uint16Array; }
+export interface ChunkSnapshot { key: string; data: Uint32Array; }
 export type UndoEntry = ChunkSnapshot[];
 
 export function pushUndo(entry: UndoEntry): void {

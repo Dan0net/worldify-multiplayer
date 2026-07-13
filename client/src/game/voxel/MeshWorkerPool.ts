@@ -2,7 +2,7 @@
  * MeshWorkerPool - Manages a pool of mesh workers with grid buffer recycling
  * 
  * Dispatches SurfaceNet + geometry expansion work to web workers.
- * Grid buffers (Uint16Array, 34³) are recycled via Transferable round-trips
+ * Grid buffers (Uint32Array, 34³) are recycled via Transferable round-trips
  * to avoid per-chunk allocations.
  * 
  * Two queues: priority (build preview) and regular (chunk remesh).
@@ -21,7 +21,7 @@ const GRID_LENGTH = GRID_SIZE * GRID_SIZE * GRID_SIZE;
 interface Task {
   id: number;
   chunkKey: string;
-  grid: Uint16Array;
+  grid: Uint32Array;
   skipHighBoundary: [boolean, boolean, boolean];
 }
 
@@ -54,7 +54,7 @@ export class MeshWorkerPool {
   private pendingCallbacks = new Map<number, (resp: MeshWorkerResponse) => void>();
 
   /** Pool of reusable grid buffers (returned by workers after each job) */
-  private gridPool: Uint16Array[] = [];
+  private gridPool: Uint32Array[] = [];
 
   /** Track which chunk keys are in-flight (prevent duplicate dispatch) */
   private inFlight = new Set<string>();
@@ -76,7 +76,7 @@ export class MeshWorkerPool {
 
     // Pre-allocate grid buffers (one per worker + a few spare)
     for (let i = 0; i < poolSize + 2; i++) {
-      this.gridPool.push(new Uint16Array(GRID_LENGTH));
+      this.gridPool.push(new Uint32Array(GRID_LENGTH));
     }
   }
 
@@ -84,8 +84,8 @@ export class MeshWorkerPool {
    * Take a grid buffer from the pool (or allocate if empty).
    * Caller fills this, then passes to dispatch().
    */
-  takeGrid(): Uint16Array {
-    return this.gridPool.pop() ?? new Uint16Array(GRID_LENGTH);
+  takeGrid(): Uint32Array {
+    return this.gridPool.pop() ?? new Uint32Array(GRID_LENGTH);
   }
 
   /**
@@ -110,7 +110,7 @@ export class MeshWorkerPool {
    */
   dispatch(
     chunkKey: string,
-    grid: Uint16Array,
+    grid: Uint32Array,
     skipHighBoundary: [boolean, boolean, boolean],
     callback: MeshResultCallback,
   ): void {
@@ -149,7 +149,7 @@ export class MeshWorkerPool {
   dispatchBatch(
     items: Array<{
       chunkKey: string;
-      grid: Uint16Array;
+      grid: Uint32Array;
       skipHighBoundary: [boolean, boolean, boolean];
     }>,
     callback: (results: MeshResult[]) => void,

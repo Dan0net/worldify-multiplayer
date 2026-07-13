@@ -77,6 +77,7 @@ export const TERRAIN_ATTRS: readonly AttrDef[] = [
   { name: 'materialIds', itemSize: 3 },
   { name: 'materialWeights', itemSize: 3 },
   { name: 'lightLevel', itemSize: 1 },
+  { name: 'blockLight', itemSize: 1 },
 ];
 
 // ============== Factory ==============

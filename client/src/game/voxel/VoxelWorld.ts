@@ -32,6 +32,10 @@ import {
   voxelIndex,
   getSunlitAbove,
   computeAndPropagateLight,
+  computeSkyLight,
+  clearBlockLight,
+  propagateBlockLight,
+  chunkHasEmitter,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
@@ -61,7 +65,7 @@ const SURFACE_CHUNK_MARGIN = 1;
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
 /** Fast typed-array equality check (same length assumed). */
-function arraysEqual(a: Uint16Array, b: Uint16Array): boolean {
+function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return false;
@@ -448,7 +452,7 @@ export class VoxelWorld implements ChunkProvider {
    *
    * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
    */
-  static computeFaceSurfaceMask(data: Uint16Array): number {
+  static computeFaceSurfaceMask(data: Uint32Array): number {
     const CS = CHUNK_SIZE;
     let mask = 0;
     for (let face = 0; face < 6; face++) {
@@ -798,7 +802,7 @@ export class VoxelWorld implements ChunkProvider {
    * Internal helper to ingest chunk data (shared by receiveChunkData and receiveSurfaceColumnData).
    * @returns The chunk that was created/updated
    */
-  private ingestChunkData(cx: number, cy: number, cz: number, voxelData: Uint16Array, lastBuildSeq: number = 0): Chunk {
+  private ingestChunkData(cx: number, cy: number, cz: number, voxelData: Uint32Array, lastBuildSeq: number = 0): Chunk {
     const key = chunkKey(cx, cy, cz);
     
     // Remove from pending
@@ -884,21 +888,83 @@ export class VoxelWorld implements ChunkProvider {
    * Checks chunk-above data to determine sky exposure.
    * Then injects border light from face-adjacent neighbors and runs BFS.
    */
-  private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint16Array): void {
+  private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint32Array): void {
     perfStats.begin('lighting');
-    // Check chunk above for sunlight state
-    const aboveKey = chunkKey(cx, cy + 1, cz);
-    const aboveChunk = this.chunks.get(aboveKey);
-    const lightFromAbove = getSunlitAbove(aboveChunk?.data);
+    const lightFromAbove = getSunlitAbove(this.chunks.get(chunkKey(cx, cy + 1, cz))?.data);
+    const neighbors = this.gatherFaceNeighbors(cx, cy, cz);
+    // Combined pipeline: sky (column + BFS) then block (emitter BFS). Returns whether
+    // the chunk holds any block light, cached on the Chunk to gate future relights.
+    const hasBlock = computeAndPropagateLight(data, lightFromAbove, neighbors);
+    const chunk = this.chunks.get(chunkKey(cx, cy, cz));
+    if (chunk) chunk.hasBlockLight = hasBlock;
+    perfStats.end('lighting');
+  }
 
-    // Gather face-adjacent neighbor data for border light injection
-    const neighbors: (Uint16Array | null)[] = FACE_OFFSETS_6.map(
+  /** Gather the 6 face-adjacent neighbor voxel arrays (+X,-X,+Y,-Y,+Z,-Z), null if unloaded. */
+  private gatherFaceNeighbors(cx: number, cy: number, cz: number): (Uint32Array | null)[] {
+    return FACE_OFFSETS_6.map(
       ([dx, dy, dz]) => this.chunks.get(chunkKey(cx + dx, cy + dy, cz + dz))?.data ?? null,
     );
+  }
 
-    // Combined pipeline: column pass → frontier seed → border inject → BFS
-    computeAndPropagateLight(data, lightFromAbove, neighbors);
+  /** Recompute only the SKY-light channel for a chunk (order-independent; used by edit relights). */
+  private computeChunkSkyLight(cx: number, cy: number, cz: number, data: Uint32Array): void {
+    perfStats.begin('lighting');
+    const lightFromAbove = getSunlitAbove(this.chunks.get(chunkKey(cx, cy + 1, cz))?.data);
+    computeSkyLight(data, lightFromAbove, this.gatherFaceNeighbors(cx, cy, cz));
     perfStats.end('lighting');
+  }
+
+  /**
+   * Incrementally recompute BLOCK light after an edit, over the 3×3×3 chunk region
+   * around the edit (block light reaches ~31 voxels ≈ one chunk, so diagonal neighbors
+   * are affected too). Clears the whole region first, then propagates to a fixed point —
+   * monotonic max-merge means this darkens correctly when an emitter is removed (the bug
+   * where a single per-chunk pass re-absorbed stale light from an uncleared neighbor).
+   *
+   * Gated: skips entirely unless the edited chunk contains an emitter or some chunk in
+   * the region already holds block light, so ordinary edits stay cheap. Returns the set
+   * of chunks whose block light changed (for remeshing), added to `batchKeys`.
+   */
+  private relightBlockRegion(cx: number, cy: number, cz: number, batchKeys: Set<string>): void {
+    const editedChunk = this.chunks.get(chunkKey(cx, cy, cz));
+    // Collect the loaded 3×3×3 region.
+    const region: Chunk[] = [];
+    let anyLit = false;
+    for (let dz = -1; dz <= 1; dz++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const c = this.chunks.get(chunkKey(cx + dx, cy + dy, cz + dz));
+          if (!c) continue;
+          region.push(c);
+          if (c.hasBlockLight) anyLit = true;
+        }
+
+    // Nothing to do if no block light exists here and the edit introduced no emitter.
+    const hasEmitter = editedChunk ? chunkHasEmitter(editedChunk.data) : false;
+    if (!anyLit && !hasEmitter) return;
+
+    perfStats.begin('lighting');
+    // Clear the region's block field once, then propagate to a fixed point.
+    for (const c of region) clearBlockLight(c.data);
+    const litThisRun = new Set<Chunk>();
+    for (let pass = 0; pass < 4; pass++) {
+      let changed = false;
+      for (const c of region) {
+        const neighbors = this.gatherFaceNeighbors(c.cx, c.cy, c.cz);
+        if (propagateBlockLight(c.data, neighbors)) { changed = true; litThisRun.add(c); }
+      }
+      if (!changed) break;
+    }
+    perfStats.end('lighting');
+
+    // Update cached flags + mark every region chunk for remesh (its block light may
+    // have changed — including chunks that just went dark).
+    for (const c of region) {
+      c.hasBlockLight = litThisRun.has(c);
+      c.dirty = true;
+      batchKeys.add(chunkKey(c.cx, c.cy, c.cz));
+    }
   }
 
   /**
@@ -1158,7 +1224,7 @@ export class VoxelWorld implements ChunkProvider {
       const chunk = this.chunks.get(key)!;
 
       // Snapshot the pre-mutation voxels for undo.
-      const before = this.isLocal ? new Uint16Array(chunk.data) : null;
+      const before = this.isLocal ? new Uint32Array(chunk.data) : null;
 
       const changed = drawToChunk(chunk, operation);
       if (changed) {
@@ -1199,39 +1265,44 @@ export class VoxelWorld implements ChunkProvider {
     batchKeys.add(chunkKey(chunk.cx, chunk.cy, chunk.cz));
 
     chunk.visibilityBits = computeVisibility(chunk.data);
-    this.computeChunkSunlight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
+    // Sky light is recomputed per chunk (order-independent — anchored by the sun column).
+    this.computeChunkSkyLight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
 
-    // Cascade relighting downward — sunlight may now pass (or be blocked)
+    // Cascade SKY relighting downward — sunlight may now pass (or be blocked)
     let belowCy = chunk.cy - 1;
     while (true) {
       const belowKey = chunkKey(chunk.cx, belowCy, chunk.cz);
       const belowChunk = this.chunks.get(belowKey);
       if (!belowChunk) break;
-      this.computeChunkSunlight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
+      this.computeChunkSkyLight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
       belowChunk.dirty = true;
       batchKeys.add(belowKey);
       belowCy--;
     }
 
-    // Cascade relighting upward — removing a floor lets light enter from below
+    // Cascade SKY relighting upward — removing a floor lets light enter from below
     const aboveKey = chunkKey(chunk.cx, chunk.cy + 1, chunk.cz);
     const aboveChunk = this.chunks.get(aboveKey);
     if (aboveChunk) {
-      this.computeChunkSunlight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
+      this.computeChunkSkyLight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
       aboveChunk.dirty = true;
       batchKeys.add(aboveKey);
     }
 
-    // Relight face-adjacent horizontal neighbors so their border light updates.
+    // Relight face-adjacent horizontal neighbors so their SKY border light updates.
     for (const [dx, dy, dz] of FACE_OFFSETS_6) {
       if (dy !== 0) continue; // vertical already handled above
       const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
       const nChunk = this.chunks.get(nKey);
       if (!nChunk) continue;
-      this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+      this.computeChunkSkyLight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
       nChunk.dirty = true;
       batchKeys.add(nKey);
     }
+
+    // Block light: incremental region recompute (clear-once + propagate-to-fixed-point),
+    // so removing an emitter darkens correctly and diagonal neighbors are covered.
+    this.relightBlockRegion(chunk.cx, chunk.cy, chunk.cz, batchKeys);
   }
 
   /**

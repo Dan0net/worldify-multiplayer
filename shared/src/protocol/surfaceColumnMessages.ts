@@ -37,9 +37,9 @@
  * ├─────────────┼─────────┼──────────────────────────────────────────┤
  * │ 0-1         │ int16   │ Chunk Y coordinate                       │
  * │ 2-5         │ uint32  │ Last build sequence                      │
- * │ 6-65541     │ uint16[]│ Voxel data (32768 × uint16 = 65536 bytes)│
+ * │ 6-131077    │ uint32[]│ Voxel data (32768 × uint32 = 131072 bytes)│
  * └─────────────┴─────────┴──────────────────────────────────────────┘
- * Per chunk: 65542 bytes
+ * Per chunk: 131078 bytes
  */
 
 import { ByteReader, ByteWriter } from '../util/bytes.js';
@@ -62,7 +62,7 @@ export interface SurfaceColumnRequest {
 export interface SurfaceColumnChunk {
   chunkY: number;
   lastBuildSeq: number;
-  voxelData: Uint16Array;
+  voxelData: Uint32Array;
 }
 
 export interface SurfaceColumnResponse {
@@ -102,10 +102,10 @@ export function decodeSurfaceColumnRequest(reader: ByteReader): SurfaceColumnReq
  */
 export function encodeSurfaceColumnData(
   tile: MapTileData,
-  chunks: Array<{ cy: number; lastBuildSeq: number; data: Uint16Array }>
+  chunks: Array<{ cy: number; lastBuildSeq: number; data: Uint32Array }>
 ): ArrayBuffer {
   // Calculate size: msgId(1) + coords(4) + heights(2048) + materials(1024) + count(1) + chunks
-  const chunkDataSize = chunks.length * (2 + 4 + VOXELS_PER_CHUNK * 2); // y + seq + voxels
+  const chunkDataSize = chunks.length * (2 + 4 + VOXELS_PER_CHUNK * 4); // y + seq + voxels
   const totalSize = 1 + 4 + MAP_TILE_PIXELS * 2 + MAP_TILE_PIXELS + 1 + chunkDataSize;
   
   const writer = new ByteWriter(totalSize);
@@ -174,7 +174,7 @@ export function decodeSurfaceColumnData(reader: ByteReader): SurfaceColumnRespon
     const lastBuildSeq = reader.readUint32();
     
     // Read voxel data
-    const voxelData = new Uint16Array(VOXELS_PER_CHUNK);
+    const voxelData = new Uint32Array(VOXELS_PER_CHUNK);
     const bytes = new Uint8Array(voxelData.buffer);
     for (let j = 0; j < bytes.length; j++) {
       bytes[j] = reader.readUint8();

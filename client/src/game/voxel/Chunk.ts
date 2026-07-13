@@ -24,10 +24,17 @@ import {
  */
 export class Chunk extends ChunkData {
   /** Temporary data buffer for preview (not persisted) */
-  tempData: Uint16Array | null = null;
+  tempData: Uint32Array | null = null;
 
   /** Whether the chunk needs to be remeshed */
   dirty: boolean = true;
+
+  /**
+   * Cached: does this chunk currently hold any block light (emitter or propagated)?
+   * Set by the lighting pass; used to cheaply gate incremental block-light relights so
+   * ordinary edits far from emitters skip the multi-chunk block recompute.
+   */
+  hasBlockLight: boolean = false;
 
   /**
    * 6-bit bitmask: bit i set ⇒ face i has non-solid voxels in its margin strip,
@@ -181,7 +188,7 @@ export class Chunk extends ChunkData {
 
   copyToTemp(): void {
     if (!this.tempData) {
-      this.tempData = new Uint16Array(VOXELS_PER_CHUNK);
+      this.tempData = new Uint32Array(VOXELS_PER_CHUNK);
     }
     this.tempData.set(this.data);
   }

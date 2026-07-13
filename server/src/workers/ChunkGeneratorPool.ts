@@ -20,7 +20,7 @@ interface PendingTask {
   cx: number;
   cy: number;
   cz: number;
-  resolve: (data: Uint16Array) => void;
+  resolve: (data: Uint32Array) => void;
   reject: (err: Error) => void;
 }
 
@@ -82,7 +82,7 @@ export class ChunkGeneratorPool {
         tasks.delete(msg.id);
 
         if (msg.type === 'result' && msg.buffer) {
-          task.resolve(new Uint16Array(msg.buffer));
+          task.resolve(new Uint32Array(msg.buffer));
         } else if (msg.type === 'error') {
           task.reject(new Error(msg.message ?? 'Worker generation failed'));
         }
@@ -130,7 +130,7 @@ export class ChunkGeneratorPool {
 
   // ============== Public API ==============
 
-  async generateChunk(cx: number, cy: number, cz: number): Promise<Uint16Array> {
+  async generateChunk(cx: number, cy: number, cz: number): Promise<Uint32Array> {
     return new Promise((resolve, reject) => {
       const task: PendingTask = { cx, cy, cz, resolve, reject };
 

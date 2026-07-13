@@ -21,6 +21,7 @@ import {
   MATERIAL_MASK,
   VISIBILITY_ALL,
   VISIBILITY_NONE,
+  VOXEL_STATIC_MASK,
   WEIGHT_MAX_PACKED,
 } from './constants.js';
 import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
@@ -29,7 +30,7 @@ import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
 
 /**
  * Pre-computed opaqueness LUT for visibility flood-fill.
- * Indexed by voxel >> LIGHT_BITS (upper 11 bits: weight + material).
+ * Indexed by `(voxel & VOXEL_STATIC_MASK) >> LIGHT_BITS` (the 11 weight+material bits).
  * Entry is 1 if the voxel blocks visibility (fully-solid opaque), 0 otherwise.
  *
  * Uses a RELAXED threshold: only fully-solid weight (WEIGHT_MAX_PACKED) with
@@ -254,16 +255,16 @@ export function getOppositeFace(face: ChunkFace): ChunkFace {
  * - Pre-computed boundary and neighbor tables
  * - Bit masks for reached faces
  * 
- * @param voxelData - The chunk's voxel data (Uint16Array)
+ * @param voxelData - The chunk's voxel data (Uint32Array)
  * @returns 15-bit visibility mask
  */
-export function computeVisibility(voxelData: Uint16Array): number {
+export function computeVisibility(voxelData: Uint32Array): number {
   // Quick check: if all opaque or all see-through, return early
   let hasOpaque = false;
   let hasSeeThrough = false;
-  
+
   for (let i = 0; i < voxelData.length; i++) {
-    if (VOXEL_OPAQUE_VIS[voxelData[i] >> LIGHT_BITS]) {
+    if (VOXEL_OPAQUE_VIS[(voxelData[i] & VOXEL_STATIC_MASK) >> LIGHT_BITS]) {
       hasOpaque = true;
     } else {
       hasSeeThrough = true;
@@ -294,7 +295,7 @@ export function computeVisibility(voxelData: Uint16Array): number {
       const startIdx = boundaryIndices[i];
       
       // Skip if opaque or already visited in THIS computation
-      if (VOXEL_OPAQUE_VIS[voxelData[startIdx] >> LIGHT_BITS]) continue;
+      if (VOXEL_OPAQUE_VIS[(voxelData[startIdx] & VOXEL_STATIC_MASK) >> LIGHT_BITS]) continue;
       if (visited[startIdx] === gen) continue;
       
       // Flood fill using pre-allocated queue
@@ -322,7 +323,7 @@ export function computeVisibility(voxelData: Uint16Array): number {
           
           // Skip if already visited or opaque (liquid/transparent allow visibility)
           if (visited[neighborIdx] === gen) continue;
-          if (VOXEL_OPAQUE_VIS[voxelData[neighborIdx] >> LIGHT_BITS]) continue;
+          if (VOXEL_OPAQUE_VIS[(voxelData[neighborIdx] & VOXEL_STATIC_MASK) >> LIGHT_BITS]) continue;
           
           visited[neighborIdx] = gen;
           queue[queueTail++] = neighborIdx;

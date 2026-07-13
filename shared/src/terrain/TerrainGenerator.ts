@@ -691,10 +691,10 @@ export class TerrainGenerator implements HeightSampler {
    * @param cx - Chunk X coordinate
    * @param cy - Chunk Y coordinate  
    * @param cz - Chunk Z coordinate
-   * @returns Uint16Array of packed voxel data (CHUNK_SIZE^3 elements)
+   * @returns Uint32Array of packed voxel data (CHUNK_SIZE^3 elements)
    */
-  generateChunk(cx: number, cy: number, cz: number): Uint16Array {
-    const data = new Uint16Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
+  generateChunk(cx: number, cy: number, cz: number): Uint32Array {
+    const data = new Uint32Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
     
     // Calculate chunk's world origin
     const chunkWorldX = cx * CHUNK_SIZE * VOXEL_SCALE;

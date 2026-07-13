@@ -30,6 +30,9 @@ import {
   MATERIAL_MASK,
   LIGHT_MASK,
   LIGHT_MAX,
+  BLOCK_LIGHT_SHIFT,
+  BLOCK_LIGHT_MASK,
+  BLOCK_LIGHT_MAX,
   INV_WEIGHT_MAX_PACKED,
   hasSurfaceCrossing,
 } from '@worldify/shared';
@@ -58,8 +61,10 @@ export interface SurfaceNetOutput {
   indices: Uint32Array;
   /** Material ID per vertex */
   materials: Uint8Array;
-  /** Light level per vertex (0.0-1.0, max of non-solid corners in 2x2x2 cell) */
+  /** Sky light level per vertex (0.0-1.0, max of non-solid corners in 2x2x2 cell) */
   lights: Float32Array;
+  /** Block light level per vertex (0.0-1.0, max of non-solid corners in 2x2x2 cell) */
+  blockLights: Float32Array;
   /**
    * Per-vertex 6-bit boundary flag: which chunk-cell planes the vertex sits on.
    * bit 0 = -X (cell x=0), 1 = +X (cell x=32), 2 = -Y, 3 = +Y, 4 = -Z, 5 = +Z.
@@ -94,7 +99,7 @@ export interface SurfaceNetInput {
   /** Dimensions of the voxel grid [x, y, z] */
   dims: [number, number, number];
   /** Flat packed voxel data array (dims[0] * dims[1] * dims[2]) */
-  data: Uint16Array;
+  data: Uint32Array;
   /** 
    * Skip faces at high boundary for each axis [+X, +Y, +Z].
    * When true, faces at dims[axis]-2 are skipped (no neighbor to stitch with).
@@ -170,7 +175,8 @@ interface MeshPool {
   positions: Float32Array;   // 3 floats per vertex
   normals: Float32Array;     // 3 floats per vertex
   materials: Uint8Array;     // 1 byte per vertex
-  lights: Float32Array;      // 1 float per vertex (0.0-1.0)
+  lights: Float32Array;      // 1 float per vertex (sky light, 0.0-1.0)
+  blockLights: Float32Array; // 1 float per vertex (block light, 0.0-1.0)
   boundaryFlags: Uint8Array; // 1 byte per vertex (6-bit boundary-plane mask)
   indices: Uint32Array;      // 3 uints per triangle
   vertCapacity: number;
@@ -184,6 +190,7 @@ for (let i = 0; i < MESH_COUNT; ++i) {
     normals: new Float32Array(INITIAL_VERT_CAPACITY * 3),
     materials: new Uint8Array(INITIAL_VERT_CAPACITY),
     lights: new Float32Array(INITIAL_VERT_CAPACITY),
+    blockLights: new Float32Array(INITIAL_VERT_CAPACITY),
     boundaryFlags: new Uint8Array(INITIAL_VERT_CAPACITY),
     indices: new Uint32Array(INITIAL_TRI_CAPACITY * 3),
     vertCapacity: INITIAL_VERT_CAPACITY,
@@ -219,6 +226,9 @@ function ensureVertCapacity(pool: MeshPool, needed: number): void {
   const newLights = new Float32Array(cap);
   newLights.set(pool.lights);
   pool.lights = newLights;
+  const newBlockLights = new Float32Array(cap);
+  newBlockLights.set(pool.blockLights);
+  pool.blockLights = newBlockLights;
   const newBoundary = new Uint8Array(cap);
   newBoundary.set(pool.boundaryFlags);
   pool.boundaryFlags = newBoundary;
@@ -334,6 +344,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
         maxWeights[0] = maxWeights[1] = maxWeights[2] = -Infinity;
         maxIdxs[0] = maxIdxs[1] = maxIdxs[2] = baseIdx;
         let maxLight = 0;
+        let maxBlock = 0;
 
         // Sample 2x2x2 grid corners using pre-computed offsets
         // Bit operations use shared constants so changes to voxel layout propagate
@@ -350,6 +361,8 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
           if (weight < 0 || matType !== MAT_TYPE_SOLID) {
             const light = voxel & LIGHT_MASK;
             if (light > maxLight) maxLight = light;
+            const blockLight = (voxel >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK;
+            if (blockLight > maxBlock) maxBlock = blockLight;
           }
           
           // For each mesh type, compute adjusted weight
@@ -450,6 +463,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
             pool.materials[vertIdx] = (data[maxIdxs[mt]] >> MATERIAL_SHIFT) & MATERIAL_MASK;
             // Light: max of non-solid corners, computed in the corner loop above
             pool.lights[vertIdx] = maxLight / LIGHT_MAX;
+            pool.blockLights[vertIdx] = maxBlock / BLOCK_LIGHT_MAX;
             // Boundary-plane mask: which of the 6 chunk-cell faces this vertex sits on.
             // Cell coords run 0..32; low face = 0, high face = highBoundary (32).
             pool.boundaryFlags[vertIdx] =
@@ -614,6 +628,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
       indices: pool.indices.subarray(0, tc * 3),
       materials: pool.materials.subarray(0, vc),
       lights: pool.lights.subarray(0, vc),
+      blockLights: pool.blockLights.subarray(0, vc),
       boundaryFlags: pool.boundaryFlags.subarray(0, vc),
       vertexCount: vc,
       triangleCount: tc,

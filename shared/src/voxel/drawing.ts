@@ -211,7 +211,7 @@ export function getAffectedChunks(operation: BuildOperation): string[] {
 export function drawToChunk(
   chunk: ChunkData,
   operation: BuildOperation,
-  targetData: Uint16Array = chunk.data
+  targetData: Uint32Array = chunk.data
 ): boolean {
   const { center, rotation, config } = operation;
   

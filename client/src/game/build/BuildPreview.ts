@@ -176,7 +176,7 @@ export class BuildPreview {
     // === Pass 2: Expand grids and dispatch (neighbors' tempData is now ready) ===
     const batchItems: Array<{
       chunkKey: string;
-      grid: Uint16Array;
+      grid: Uint32Array;
       skipHighBoundary: [boolean, boolean, boolean];
     }> = [];
     const newActiveChunks = this.newActiveChunksBuf;
@@ -627,8 +627,8 @@ export class BuildPreview {
    * Returns true as soon as any difference is found (early-exit).
    */
   private static hasBoundaryChanges(
-    data: Uint16Array,
-    temp: Uint16Array,
+    data: Uint32Array,
+    temp: Uint32Array,
     axis: number,
   ): boolean {
     const CS = CHUNK_SIZE;

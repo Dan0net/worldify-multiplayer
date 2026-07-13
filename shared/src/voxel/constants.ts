@@ -16,8 +16,14 @@ export const CHUNK_WORLD_SIZE = CHUNK_SIZE * VOXEL_SCALE; // 8m
 export const VOXELS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; // 32768
 
 // ============== Voxel Bit Layout ==============
-// Layout: WWWW MMMMMMM LLLLL (16 bits total)
-//         4    7       5
+// Layout (32-bit word):
+//   bit:  0-4    5-11      12-15   16-20        21-31
+//         LLLLL  MMMMMMM   WWWW    BBBBB        (spare, 11 bits for future)
+//         sky    material  weight  block-light
+//
+// The low 16 bits (sky light + material + weight) are byte-identical to the
+// previous 16-bit layout, so every existing pack/unpack shift & mask is unchanged.
+// Block light lives at bit 16; the top 11 bits are reserved for future per-voxel data.
 
 /** Bits for weight field (surface distance) */
 export const WEIGHT_BITS = 4;
@@ -25,8 +31,11 @@ export const WEIGHT_BITS = 4;
 /** Bits for material ID field */
 export const MATERIAL_BITS = 7;
 
-/** Bits for light level field */
+/** Bits for (sky) light level field */
 export const LIGHT_BITS = 5;
+
+/** Bits for block-light field */
+export const BLOCK_LIGHT_BITS = 5;
 
 /** Maximum weight value in packed form */
 export const WEIGHT_MAX_PACKED = (1 << WEIGHT_BITS) - 1; // 15
@@ -34,8 +43,11 @@ export const WEIGHT_MAX_PACKED = (1 << WEIGHT_BITS) - 1; // 15
 /** Maximum material ID value */
 export const MATERIAL_MAX = (1 << MATERIAL_BITS) - 1; // 127
 
-/** Maximum light level value */
+/** Maximum (sky) light level value */
 export const LIGHT_MAX = (1 << LIGHT_BITS) - 1; // 31
+
+/** Maximum block-light level value */
+export const BLOCK_LIGHT_MAX = (1 << BLOCK_LIGHT_BITS) - 1; // 31
 
 /** Bit shift for material field */
 export const MATERIAL_SHIFT = LIGHT_BITS; // 5
@@ -43,7 +55,10 @@ export const MATERIAL_SHIFT = LIGHT_BITS; // 5
 /** Bit shift for weight field */
 export const WEIGHT_SHIFT = LIGHT_BITS + MATERIAL_BITS; // 12
 
-/** Bit mask for light field */
+/** Bit shift for block-light field (first bit past the original 16-bit word) */
+export const BLOCK_LIGHT_SHIFT = 16;
+
+/** Bit mask for (sky) light field */
 export const LIGHT_MASK = LIGHT_MAX; // 0b11111
 
 /** Bit mask for material field (before shift) */
@@ -51,6 +66,19 @@ export const MATERIAL_MASK = MATERIAL_MAX; // 0b1111111
 
 /** Bit mask for weight field (before shift) */
 export const WEIGHT_MASK = WEIGHT_MAX_PACKED; // 0b1111
+
+/** Bit mask for block-light field (before shift) */
+export const BLOCK_LIGHT_MASK = BLOCK_LIGHT_MAX; // 0b11111
+
+/** Clear mask for the block-light field (positioned, for read-modify-write) */
+export const BLOCK_LIGHT_CLEAR = ~(BLOCK_LIGHT_MASK << BLOCK_LIGHT_SHIFT);
+
+/**
+ * Mask for the "static" low 16 bits (weight + material + sky light) of the word.
+ * Used to strip block-light/spare bits before indexing the material/weight LUTs,
+ * which are sized 1<<(16-LIGHT_BITS) and indexed by `word >> LIGHT_BITS`.
+ */
+export const VOXEL_STATIC_MASK = 0xFFFF;
 
 /** Packed weight threshold for surface (weight=0 boundary) */
 export const SURFACE_PACKED_THRESHOLD = WEIGHT_MAX_PACKED >> 1; // 7

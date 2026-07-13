@@ -16,7 +16,7 @@ export interface ChunkLike {
   readonly cx: number;
   readonly cy: number;
   readonly cz: number;
-  readonly data: Uint16Array;
+  readonly data: Uint32Array;
 }
 
 /**

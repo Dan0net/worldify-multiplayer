@@ -31,7 +31,7 @@ export interface SurfaceColumn {
   chunks: Array<{
     cy: number;
     lastBuildSeq: number;
-    data: Uint16Array;
+    data: Uint32Array;
   }>;
 }
 

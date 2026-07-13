@@ -147,7 +147,8 @@ for (const id of pallet.types.liquid) {
  */
 export const MATERIAL_EMISSION_LUT = new Uint8Array(128);
 
-// Lava (ID 50) emits light level 24
+// Lava (ID 50) emits at full strength (LIGHT_MAX = 31); tune brightness via the
+// block-light intensity uniform rather than lowering the propagation range here.
 MATERIAL_EMISSION_LUT[50] = LIGHT_MAX;
 
 /**

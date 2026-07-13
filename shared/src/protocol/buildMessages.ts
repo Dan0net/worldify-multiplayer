@@ -57,9 +57,9 @@
  * │ 3-4         │ int16   │ Chunk Y coordinate                       │
  * │ 5-6         │ int16   │ Chunk Z coordinate                       │
  * │ 7-10        │ uint32  │ Last build sequence applied to chunk     │
- * │ 11+         │ bytes   │ Raw voxel data (32×32×32×2 = 65536 bytes)│
+ * │ 11+         │ bytes   │ Raw voxel data (32×32×32×4 = 131072 bytes)│
  * └─────────────┴─────────┴──────────────────────────────────────────┘
- * Total: 65547 bytes
+ * Total: 131083 bytes
  * 
  * VOXEL_CHUNK_REQUEST Binary Layout (Client -> Server):
  * Request full chunk data (for streaming or resync).
@@ -177,8 +177,8 @@ export interface VoxelChunkData {
   chunkZ: number;
   /** Last build sequence number applied to this chunk */
   lastBuildSeq: number;
-  /** Raw voxel data (32×32×32 = 32768 uint16 values) */
-  voxelData: Uint16Array;
+  /** Raw voxel data (32×32×32 = 32768 uint32 values) */
+  voxelData: Uint32Array;
 }
 
 /**
@@ -382,8 +382,8 @@ export function decodeVoxelBuildCommit(reader: ByteReader): VoxelBuildCommit {
  * Encode chunk data for network transmission.
  */
 export function encodeVoxelChunkData(chunk: VoxelChunkData): Uint8Array {
-  // 1 (msgId) + 6 (coords) + 4 (seq) + 65536 (data) = 65547 bytes
-  const size = 11 + VOXELS_PER_CHUNK * 2;
+  // 1 (msgId) + 6 (coords) + 4 (seq) + 131072 (data) = 131083 bytes
+  const size = 11 + VOXELS_PER_CHUNK * 4;
   const writer = new ByteWriter(size);
   
   writer.writeUint8(MSG_VOXEL_CHUNK_DATA);
@@ -412,7 +412,7 @@ export function decodeVoxelChunkData(reader: ByteReader): VoxelChunkData {
   const lastBuildSeq = reader.readUint32();
   
   // Read raw voxel data
-  const voxelData = new Uint16Array(VOXELS_PER_CHUNK);
+  const voxelData = new Uint32Array(VOXELS_PER_CHUNK);
   const bytes = new Uint8Array(voxelData.buffer);
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = reader.readUint8();

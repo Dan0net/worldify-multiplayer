@@ -17,7 +17,7 @@ import { isVoxelSolid, getMaterial, voxelIndex } from './voxelData.js';
  * @param data - The chunk's voxel data array
  * @returns true if chunk contains at least one solid voxel
  */
-export function chunkHasContent(data: Uint16Array): boolean {
+export function chunkHasContent(data: Uint32Array): boolean {
   for (let i = 0; i < data.length; i++) {
     if (isVoxelSolid(data[i])) {
       return true;
@@ -32,7 +32,7 @@ export function chunkHasContent(data: Uint16Array): boolean {
  * @param data - The chunk's voxel data array
  * @returns true if chunk contains no solid voxels
  */
-export function chunkIsEmpty(data: Uint16Array): boolean {
+export function chunkIsEmpty(data: Uint32Array): boolean {
   return !chunkHasContent(data);
 }
 
@@ -59,7 +59,7 @@ export interface ColumnSurfaceResult {
  * @param lz - Local Z coordinate (0-31)
  * @returns Surface result with local Y, material, and found flag
  */
-export function scanChunkColumn(data: Uint16Array, lx: number, lz: number): ColumnSurfaceResult {
+export function scanChunkColumn(data: Uint32Array, lx: number, lz: number): ColumnSurfaceResult {
   for (let ly = CHUNK_SIZE - 1; ly >= 0; ly--) {
     const index = voxelIndex(lx, ly, lz);
     const voxel = data[index];
@@ -86,7 +86,7 @@ export function scanChunkColumn(data: Uint16Array, lx: number, lz: number): Colu
  * @returns Object with global voxel height and material
  */
 export function scanMultiChunkColumn(
-  chunks: Array<{ cy: number; data: Uint16Array }>,
+  chunks: Array<{ cy: number; data: Uint32Array }>,
   lx: number,
   lz: number
 ): { height: number; material: number } {
@@ -163,7 +163,7 @@ export function getChunkRangeFromHeights(heights: ArrayLike<number>): ChunkRange
  * @param data - The chunk's voxel data array
  * @returns Number of solid voxels
  */
-export function countSolidVoxels(data: Uint16Array): number {
+export function countSolidVoxels(data: Uint32Array): number {
   let count = 0;
   for (let i = 0; i < data.length; i++) {
     if (isVoxelSolid(data[i])) {
@@ -179,6 +179,6 @@ export function countSolidVoxels(data: Uint16Array): number {
  * @param data - The chunk's voxel data array
  * @returns Percentage of solid voxels (0-100)
  */
-export function getChunkFillPercentage(data: Uint16Array): number {
+export function getChunkFillPercentage(data: Uint32Array): number {
   return (countSolidVoxels(data) / VOXELS_PER_CHUNK) * 100;
 }
