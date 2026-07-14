@@ -42,9 +42,9 @@ export function MobileControls() {
   const toggleBuildMode = useGameStore((s) => s.toggleBuildMode);
   // Narrow selectors — the current build's config/rotation only change on
   // selection, not per frame (unlike hasValidTarget), so this won't thrash.
-  const currentConfig = useGameStore((s) => s.build.presetConfigs[s.build.presetId]);
   const currentRotation = useGameStore((s) => s.build.presetMeta[s.build.presetId]?.baseRotation);
-  const buildThumb = usePresetThumbnail(currentConfig, currentRotation, { priority: THUMB_PRIORITY.HIGH });
+  const currentParts = useGameStore((s) => s.build.presetMeta[s.build.presetId]?.parts);
+  const buildThumb = usePresetThumbnail(currentParts, currentRotation, { priority: THUMB_PRIORITY.HIGH });
 
   const [sprintOn, setSprintOn] = useState(false);
   const [joy, setJoy] = useState<{ dx: number; dy: number } | null>(null);

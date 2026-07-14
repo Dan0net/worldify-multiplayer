@@ -5,10 +5,10 @@
  */
 
 import { CHUNK_SIZE, VOXEL_SCALE } from './constants.js';
-import { 
-  BuildConfig, 
-  BuildMode, 
-  BuildOperation, 
+import {
+  BuildConfig,
+  BuildMode,
+  BuildOperation,
   VoxelBBox,
   clamp,
 } from './buildTypes.js';
@@ -149,26 +149,40 @@ export function getApplyFunction(mode: BuildMode): ApplyFunction {
  * Returns the range of voxels that could be affected.
  */
 export function calculateBuildBBox(operation: BuildOperation): VoxelBBox {
-  const { center, config } = operation;
-  
-  // Calculate max radius in any direction (conservative estimate for rotated shapes)
-  const maxSize = Math.max(config.size.x, config.size.y, config.size.z);
-  // Add margin for rotation, smooth transitions, and 1 extra voxel so surface nets
-  // can read the empty neighbor row beyond the SDF shape boundary
-  const margin = maxSize + 3;
-  
+  const { center, parts } = operation;
+
   // Convert world center to voxel coordinates
   const centerVoxelX = center.x / VOXEL_SCALE;
   const centerVoxelY = center.y / VOXEL_SCALE;
   const centerVoxelZ = center.z / VOXEL_SCALE;
-  
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+  for (const part of parts) {
+    const { size } = part.config;
+    // Max radius in any direction (conservative estimate for rotated shapes) + margin
+    // for rotation, smooth transitions, and 1 extra voxel so surface nets can read the
+    // empty neighbor row beyond the SDF boundary.
+    const margin = Math.max(size.x, size.y, size.z) + 3;
+    // The part sits `offset` (voxel units) from center in the pre-rotation frame; after
+    // rotation it can lie |offset| away in any direction, so add its length to the radius.
+    const offLen = Math.sqrt(
+      part.offset.x * part.offset.x + part.offset.y * part.offset.y + part.offset.z * part.offset.z
+    );
+    const r = margin + offLen;
+    minX = Math.min(minX, centerVoxelX - r); maxX = Math.max(maxX, centerVoxelX + r);
+    minY = Math.min(minY, centerVoxelY - r); maxY = Math.max(maxY, centerVoxelY + r);
+    minZ = Math.min(minZ, centerVoxelZ - r); maxZ = Math.max(maxZ, centerVoxelZ + r);
+  }
+
   return {
-    minX: Math.floor(centerVoxelX - margin),
-    minY: Math.floor(centerVoxelY - margin),
-    minZ: Math.floor(centerVoxelZ - margin),
-    maxX: Math.ceil(centerVoxelX + margin),
-    maxY: Math.ceil(centerVoxelY + margin),
-    maxZ: Math.ceil(centerVoxelZ + margin),
+    minX: Math.floor(minX),
+    minY: Math.floor(minY),
+    minZ: Math.floor(minZ),
+    maxX: Math.ceil(maxX),
+    maxY: Math.ceil(maxY),
+    maxZ: Math.ceil(maxZ),
   };
 }
 
@@ -213,22 +227,32 @@ export function drawToChunk(
   operation: BuildOperation,
   targetData: Uint32Array = chunk.data
 ): boolean {
-  const { center, rotation, config } = operation;
-  
+  const { center, rotation } = operation;
+
   // Get the inverse rotation to transform voxel positions into shape space
   const invRotation = invertQuat(rotation);
-  
+
   // Get chunk world position
   const chunkWorldPos = chunk.getWorldPosition();
-  
-  // Get the apply function for this mode
-  const applyFn = getApplyFunction(config.mode);
-  
-  // Weight multiplier for subtract mode
-  const weightMult = config.mode === BuildMode.SUBTRACT ? -1 : 1;
-  
+
+  // Precompute per-part draw state. All parts share `rotation`, so in shape-local space
+  // a part is just a translation by its offset (voxel units → world units). One
+  // inverse-rotate per voxel is reused across every part.
+  const prepared = operation.parts.map((part) => ({
+    applyFn: getApplyFunction(part.config.mode),
+    weightMult: part.config.mode === BuildMode.SUBTRACT ? -1 : 1,
+    material: part.config.material,
+    config: part.config,
+    ox: part.offset.x * VOXEL_SCALE,
+    oy: part.offset.y * VOXEL_SCALE,
+    oz: part.offset.z * VOXEL_SCALE,
+  }));
+
   let anyChanged = false;
-  
+
+  // Scratch object reused per part to avoid per-voxel allocation.
+  const partPos: Vec3 = { x: 0, y: 0, z: 0 };
+
   // Calculate local bounding box within this chunk
   // (Could optimize this further by intersecting with operation bbox)
   for (let lz = 0; lz < CHUNK_SIZE; lz++) {
@@ -238,39 +262,48 @@ export function drawToChunk(
         const worldX = chunkWorldPos.x + (lx) * VOXEL_SCALE;
         const worldY = chunkWorldPos.y + (ly) * VOXEL_SCALE;
         const worldZ = chunkWorldPos.z + (lz) * VOXEL_SCALE;
-        
+
         // Position relative to build center
         const relPos: Vec3 = {
           x: worldX - center.x,
           y: worldY - center.y,
           z: worldZ - center.z,
         };
-        
-        // Transform to shape's local space (inverse rotate)
+
+        // Transform to shape's local space (inverse rotate) — shared across all parts
         const localPos = applyQuatToVec3(relPos, invRotation);
-        
-        // Calculate SDF distance
-        const sdfDist = sdfFromConfig(localPos, config);
-        
-        // Only process voxels that are near the shape (within ~1 voxel of surface)
-        if (sdfDist > 1.5) continue;
-        
-        // Convert SDF to weight
-        const weight = sdfToWeight(sdfDist) * weightMult;
-        
-        // Apply the build mode
+
+        // Fold every part into this voxel in order (composite atomically).
         const idx = voxelIndex(lx, ly, lz);
-        const existingPacked = targetData[idx];
-        const { packed, changed } = applyFn(existingPacked, weight, config.material);
-        
-        if (changed) {
-          targetData[idx] = packed;
+        let current = targetData[idx];
+        let voxelChanged = false;
+
+        for (const part of prepared) {
+          // Part-local position = shape-local position minus the part's offset.
+          partPos.x = localPos.x - part.ox;
+          partPos.y = localPos.y - part.oy;
+          partPos.z = localPos.z - part.oz;
+
+          const sdfDist = sdfFromConfig(partPos, part.config);
+          // Only process voxels near this part's surface (within ~1 voxel).
+          if (sdfDist > 1.5) continue;
+
+          const weight = sdfToWeight(sdfDist) * part.weightMult;
+          const { packed, changed } = part.applyFn(current, weight, part.material);
+          if (changed) {
+            current = packed;
+            voxelChanged = true;
+          }
+        }
+
+        if (voxelChanged) {
+          targetData[idx] = current;
           anyChanged = true;
         }
       }
     }
   }
-  
+
   return anyChanged;
 }
 
@@ -314,6 +347,6 @@ export function createBuildOperation(
   return {
     center: { x: centerX, y: centerY, z: centerZ },
     rotation: { x: 0, y: 0, z: 0, w: 1 },  // Identity quaternion
-    config,
+    parts: [{ config, offset: { x: 0, y: 0, z: 0 } }],
   };
 }

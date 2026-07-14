@@ -12,6 +12,7 @@ import {
   VoxelBuildIntent,
   VoxelBuildCommit,
   VoxelChunkRequest,
+  BuildConfig,
   BuildResult,
   BuildShape,
   encodeVoxelBuildCommit,
@@ -70,13 +71,18 @@ function isWithinRange(
  * Validate build configuration.
  * CYLINDER and SPHERE shapes don't use size.z, so allow it to be 0.
  */
-function isValidConfig(intent: VoxelBuildIntent): boolean {
-  const { size, shape } = intent.config;
+function isValidBuildConfig(config: BuildConfig): boolean {
+  const { size, shape } = config;
   const needsZ = shape !== BuildShape.CYLINDER && shape !== BuildShape.SPHERE;
   return (
     size.x > 0 && size.y > 0 && (!needsZ || size.z > 0) &&
     size.x <= 20 && size.y <= 20 && size.z <= 20
   );
+}
+
+function isValidConfig(intent: VoxelBuildIntent): boolean {
+  // Every part must be a valid shape config.
+  return intent.parts.length > 0 && intent.parts.every((p) => isValidBuildConfig(p.config));
 }
 
 // ============== Build Intent Handler ==============
@@ -122,11 +128,11 @@ export function handleBuildIntent(
   // Get chunk provider
   const chunkProvider = getChunkProvider();
 
-  // Build operation
+  // Build operation (parts are the geometry)
   const operation = {
     center: intent.center,
     rotation: intent.rotation,
-    config: intent.config,
+    parts: intent.parts,
   };
 
   // Get affected chunks and apply build

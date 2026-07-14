@@ -11,28 +11,19 @@
  * 4. For new chunks or resync → VOXEL_CHUNK_DATA → Client
  * 
  * VOXEL_BUILD_INTENT Binary Layout (Client -> Server):
+ * Geometry is always a list of parts (a simple build is a 1-element list).
  * ┌─────────────┬─────────┬──────────────────────────────────────────┐
  * │ Byte Offset │ Type    │ Description                              │
  * ├─────────────┼─────────┼──────────────────────────────────────────┤
  * │ 0           │ uint8   │ MSG_VOXEL_BUILD_INTENT (0x06)            │
- * │ 1-4         │ float32 │ Center X (world coords)                  │
- * │ 5-8         │ float32 │ Center Y (world coords)                  │
- * │ 9-12        │ float32 │ Center Z (world coords)                  │
- * │ 13-16       │ float32 │ Quaternion X                             │
- * │ 17-20       │ float32 │ Quaternion Y                             │
- * │ 21-24       │ float32 │ Quaternion Z                             │
- * │ 25-28       │ float32 │ Quaternion W                             │
- * │ 29          │ uint8   │ Shape (0=cube, 1=sphere, 2=cylinder, 3=prism) │
- * │ 30          │ uint8   │ Mode (0=add, 1=subtract, 2=paint, 3=fill)│
- * │ 31-34       │ float32 │ Size X                                   │
- * │ 35-38       │ float32 │ Size Y                                   │
- * │ 39-42       │ float32 │ Size Z                                   │
- * │ 43          │ uint8   │ Material ID (0-127)                      │
- * │ 44          │ uint8   │ Flags (bit0=hasThickness, bit1=closed)   │
- * │ 45-48       │ float32 │ Thickness (optional, if flag set)        │
- * │ 49-52       │ float32 │ Arc sweep (optional, if needed)          │
+ * │ 1-12        │ float32 │ Center X/Y/Z (world coords)              │
+ * │ 13-28       │ float32 │ Quaternion X/Y/Z/W                       │
+ * │ 29          │ uint8   │ Part count (>= 1)                        │
+ * │ 30+         │ part[]  │ Per part: offset(3×f32) + config block   │
  * └─────────────┴─────────┴──────────────────────────────────────────┘
- * Variable size: 45-53 bytes depending on optional fields
+ * Per-part config block: shape(u8) mode(u8) size(3×f32) material(u8)
+ *   flags(u8: bit0=thickness,1=closed,2=arc) [thickness f32] [arcSweep f32].
+ * Size: 12 + 16 + 1 + Σ(12 + configBytes).
  * 
  * VOXEL_BUILD_COMMIT Binary Layout (Server -> Client):
  * Echoes the build intent to all clients so they can apply it locally.
@@ -78,6 +69,7 @@ import { ByteReader, ByteWriter } from '../util/bytes.js';
 import {
   BuildConfig,
   BuildMode,
+  BuildPart,
   BuildShape,
   Quat,
   Vec3,
@@ -148,8 +140,8 @@ export interface VoxelBuildIntent {
   center: Vec3;
   /** Rotation as quaternion */
   rotation: Quat;
-  /** Build configuration */
-  config: BuildConfig;
+  /** Composite parts (>= 1). Drawn atomically as one build. */
+  parts: BuildPart[];
 }
 
 /**
@@ -195,49 +187,83 @@ export interface VoxelChunkRequest {
 // ============== Intent Encoding (shared by INTENT and COMMIT) ==============
 
 /**
- * Write intent data to a ByteWriter (without message ID).
+ * Write a self-contained config block (shape, mode, size, material, flags, optional
+ * thickness/arcSweep). Used for composite parts. Same field layout as the main config
+ * block minus the center/rotation.
  */
-function writeIntentData(writer: ByteWriter, intent: VoxelBuildIntent): void {
-  const { center, rotation, config } = intent;
-  
-  // Calculate flags
+function writePartConfig(writer: ByteWriter, config: BuildConfig): void {
   let flags = 0;
   if (config.thickness !== undefined) flags |= FLAG_HAS_THICKNESS;
   if (config.closed) flags |= FLAG_CLOSED;
   if (config.arcSweep !== undefined) flags |= FLAG_HAS_ARC_SWEEP;
-  
+
+  writer.writeUint8(SHAPE_TO_NUM[config.shape]);
+  writer.writeUint8(MODE_TO_NUM[config.mode]);
+  writer.writeFloat32(config.size.x);
+  writer.writeFloat32(config.size.y);
+  writer.writeFloat32(config.size.z);
+  writer.writeUint8(config.material & 0x7f);
+  writer.writeUint8(flags);
+  if (flags & FLAG_HAS_THICKNESS) writer.writeFloat32(config.thickness!);
+  if (flags & FLAG_HAS_ARC_SWEEP) writer.writeFloat32(config.arcSweep!);
+}
+
+/** Read a self-contained config block written by writePartConfig. */
+function readPartConfig(reader: ByteReader): BuildConfig {
+  const shapeNum = reader.readUint8();
+  const modeNum = reader.readUint8();
+  const size = {
+    x: reader.readFloat32(),
+    y: reader.readFloat32(),
+    z: reader.readFloat32(),
+  };
+  const material = reader.readUint8();
+  const flags = reader.readUint8();
+  const config: BuildConfig = {
+    shape: NUM_TO_SHAPE[shapeNum] ?? BuildShape.CUBE,
+    mode: NUM_TO_MODE[modeNum] ?? BuildMode.ADD,
+    size,
+    material,
+  };
+  if (flags & FLAG_HAS_THICKNESS) config.thickness = reader.readFloat32();
+  if (flags & FLAG_CLOSED) config.closed = true;
+  if (flags & FLAG_HAS_ARC_SWEEP) config.arcSweep = reader.readFloat32();
+  return config;
+}
+
+/** Byte size of a writePartConfig block. */
+function partConfigByteSize(config: BuildConfig): number {
+  let s = 16; // shape(1) + mode(1) + size(12) + material(1) + flags(1)
+  if (config.thickness !== undefined) s += 4;
+  if (config.arcSweep !== undefined) s += 4;
+  return s;
+}
+
+/**
+ * Write intent data to a ByteWriter (without message ID):
+ * center(3f) + rotation(4f) + partCount(u8) + per-part(offset 3f + config block).
+ */
+function writeIntentData(writer: ByteWriter, intent: VoxelBuildIntent): void {
+  const { center, rotation, parts } = intent;
+
   // Center position
   writer.writeFloat32(center.x);
   writer.writeFloat32(center.y);
   writer.writeFloat32(center.z);
-  
+
   // Rotation quaternion
   writer.writeFloat32(rotation.x);
   writer.writeFloat32(rotation.y);
   writer.writeFloat32(rotation.z);
   writer.writeFloat32(rotation.w);
-  
-  // Shape and mode
-  writer.writeUint8(SHAPE_TO_NUM[config.shape]);
-  writer.writeUint8(MODE_TO_NUM[config.mode]);
-  
-  // Size
-  writer.writeFloat32(config.size.x);
-  writer.writeFloat32(config.size.y);
-  writer.writeFloat32(config.size.z);
-  
-  // Material
-  writer.writeUint8(config.material & 0x7f);
-  
-  // Flags
-  writer.writeUint8(flags);
-  
-  // Optional fields
-  if (flags & FLAG_HAS_THICKNESS) {
-    writer.writeFloat32(config.thickness!);
-  }
-  if (flags & FLAG_HAS_ARC_SWEEP) {
-    writer.writeFloat32(config.arcSweep!);
+
+  // Parts (>= 1): count then offset + config block per part
+  writer.writeUint8(parts.length);
+  for (const p of parts) {
+    writer.writeFloat32(p.offset.x);
+    writer.writeFloat32(p.offset.y);
+    writer.writeFloat32(p.offset.z);
+    writePartConfig(writer, p.config);
   }
 }
 
@@ -251,7 +277,7 @@ function readIntentData(reader: ByteReader): VoxelBuildIntent {
     y: reader.readFloat32(),
     z: reader.readFloat32(),
   };
-  
+
   // Rotation quaternion
   const rotation: Quat = {
     x: reader.readFloat32(),
@@ -259,53 +285,29 @@ function readIntentData(reader: ByteReader): VoxelBuildIntent {
     z: reader.readFloat32(),
     w: reader.readFloat32(),
   };
-  
-  // Shape and mode
-  const shapeNum = reader.readUint8();
-  const modeNum = reader.readUint8();
-  
-  // Size
-  const size = {
-    x: reader.readFloat32(),
-    y: reader.readFloat32(),
-    z: reader.readFloat32(),
-  };
-  
-  // Material
-  const material = reader.readUint8();
-  
-  // Flags
-  const flags = reader.readUint8();
-  
-  // Build config
-  const config: BuildConfig = {
-    shape: NUM_TO_SHAPE[shapeNum] ?? BuildShape.CUBE,
-    mode: NUM_TO_MODE[modeNum] ?? BuildMode.ADD,
-    size,
-    material,
-  };
-  
-  // Optional fields
-  if (flags & FLAG_HAS_THICKNESS) {
-    config.thickness = reader.readFloat32();
+
+  // Parts
+  const count = reader.readUint8();
+  const parts: BuildPart[] = [];
+  for (let i = 0; i < count; i++) {
+    const offset: Vec3 = {
+      x: reader.readFloat32(),
+      y: reader.readFloat32(),
+      z: reader.readFloat32(),
+    };
+    parts.push({ config: readPartConfig(reader), offset });
   }
-  if (flags & FLAG_CLOSED) {
-    config.closed = true;
-  }
-  if (flags & FLAG_HAS_ARC_SWEEP) {
-    config.arcSweep = reader.readFloat32();
-  }
-  
-  return { center, rotation, config };
+
+  return { center, rotation, parts };
 }
 
 /**
- * Calculate the byte size of an intent.
+ * Calculate the byte size of an intent (without message ID):
+ * 12 (center) + 16 (rotation) + 1 (count) + Σ per-part (12 offset + config block).
  */
 function intentByteSize(intent: VoxelBuildIntent): number {
-  let size = 44; // base size (without message ID)
-  if (intent.config.thickness !== undefined) size += 4;
-  if (intent.config.arcSweep !== undefined) size += 4;
+  let size = 12 + 16 + 1;
+  for (const p of intent.parts) size += 12 + partConfigByteSize(p.config);
   return size;
 }
 

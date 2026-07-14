@@ -4,12 +4,12 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { BuildConfig, Quat } from '@worldify/shared';
+import type { BuildPart, Quat } from '@worldify/shared';
 import { useGameStore } from '../state/store';
 import { queueThumbnailRender, THUMB_PRIORITY } from './PresetThumbnailRenderer';
 
 export function usePresetThumbnail(
-  config: BuildConfig | undefined,
+  parts: BuildPart[] | undefined,
   rotation?: Quat,
   options?: { priority?: number },
 ): string | null {
@@ -18,20 +18,21 @@ export function usePresetThumbnail(
   // renders untextured before that, and low/high are distinct cache entries.
   const textureState = useGameStore((s) => s.textureState);
   const rotKey = rotation ? `${rotation.x},${rotation.y},${rotation.z},${rotation.w}` : '';
-  const depKey = config
-    ? `${config.mode}|${config.shape}|${config.size.x},${config.size.y},${config.size.z}|${config.material}|${config.thickness ?? 0}|${config.closed ?? 1}|${config.arcSweep ?? 0}|${rotKey}|${textureState}`
-    : '';
+  const partsKey = (parts ?? [])
+    .map((p) => `${p.config.shape},${p.config.mode},${p.config.material},${p.config.size.x},${p.config.size.y},${p.config.size.z},${p.config.thickness ?? 0},${p.config.closed ?? 1},${p.config.arcSweep ?? 0}@${p.offset.x},${p.offset.y},${p.offset.z}`)
+    .join(';');
+  const depKey = parts && parts.length ? `${partsKey}|${rotKey}|${textureState}` : '';
 
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!config) {
+    if (!parts || !parts.length) {
       setUrl(null);
       return;
     }
 
     let cancelled = false;
-    queueThumbnailRender(config, rotation, (result) => {
+    queueThumbnailRender(parts, rotation, (result) => {
       if (!cancelled) setUrl(result);
     }, priority);
 

@@ -12,13 +12,16 @@ export function getBuildPreset(): BuildPreset {
   const state = useGameStore.getState();
   const id = state.build.presetId;
   const base = getPreset(id);
-  const config = state.build.presetConfigs[id];
   const meta = state.build.presetMeta[id];
-  if (config && meta) {
-    return { ...base, config, align: meta.align, snapShape: meta.snapShape, baseRotation: meta.baseRotation, autoRotateY: meta.autoRotateY };
-  }
-  if (config) {
-    return { ...base, config };
+  if (meta) {
+    return {
+      ...base,
+      align: meta.align,
+      snapShape: meta.snapShape,
+      baseRotation: meta.baseRotation,
+      autoRotateY: meta.autoRotateY,
+      parts: meta.parts,
+    };
   }
   return base;
 }

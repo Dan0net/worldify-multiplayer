@@ -1,9 +1,14 @@
 /**
  * Build presets - predefined build configurations mapped to keyboard 0-9
  * Ported from worldify-app's BuildPresets.ts with architecture-appropriate types.
+ *
+ * Geometry is always expressed as `parts: BuildPart[]` — a simple preset is just a
+ * one-element list at zero offset; composite presets (e.g. the Torch) list several
+ * shapes with per-part offsets. There is no separate single `config`; where a single
+ * representative is needed, use `parts[0].config` (see `representativeConfig`).
  */
 
-import { BuildConfig, BuildMode, BuildPresetSnapShape, BuildShape, Size3 } from './buildTypes.js';
+import { BuildConfig, BuildMode, BuildPart, BuildPresetSnapShape, BuildShape, Size3, Vec3 } from './buildTypes.js';
 import {
   Quat, yRotationQuat, xRotationQuat, multiplyQuats,
 } from '../util/math.js';
@@ -22,12 +27,14 @@ export enum BuildPresetAlign {
   SURFACE = 'surface',
   /** Carve into surface: auto-rotates to face normal and projects INTO the voxels */
   CARVE = 'carve',
+  /** Base at surface; rotates so the shape points OUT along the face normal
+   *  (up off floors, down off ceilings, sideways off walls) */
+  POINT_OUT = 'point-out',
 }
 
 /**
- * Per-slot metadata that sits alongside BuildConfig.
- * Stores the preset-level properties that affect placement behavior
- * (as opposed to the shape/material data in BuildConfig).
+ * Per-slot metadata that sits alongside a preset's geometry.
+ * Stores the preset-level properties that affect placement behavior.
  */
 export interface PresetSlotMeta {
   /** Display name for this slot's current preset template */
@@ -40,18 +47,20 @@ export interface PresetSlotMeta {
   baseRotation?: Quat;
   /** When true, the shape auto-rotates to face the hit surface normal */
   autoRotateY?: boolean;
+  /** Composite parts (>= 1). The editable geometry for this slot. */
+  parts: BuildPart[];
 }
 
 /**
- * A named build preset with configuration and alignment.
+ * A named build preset with geometry and alignment.
  */
 export interface BuildPreset {
   /** Preset ID (0-9, mapped to keyboard) */
   id: number;
   /** Display name */
   name: string;
-  /** Build configuration (shape, mode, size, material) */
-  config: BuildConfig;
+  /** Composite parts (>= 1). Simple presets have a single zero-offset part. */
+  parts: BuildPart[];
   /** How to position relative to hit point */
   align: BuildPresetAlign;
   /**
@@ -76,22 +85,27 @@ function size(x: number, y: number, z: number): Size3 {
   return { x, y, z };
 }
 
+/**
+ * Create a build part (a shape config + canonical offset in voxel units).
+ * Offset defaults to the origin — simple single-shape presets place at the aligned center.
+ */
+function part(config: BuildConfig, offset: Vec3 = { x: 0, y: 0, z: 0 }): BuildPart {
+  return { config, offset };
+}
+
 /** Preset ID for the "None" (disabled) preset */
 export const NONE_PRESET_ID = 1;
 
 /**
  * Default build presets (10 total, mapped to keys 0-9).
  * Preset 1 is "None" (building disabled) — key 1 is the default.
- *
- * Ported from worldify-app BuildPresets — first 10 items mapped to hotbar.
- * Material IDs match the shared pallet (pallet.json indices are identical).
  */
 export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   // 0 = Blob paint (sphere, paint, centered) — last in keyboard layout
   {
     id: 0,
     name: 'Paint',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 },
+    parts: [part({ shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 })],
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
@@ -99,7 +113,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 1,
     name: 'None',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0, 0, 0), material: 0 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0, 0, 0), material: 0 })],
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.POINT,
   },
@@ -107,7 +121,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 2,
     name: 'Brick Wall',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 })],
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.PLANE,
   },
@@ -115,11 +129,11 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 3,
     name: 'Stairs',
-    config: {
+    parts: [part({
       shape: BuildShape.CUBE, mode: BuildMode.FILL,
       size: size(4, Math.sqrt(2 ** 2 + 4 ** 2), 1),
       material: 29,
-    },
+    })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.atan(4 / 2)),
     snapShape: BuildPresetSnapShape.PLANE,
@@ -128,7 +142,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 4,
     name: 'Wood Pillar',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 })],
     align: BuildPresetAlign.BASE,
     snapShape: BuildPresetSnapShape.LINE,
   },
@@ -136,7 +150,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 5,
     name: 'Wood Beam',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.PI / 2),
     snapShape: BuildPresetSnapShape.LINE,
@@ -145,7 +159,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 6,
     name: 'Stone Floor',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.PI / 2),
     snapShape: BuildPresetSnapShape.PLANE,
@@ -154,7 +168,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 7,
     name: 'Leafy Blob',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(3, 3, 3), material: 48 },
+    parts: [part({ shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(3, 3, 3), material: 48 })],
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
@@ -162,7 +176,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 8,
     name: 'Blob Carve',
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 },
+    parts: [part({ shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 })],
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
@@ -170,7 +184,7 @@ export const DEFAULT_BUILD_PRESETS: readonly BuildPreset[] = [
   {
     id: 9,
     name: 'Door Carve',
-    config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 })],
     align: BuildPresetAlign.CARVE,
     autoRotateY: true,
     snapShape: BuildPresetSnapShape.NONE,
@@ -196,8 +210,8 @@ export interface BuildPresetTemplate {
   name: string;
   /** Category for UI grouping */
   category: PresetCategory;
-  /** Build configuration (shape, mode, size, material) */
-  config: BuildConfig;
+  /** Composite parts (>= 1). */
+  parts: BuildPart[];
   /** How to position relative to hit point */
   align: BuildPresetAlign;
   /** Baked-in base rotation */
@@ -226,42 +240,42 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Brick Wall',
     category: PresetCategory.WALLS,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 })],
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.PLANE,
   },
   {
     name: 'Half Brick Wall',
     category: PresetCategory.WALLS,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(2, 2, 0.71), material: 6 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(2, 2, 0.71), material: 6 })],
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.PLANE,
   },
   {
     name: 'Shallow Slope Wall',
     category: PresetCategory.WALLS,
-    config: { shape: BuildShape.PRISM, mode: BuildMode.ADD, size: size(4, 2, 0.71), material: 6 },
+    parts: [part({ shape: BuildShape.PRISM, mode: BuildMode.ADD, size: size(4, 2, 0.71), material: 6 })],
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.PRISM,
   },
   {
     name: 'Half Slope Wall',
     category: PresetCategory.WALLS,
-    config: { shape: BuildShape.PRISM, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 },
+    parts: [part({ shape: BuildShape.PRISM, mode: BuildMode.ADD, size: size(4, 4, 0.71), material: 6 })],
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.PRISM,
   },
   {
     name: 'Steep Slope Wall',
     category: PresetCategory.WALLS,
-    config: { shape: BuildShape.PRISM, mode: BuildMode.ADD, size: size(2, 4, 0.71), material: 6 },
+    parts: [part({ shape: BuildShape.PRISM, mode: BuildMode.ADD, size: size(2, 4, 0.71), material: 6 })],
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.PRISM,
   },
   {
     name: 'Curved Wall',
     category: PresetCategory.WALLS,
-    config: { shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(8, 4, 8), material: 6, thickness: 1, arcSweep: Math.PI / 2 },
+    parts: [part({ shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(8, 4, 8), material: 6, thickness: 1, arcSweep: Math.PI / 2 })],
     align: BuildPresetAlign.BASE,
     snapShape: BuildPresetSnapShape.CYLINDER,
   },
@@ -270,7 +284,7 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Stone Floor',
     category: PresetCategory.FLOORS,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(4, 4, 0.71), material: 8 })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.PI / 2),
     snapShape: BuildPresetSnapShape.PLANE,
@@ -278,7 +292,7 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Half Stone Floor',
     category: PresetCategory.FLOORS,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(2, 2, 0.71), material: 8 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.FILL, size: size(2, 2, 0.71), material: 8 })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.PI / 2),
     snapShape: BuildPresetSnapShape.PLANE,
@@ -288,11 +302,11 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Stone Stairs',
     category: PresetCategory.STAIRS,
-    config: {
+    parts: [part({
       shape: BuildShape.CUBE, mode: BuildMode.FILL,
       size: size(4, Math.sqrt(2 ** 2 + 4 ** 2), 1),
       material: 29,
-    },
+    })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.atan(4 / 2)),
     snapShape: BuildPresetSnapShape.PLANE,
@@ -300,11 +314,11 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Steep Stone Stairs',
     category: PresetCategory.STAIRS,
-    config: {
+    parts: [part({
       shape: BuildShape.CUBE, mode: BuildMode.FILL,
       size: size(4, Math.sqrt(4 ** 2 + 4 ** 2), 1),
       material: 29,
-    },
+    })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.atan(4 / 4)),
     snapShape: BuildPresetSnapShape.PLANE,
@@ -312,11 +326,11 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Shallow Slope Ramp',
     category: PresetCategory.STAIRS,
-    config: {
+    parts: [part({
       shape: BuildShape.CUBE, mode: BuildMode.FILL,
       size: size(4, Math.sqrt(2 ** 2 + 4 ** 2), 1),
       material: 29,
-    },
+    })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.atan(2 / 4)),
     snapShape: BuildPresetSnapShape.PLANE,
@@ -326,29 +340,43 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Wood Pillar',
     category: PresetCategory.STRUCTURAL,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 })],
     align: BuildPresetAlign.BASE,
     snapShape: BuildPresetSnapShape.LINE,
   },
   {
     name: 'Wood Beam',
     category: PresetCategory.STRUCTURAL,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(1, 4, 1), material: 5 })],
     align: BuildPresetAlign.PROJECT,
     baseRotation: xRotationQuat(Math.PI / 2),
     snapShape: BuildPresetSnapShape.LINE,
   },
   {
+    // Composite: a wood column with a glowing lava tip. Authored pointing +Y (base at the
+    // origin, extending up); POINT_OUT rotates +Y onto the targeted face normal.
+    name: 'Torch',
+    category: PresetCategory.STRUCTURAL,
+    align: BuildPresetAlign.POINT_OUT,
+    snapShape: BuildPresetSnapShape.NONE,
+    parts: [
+      // Column: half-height 2 → centre at +2 (base at origin).
+      part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0.71, 2, 0.71), material: 2 }, { x: 0, y: 2, z: 0 }),
+      // Lava blob at the column top (+4), emissive so the tip glows.
+      part({ shape: BuildShape.SPHERE, mode: BuildMode.ADD, size: size(1, 1, 1), material: 50 }, { x: 0, y: 4, z: 0 }),
+    ],
+  },
+  {
     name: 'Brick Cylinder',
     category: PresetCategory.STRUCTURAL,
-    config: { shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(4, 4, 1), material: 6, thickness: 1 },
+    parts: [part({ shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(4, 4, 1), material: 6, thickness: 1 })],
     align: BuildPresetAlign.BASE,
     snapShape: BuildPresetSnapShape.CYLINDER,
   },
   {
     name: 'Hollow Cube',
     category: PresetCategory.STRUCTURAL,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(8, 8, 8), material: 3, thickness: 1 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(8, 8, 8), material: 3, thickness: 1 })],
     align: BuildPresetAlign.PROJECT,
     snapShape: BuildPresetSnapShape.CUBE,
   },
@@ -357,28 +385,28 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Blob Paint',
     category: PresetCategory.TERRAIN,
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 },
+    parts: [part({ shape: BuildShape.SPHERE, mode: BuildMode.PAINT, size: size(2, 2, 2), material: 1 })],
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
   {
     name: 'Blob Carve',
     category: PresetCategory.TERRAIN,
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 },
+    parts: [part({ shape: BuildShape.SPHERE, mode: BuildMode.SUBTRACT, size: size(2, 2, 2), material: 1 })],
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
   {
     name: 'Leafy Blob',
     category: PresetCategory.TERRAIN,
-    config: { shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(3, 3, 3), material: 48 },
+    parts: [part({ shape: BuildShape.SPHERE, mode: BuildMode.FILL, size: size(3, 3, 3), material: 48 })],
     align: BuildPresetAlign.CENTER,
     snapShape: BuildPresetSnapShape.NONE,
   },
   {
     name: 'Door Carve',
     category: PresetCategory.TERRAIN,
-    config: { shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 },
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.SUBTRACT, size: size(4, 6, 3), material: 0 })],
     align: BuildPresetAlign.CARVE,
     autoRotateY: true,
     snapShape: BuildPresetSnapShape.NONE,
@@ -386,7 +414,7 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
   {
     name: 'Flatten',
     category: PresetCategory.TERRAIN,
-    config: { shape: BuildShape.CYLINDER, mode: BuildMode.SUBTRACT, size: size(8, 4, 1), material: 1 },
+    parts: [part({ shape: BuildShape.CYLINDER, mode: BuildMode.SUBTRACT, size: size(8, 4, 1), material: 1 })],
     align: BuildPresetAlign.BASE,
     snapShape: BuildPresetSnapShape.CYLINDER,
   },
@@ -402,6 +430,7 @@ export function templateToSlotMeta(template: BuildPresetTemplate): PresetSlotMet
     snapShape: template.snapShape,
     baseRotation: template.baseRotation,
     autoRotateY: template.autoRotateY,
+    parts: clonePartsList(template.parts),
   };
 }
 
@@ -415,7 +444,16 @@ export function presetToSlotMeta(preset: BuildPreset): PresetSlotMeta {
     snapShape: preset.snapShape,
     baseRotation: preset.baseRotation,
     autoRotateY: preset.autoRotateY,
+    parts: clonePartsList(preset.parts),
   };
+}
+
+/** Deep-clone a parts list so slot edits never mutate the shared catalog/default objects. */
+export function clonePartsList(parts: BuildPart[]): BuildPart[] {
+  return parts.map((p) => ({
+    config: { ...p.config, size: { ...p.config.size } },
+    offset: { ...p.offset },
+  }));
 }
 
 /**
