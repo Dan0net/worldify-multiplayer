@@ -155,15 +155,16 @@ export type { DayNightKeyframe, DayNightConfig };
 
 export const DEFAULT_DAY_NIGHT_CONFIG: DayNightConfig = {
   sunHeight: SUN_ELEVATION_MAX, sunDistance: SUN_DISTANCE, sunSize: 1.0, sunIntensity: LIGHT_SUN_INTENSITY,
-  moonHeight: 55, moonDistance: SUN_DISTANCE, moonSize: 0.5, moonIntensity: 0.3,
+  moonHeight: 55, moonDistance: SUN_DISTANCE, moonSize: 0.5, moonIntensity: 1.0,
   // Long day: dawn ~04:34–06:58, dusk ~19:55–22:05 (sunset centre ≈ 21:00).
   sunriseStart: 0.19, sunriseEnd: 0.29, sunsetStart: 0.83, sunsetEnd: 0.92,
+  twilightAngle: 6,  // ± elevation band for the twilight fade / hand-off overlap
   keyframes: [
     {
       name: 'Night',
       sunColor: '#334466', moonColor: LIGHT_MOON_COLOR,
       skyZenithColor: '#0b1a33', skyHorizonColor: '#243b66', groundColor: HEMISPHERE_GROUND_NIGHT,
-      hemisphereIntensity: 0,
+      hemisphereIntensity: 0.6,
     },
     {
       name: 'Sunrise',

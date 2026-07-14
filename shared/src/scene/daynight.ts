@@ -57,17 +57,14 @@ export interface DayNightConfig {
   moonHeight: number; moonDistance: number; moonSize: number; moonIntensity: number;
   sunriseStart: number; sunriseEnd: number;   // dawn transition window (0..1)
   sunsetStart: number; sunsetEnd: number;      // dusk transition window (0..1)
+  twilightAngle: number;                       // ± elevation band (deg) for the light fade / hand-off overlap
   keyframes: DayNightKeyframe[];               // [Night, Sunrise, Day, Sunset]
 }
 
-/**
- * Elevation band (degrees) over which sun/moon light fades in. It starts BELOW the horizon so a
- * body grazing the horizon still lights the scene (civil twilight) — at elevation 0 each gives
- * ~50%, so the antipodal sun↔moon hand-off overlaps instead of going dark. Well below the horizon
- * (≤ HORIZON_LO) intensity is still 0, so this is not the old "sun lights from under the ground".
- */
-const HORIZON_LO = -6;
-const HORIZON_HI = 6;
+// The elevation intensity gate spans ±`cfg.twilightAngle` around the horizon. It starts BELOW the
+// horizon so a body grazing it still lights the scene (civil twilight) — at elevation 0 each gives
+// ~50%, so the antipodal sun↔moon hand-off overlaps instead of going dark. Larger angle = longer,
+// softer twilight. Well below the band intensity is still 0 (no "sun lights from under the ground").
 
 /**
  * Clamp the window times into [0, 1) and enforce sunriseStart < sunriseEnd < sunsetStart < sunsetEnd
@@ -174,12 +171,13 @@ export function deriveLighting(cfg: DayNightConfig, time: number): DerivedLighti
   const sunElevation = getSunElevation(cfg, T);
   const moonElevation = getMoonElevation(cfg, T);
   const sunAzimuth = getSunAzimuth(T);
+  const tw = Math.max(0.5, cfg.twilightAngle);
   return {
     ...palette,
     sunAzimuth, sunElevation,
     moonAzimuth: (sunAzimuth + 180) % 360, moonElevation,
-    sunIntensity: cfg.sunIntensity * smoothstep(HORIZON_LO, HORIZON_HI, sunElevation),
-    moonIntensity: cfg.moonIntensity * smoothstep(HORIZON_LO, HORIZON_HI, moonElevation),
+    sunIntensity: cfg.sunIntensity * smoothstep(-tw, tw, sunElevation),
+    moonIntensity: cfg.moonIntensity * smoothstep(-tw, tw, moonElevation),
     sunSize: cfg.sunSize, moonSize: cfg.moonSize,
     sunDistance: cfg.sunDistance, moonDistance: cfg.moonDistance,
     time: T, moonHeight: cfg.moonHeight,
