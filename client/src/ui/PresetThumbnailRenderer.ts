@@ -27,6 +27,7 @@ import {
   PRESET_TEMPLATES,
   NONE_PRESET_ID,
   MATERIAL_NAMES,
+  materialCubeParts,
   type BuildConfig,
   type BuildPart,
   type Quat,
@@ -731,7 +732,7 @@ export function preloadPresetThumbnails(): void {
     enqueue(t.parts, t.baseRotation);
   }
   for (let id = 0; id < MATERIAL_NAMES.length; id++) {
-    enqueue([{ config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: id }, offset: { x: 0, y: 0, z: 0 } }]);
+    enqueue(materialCubeParts(id));
   }
 }
 

@@ -17,8 +17,7 @@ import {
   MATERIAL_NAMES,
   GameMode,
   PRESET_TEMPLATES,
-  BuildMode,
-  BuildShape,
+  materialCubeParts,
   type BuildPart,
 } from '@worldify/shared';
 import { usePresetThumbnail } from './usePresetThumbnail';
@@ -78,10 +77,7 @@ function MaterialTile({
   isActive: boolean;
   onSelect: () => void;
 }) {
-  const parts = useMemo<BuildPart[]>(() => ([{
-    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: materialId },
-    offset: { x: 0, y: 0, z: 0 },
-  }]), [materialId]);
+  const parts = useMemo<BuildPart[]>(() => materialCubeParts(materialId), [materialId]);
   const thumbnailUrl = usePresetThumbnail(parts, undefined, { priority: THUMB_PRIORITY.HIGH });
   return <ThumbTile thumbnailUrl={thumbnailUrl} isActive={isActive} onSelect={onSelect} />;
 }

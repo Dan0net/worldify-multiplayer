@@ -45,6 +45,8 @@ export interface StampPlacement {
   worldZ: number;
   /** Rotation in radians (for future use) */
   rotation: number;
+  /** Optional vertical offset (voxels) added to the terrain-height origin (e.g. torch on a wall). */
+  yOffset?: number;
 }
 
 // ============== Default Configuration ==============
