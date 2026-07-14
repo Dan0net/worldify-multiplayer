@@ -3,7 +3,7 @@
  * Ported from worldify-app's BuildPresets.ts with architecture-appropriate types.
  */
 
-import { BuildConfig, BuildMode, BuildPresetSnapShape, BuildShape, Size3 } from './buildTypes.js';
+import { BuildConfig, BuildMode, BuildPart, BuildPresetSnapShape, BuildShape, Size3 } from './buildTypes.js';
 import {
   Quat, yRotationQuat, xRotationQuat, multiplyQuats,
 } from '../util/math.js';
@@ -22,6 +22,9 @@ export enum BuildPresetAlign {
   SURFACE = 'surface',
   /** Carve into surface: auto-rotates to face normal and projects INTO the voxels */
   CARVE = 'carve',
+  /** Base at surface; rotates so the shape points OUT along the face normal
+   *  (up off floors, down off ceilings, sideways off walls) */
+  POINT_OUT = 'point-out',
 }
 
 /**
@@ -40,6 +43,8 @@ export interface PresetSlotMeta {
   baseRotation?: Quat;
   /** When true, the shape auto-rotates to face the hit surface normal */
   autoRotateY?: boolean;
+  /** Composite parts (shape+material+offset). When set, this slot builds a multi-part shape. */
+  parts?: BuildPart[];
 }
 
 /**
@@ -67,6 +72,11 @@ export interface BuildPreset {
    * hit surface normal. User Q/E rotation is ignored.
    */
   autoRotateY?: boolean;
+  /**
+   * Composite parts. When present, the preset builds a multi-part shape drawn
+   * atomically; `config` is a representative copy of `parts[0]`.
+   */
+  parts?: BuildPart[];
 }
 
 /**
@@ -206,6 +216,8 @@ export interface BuildPresetTemplate {
   snapShape: BuildPresetSnapShape;
   /** When true, auto-rotates to face hit surface */
   autoRotateY?: boolean;
+  /** Composite parts (shape+material+offset), drawn atomically as one build. */
+  parts?: BuildPart[];
 }
 
 /** Categories for organizing presets in the menu */
@@ -339,6 +351,22 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
     snapShape: BuildPresetSnapShape.LINE,
   },
   {
+    // Composite: a wood column with a glowing lava tip. Authored pointing +Y (base at the
+    // origin, extending up); POINT_OUT rotates +Y onto the targeted face normal.
+    name: 'Torch',
+    category: PresetCategory.STRUCTURAL,
+    // Representative config = the column (marker colour / validation / thumbnail fallback).
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0.71, 2, 0.71), material: 2 },
+    align: BuildPresetAlign.POINT_OUT,
+    snapShape: BuildPresetSnapShape.NONE,
+    parts: [
+      // Column: half-height 2 → centre at +2 (base at origin).
+      { config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0.71, 2, 0.71), material: 2 }, offset: { x: 0, y: 2, z: 0 } },
+      // Lava blob at the column top (+4), emissive so the tip glows.
+      { config: { shape: BuildShape.SPHERE, mode: BuildMode.ADD, size: size(0.71, 0.71, 0.71), material: 50 }, offset: { x: 0, y: 4, z: 0 } },
+    ],
+  },
+  {
     name: 'Brick Cylinder',
     category: PresetCategory.STRUCTURAL,
     config: { shape: BuildShape.CYLINDER, mode: BuildMode.ADD, size: size(4, 4, 1), material: 6, thickness: 1 },
@@ -402,6 +430,7 @@ export function templateToSlotMeta(template: BuildPresetTemplate): PresetSlotMet
     snapShape: template.snapShape,
     baseRotation: template.baseRotation,
     autoRotateY: template.autoRotateY,
+    parts: template.parts,
   };
 }
 
@@ -415,7 +444,19 @@ export function presetToSlotMeta(preset: BuildPreset): PresetSlotMeta {
     snapShape: preset.snapShape,
     baseRotation: preset.baseRotation,
     autoRotateY: preset.autoRotateY,
+    parts: preset.parts,
   };
+}
+
+/**
+ * The parts that make up a preset's geometry. For a composite preset this is its
+ * authored `parts`; for a single-config preset it synthesizes one part whose base
+ * sits at the origin and extends +Y (so POINT_OUT plants the base on the surface).
+ * Offsets are in voxel units, in the preset's canonical (pre-rotation, +Y-out) space.
+ */
+export function getPresetParts(preset: BuildPreset): BuildPart[] {
+  if (preset.parts?.length) return preset.parts;
+  return [{ config: preset.config, offset: { x: 0, y: preset.config.size.y, z: 0 } }];
 }
 
 /**

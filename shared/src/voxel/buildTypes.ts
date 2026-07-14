@@ -92,6 +92,16 @@ export interface BuildConfig {
 }
 
 /**
+ * One part of a composite build: its own shape/material config plus a positional
+ * offset (in voxel units) from the operation center, expressed in the operation's
+ * canonical (pre-rotation) local space.
+ */
+export interface BuildPart {
+  config: BuildConfig;
+  offset: Vec3;
+}
+
+/**
  * A complete build operation with position and rotation.
  */
 export interface BuildOperation {
@@ -101,6 +111,13 @@ export interface BuildOperation {
   rotation: Quat;
   /** Build configuration */
   config: BuildConfig;
+  /**
+   * Optional multi-part composite. When present, `parts` is the authoritative
+   * geometry (drawn atomically) and `config` is a representative copy of `parts[0]`
+   * (used for marker colour / validation / thumbnail fallback). When absent, the
+   * single `config` is drawn — unchanged legacy behaviour.
+   */
+  parts?: BuildPart[];
 }
 
 /**

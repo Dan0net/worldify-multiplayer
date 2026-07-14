@@ -41,6 +41,7 @@ const ALIGN_OPTIONS: { value: BuildPresetAlign; label: string; desc: string }[] 
   { value: BuildPresetAlign.PROJECT, label: 'Project', desc: 'Project along surface' },
   { value: BuildPresetAlign.SURFACE, label: 'Surface', desc: 'Offset from surface' },
   { value: BuildPresetAlign.CARVE, label: 'Carve', desc: 'Carve into surface' },
+  { value: BuildPresetAlign.POINT_OUT, label: 'Point Out', desc: 'Point out of the face' },
 ];
 
 const SNAP_OPTIONS: { value: BuildPresetSnapShape; label: string }[] = [
@@ -224,7 +225,7 @@ export function BuildConfigTab({
 
   // Live thumbnail preview of current config — top priority so it re-renders
   // immediately as the user tweaks sliders (the menu takes over the window).
-  const thumbnailUrl = usePresetThumbnail(config, meta.baseRotation, { priority: THUMB_PRIORITY.PREVIEW });
+  const thumbnailUrl = usePresetThumbnail(config, meta.baseRotation, { priority: THUMB_PRIORITY.PREVIEW }, meta.parts);
 
   // Whether closed (open-ended) applies – only when there's a non-zero thickness
   const supportsClosed = (thickness ?? 0) > 0;

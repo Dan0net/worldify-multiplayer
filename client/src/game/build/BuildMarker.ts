@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import {
   BuildShape,
   BuildMode,
+  BuildConfig,
   BuildPreset,
   BuildPresetAlign,
   BuildPresetSnapShape,
@@ -17,6 +18,7 @@ import {
   BUILD_ROTATION_STEP,
   BUILD_PROJECTION_DEADZONE,
   composeRotation,
+  getPresetParts,
   NONE_PRESET_ID,
 } from '@worldify/shared';
 import { useGameStore } from '../../state/store';
@@ -79,8 +81,11 @@ export class BuildMarker {
   /** Container for all marker geometry */
   private readonly group: THREE.Group;
 
-  /** Current wireframe mesh */
+  /** Current wireframe mesh (single-config / legacy-alignment path) */
   private wireframe: THREE.LineSegments | null = null;
+
+  /** Per-part wireframe meshes (point-out / composite path); empty otherwise */
+  private partWireframes: THREE.LineSegments[] = [];
 
   /** Raycaster for hit detection */
   private readonly raycaster: THREE.Raycaster;
@@ -97,6 +102,12 @@ export class BuildMarker {
   private readonly _hNormal = new THREE.Vector3();
   private readonly _hTangent = new THREE.Vector3();
   private readonly _tempAxis = new THREE.Vector3();
+
+  /** Reusable objects for the point-out orientation path */
+  private readonly _up = new THREE.Vector3(0, 1, 0);
+  private readonly _alignQuat = new THREE.Quaternion();
+  private readonly _spinQuat = new THREE.Quaternion();
+  private readonly _offsetVec = new THREE.Vector3();
 
   /** Rotated OBB half-Y extent (world units), updated per-rebuild */
   private rotatedHalfY = 0;
@@ -166,11 +177,16 @@ export class BuildMarker {
 
     // Generate a fingerprint to detect config/meta changes within the same slot
     const cfg = preset.config;
-    const fp = `${cfg.shape}|${cfg.size.x},${cfg.size.y},${cfg.size.z}|${preset.snapShape}|${preset.align}|${cfg.thickness ?? ''}|${cfg.arcSweep ?? ''}|${preset.baseRotation?.x ?? ''},${preset.baseRotation?.y ?? ''},${preset.baseRotation?.z ?? ''},${preset.baseRotation?.w ?? ''}`;
+    const partsFp = (preset.parts ?? [])
+      .map((p) => `${p.config.shape}:${p.config.material}:${p.config.size.x},${p.config.size.y},${p.config.size.z}@${p.offset.x},${p.offset.y},${p.offset.z}`)
+      .join(';');
+    const fp = `${cfg.shape}|${cfg.size.x},${cfg.size.y},${cfg.size.z}|${preset.snapShape}|${preset.align}|${cfg.thickness ?? ''}|${cfg.arcSweep ?? ''}|${preset.baseRotation?.x ?? ''},${preset.baseRotation?.y ?? ''},${preset.baseRotation?.z ?? ''},${preset.baseRotation?.w ?? ''}|${partsFp}`;
     const configChanged = fp !== this.currentConfigFingerprint;
 
-    // For non-auto-rotate presets, rebuild wireframe when preset, config, or rotation changes
-    if (!preset.autoRotateY) {
+    // Point-out and auto-rotate derive orientation from the hit normal each frame, so their
+    // geometry is rebuilt on preset/config change only; everything else rebuilds on rotation too.
+    const perFrameOrient = preset.autoRotateY || preset.align === BuildPresetAlign.POINT_OUT;
+    if (!perFrameOrient) {
       this.autoYRadians = null;
       if (presetId !== this.currentPresetId || rotationSteps !== this.currentRotation || configChanged) {
         this.rebuildWireframe(preset, rotationSteps);
@@ -179,7 +195,7 @@ export class BuildMarker {
         this.currentConfigFingerprint = fp;
       }
     } else if (presetId !== this.currentPresetId || configChanged) {
-      // Auto-rotate: rebuild geometry on preset/config change only (rotation updated per-frame below)
+      // Per-frame orient: rebuild geometry on preset/config change only (rotation updated below)
       this.rebuildWireframe(preset, 0);
       this.currentPresetId = presetId;
       this.currentRotation = 0;
@@ -226,6 +242,9 @@ export class BuildMarker {
     // For auto-rotate presets, derive Y rotation from the hit normal each frame
     if (preset.autoRotateY) {
       this.applyAutoRotateY(preset, this._hitNormal);
+    } else if (preset.align === BuildPresetAlign.POINT_OUT) {
+      // Point-out: full orientation from the hit normal (up off floors, down off ceilings, …)
+      this.applyPointOut(preset, this._hitNormal);
     }
 
     // Update color based on validity
@@ -256,6 +275,11 @@ export class BuildMarker {
 
       case BuildPresetAlign.BASE:
         // Base at hit point - wireframe is offset up within the group
+        break;
+
+      case BuildPresetAlign.POINT_OUT:
+        // Anchor at the hit point; the part wireframes carry their own (rotated) offsets so
+        // the base plants on the surface and the shape extends out along the normal.
         break;
 
       case BuildPresetAlign.PROJECT: {
@@ -487,76 +511,97 @@ export class BuildMarker {
     return this.autoYRadians ?? getBuildRotationRadians();
   }
 
+  /** Whether this preset uses the point-out / composite parts rendering path. */
+  private usesPartsPath(preset: BuildPreset): boolean {
+    return !!(preset.parts && preset.parts.length) || preset.align === BuildPresetAlign.POINT_OUT;
+  }
+
   /**
-   * Rebuild the wireframe geometry for the current preset.
+   * Point-out orientation: rotate the shape's canonical +Y axis onto the hit normal, then spin
+   * about that normal by the user's Q/E rotation. Applies the orientation + each part's rotated
+   * offset to the per-part wireframes, and stores it as the placement quaternion.
    */
-  private rebuildWireframe(preset: BuildPreset, rotationSteps: number): void {
-    // Remove old wireframe
+  private applyPointOut(preset: BuildPreset, hitNormal: THREE.Vector3): void {
+    this._alignQuat.setFromUnitVectors(this._up, hitNormal);
+    this._spinQuat.setFromAxisAngle(hitNormal, getBuildRotationRadians());
+    this._composedQuat.multiplyQuaternions(this._spinQuat, this._alignQuat);
+
+    const parts = getPresetParts(preset);
+    for (let i = 0; i < this.partWireframes.length && i < parts.length; i++) {
+      const off = parts[i].offset;
+      this._offsetVec
+        .set(off.x * VOXEL_SCALE, off.y * VOXEL_SCALE, off.z * VOXEL_SCALE)
+        .applyQuaternion(this._composedQuat);
+      this.partWireframes[i].position.copy(this._offsetVec);
+      this.partWireframes[i].quaternion.copy(this._composedQuat);
+    }
+  }
+
+  /**
+   * The full placement rotation quaternion for the current frame. For point-out this is the
+   * normal-derived orientation; for every other preset it is the composed base+user-Y rotation
+   * already stored during rebuild / auto-rotate. Used by the Builder for preview / snap / place.
+   */
+  getPlacementRotation(): { x: number; y: number; z: number; w: number } {
+    const q = this._composedQuat;
+    return { x: q.x, y: q.y, z: q.z, w: q.w };
+  }
+
+  /** Dispose and detach all wireframe meshes (single + per-part). */
+  private clearWireframes(): void {
     if (this.wireframe) {
       this.group.remove(this.wireframe);
       this.wireframe.geometry.dispose();
       (this.wireframe.material as THREE.Material).dispose();
       this.wireframe = null;
     }
+    for (const wf of this.partWireframes) {
+      this.group.remove(wf);
+      wf.geometry.dispose();
+      (wf.material as THREE.Material).dispose();
+    }
+    this.partWireframes.length = 0;
+  }
 
-    // Don't create wireframe for disabled preset
-    if (preset.id === NONE_PRESET_ID) return;
-
-    const size = preset.config.size;
-    const shape = preset.config.shape;
-
-    // Size values are half-extents in voxel units
-    // Convert to world units: size * VOXEL_SCALE for radius/half-extent
-    // For full dimensions (box width/height), use size * 2 * VOXEL_SCALE
+  /** Build a wireframe LineSegments for one build config (no position/rotation applied). */
+  private buildWireframeMesh(config: BuildConfig, mode: BuildMode): THREE.LineSegments {
+    const size = config.size;
+    // Size values are half-extents in voxel units → world units via VOXEL_SCALE.
     const halfX = size.x * VOXEL_SCALE;
     const halfY = size.y * VOXEL_SCALE;
     const halfZ = size.z * VOXEL_SCALE;
 
     let geometry: THREE.BufferGeometry;
-
-    switch (shape) {
+    switch (config.shape) {
       case BuildShape.SPHERE:
-        // Sphere radius is size.x
         geometry = new THREE.IcosahedronGeometry(halfX, 1);
         break;
-
       case BuildShape.CYLINDER:
-        // Cylinder: radius = size.x, half-height = size.y
         geometry = new THREE.CylinderGeometry(halfX, halfX, halfY * 2, 16);
         break;
-
       case BuildShape.PRISM:
-        // Triangular prism - full dimensions
         geometry = this.createPrismGeometry(halfX * 2, halfY * 2, halfZ * 2);
         break;
-
       case BuildShape.CUBE:
       default:
-        // Box uses full dimensions
         geometry = new THREE.BoxGeometry(halfX * 2, halfY * 2, halfZ * 2);
         break;
     }
 
-    // Create edges geometry for wireframe
     const edges = new THREE.EdgesGeometry(geometry);
     geometry.dispose();
 
     const material = new THREE.LineBasicMaterial({
-      color: getModeColor(preset.config.mode, true),
+      color: getModeColor(mode, true),
       linewidth: 2,
       transparent: true,
       opacity: 0.8,
     });
+    return new THREE.LineSegments(edges, material);
+  }
 
-    this.wireframe = new THREE.LineSegments(edges, material);
-
-    // Apply composed rotation (base rotation + user Y rotation)
-    const composed = composeRotation(preset, (rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180);
-    this._composedQuat.set(composed.x, composed.y, composed.z, composed.w);
-    this.wireframe.quaternion.copy(this._composedQuat);
-
-    // Compute the rotated OBB half-Y extent (world units).
-    // This is the correct base offset for shapes with baseRotation (e.g. floors, stairs).
+  /** Compute the rotated OBB half-Y extent (world units) for the single-wireframe path. */
+  private computeRotatedHalfY(size: { x: number; y: number; z: number }): void {
     this._tempAxis.set(1, 0, 0).applyQuaternion(this._composedQuat);
     this.rotatedHalfY = size.x * Math.abs(this._tempAxis.y);
     this._tempAxis.set(0, 1, 0).applyQuaternion(this._composedQuat);
@@ -564,6 +609,40 @@ export class BuildMarker {
     this._tempAxis.set(0, 0, 1).applyQuaternion(this._composedQuat);
     this.rotatedHalfY += size.z * Math.abs(this._tempAxis.y);
     this.rotatedHalfY *= VOXEL_SCALE;
+  }
+
+  /**
+   * Rebuild the wireframe geometry for the current preset.
+   */
+  private rebuildWireframe(preset: BuildPreset, rotationSteps: number): void {
+    this.clearWireframes();
+
+    // Don't create wireframe for disabled preset
+    if (preset.id === NONE_PRESET_ID) return;
+
+    if (this.usesPartsPath(preset)) {
+      // Point-out / composite: one wireframe per part. Orientation and per-part offsets are
+      // applied every frame by applyPointOut(); seed the placement quat with identity.
+      this._composedQuat.identity();
+      const mode = preset.config.mode;
+      for (const part of getPresetParts(preset)) {
+        const wf = this.buildWireframeMesh(part.config, mode);
+        this.partWireframes.push(wf);
+        this.group.add(wf);
+      }
+      return;
+    }
+
+    // Single-wireframe legacy path.
+    this.wireframe = this.buildWireframeMesh(preset.config, preset.config.mode);
+
+    // Apply composed rotation (base rotation + user Y rotation)
+    const composed = composeRotation(preset, (rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180);
+    this._composedQuat.set(composed.x, composed.y, composed.z, composed.w);
+    this.wireframe.quaternion.copy(this._composedQuat);
+
+    // Rotated OBB half-Y extent (correct base offset for shapes with baseRotation).
+    this.computeRotatedHalfY(preset.config.size);
 
     // For BASE and PROJECT, offset the wireframe up by the rotated half-Y so
     // the shape's bottom edge sits at the group origin (base at surface).
@@ -620,9 +699,13 @@ export class BuildMarker {
    * Update the wireframe color.
    */
   private updateColor(mode: BuildMode, isValid: boolean): void {
-    if (!this.wireframe) return;
-    const material = this.wireframe.material as THREE.LineBasicMaterial;
-    material.color.setHex(getModeColor(mode, isValid));
+    const hex = getModeColor(mode, isValid);
+    if (this.wireframe) {
+      (this.wireframe.material as THREE.LineBasicMaterial).color.setHex(hex);
+    }
+    for (const wf of this.partWireframes) {
+      (wf.material as THREE.LineBasicMaterial).color.setHex(hex);
+    }
   }
 
   /**
@@ -653,6 +736,37 @@ export class BuildMarker {
     if (!this.isVisible || this.currentPresetId === NONE_PRESET_ID) return null;
 
     const preset = getBuildPreset();
+
+    // Point-out / composite: union each part's oriented box (part center = anchor + q·offset).
+    if (this.usesPartsPath(preset)) {
+      const anchor = this.group.position;
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const part of getPresetParts(preset)) {
+        this._offsetVec
+          .set(part.offset.x * VOXEL_SCALE, part.offset.y * VOXEL_SCALE, part.offset.z * VOXEL_SCALE)
+          .applyQuaternion(this._composedQuat);
+        const cx = anchor.x + this._offsetVec.x;
+        const cy = anchor.y + this._offsetVec.y;
+        const cz = anchor.z + this._offsetVec.z;
+        const s = part.config.size;
+        const he = [s.x, s.y, s.z];
+        let hx = 0, hy = 0, hz = 0;
+        for (let i = 0; i < 3; i++) {
+          this._tempAxis.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0)
+            .applyQuaternion(this._composedQuat);
+          hx += he[i] * Math.abs(this._tempAxis.x);
+          hy += he[i] * Math.abs(this._tempAxis.y);
+          hz += he[i] * Math.abs(this._tempAxis.z);
+        }
+        hx *= VOXEL_SCALE; hy *= VOXEL_SCALE; hz *= VOXEL_SCALE;
+        minX = Math.min(minX, cx - hx); maxX = Math.max(maxX, cx + hx);
+        minY = Math.min(minY, cy - hy); maxY = Math.max(maxY, cy + hy);
+        minZ = Math.min(minZ, cz - hz); maxZ = Math.max(maxZ, cz + hz);
+      }
+      return { min: new THREE.Vector3(minX, minY, minZ), max: new THREE.Vector3(maxX, maxY, maxZ) };
+    }
+
     const center = this.group.position.clone();
 
     // For BASE / PROJECT, compute actual center (offset up from group position)
@@ -687,10 +801,12 @@ export class BuildMarker {
    * Set the wireframe to 'too close' warning color.
    */
   setTooCloseWarning(tooClose: boolean): void {
-    if (!this.wireframe) return;
-    if (tooClose) {
-      const material = this.wireframe.material as THREE.LineBasicMaterial;
-      material.color.setHex(COLOR_TOO_CLOSE);
+    if (!tooClose) return;
+    if (this.wireframe) {
+      (this.wireframe.material as THREE.LineBasicMaterial).color.setHex(COLOR_TOO_CLOSE);
+    }
+    for (const wf of this.partWireframes) {
+      (wf.material as THREE.LineBasicMaterial).color.setHex(COLOR_TOO_CLOSE);
     }
     // Normal color is restored by updateColor() in the next update() call
   }
@@ -727,11 +843,6 @@ export class BuildMarker {
    * Dispose of all resources.
    */
   dispose(): void {
-    if (this.wireframe) {
-      this.wireframe.geometry.dispose();
-      (this.wireframe.material as THREE.Material).dispose();
-      this.group.remove(this.wireframe);
-      this.wireframe = null;
-    }
+    this.clearWireframes();
   }
 }

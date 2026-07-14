@@ -15,7 +15,7 @@ export function getBuildPreset(): BuildPreset {
   const config = state.build.presetConfigs[id];
   const meta = state.build.presetMeta[id];
   if (config && meta) {
-    return { ...base, config, align: meta.align, snapShape: meta.snapShape, baseRotation: meta.baseRotation, autoRotateY: meta.autoRotateY };
+    return { ...base, config, align: meta.align, snapShape: meta.snapShape, baseRotation: meta.baseRotation, autoRotateY: meta.autoRotateY, parts: meta.parts };
   }
   if (config) {
     return { ...base, config };

@@ -61,11 +61,11 @@ function PresetTile({
   isActive,
   onSelect,
 }: {
-  template: { config: BuildConfig; baseRotation?: import('@worldify/shared').Quat };
+  template: { config: BuildConfig; baseRotation?: import('@worldify/shared').Quat; parts?: import('@worldify/shared').BuildPart[] };
   isActive: boolean;
   onSelect: () => void;
 }) {
-  const thumbnailUrl = usePresetThumbnail(template.config, template.baseRotation, { priority: THUMB_PRIORITY.HIGH });
+  const thumbnailUrl = usePresetThumbnail(template.config, template.baseRotation, { priority: THUMB_PRIORITY.HIGH }, template.parts);
   return <ThumbTile thumbnailUrl={thumbnailUrl} isActive={isActive} onSelect={onSelect} />;
 }
 
@@ -106,7 +106,7 @@ export function BuildMenu() {
   const [activeTab, setActiveTab] = useState<MenuTab>('presets');
 
   // Current-build preview shown in the header (top priority — renders immediately).
-  const previewUrl = usePresetThumbnail(currentConfig, currentMeta?.baseRotation, { priority: THUMB_PRIORITY.PREVIEW });
+  const previewUrl = usePresetThumbnail(currentConfig, currentMeta?.baseRotation, { priority: THUMB_PRIORITY.PREVIEW }, currentMeta?.parts);
 
   const handleClose = useCallback(() => {
     setBuildMenuOpen(false);

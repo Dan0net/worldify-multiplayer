@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import {
   BuildOperation,
   BuildConfig,
+  BuildPart,
   drawToChunk,
   getAffectedChunks,
   Quat,
@@ -61,12 +62,15 @@ export class BuildPreview {
   private lastCenter = { x: NaN, y: NaN, z: NaN };
   private lastRotation: Quat = { x: NaN, y: NaN, z: NaN, w: NaN };
   private lastConfig: BuildConfig | null = null;
+  /** Fingerprint of the last operation's composite parts (empty for single-config). */
+  private lastPartsFp = '';
 
   /** If aim moved while batch was in flight, store the new operation here */
   private pendingOperation: {
     center: THREE.Vector3;
     rotation: Quat;
     config: BuildConfig;
+    parts?: BuildPart[];
   } | null = null;
 
   /** Chunks with preview still visible after commit, waiting for remesh to replace them */
@@ -111,25 +115,26 @@ export class BuildPreview {
   updatePreview(
     center: THREE.Vector3,
     rotation: Quat,
-    config: BuildConfig
+    config: BuildConfig,
+    parts?: BuildPart[]
   ): void {
     if (!this.world || !this.scene || !this.meshPool) return;
 
     // Check if operation changed (avoid redundant work)
     if (!this.batchInFlight && this.activePreviewChunks.size > 0 &&
-        this.isSameOperation(center, rotation, config)) {
+        this.isSameOperation(center, rotation, config, parts)) {
       return; // Already displaying this exact state
     }
 
     // If a batch is in flight, just store as pending — don't cancel, don't dispatch
     if (this.batchInFlight) {
-      this.pendingOperation = { center: center.clone(), rotation, config };
+      this.pendingOperation = { center: center.clone(), rotation, config, parts };
       return;
     }
 
     // No batch in flight — dispatch immediately
-    const operation = this.createOperation(center, rotation, config);
-    this.storeOperation(center, rotation, config);
+    const operation = this.createOperation(center, rotation, config, parts);
+    this.storeOperation(center, rotation, config, parts);
     this.dispatchPreviewBatch(operation);
   }
 
@@ -284,14 +289,14 @@ export class BuildPreview {
   private processPending(): void {
     if (!this.pendingOperation) return;
 
-    const { center, rotation, config } = this.pendingOperation;
+    const { center, rotation, config, parts } = this.pendingOperation;
     this.pendingOperation = null;
 
     // Skip if the pending operation matches what we just rendered
-    if (this.isSameOperation(center, rotation, config)) return;
+    if (this.isSameOperation(center, rotation, config, parts)) return;
 
-    const operation = this.createOperation(center, rotation, config);
-    this.storeOperation(center, rotation, config);
+    const operation = this.createOperation(center, rotation, config, parts);
+    this.storeOperation(center, rotation, config, parts);
     this.dispatchPreviewBatch(operation);
   }
 
@@ -420,13 +425,26 @@ export class BuildPreview {
   private createOperation(
     center: THREE.Vector3,
     rotation: Quat,
-    config: BuildConfig
+    config: BuildConfig,
+    parts?: BuildPart[]
   ): BuildOperation {
     return {
       center: { x: center.x, y: center.y, z: center.z },
       rotation,
       config,
+      parts,
     };
+  }
+
+  /** Cheap change-detection fingerprint for composite parts (empty string = none). */
+  private partsFingerprint(parts?: BuildPart[]): string {
+    if (!parts || !parts.length) return '';
+    let s = '';
+    for (const p of parts) {
+      const c = p.config;
+      s += `${c.shape},${c.mode},${c.size.x},${c.size.y},${c.size.z},${c.material},${c.thickness ?? ''},${c.arcSweep ?? ''},${c.closed ?? ''}@${p.offset.x},${p.offset.y},${p.offset.z};`;
+    }
+    return s;
   }
 
   /**
@@ -437,6 +455,7 @@ export class BuildPreview {
     center: THREE.Vector3,
     rotation: Quat,
     config: BuildConfig,
+    parts?: BuildPart[],
   ): boolean {
     const lc = this.lastCenter;
     const lr = this.lastRotation;
@@ -452,7 +471,8 @@ export class BuildPreview {
       config.size.x === lf.size.x && config.size.y === lf.size.y &&
       config.size.z === lf.size.z && config.material === lf.material &&
       config.thickness === lf.thickness && config.arcSweep === lf.arcSweep &&
-      config.closed === lf.closed;
+      config.closed === lf.closed &&
+      this.partsFingerprint(parts) === this.lastPartsFp;
   }
 
   /** Store last operation fields for change detection. */
@@ -460,12 +480,14 @@ export class BuildPreview {
     center: THREE.Vector3,
     rotation: Quat,
     config: BuildConfig,
+    parts?: BuildPart[],
   ): void {
     this.lastCenter.x = center.x;
     this.lastCenter.y = center.y;
     this.lastCenter.z = center.z;
     this.lastRotation = rotation;
     this.lastConfig = config;
+    this.lastPartsFp = this.partsFingerprint(parts);
   }
 
   /** Clear last operation fields (e.g. after endPreview/clearPreview). */
@@ -475,6 +497,7 @@ export class BuildPreview {
     this.lastCenter.z = NaN;
     this.lastRotation = { x: NaN, y: NaN, z: NaN, w: NaN };
     this.lastConfig = null;
+    this.lastPartsFp = '';
   }
 
   // ---- Preview group suppression ----

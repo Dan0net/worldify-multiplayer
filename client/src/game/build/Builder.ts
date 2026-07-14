@@ -19,7 +19,7 @@ import { getBuildPreset, getBuildIsEnabled } from '../../state/buildAccessors';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, composeRotation, BuildMode, BuildPresetSnapShape, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, getPresetParts, BuildPreset, BuildPart, BuildPresetAlign, BuildMode, BuildPresetSnapShape, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
 
 const EMPTY_SET: ReadonlySet<number> = new Set();
 
@@ -177,7 +177,7 @@ export class Builder {
       const targetPos = this.marker.getTargetPosition();
       if (targetPos) {
         const preset = getBuildPreset();
-        const rotation = composeRotation(preset, this.marker.getEffectiveYRadians());
+        const rotation = this.marker.getPlacementRotation();
         const snapResult = this.snapManager.trySnap(
           preset,
           { x: targetPos.x, y: targetPos.y, z: targetPos.z },
@@ -213,7 +213,7 @@ export class Builder {
       const finalPos = this.marker.getTargetPosition();
       if (finalPos) {
         const preset = getBuildPreset();
-        const rotation = composeRotation(preset, this.marker.getEffectiveYRadians());
+        const rotation = this.marker.getPlacementRotation();
         this.snapManager.updateVisuals(
           preset,
           { x: finalPos.x, y: finalPos.y, z: finalPos.z },
@@ -312,13 +312,22 @@ export class Builder {
       return;
     }
 
-    // Get preset and rotation
+    // Get preset and the full placement rotation (point-out uses the face normal)
     const preset = getBuildPreset();
-    const rotationRadians = this.marker.getEffectiveYRadians();
+    const rotation = this.marker.getPlacementRotation();
+    const parts = this.compositeParts(preset);
+    this.preview.updatePreview(targetPos, rotation, preset.config, parts);
+  }
 
-    // Update preview with composed rotation (base + user Y)
-    const rotation = composeRotation(preset, rotationRadians);
-    this.preview.updatePreview(targetPos, rotation, preset.config);
+  /**
+   * Composite parts for the current preset, or undefined for a plain single-config build.
+   * Point-out presets always use parts (a synthesized single part plants the base on the
+   * surface); composite presets (e.g. the torch) use their authored parts.
+   */
+  private compositeParts(preset: BuildPreset): BuildPart[] | undefined {
+    return (preset.parts?.length || preset.align === BuildPresetAlign.POINT_OUT)
+      ? getPresetParts(preset)
+      : undefined;
   }
 
   /**
@@ -338,16 +347,18 @@ export class Builder {
     triggerArmSwing();
 
     const preset = getBuildPreset();
-    const rotationRadians = this.marker.getEffectiveYRadians();
 
-    // Create build intent using composed rotation (base + user Y)
-    const rotation = composeRotation(preset, rotationRadians);
+    // Full placement rotation (point-out orients out of the targeted face); composite parts
+    // (torch = column + lava tip) travel in a single atomic operation.
+    const rotation = this.marker.getPlacementRotation();
+    const parts = this.compositeParts(preset);
     const center = { x: targetPos.x, y: targetPos.y, z: targetPos.z };
 
     const intent: VoxelBuildIntent = {
       center,
       rotation,
       config: preset.config,
+      parts,
     };
 
     if (useGameStore.getState().useServerChunks) {
@@ -357,7 +368,7 @@ export class Builder {
       sendBinary(encoded);
     } else {
       // Offline: no server round-trip — apply directly to the local world.
-      const operation = { center, rotation, config: preset.config };
+      const operation = { center, rotation, config: preset.config, parts };
       const modified = this.voxelWorld?.applyBuildOperation(operation) ?? [];
       if (modified.length > 0) {
         this.onBuildApplied?.(modified);
