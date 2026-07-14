@@ -19,7 +19,7 @@ import {
   PRESET_TEMPLATES,
   BuildMode,
   BuildShape,
-  type BuildConfig,
+  type BuildPart,
 } from '@worldify/shared';
 import { usePresetThumbnail } from './usePresetThumbnail';
 import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
@@ -61,11 +61,11 @@ function PresetTile({
   isActive,
   onSelect,
 }: {
-  template: { config: BuildConfig; baseRotation?: import('@worldify/shared').Quat; parts?: import('@worldify/shared').BuildPart[] };
+  template: { parts: import('@worldify/shared').BuildPart[]; baseRotation?: import('@worldify/shared').Quat };
   isActive: boolean;
   onSelect: () => void;
 }) {
-  const thumbnailUrl = usePresetThumbnail(template.config, template.baseRotation, { priority: THUMB_PRIORITY.HIGH }, template.parts);
+  const thumbnailUrl = usePresetThumbnail(template.parts, template.baseRotation, { priority: THUMB_PRIORITY.HIGH });
   return <ThumbTile thumbnailUrl={thumbnailUrl} isActive={isActive} onSelect={onSelect} />;
 }
 
@@ -78,10 +78,11 @@ function MaterialTile({
   isActive: boolean;
   onSelect: () => void;
 }) {
-  const config = useMemo<BuildConfig>(() => ({
-    shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: materialId,
-  }), [materialId]);
-  const thumbnailUrl = usePresetThumbnail(config, undefined, { priority: THUMB_PRIORITY.HIGH });
+  const parts = useMemo<BuildPart[]>(() => ([{
+    config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: materialId },
+    offset: { x: 0, y: 0, z: 0 },
+  }]), [materialId]);
+  const thumbnailUrl = usePresetThumbnail(parts, undefined, { priority: THUMB_PRIORITY.HIGH });
   return <ThumbTile thumbnailUrl={thumbnailUrl} isActive={isActive} onSelect={onSelect} />;
 }
 
@@ -95,10 +96,10 @@ export function BuildMenu() {
   const updatePresetMeta = useGameStore((s) => s.updatePresetMeta);
   const applyPresetTemplate = useGameStore((s) => s.applyPresetTemplate);
 
-  const { presetId, menuOpen, presetConfigs, presetMeta } = build;
+  const { presetId, menuOpen, presetMeta } = build;
 
-  const currentConfig = presetConfigs[presetId];
   const currentMeta = presetMeta[presetId];
+  const currentConfig = currentMeta?.parts[0]?.config;
   const currentMaterial = currentConfig?.material ?? 0;
   const isNonePreset = presetId === NONE_PRESET_ID;
   const currentTemplateName = currentMeta?.templateName ?? '';
@@ -106,7 +107,7 @@ export function BuildMenu() {
   const [activeTab, setActiveTab] = useState<MenuTab>('presets');
 
   // Current-build preview shown in the header (top priority — renders immediately).
-  const previewUrl = usePresetThumbnail(currentConfig, currentMeta?.baseRotation, { priority: THUMB_PRIORITY.PREVIEW }, currentMeta?.parts);
+  const previewUrl = usePresetThumbnail(currentMeta?.parts, currentMeta?.baseRotation, { priority: THUMB_PRIORITY.PREVIEW });
 
   const handleClose = useCallback(() => {
     setBuildMenuOpen(false);

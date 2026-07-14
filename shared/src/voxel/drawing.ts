@@ -9,7 +9,6 @@ import {
   BuildConfig,
   BuildMode,
   BuildOperation,
-  BuildPart,
   VoxelBBox,
   clamp,
 } from './buildTypes.js';
@@ -143,19 +142,6 @@ export function getApplyFunction(mode: BuildMode): ApplyFunction {
   return APPLY_FUNCTIONS[mode] ?? applyAdd;
 }
 
-// ============== Composite parts ==============
-
-const ZERO_OFFSET: Vec3 = { x: 0, y: 0, z: 0 };
-
-/**
- * The parts an operation draws. A composite op supplies `parts`; a legacy single-config op
- * yields one part (its `config`) at zero offset — identical to the previous behaviour.
- */
-function operationParts(operation: BuildOperation): BuildPart[] {
-  if (operation.parts && operation.parts.length) return operation.parts;
-  return [{ config: operation.config, offset: ZERO_OFFSET }];
-}
-
 // ============== Bounding Box Calculation ==============
 
 /**
@@ -163,8 +149,7 @@ function operationParts(operation: BuildOperation): BuildPart[] {
  * Returns the range of voxels that could be affected.
  */
 export function calculateBuildBBox(operation: BuildOperation): VoxelBBox {
-  const { center } = operation;
-  const parts = operationParts(operation);
+  const { center, parts } = operation;
 
   // Convert world center to voxel coordinates
   const centerVoxelX = center.x / VOXEL_SCALE;
@@ -253,7 +238,7 @@ export function drawToChunk(
   // Precompute per-part draw state. All parts share `rotation`, so in shape-local space
   // a part is just a translation by its offset (voxel units → world units). One
   // inverse-rotate per voxel is reused across every part.
-  const prepared = operationParts(operation).map((part) => ({
+  const prepared = operation.parts.map((part) => ({
     applyFn: getApplyFunction(part.config.mode),
     weightMult: part.config.mode === BuildMode.SUBTRACT ? -1 : 1,
     material: part.config.material,
@@ -362,6 +347,6 @@ export function createBuildOperation(
   return {
     center: { x: centerX, y: centerY, z: centerZ },
     rotation: { x: 0, y: 0, z: 0, w: 1 },  // Identity quaternion
-    config,
+    parts: [{ config, offset: { x: 0, y: 0, z: 0 } }],
   };
 }

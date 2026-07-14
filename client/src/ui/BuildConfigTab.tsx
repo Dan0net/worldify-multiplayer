@@ -225,7 +225,7 @@ export function BuildConfigTab({
 
   // Live thumbnail preview of current config — top priority so it re-renders
   // immediately as the user tweaks sliders (the menu takes over the window).
-  const thumbnailUrl = usePresetThumbnail(config, meta.baseRotation, { priority: THUMB_PRIORITY.PREVIEW }, meta.parts);
+  const thumbnailUrl = usePresetThumbnail(meta.parts, meta.baseRotation, { priority: THUMB_PRIORITY.PREVIEW });
 
   // Whether closed (open-ended) applies – only when there's a non-zero thickness
   const supportsClosed = (thickness ?? 0) > 0;

@@ -17,7 +17,7 @@
  */
 
 import * as THREE from 'three';
-import type { BuildConfig, BuildPart, Quat } from '@worldify/shared';
+import type { BuildPart, Quat } from '@worldify/shared';
 import { createBuildItemMeshes } from '../../ui/PresetThumbnailRenderer';
 import { FIRST_PERSON_LAYER, FIRST_PERSON_ITEM_LAYER } from './firstPersonLayer';
 import { getCamera } from './camera';
@@ -127,10 +127,10 @@ function clearHeldItem(): void {
   heldKey = '';
 }
 
-function itemKey(config: BuildConfig, rotation: Quat | undefined, variant: string, parts?: BuildPart[]): string {
+function itemKey(parts: BuildPart[], rotation: Quat | undefined, variant: string): string {
   const r = rotation ? `${rotation.x.toFixed(3)},${rotation.y.toFixed(3)},${rotation.z.toFixed(3)},${rotation.w.toFixed(3)}` : '';
-  const p = (parts ?? []).map((pt) => `${pt.config.shape},${pt.config.material},${pt.config.size.x},${pt.config.size.y},${pt.config.size.z}@${pt.offset.x},${pt.offset.y},${pt.offset.z}`).join(';');
-  return `${variant}|${config.mode}|${config.shape}|${config.size.x},${config.size.y},${config.size.z}|${config.material}|${config.thickness ?? 0}|${config.closed ?? 1}|${config.arcSweep ?? 0}|${r}|${p}`;
+  const p = parts.map((pt) => `${pt.config.shape},${pt.config.mode},${pt.config.material},${pt.config.size.x},${pt.config.size.y},${pt.config.size.z},${pt.config.thickness ?? 0},${pt.config.closed ?? 1},${pt.config.arcSweep ?? 0}@${pt.offset.x},${pt.offset.y},${pt.offset.z}`).join(';');
+  return `${variant}|${r}|${p}`;
 }
 
 /**
@@ -160,7 +160,6 @@ function sizeVmCamera(): { halfW: number; halfH: number } {
 export function updateFirstPersonArm(opts: {
   visible: boolean;
   buildMode: boolean;
-  config?: BuildConfig;
   rotation?: Quat;
   parts?: BuildPart[];
   texturesReady: boolean;
@@ -190,11 +189,11 @@ export function updateFirstPersonArm(opts: {
   group.rotation.set(-punch * 0.7, 0, 0);
 
   // Held item — the real build mesh, rebuilt only when it changes.
-  if (opts.buildMode && opts.config && opts.texturesReady) {
-    const key = itemKey(opts.config, opts.rotation, opts.variant, opts.parts);
+  if (opts.buildMode && opts.parts && opts.parts.length && opts.texturesReady) {
+    const key = itemKey(opts.parts, opts.rotation, opts.variant);
     if (key !== heldKey) {
       clearHeldItem();
-      const mesh = createBuildItemMeshes(opts.config, opts.rotation, opts.parts);
+      const mesh = createBuildItemMeshes(opts.parts, opts.rotation);
       if (mesh) {
         mesh.position.set(-0.16, 0.24, -0.3);  // held in the lower-right, Minecraft-style
         mesh.quaternion.copy(HELD_ITEM_QUAT);  // thumbnail's 3/4 view angle

@@ -968,6 +968,51 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Relight the PREVIEW temp buffers of the given drawn chunks, mirroring the committed relight
+   * (executeBuildOperation → computeChunkSkyLight + relightBlockRegion). Without this the preview
+   * shows raw inherited light: freshly-carved air stays at light 0 and emitters (lava) don't glow.
+   * Reads temp buffers for drawn chunks and committed data for their neighbours; block light is
+   * propagated only over the drawn chunks (their committed neighbours already hold correct light).
+   */
+  relightPreview(drawnKeys: string[]): void {
+    if (drawnKeys.length === 0) return;
+    const drawn = new Set(drawnKeys);
+    // Buffer selector: temp for drawn chunks (post-draw), committed data otherwise.
+    const buf = (cx: number, cy: number, cz: number): Uint32Array | null => {
+      const c = this.chunks.get(chunkKey(cx, cy, cz));
+      if (!c) return null;
+      return drawn.has(chunkKey(cx, cy, cz)) && c.tempData ? c.tempData : c.data;
+    };
+    const faceNeighbors = (cx: number, cy: number, cz: number): (Uint32Array | null)[] =>
+      FACE_OFFSETS_6.map(([dx, dy, dz]) => buf(cx + dx, cy + dy, cz + dz));
+
+    const drawnChunks = drawnKeys
+      .map((k) => this.chunks.get(k))
+      .filter((c): c is Chunk => !!c && !!c.tempData);
+    if (drawnChunks.length === 0) return;
+
+    perfStats.begin('lighting');
+    // Sky light: recompute each drawn chunk's temp buffer from scratch (floods from above).
+    for (const c of drawnChunks) {
+      const lightFromAbove = getSunlitAbove(buf(c.cx, c.cy + 1, c.cz) ?? undefined);
+      computeSkyLight(c.tempData!, lightFromAbove, faceNeighbors(c.cx, c.cy, c.cz));
+    }
+    // Block light: only when an emitter is present or block light already exists here.
+    const anyLit = drawnChunks.some((c) => c.hasBlockLight || chunkHasEmitter(c.tempData!));
+    if (anyLit) {
+      for (const c of drawnChunks) clearBlockLight(c.tempData!);
+      for (let pass = 0; pass < 4; pass++) {
+        let changed = false;
+        for (const c of drawnChunks) {
+          if (propagateBlockLight(c.tempData!, faceNeighbors(c.cx, c.cy, c.cz))) changed = true;
+        }
+        if (!changed) break;
+      }
+    }
+    perfStats.end('lighting');
+  }
+
+  /**
    * Receive chunk data from the server.
    * Called by the network layer when chunk data arrives.
    */

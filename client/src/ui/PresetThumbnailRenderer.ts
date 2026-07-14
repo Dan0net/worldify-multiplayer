@@ -26,7 +26,6 @@ import {
   DEFAULT_BUILD_PRESETS,
   PRESET_TEMPLATES,
   NONE_PRESET_ID,
-  presetToSlotMeta,
   MATERIAL_NAMES,
   type BuildConfig,
   type BuildPart,
@@ -34,7 +33,7 @@ import {
 } from '@worldify/shared';
 import { meshVoxelsSplit } from '../game/voxel/SurfaceNet';
 import { createGeometryFromSurfaceNet } from '../game/voxel/MeshGeometry';
-import { getTerrainMaterial, getTransparentTerrainMaterial, getLiquidTerrainMaterial, createHeldItemMaterial } from '../game/material/TerrainMaterial';
+import { getTerrainMaterial, getTransparentTerrainMaterial, createHeldItemMaterial } from '../game/material/TerrainMaterial';
 import { getRendererRef } from '../game/quality/QualityManager';
 import { useGameStore } from '../state/store';
 
@@ -179,9 +178,8 @@ async function clearIDB(): Promise<void> {
 // ============== Render Queue ==============
 
 interface PendingRender {
-  config: BuildConfig;
+  parts: BuildPart[];
   rotation?: Quat;
-  parts?: BuildPart[];
   hash: string;
   priority: number;
   callbacks: Array<(url: string | null) => void>;
@@ -359,14 +357,14 @@ function encodeImageDataToBlobAndUrl(imageData: ImageData): Promise<{ url: strin
 
 // ============== Voxel Grid Generation ==============
 
-function fillVoxelGrid(config: BuildConfig, rotation?: Quat, parts?: BuildPart[]): void {
+function fillVoxelGrid(parts: BuildPart[], rotation?: Quat): void {
   const data = voxelGrid!;
   data.fill(0);
   const gridCenter = (GRID_SIZE - 1) / 2;
   const invRot = rotation ? invertQuat(rotation) : null;
 
-  // Composite parts (union of the most-solid part per voxel); single-config falls back to one part.
-  const prep = (parts && parts.length ? parts : [{ config, offset: { x: 0, y: 0, z: 0 } }]).map((p) => ({
+  // Union of the most-solid part per voxel (a simple preset is just one zero-offset part).
+  const prep = parts.map((p) => ({
     config: p.config,
     ox: p.offset.x * VOXEL_SCALE,
     oy: p.offset.y * VOXEL_SCALE,
@@ -402,19 +400,12 @@ function fillVoxelGrid(config: BuildConfig, rotation?: Quat, parts?: BuildPart[]
 
 // ============== Config Hashing ==============
 
-function configHash(config: BuildConfig, rotation?: Quat, parts?: BuildPart[]): string {
-  const partsKey = (parts ?? [])
-    .map((p) => `${p.config.shape},${p.config.mode},${p.config.material},${p.config.size.x},${p.config.size.y},${p.config.size.z}@${p.offset.x},${p.offset.y},${p.offset.z}`)
+function configHash(parts: BuildPart[], rotation?: Quat): string {
+  const partsKey = parts
+    .map((p) => `${p.config.shape},${p.config.mode},${p.config.material},${p.config.size.x},${p.config.size.y},${p.config.size.z},${p.config.thickness ?? 0},${p.config.closed ?? 1},${p.config.arcSweep ?? 0}@${p.offset.x},${p.offset.y},${p.offset.z}`)
     .join(';');
   return [
     textureVariant(), // low/high textures produce different thumbnails — cache apart
-    config.mode,
-    config.shape,
-    config.size.x, config.size.y, config.size.z,
-    config.material,
-    config.thickness ?? 0,
-    config.closed ?? 1,
-    config.arcSweep ?? 0,
     rotation ? `${rotation.x.toFixed(4)},${rotation.y.toFixed(4)},${rotation.z.toFixed(4)},${rotation.w.toFixed(4)}` : '',
     partsKey,
   ].join('|');
@@ -472,22 +463,23 @@ function buildWireframe(config: BuildConfig, rotation?: Quat): THREE.LineSegment
 
 // ============== Main Render Function ==============
 
-function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefined, parts: BuildPart[] | undefined, renderer: THREE.WebGLRenderer): ImageData | null {
+function renderThumbnailToImageData(parts: BuildPart[], rotation: Quat | undefined, renderer: THREE.WebGLRenderer): ImageData | null {
   ensureSetup();
   if (!thumbScene || !thumbCamera || !renderTarget) return null;
 
   clearMeshes();
 
-  // SUBTRACT (single-config) shows the red wireframe; composite/ADD builds render voxels.
-  if (config.mode === BuildMode.SUBTRACT && !(parts && parts.length)) {
-    thumbWireframe = buildWireframe(config, rotation);
+  // A single-part SUBTRACT shows the red wireframe; composite/ADD builds render voxels.
+  const primary = parts[0].config;
+  if (primary.mode === BuildMode.SUBTRACT && parts.length === 1) {
+    thumbWireframe = buildWireframe(primary, rotation);
     thumbScene.add(thumbWireframe);
     _center.set(0, 0, 0);
     fitCameraToBox(_bbox, _center);
     return renderAndReadbackImageData(renderer);
   }
 
-  fillVoxelGrid(config, rotation, parts);
+  fillVoxelGrid(parts, rotation);
 
   const meshOutput = meshVoxelsSplit({ dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], data: voxelGrid! });
   const { solid, transparent, liquid } = meshOutput;
@@ -516,7 +508,9 @@ function renderThumbnailToImageData(config: BuildConfig, rotation: Quat | undefi
     thumbScene.add(thumbTransMesh);
   }
   if (liquidGeo) {
-    thumbLiquidMesh = new THREE.Mesh(liquidGeo, getLiquidTerrainMaterial());
+    // Render the liquid bucket with the opaque terrain material (not the animated water
+    // material) so lava shows its orange albedo, opaque and lit, in the static icon.
+    thumbLiquidMesh = new THREE.Mesh(liquidGeo, getTerrainMaterial());
     thumbLiquidMesh.position.set(ox, oy, oz);
     thumbLiquidMesh.renderOrder = 2;
     thumbScene.add(thumbLiquidMesh);
@@ -552,13 +546,14 @@ function normalizeHeldGroup(group: THREE.Group, bbox: THREE.Box3): void {
  * and the `userData.heldItem`-tagged materials (the liquid part reuses the shared
  * water material — don't dispose that one).
  */
-export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat, parts?: BuildPart[]): THREE.Object3D | null {
+export function createBuildItemMeshes(parts: BuildPart[], rotation?: Quat): THREE.Object3D | null {
   ensureSetup();
   const group = new THREE.Group();
 
-  // SUBTRACT (single-config) has no solid mesh — show the same red wireframe the thumbnail uses.
-  if (config.mode === BuildMode.SUBTRACT && !(parts && parts.length)) {
-    const wf = buildWireframe(config, rotation);
+  // A single-part SUBTRACT has no solid mesh — show the same red wireframe the thumbnail uses.
+  const primary = parts[0].config;
+  if (primary.mode === BuildMode.SUBTRACT && parts.length === 1) {
+    const wf = buildWireframe(primary, rotation);
     wf.frustumCulled = false;
     const c = new THREE.Vector3(); _bbox.getCenter(c);
     wf.position.set(-c.x, -c.y, -c.z);
@@ -567,7 +562,7 @@ export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat, part
     return group;
   }
 
-  fillVoxelGrid(config, rotation, parts);
+  fillVoxelGrid(parts, rotation);
   const { solid, transparent, liquid } = meshVoxelsSplit({ dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], data: voxelGrid! });
   if (solid.vertexCount === 0 && transparent.vertexCount === 0 && liquid.vertexCount === 0) return null;
 
@@ -589,7 +584,9 @@ export function createBuildItemMeshes(config: BuildConfig, rotation?: Quat, part
   };
   addMesh(solidGeo, solidGeo ? createHeldItemMaterial(false) : getTerrainMaterial());
   addMesh(transGeo, transGeo ? createHeldItemMaterial(true) : getTransparentTerrainMaterial());
-  addMesh(liquidGeo, getLiquidTerrainMaterial());
+  // Liquid (e.g. lava) uses the opaque object-space terrain material too, so it shows its
+  // albedo instead of the world-space animated water shader.
+  addMesh(liquidGeo, createHeldItemMaterial(false));
 
   normalizeHeldGroup(group, _bbox);
   return group;
@@ -609,7 +606,7 @@ function processEntry(entry: PendingRender, renderer: THREE.WebGLRenderer): bool
 
   let imageData: ImageData | null = null;
   try {
-    imageData = renderThumbnailToImageData(entry.config, entry.rotation, entry.parts, renderer);
+    imageData = renderThumbnailToImageData(entry.parts, entry.rotation, renderer);
   } catch (err) {
     console.warn('[thumbnail] render failed', err);
   }
@@ -676,17 +673,16 @@ function scheduleQueue(): void {
 // ============== Public API ==============
 
 /**
- * Get a thumbnail for a BuildConfig. Checks in-memory cache, then IndexedDB,
+ * Get a thumbnail for a build's parts list. Checks in-memory cache, then IndexedDB,
  * then falls back to queued GPU rendering. Callback fires with the blob URL.
  */
 export function queueThumbnailRender(
-  config: BuildConfig,
+  parts: BuildPart[],
   rotation: Quat | undefined,
   callback: (url: string | null) => void,
   priority: number = THUMB_PRIORITY.NORMAL,
-  parts?: BuildPart[],
 ): void {
-  const hash = configHash(config, rotation, parts);
+  const hash = configHash(parts, rotation);
 
   // 1. In-memory cache — instant
   const cached = thumbnailCache.get(hash);
@@ -701,7 +697,7 @@ export function queueThumbnailRender(
   }
 
   // 3. Try IndexedDB first, fall back to GPU queue on miss
-  const entry: PendingRender = { config, rotation, parts, hash, priority, callbacks: [callback] };
+  const entry: PendingRender = { parts, rotation, hash, priority, callbacks: [callback] };
   pendingByHash.set(hash, entry);
 
   loadFromIDB(hash).then(url => {
@@ -724,18 +720,18 @@ export function queueThumbnailRender(
  * exists (the queue reschedules until it does). Deduped by hash.
  */
 export function preloadPresetThumbnails(): void {
-  const enqueue = (config: BuildConfig, rotation?: Quat, parts?: BuildPart[]) =>
-    queueThumbnailRender(config, rotation, () => { /* warm cache only */ }, THUMB_PRIORITY.PRELOAD, parts);
+  const enqueue = (parts: BuildPart[], rotation?: Quat) =>
+    queueThumbnailRender(parts, rotation, () => { /* warm cache only */ }, THUMB_PRIORITY.PRELOAD);
 
   for (const p of DEFAULT_BUILD_PRESETS) {
     if (p.id === NONE_PRESET_ID) continue;
-    enqueue(p.config, presetToSlotMeta(p).baseRotation, p.parts);
+    enqueue(p.parts, p.baseRotation);
   }
   for (const t of PRESET_TEMPLATES) {
-    enqueue(t.config, t.baseRotation, t.parts);
+    enqueue(t.parts, t.baseRotation);
   }
   for (let id = 0; id < MATERIAL_NAMES.length; id++) {
-    enqueue({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: id });
+    enqueue([{ config: { shape: BuildShape.CUBE, mode: BuildMode.ADD, size: { x: 4, y: 4, z: 4 }, material: id }, offset: { x: 0, y: 0, z: 0 } }]);
   }
 }
 

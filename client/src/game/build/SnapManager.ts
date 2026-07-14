@@ -397,9 +397,10 @@ export class SnapManager {
    * Uses a fingerprint of snapShape + size to detect template changes within the same slot.
    */
   private getLocalPoints(preset: BuildPreset): Vec3[] {
-    const fp = `${preset.snapShape}|${preset.config.size.x},${preset.config.size.y},${preset.config.size.z}`;
+    const snapSize = preset.parts[0].config.size;
+    const fp = `${preset.snapShape}|${snapSize.x},${snapSize.y},${snapSize.z}`;
     if (fp !== this.cachedSnapFingerprint) {
-      this.cachedLocalPoints = generateSnapPointsLocal(preset.snapShape, preset.config.size);
+      this.cachedLocalPoints = generateSnapPointsLocal(preset.snapShape, snapSize);
       this.cachedSnapFingerprint = fp;
     }
     return this.cachedLocalPoints;

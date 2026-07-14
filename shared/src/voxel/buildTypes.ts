@@ -102,22 +102,24 @@ export interface BuildPart {
 }
 
 /**
- * A complete build operation with position and rotation.
+ * A complete build operation. Geometry is always expressed as `parts` (a single-shape
+ * build is just a one-element list); every part is drawn atomically as one operation.
  */
 export interface BuildOperation {
   /** World position center of the build */
   center: Vec3;
   /** Rotation as quaternion (for inverse-rotating voxel positions) */
   rotation: Quat;
-  /** Build configuration */
-  config: BuildConfig;
-  /**
-   * Optional multi-part composite. When present, `parts` is the authoritative
-   * geometry (drawn atomically) and `config` is a representative copy of `parts[0]`
-   * (used for marker colour / validation / thumbnail fallback). When absent, the
-   * single `config` is drawn — unchanged legacy behaviour.
-   */
-  parts?: BuildPart[];
+  /** Composite parts (>= 1). Drawn atomically. */
+  parts: BuildPart[];
+}
+
+/**
+ * The representative config of a parts list — `parts[0].config`. Used where a single
+ * config is needed (marker colour, snap size, thumbnail fallback, config-tab editing).
+ */
+export function representativeConfig(parts: BuildPart[]): BuildConfig {
+  return parts[0].config;
 }
 
 /**

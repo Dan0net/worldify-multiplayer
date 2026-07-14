@@ -103,9 +103,7 @@ export interface BuildState {
   snapGrid: boolean;
   /** Whether the build menu overlay is open */
   menuOpen: boolean;
-  /** Mutable preset configs (user can change material/shape) */
-  presetConfigs: BuildConfig[];
-  /** Per-slot metadata (align, snapShape, baseRotation, autoRotateY, templateName) */
+  /** Per-slot metadata + geometry (parts, align, snapShape, baseRotation, autoRotateY, templateName) */
   presetMeta: PresetSlotMeta[];
 }
 
@@ -486,7 +484,6 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     snapPoint: true,    // Point snapping on by default
     snapGrid: false,    // Grid snapping off by default
     menuOpen: false,
-    presetConfigs: DEFAULT_BUILD_PRESETS.map(p => ({ ...p.config })),
     presetMeta: DEFAULT_BUILD_PRESETS.map(p => presetToSlotMeta(p)),
   },
   
@@ -645,9 +642,14 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     return { build: { ...state.build, menuOpen: open, buildMode, presetId } };
   }),
   updatePresetConfig: (presetId, updates) => set((state) => {
-    const configs = [...state.build.presetConfigs];
-    configs[presetId] = { ...configs[presetId], ...updates };
-    return { build: { ...state.build, presetConfigs: configs } };
+    // The config tab edits the primary part (parts[0]) of the slot's geometry.
+    const metas = [...state.build.presetMeta];
+    const meta = metas[presetId];
+    if (!meta || !meta.parts.length) return state;
+    const parts = meta.parts.map((p, i) =>
+      i === 0 ? { ...p, config: { ...p.config, ...updates } } : p);
+    metas[presetId] = { ...meta, parts };
+    return { build: { ...state.build, presetMeta: metas } };
   }),
   updatePresetMeta: (presetId, updates) => set((state) => {
     const metas = [...state.build.presetMeta];
@@ -657,11 +659,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   applyPresetTemplate: (slotId, templateIndex) => set((state) => {
     const template = PRESET_TEMPLATES[templateIndex];
     if (!template) return state;
-    const configs = [...state.build.presetConfigs];
-    configs[slotId] = { ...template.config };
     const metas = [...state.build.presetMeta];
     metas[slotId] = templateToSlotMeta(template);
-    return { build: { ...state.build, presetConfigs: configs, presetMeta: metas } };
+    return { build: { ...state.build, presetMeta: metas } };
   }),
   
   // Material/texture actions

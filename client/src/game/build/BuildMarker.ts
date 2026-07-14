@@ -18,7 +18,6 @@ import {
   BUILD_ROTATION_STEP,
   BUILD_PROJECTION_DEADZONE,
   composeRotation,
-  getPresetParts,
   NONE_PRESET_ID,
 } from '@worldify/shared';
 import { useGameStore } from '../../state/store';
@@ -176,8 +175,8 @@ export class BuildMarker {
     const preset = getBuildPreset();
 
     // Generate a fingerprint to detect config/meta changes within the same slot
-    const cfg = preset.config;
-    const partsFp = (preset.parts ?? [])
+    const cfg = preset.parts[0].config;
+    const partsFp = preset.parts
       .map((p) => `${p.config.shape}:${p.config.material}:${p.config.size.x},${p.config.size.y},${p.config.size.z}@${p.offset.x},${p.offset.y},${p.offset.z}`)
       .join(';');
     const fp = `${cfg.shape}|${cfg.size.x},${cfg.size.y},${cfg.size.z}|${preset.snapShape}|${preset.align}|${cfg.thickness ?? ''}|${cfg.arcSweep ?? ''}|${preset.baseRotation?.x ?? ''},${preset.baseRotation?.y ?? ''},${preset.baseRotation?.z ?? ''},${preset.baseRotation?.w ?? ''}|${partsFp}`;
@@ -248,7 +247,7 @@ export class BuildMarker {
     }
 
     // Update color based on validity
-    this.updateColor(preset.config.mode, isValid);
+    this.updateColor(preset.parts[0].config.mode, isValid);
 
     // Show the marker
     this.show();
@@ -265,7 +264,7 @@ export class BuildMarker {
     hitPoint: THREE.Vector3,
     hitNormal: THREE.Vector3
   ): THREE.Vector3 {
-    const size = preset.config.size;
+    const size = preset.parts[0].config.size;
     const pos = hitPoint.clone();
 
     switch (preset.align) {
@@ -492,7 +491,7 @@ export class BuildMarker {
     }
 
     // Recompute rotated half-Y extent
-    const size = preset.config.size;
+    const size = preset.parts[0].config.size;
     this._tempAxis.set(1, 0, 0).applyQuaternion(this._composedQuat);
     this.rotatedHalfY = size.x * Math.abs(this._tempAxis.y);
     this._tempAxis.set(0, 1, 0).applyQuaternion(this._composedQuat);
@@ -513,7 +512,7 @@ export class BuildMarker {
 
   /** Whether this preset uses the point-out / composite parts rendering path. */
   private usesPartsPath(preset: BuildPreset): boolean {
-    return !!(preset.parts && preset.parts.length) || preset.align === BuildPresetAlign.POINT_OUT;
+    return preset.align === BuildPresetAlign.POINT_OUT;
   }
 
   /**
@@ -526,7 +525,7 @@ export class BuildMarker {
     this._spinQuat.setFromAxisAngle(hitNormal, getBuildRotationRadians());
     this._composedQuat.multiplyQuaternions(this._spinQuat, this._alignQuat);
 
-    const parts = getPresetParts(preset);
+    const parts = preset.parts;
     for (let i = 0; i < this.partWireframes.length && i < parts.length; i++) {
       const off = parts[i].offset;
       this._offsetVec
@@ -624,8 +623,8 @@ export class BuildMarker {
       // Point-out / composite: one wireframe per part. Orientation and per-part offsets are
       // applied every frame by applyPointOut(); seed the placement quat with identity.
       this._composedQuat.identity();
-      const mode = preset.config.mode;
-      for (const part of getPresetParts(preset)) {
+      const mode = preset.parts[0].config.mode;
+      for (const part of preset.parts) {
         const wf = this.buildWireframeMesh(part.config, mode);
         this.partWireframes.push(wf);
         this.group.add(wf);
@@ -634,7 +633,7 @@ export class BuildMarker {
     }
 
     // Single-wireframe legacy path.
-    this.wireframe = this.buildWireframeMesh(preset.config, preset.config.mode);
+    this.wireframe = this.buildWireframeMesh(preset.parts[0].config, preset.parts[0].config.mode);
 
     // Apply composed rotation (base rotation + user Y rotation)
     const composed = composeRotation(preset, (rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180);
@@ -642,7 +641,7 @@ export class BuildMarker {
     this.wireframe.quaternion.copy(this._composedQuat);
 
     // Rotated OBB half-Y extent (correct base offset for shapes with baseRotation).
-    this.computeRotatedHalfY(preset.config.size);
+    this.computeRotatedHalfY(preset.parts[0].config.size);
 
     // For BASE and PROJECT, offset the wireframe up by the rotated half-Y so
     // the shape's bottom edge sits at the group origin (base at surface).
@@ -742,7 +741,7 @@ export class BuildMarker {
       const anchor = this.group.position;
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-      for (const part of getPresetParts(preset)) {
+      for (const part of preset.parts) {
         this._offsetVec
           .set(part.offset.x * VOXEL_SCALE, part.offset.y * VOXEL_SCALE, part.offset.z * VOXEL_SCALE)
           .applyQuaternion(this._composedQuat);
@@ -775,7 +774,7 @@ export class BuildMarker {
     }
 
     // Compute oriented bounding box projected to AABB
-    const size = preset.config.size;
+    const size = preset.parts[0].config.size;
     const halfExtents = [size.x, size.y, size.z];
     let halfX = 0, halfY = 0, halfZ = 0;
 

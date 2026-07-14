@@ -407,11 +407,10 @@ export class GameCore {
       return;
     }
 
-    // Apply the build operation to voxel world (carry composite parts through)
+    // Apply the build operation to voxel world (parts are the geometry)
     const operation = {
       center: commit.intent.center,
       rotation: commit.intent.rotation,
-      config: commit.intent.config,
       parts: commit.intent.parts,
     };
 
@@ -916,7 +915,6 @@ export class GameCore {
     updateFirstPersonArm({
       visible: !menuPaused,
       buildMode: build.buildMode,
-      config: build.presetConfigs[build.presetId],
       rotation: meta?.baseRotation,
       parts: meta?.parts,
       texturesReady: ts === 'low' || ts === 'high',

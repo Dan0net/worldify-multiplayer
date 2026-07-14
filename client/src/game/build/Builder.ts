@@ -19,7 +19,7 @@ import { getBuildPreset, getBuildIsEnabled } from '../../state/buildAccessors';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, getPresetParts, BuildPreset, BuildPart, BuildPresetAlign, BuildMode, BuildPresetSnapShape, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, BuildMode, BuildPresetSnapShape, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
 
 const EMPTY_SET: ReadonlySet<number> = new Set();
 
@@ -195,8 +195,8 @@ export class Builder {
     // Skip check for transparent materials (player won't collide with them)
     if (hasValidTarget) {
       const preset = getBuildPreset();
-      const mode = preset.config.mode;
-      const materialIsTransparent = isTransparent(preset.config.material);
+      const mode = preset.parts[0].config.mode;
+      const materialIsTransparent = isTransparent(preset.parts[0].config.material);
       if ((mode === BuildMode.ADD || mode === BuildMode.FILL) && !materialIsTransparent) {
         const aabb = this.marker.getWorldAABB();
         if (aabb && this.buildOverlapsPlayer(aabb, playerPosition, camera.position)) {
@@ -315,19 +315,7 @@ export class Builder {
     // Get preset and the full placement rotation (point-out uses the face normal)
     const preset = getBuildPreset();
     const rotation = this.marker.getPlacementRotation();
-    const parts = this.compositeParts(preset);
-    this.preview.updatePreview(targetPos, rotation, preset.config, parts);
-  }
-
-  /**
-   * Composite parts for the current preset, or undefined for a plain single-config build.
-   * Point-out presets always use parts (a synthesized single part plants the base on the
-   * surface); composite presets (e.g. the torch) use their authored parts.
-   */
-  private compositeParts(preset: BuildPreset): BuildPart[] | undefined {
-    return (preset.parts?.length || preset.align === BuildPresetAlign.POINT_OUT)
-      ? getPresetParts(preset)
-      : undefined;
+    this.preview.updatePreview(targetPos, rotation, preset.parts);
   }
 
   /**
@@ -348,16 +336,15 @@ export class Builder {
 
     const preset = getBuildPreset();
 
-    // Full placement rotation (point-out orients out of the targeted face); composite parts
-    // (torch = column + lava tip) travel in a single atomic operation.
+    // Full placement rotation (point-out orients out of the targeted face); the preset's
+    // parts (e.g. torch = column + lava tip) travel in a single atomic operation.
     const rotation = this.marker.getPlacementRotation();
-    const parts = this.compositeParts(preset);
+    const parts = preset.parts;
     const center = { x: targetPos.x, y: targetPos.y, z: targetPos.z };
 
     const intent: VoxelBuildIntent = {
       center,
       rotation,
-      config: preset.config,
       parts,
     };
 
@@ -368,7 +355,7 @@ export class Builder {
       sendBinary(encoded);
     } else {
       // Offline: no server round-trip — apply directly to the local world.
-      const operation = { center, rotation, config: preset.config, parts };
+      const operation = { center, rotation, parts };
       const modified = this.voxelWorld?.applyBuildOperation(operation) ?? [];
       if (modified.length > 0) {
         this.onBuildApplied?.(modified);

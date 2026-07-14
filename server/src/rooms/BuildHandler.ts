@@ -81,11 +81,8 @@ function isValidBuildConfig(config: BuildConfig): boolean {
 }
 
 function isValidConfig(intent: VoxelBuildIntent): boolean {
-  // Composite builds validate every part; legacy builds validate the single config.
-  if (intent.parts && intent.parts.length) {
-    return intent.parts.every((p) => isValidBuildConfig(p.config));
-  }
-  return isValidBuildConfig(intent.config);
+  // Every part must be a valid shape config.
+  return intent.parts.length > 0 && intent.parts.every((p) => isValidBuildConfig(p.config));
 }
 
 // ============== Build Intent Handler ==============
@@ -131,11 +128,10 @@ export function handleBuildIntent(
   // Get chunk provider
   const chunkProvider = getChunkProvider();
 
-  // Build operation (carry composite parts through to the draw core)
+  // Build operation (parts are the geometry)
   const operation = {
     center: intent.center,
     rotation: intent.rotation,
-    config: intent.config,
     parts: intent.parts,
   };
 
