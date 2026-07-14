@@ -16,11 +16,10 @@
 
 import * as THREE from 'three';
 import { getScene } from './scene';
-import { setTerrainEnvMapIntensity } from '../material/TerrainMaterial';
 import { useGameStore, EnvironmentSettings } from '../../state/store';
 import { initSkyDome, updateSkyUniforms, disposeSkyDome } from './SkyDome';
 import { FIRST_PERSON_LAYER, FIRST_PERSON_ITEM_LAYER } from './firstPersonLayer';
-import { CHUNK_WORLD_SIZE } from '@worldify/shared';
+import { CHUNK_WORLD_SIZE, deriveLighting, type DerivedLighting } from '@worldify/shared';
 
 // ============== Internal State ==============
 
@@ -34,6 +33,21 @@ let activeShadowCaster: 'sun' | 'moon' = 'sun';
 
 /** Whether moon is allowed to become the shadow caster (quality setting) */
 let moonShadowsAllowed = false;
+
+/**
+ * Sun/moon world directions (unit vectors pointing from the scene toward the body). Set from
+ * the derived azimuth/elevation each frame and used to position both the lights and the
+ * shadow-follow — so the light *direction* is always correct and independent of where the
+ * player is in the world (the sun/moon don't drift as you move).
+ */
+const _sunDir = new THREE.Vector3(0, 1, 0);
+const _moonDir = new THREE.Vector3(0, -1, 0);
+
+/** Elevation band (degrees) over which the shadow fades out near the horizon. */
+const SHADOW_FADE_LO = 2;
+const SHADOW_FADE_HI = 12;
+/** Fade level below which a queued caster swap is executed (swap is invisible at ~0). */
+const SWAP_EPS = 0.03;
 
 /** Current shadow frustum half-size (updated when visibility changes) */
 let shadowFrustumSize = 40;
@@ -51,23 +65,16 @@ const SHADOW_MARGIN = 24;
 
 // ============== Position Calculation ==============
 
-/**
- * Convert azimuth/elevation angles to 3D position.
- * @param azimuth - Horizontal angle in degrees (0 = North, 90 = East, 180 = South, 270 = West)
- * @param elevation - Vertical angle in degrees (0 = horizon, 90 = zenith, -90 = nadir)
- * @param distance - Distance from origin
- */
-function anglesToPosition(azimuth: number, elevation: number, distance: number): THREE.Vector3 {
+/** Write the unit direction for azimuth/elevation (degrees) into `out`. */
+function anglesToDir(azimuth: number, elevation: number, out: THREE.Vector3): THREE.Vector3 {
   const azRad = (azimuth * Math.PI) / 180;
   const elRad = (elevation * Math.PI) / 180;
-  
   const cosEl = Math.cos(elRad);
-  
-  return new THREE.Vector3(
-    Math.sin(azRad) * cosEl * distance,
-    Math.sin(elRad) * distance,
-    Math.cos(azRad) * cosEl * distance
-  );
+  return out.set(
+    Math.sin(azRad) * cosEl,
+    Math.sin(elRad),
+    Math.cos(azRad) * cosEl
+  ).normalize();
 }
 
 // ============== Initialization ==============
@@ -86,69 +93,52 @@ export function initLighting(webglRenderer: THREE.WebGLRenderer): void {
   
   renderer = webglRenderer;
   
-  // Get initial settings from store with fallback defaults
+  // Get initial settings from store
   const settings = useGameStore.getState().environment;
-  
-  // Sun (primary directional light)
-  sunLight = new THREE.DirectionalLight(
-    settings.sunColor ?? '#ffcc00',
-    settings.sunIntensity ?? 3.0
-  );
-  const sunPos = anglesToPosition(
-    settings.sunAzimuth ?? 135,
-    settings.sunElevation ?? 45,
-    settings.sunDistance ?? 150
-  );
-  sunLight.position.copy(sunPos);
+
+  // Sun (primary directional light). Colour/intensity/position are seeded from the keyframes
+  // below via applyDerivedLighting — the placeholders here are overwritten before first render.
+  sunLight = new THREE.DirectionalLight('#ffffff', 1);
   sunLight.castShadow = true;
+  sunLight.shadow.intensity = 1;
   sunLight.layers.enable(FIRST_PERSON_LAYER); sunLight.layers.enable(FIRST_PERSON_ITEM_LAYER); // light the FP arm + held item
   configureShadowCamera(sunLight, settings);
   scene.add(sunLight);
   scene.add(sunLight.target);
-  
-  // Moon (secondary directional light — does NOT cast shadows on init;
-  // shadow caster is swapped at runtime by updateShadowCaster())
-  moonLight = new THREE.DirectionalLight(
-    settings.moonColor ?? '#8899bb',
-    settings.moonIntensity ?? 0.3
-  );
-  const moonPos = anglesToPosition(
-    settings.moonAzimuth ?? 315,
-    settings.moonElevation ?? -45,
-    settings.sunDistance ?? 150
-  );
-  moonLight.position.copy(moonPos);
+
+  // Moon (secondary directional light — does NOT cast shadows on init; the shadow caster is
+  // swapped/faded at runtime by updateShadowCaster()).
+  moonLight = new THREE.DirectionalLight('#8899bb', 0.3);
   moonLight.castShadow = false;
+  moonLight.shadow.intensity = 0;
   moonLight.layers.enable(FIRST_PERSON_LAYER); moonLight.layers.enable(FIRST_PERSON_ITEM_LAYER); // light the FP arm + held item
   configureShadowCamera(moonLight, settings);
   scene.add(moonLight);
   scene.add(moonLight.target);
-  
+
   activeShadowCaster = 'sun';
-  
-  // Hemisphere light (sky/ground gradient for natural outdoor lighting)
-  if (settings.hemisphereEnabled ?? true) {
-    hemisphereLight = new THREE.HemisphereLight(
-      settings.hemisphereSkyColor ?? '#87ceeb',
-      settings.hemisphereGroundColor ?? '#3d5c3d',
-      settings.hemisphereIntensity ?? 1.0
-    );
-    hemisphereLight.layers.enable(FIRST_PERSON_LAYER); hemisphereLight.layers.enable(FIRST_PERSON_ITEM_LAYER); // light the FP arm + held item
-    scene.add(hemisphereLight);
-  }
-  
-  // Initialize procedural sky dome (matches hemisphere/sun/moon colors)
+
+  // Hemisphere light (sky/ground gradient — the natural outdoor fill; replaces ambient).
+  // Always present; colours + intensity are driven by the keyframes.
+  hemisphereLight = new THREE.HemisphereLight('#87ceeb', '#3d5c3d', 1.0);
+  hemisphereLight.layers.enable(FIRST_PERSON_LAYER); hemisphereLight.layers.enable(FIRST_PERSON_ITEM_LAYER); // light the FP arm + held item
+  scene.add(hemisphereLight);
+
+  // Initialize procedural sky dome (its uniforms are seeded by applyDerivedLighting below).
   initSkyDome();
-  
-  // Apply environment intensity to scene
-  applyEnvironmentIntensity(settings.environmentIntensity ?? 0.5);
-  
-  // Apply tone mapping settings
+
+  // ACES tone mapping — applied once here (no longer a runtime setting). Note the always-on
+  // post-processing composer has no ToneMappingEffect, so this affects only the rare
+  // composer-bypassed path; kept for parity with the previous look.
   if (renderer) {
-    renderer.toneMapping = settings.toneMapping ?? THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = settings.toneMappingExposure ?? 1.0;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
   }
-  
+
+  // Seed the full lighting state from the keyframes at the current time (no first-frame flash).
+  const cfg = useGameStore.getState().dayNightConfig;
+  applyDerivedLighting(deriveLighting(cfg, settings.timeOfDay));
+
   console.log('[Lighting] Initialized with sun + moon + hemisphere + procedural sky (single shadow caster)');
 
   // Subscribe to store — update shadow blur radius when it changes
@@ -185,138 +175,63 @@ function applyShadowBlurRadius(radius: number): void {
   }
 }
 
-// ============== Environment Intensity ==============
-
-/**
- * Apply environment intensity to scene and terrain materials.
- */
-function applyEnvironmentIntensity(intensity: number): void {
-  const scene = getScene();
-  if (scene) {
-    (scene as unknown as { environmentIntensity: number }).environmentIntensity = intensity;
-    (scene as unknown as { backgroundIntensity: number }).backgroundIntensity = intensity;
-    setTerrainEnvMapIntensity(intensity);
-  }
-}
-
 // ============== Settings Application ==============
 
 /**
- * Apply environment settings from store.
- * Call when settings change from UI or DayNightCycle controller.
+ * Apply the derived day-night lighting (from `deriveLighting`) straight to the sun/moon/
+ * hemisphere lights + the sky dome. Positions are set relative to each light's current target
+ * along the stored direction, so the light *direction* is constant regardless of world position
+ * (the sun/moon don't drift as the player moves).
+ */
+export function applyDerivedLighting(d: DerivedLighting): void {
+  anglesToDir(d.sunAzimuth, d.sunElevation, _sunDir);
+  anglesToDir(d.moonAzimuth, d.moonElevation, _moonDir);
+
+  if (sunLight) {
+    sunLight.color.set(d.sunColor);
+    sunLight.intensity = d.sunIntensity;
+    sunLight.position.copy(sunLight.target.position).addScaledVector(_sunDir, d.sunDistance);
+  }
+  if (moonLight) {
+    moonLight.color.set(d.moonColor);
+    moonLight.intensity = d.moonIntensity;
+    moonLight.position.copy(moonLight.target.position).addScaledVector(_moonDir, d.moonDistance);
+  }
+  if (hemisphereLight) {
+    hemisphereLight.color.set(d.skyZenithColor);
+    hemisphereLight.groundColor.set(d.groundColor);
+    hemisphereLight.intensity = d.hemisphereIntensity;
+  }
+
+  updateSkyUniforms(d);
+}
+
+/**
+ * Apply the non-cycle environment settings that affect the lights/renderer — currently just
+ * the shadow bias / normal-bias / map-size (post-FX and terrain-shader fields are applied by
+ * their own owners). Called from the debug panel on change.
  */
 export function applyEnvironmentSettings(settings: Partial<EnvironmentSettings>): void {
-  // Get full current settings for position calculations
-  const currentSettings = useGameStore.getState().environment;
-  
-  // Update sun light
-  if (sunLight) {
-    if (settings.sunColor !== undefined) {
-      sunLight.color.set(settings.sunColor);
-    }
-    if (settings.sunIntensity !== undefined) {
-      sunLight.intensity = settings.sunIntensity;
-    }
-    
-    // Update sun position if azimuth or elevation changed
-    if (settings.sunAzimuth !== undefined || settings.sunElevation !== undefined || settings.sunDistance !== undefined) {
-      const azimuth = settings.sunAzimuth ?? currentSettings.sunAzimuth ?? 135;
-      const elevation = settings.sunElevation ?? currentSettings.sunElevation ?? 45;
-      const distance = settings.sunDistance ?? currentSettings.sunDistance ?? 150;
-      const pos = anglesToPosition(azimuth, elevation, distance);
-      sunLight.position.copy(pos);
-    }
-    
-    if (settings.shadowBias !== undefined) {
-      sunLight.shadow.bias = settings.shadowBias;
-      if (moonLight) moonLight.shadow.bias = settings.shadowBias;
-    }
-    if (settings.shadowNormalBias !== undefined) {
-      sunLight.shadow.normalBias = settings.shadowNormalBias;
-      if (moonLight) moonLight.shadow.normalBias = settings.shadowNormalBias;
-    }
-    if (settings.shadowMapSize !== undefined && sunLight.shadow.mapSize.width !== settings.shadowMapSize) {
-      // Update both lights so either can be shadow caster
-      for (const light of [sunLight, moonLight]) {
-        if (light && light.shadow.mapSize.width !== settings.shadowMapSize) {
-          light.shadow.mapSize.width = settings.shadowMapSize;
-          light.shadow.mapSize.height = settings.shadowMapSize;
-          light.shadow.map?.dispose();
-          light.shadow.map = null;
-        }
+  if (!sunLight) return;
+
+  if (settings.shadowBias !== undefined) {
+    sunLight.shadow.bias = settings.shadowBias;
+    if (moonLight) moonLight.shadow.bias = settings.shadowBias;
+  }
+  if (settings.shadowNormalBias !== undefined) {
+    sunLight.shadow.normalBias = settings.shadowNormalBias;
+    if (moonLight) moonLight.shadow.normalBias = settings.shadowNormalBias;
+  }
+  if (settings.shadowMapSize !== undefined && sunLight.shadow.mapSize.width !== settings.shadowMapSize) {
+    for (const light of [sunLight, moonLight]) {
+      if (light && light.shadow.mapSize.width !== settings.shadowMapSize) {
+        light.shadow.mapSize.width = settings.shadowMapSize;
+        light.shadow.mapSize.height = settings.shadowMapSize;
+        light.shadow.map?.dispose();
+        light.shadow.map = null;
       }
     }
   }
-  
-  // Update moon light
-  if (moonLight) {
-    if (settings.moonColor !== undefined) {
-      moonLight.color.set(settings.moonColor);
-    }
-    if (settings.moonIntensity !== undefined) {
-      moonLight.intensity = settings.moonIntensity;
-    }
-    
-    // Update moon position if azimuth or elevation changed
-    if (settings.moonAzimuth !== undefined || settings.moonElevation !== undefined || settings.sunDistance !== undefined) {
-      const azimuth = settings.moonAzimuth ?? currentSettings.moonAzimuth ?? 315;
-      const elevation = settings.moonElevation ?? currentSettings.moonElevation ?? -45;
-      const distance = settings.sunDistance ?? currentSettings.sunDistance ?? 150; // Use sun distance for consistency
-      const pos = anglesToPosition(azimuth, elevation, distance);
-      moonLight.position.copy(pos);
-    }
-  }
-  
-  // Update hemisphere light (replaces ambient for natural outdoor lighting)
-  if (hemisphereLight) {
-    if (settings.hemisphereSkyColor !== undefined) {
-      hemisphereLight.color.set(settings.hemisphereSkyColor);
-    }
-    if (settings.hemisphereGroundColor !== undefined) {
-      hemisphereLight.groundColor.set(settings.hemisphereGroundColor);
-    }
-    if (settings.hemisphereIntensity !== undefined) {
-      hemisphereLight.intensity = settings.hemisphereIntensity;
-    }
-  }
-  
-  // Handle hemisphere light enable/disable
-  if (settings.hemisphereEnabled !== undefined) {
-    const scene = getScene();
-    if (scene) {
-      if (settings.hemisphereEnabled && !hemisphereLight) {
-        // Create hemisphere light if enabled and doesn't exist
-        hemisphereLight = new THREE.HemisphereLight(
-          currentSettings.hemisphereSkyColor ?? '#87ceeb',
-          currentSettings.hemisphereGroundColor ?? '#3d5c3d',
-          currentSettings.hemisphereIntensity ?? 0.4
-        );
-        scene.add(hemisphereLight);
-      } else if (!settings.hemisphereEnabled && hemisphereLight) {
-        // Remove hemisphere light if disabled
-        scene.remove(hemisphereLight);
-        hemisphereLight = null;
-      }
-    }
-  }
-  
-  // Update environment intensity
-  if (settings.environmentIntensity !== undefined) {
-    applyEnvironmentIntensity(settings.environmentIntensity);
-  }
-  
-  // Update renderer tone mapping
-  if (renderer) {
-    if (settings.toneMapping !== undefined) {
-      renderer.toneMapping = settings.toneMapping;
-    }
-    if (settings.toneMappingExposure !== undefined) {
-      renderer.toneMappingExposure = settings.toneMappingExposure;
-    }
-  }
-  
-  // Update procedural sky dome uniforms
-  updateSkyUniforms(settings);
 }
 
 /**
@@ -363,9 +278,15 @@ export function getActiveShadowLight(): THREE.DirectionalLight | null {
  */
 export function setMoonShadowsAllowed(allowed: boolean): void {
   moonShadowsAllowed = allowed;
-  // If moon shadows just got disabled and moon currently owns the shadow, swap back to sun
+  // If moon shadows are disabled while the moon owns the shadow: when the cycle is running the
+  // reconciler will fade+swap to the sun next frame, but when it's paused/off the reconciler
+  // isn't pumping — so hard-swap immediately in that case.
   if (!allowed && activeShadowCaster === 'moon') {
-    transferShadowCaster('sun');
+    const cycleRunning = useGameStore.getState().environment.dayNightEnabled ?? false;
+    if (!cycleRunning) {
+      transferShadowCaster('sun');
+      if (sunLight) sunLight.shadow.intensity = 1;
+    }
   }
 }
 
@@ -374,26 +295,40 @@ export function isMoonShadowsAllowed(): boolean {
 }
 
 /**
- * Update which directional light casts shadows based on current intensities.
- * Call each frame from DayNightCycle (or whenever intensities change).
- * 
- * Only ONE light casts shadows at a time. This keeps NUM_DIR_LIGHT_SHADOWS
- * constant at 1 so receiver shaders never need recompilation.
- * 
- * @param sunIntensity - current sun light intensity
- * @param moonIntensity - current moon light intensity
+ * Reconcile which directional light casts shadows, and drive a pop-free fade across sun↔moon
+ * hand-offs. Called each frame from DayNightCycle.
+ *
+ * Only ONE light casts shadows at a time (keeps NUM_DIR_LIGHT_SHADOWS constant → no receiver
+ * recompiles). The active caster's `shadow.intensity` follows its body's elevation (shadows
+ * soften to nothing as the body reaches the horizon), and a queued caster swap is deferred
+ * until that intensity is ~0 — so the hard castShadow flip (which disposes/reallocates the
+ * shadow map) is invisible. A hysteresis deadband avoids thrash at the crossover.
  */
-export function updateShadowCaster(sunIntensity: number, moonIntensity: number): void {
+export function updateShadowCaster(sunElevation: number, moonElevation: number): void {
   if (!sunLight || !moonLight) return;
-  
-  // Determine who should own the shadow
-  let desired: 'sun' | 'moon' = 'sun';
-  if (moonShadowsAllowed && moonIntensity > sunIntensity) {
-    desired = 'moon';
-  }
-  
-  if (desired !== activeShadowCaster) {
+
+  // Desired caster by ELEVATION: whichever body is higher and above the horizon. Sun & moon cross
+  // 0° together at dawn/dusk, so the swap lands where BOTH are at the horizon — where the fade is
+  // ~0 for both — instead of when the incoming body is already high (the old dusk-pop). A small
+  // deadband avoids thrash at the crossover.
+  let desired: 'sun' | 'moon';
+  if (moonShadowsAllowed && moonElevation > 0 && moonElevation > sunElevation + 1) desired = 'moon';
+  else if (sunElevation > moonElevation + 1 || !moonShadowsAllowed) desired = 'sun';
+  else desired = activeShadowCaster;
+
+  const active = getActiveShadowLight();
+  if (!active) return;
+
+  // Fade level = smoothstep of the active body's elevation over the near-horizon band.
+  const activeElev = activeShadowCaster === 'sun' ? sunElevation : moonElevation;
+  const f = Math.min(1, Math.max(0, (activeElev - SHADOW_FADE_LO) / (SHADOW_FADE_HI - SHADOW_FADE_LO)));
+  active.shadow.intensity = f * f * (3 - 2 * f);
+
+  if (desired !== activeShadowCaster && active.shadow.intensity <= SWAP_EPS) {
+    // Perform the (invisible) hard swap only once the active shadow has faded to ~0.
     transferShadowCaster(desired);
+    const next = getActiveShadowLight();
+    if (next) next.shadow.intensity = 0; // fades back up next frame from its own elevation
   }
 }
 
@@ -465,20 +400,16 @@ export function updateShadowFollow(center: THREE.Vector3): void {
   const light = activeShadowCaster === 'sun' ? sunLight : moonLight;
   if (!light || !light.castShadow) return;
 
-  // The light direction is encoded in its position (directional light
-  // shines from position toward target). We keep the same direction but
-  // re-center around the player.
-  
-  // Compute the normalized light-to-target direction from current position
-  _lightOffset.copy(light.position).sub(light.target.position);
+  // Use the stored light direction (from the derived azimuth/elevation), NOT position−target —
+  // so the direction is constant regardless of where the player is in the world.
+  _lightOffset.copy(activeShadowCaster === 'sun' ? _sunDir : _moonDir);
   if (_lightOffset.lengthSq() < 0.001) return;
-  _lightOffset.normalize();
 
   // Snap center to shadow texel grid to prevent shadow swimming/shimmer
   // when the player moves sub-texel amounts
   const shadowMapSize = light.shadow.mapSize.width;
   const worldUnitsPerTexel = (shadowFrustumSize * 2) / shadowMapSize;
-  
+
   // Snap in the shadow camera's "right" and "up" directions
   // For simplicity, snap in world XZ (dominant axes for top-down shadow)
   const snappedX = Math.floor(center.x / worldUnitsPerTexel) * worldUnitsPerTexel;
@@ -528,17 +459,3 @@ export function disposeLighting(): void {
   
   renderer = null;
 }
-
-// ============== UI Helpers ==============
-
-/**
- * Map for tone mapping types (for UI dropdowns).
- */
-export const TONE_MAPPING_OPTIONS: { label: string; value: THREE.ToneMapping }[] = [
-  { label: 'None', value: THREE.NoToneMapping },
-  { label: 'Linear', value: THREE.LinearToneMapping },
-  { label: 'Reinhard', value: THREE.ReinhardToneMapping },
-  { label: 'Cineon', value: THREE.CineonToneMapping },
-  { label: 'ACES Filmic', value: THREE.ACESFilmicToneMapping },
-  { label: 'AgX', value: THREE.AgXToneMapping },
-];

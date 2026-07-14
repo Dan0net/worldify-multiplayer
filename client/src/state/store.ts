@@ -6,26 +6,21 @@ import {
   MATERIAL_METALNESS_OFFSET,
   MATERIAL_AO_INTENSITY,
   MATERIAL_NORMAL_STRENGTH,
-  ENVIRONMENT_INTENSITY,
-  DEFAULT_SKYBOX,
-  LIGHT_SUN_COLOR,
   LIGHT_SUN_INTENSITY,
   LIGHT_MOON_COLOR,
-  LIGHT_MOON_INTENSITY,
   SUN_DISTANCE,
+  SUN_ELEVATION_MAX,
   DEFAULT_TIME_OF_DAY,
   DEFAULT_TIME_SPEED,
   HEMISPHERE_SKY_DAY,
   HEMISPHERE_GROUND_DAY,
   HEMISPHERE_INTENSITY_DAY,
-  HEMISPHERE_SKY_NIGHT,
   HEMISPHERE_GROUND_NIGHT,
-  HEMISPHERE_INTENSITY_NIGHT,
-  ENVIRONMENT_INTENSITY_DAY,
-  ENVIRONMENT_INTENSITY_NIGHT,
   SUN_COLOR_NOON,
+  normalizeDayNightConfig,
+  type DayNightKeyframe,
+  type DayNightConfig,
 } from '@worldify/shared';
-import * as THREE from 'three';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -114,53 +109,21 @@ export interface BuildState {
   presetMeta: PresetSlotMeta[];
 }
 
-/** Environment/lighting settings */
+/** Environment/lighting settings (everything NOT driven by the day-night keyframes). */
 export interface EnvironmentSettings {
-  // Day-Night Cycle. `dayNightEnabled` is the single master: when on, the cycle derives
-  // sun/moon/hemisphere/IBL from `timeOfDay` + the editable `DayNightConfig` stage keyframes
-  // (single source of truth — no per-field "auto" flags). When off, the manual values below
-  // are used as-is.
+  // Day-Night Cycle master + clock. When enabled, the cycle derives sun/moon/hemisphere/sky
+  // from `timeOfDay` + the `DayNightConfig` keyframes (single source of truth). When disabled,
+  // the scene holds at the palette/position for the current `timeOfDay`.
   dayNightEnabled: boolean;
   timeOfDay: number;              // 0-1 normalized time
   timeSpeed: number;              // Game-minutes per real-second (0 = paused)
 
-  // Sun settings (manual values, or calculated when the cycle is enabled)
-  sunColor: string;         // Hex color
-  sunIntensity: number;     // 0-10
-  sunDistance: number;      // Distance from origin for light positioning
-  sunAzimuth: number;       // Horizontal angle in degrees (0-360)
-  sunElevation: number;     // Vertical angle in degrees (-90 to 90)
-  
-  // Moon settings
-  moonColor: string;        // Hex color
-  moonIntensity: number;    // 0-2
-  moonAzimuth: number;      // Horizontal angle in degrees
-  moonElevation: number;    // Vertical angle in degrees
-  
-  // Hemisphere light (sky/ground gradient)
-  hemisphereEnabled: boolean;     // Toggle hemisphere light
-  hemisphereSkyColor: string;     // Hex color (from above)
-  hemisphereGroundColor: string;  // Hex color (from below)
-  hemisphereIntensity: number;    // 0-2
-  
-  // Sunset/sunrise colors for sky shader
-  sunsetHorizonColor: string;     // Warm orange-red at horizon
-  sunsetZenithColor: string;      // Cool purple at zenith
-  
-  // Environment (IBL)
-  skybox: string;                 // Skybox image filename
-  environmentIntensity: number; // 0-2
-  
   // Shadow settings
   shadowBias: number;       // -0.01 to 0.01
   shadowNormalBias: number; // 0 to 0.1
   shadowMapSize: number;    // 512, 1024, 2048, 4096
   shadowBlurRadius: number; // 1-25, controls shadow edge softness
-  
-  // Tone mapping
-  toneMapping: THREE.ToneMapping;
-  toneMappingExposure: number; // 0.1 to 3
-  
+
   // Post-processing effects
   ssaoIntensity: number;        // 0-4
   ssaoRadius: number;           // 0-0.5
@@ -169,13 +132,13 @@ export interface EnvironmentSettings {
   bloomRadius: number;          // 0-3
   godRaysDecay: number;         // 0-1
   godRaysExposure: number;      // 0-1
-  
+
   // Color correction
   saturation: number;           // 0-2, 1.0 = no change
-  
-  // Voxel light fill
-  lightFillPower: number;       // 0.5-5, exponent for fill light curve
-  lightFillIntensity: number;   // 0-1, strength of additive fill light
+
+  // Voxel light fill curves — exponents applied to the per-vertex light channels.
+  skyFillPower: number;         // sky-light channel: <1 lifts dark areas (0.5 = sqrt)
+  blockFillPower: number;       // block-light channel: >1 = tighter drop-off (2 = square)
 
   // Block light (emitters, e.g. lava) — warm, sun-independent glow
   blockLightColor: string;      // hex colour, e.g. '#ffb050'
@@ -183,54 +146,45 @@ export interface EnvironmentSettings {
 }
 
 /**
- * Editable day/night stage keyframes — the single source of truth the day-night cycle
- * interpolates between. Editing a stage updates the scene live (the cycle re-derives) with
- * no reset, because both the cycle and the UI read/write this one slice. Transitional
- * sunrise/sunset gradients stay as shared constants; these are the two endpoints artists
- * tune most.
+ * `DayNightConfig` (defined in `@worldify/shared`) — the single source of truth for the day-night
+ * look. Sun/moon appearance + arc are global; timing is four transition-window boundaries; the four
+ * `keyframes` are the phase palettes [Night, Sunrise, Day, Sunset]. `deriveLighting(cfg, time)` is
+ * the one place that turns this into lighting.
  */
-export interface DayStageConfig {
-  sunColor: string;
-  sunIntensity: number;         // peak sun intensity at noon
-  hemisphereSkyColor: string;
-  hemisphereGroundColor: string;
-  hemisphereIntensity: number;
-  environmentIntensity: number; // IBL / sky-ambient strength
-}
-export interface NightStageConfig {
-  moonColor: string;
-  moonIntensity: number;        // peak moon intensity
-  hemisphereSkyColor: string;
-  hemisphereGroundColor: string;
-  hemisphereIntensity: number;
-  environmentIntensity: number;
-  skyDarkness: number;          // visible-sky brightness multiplier at deep night (0-1)
-  starSize: number;             // relative star size (1 = base; larger = bigger stars)
-}
-export interface DayNightConfig {
-  day: DayStageConfig;
-  night: NightStageConfig;
-}
+export type { DayNightKeyframe, DayNightConfig };
 
 export const DEFAULT_DAY_NIGHT_CONFIG: DayNightConfig = {
-  day: {
-    sunColor: SUN_COLOR_NOON,
-    sunIntensity: LIGHT_SUN_INTENSITY,
-    hemisphereSkyColor: HEMISPHERE_SKY_DAY,
-    hemisphereGroundColor: HEMISPHERE_GROUND_DAY,
-    hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
-    environmentIntensity: ENVIRONMENT_INTENSITY_DAY,
-  },
-  night: {
-    moonColor: LIGHT_MOON_COLOR,
-    moonIntensity: LIGHT_MOON_INTENSITY,
-    hemisphereSkyColor: HEMISPHERE_SKY_NIGHT,
-    hemisphereGroundColor: HEMISPHERE_GROUND_NIGHT,
-    hemisphereIntensity: HEMISPHERE_INTENSITY_NIGHT,
-    environmentIntensity: ENVIRONMENT_INTENSITY_NIGHT,
-    skyDarkness: 0.08,
-    starSize: 1.0,
-  },
+  sunHeight: SUN_ELEVATION_MAX, sunDistance: SUN_DISTANCE, sunSize: 1.0, sunIntensity: LIGHT_SUN_INTENSITY,
+  moonHeight: 55, moonDistance: SUN_DISTANCE, moonSize: 0.5, moonIntensity: 1.0,
+  // Long day: dawn ~04:34–06:58, dusk ~19:55–22:05 (sunset centre ≈ 21:00).
+  sunriseStart: 0.19, sunriseEnd: 0.29, sunsetStart: 0.83, sunsetEnd: 0.92,
+  twilightAngle: 6,  // ± elevation band for the twilight fade / hand-off overlap
+  keyframes: [
+    {
+      name: 'Night',
+      sunColor: '#334466', moonColor: LIGHT_MOON_COLOR,
+      skyZenithColor: '#0b1a33', skyHorizonColor: '#243b66', groundColor: HEMISPHERE_GROUND_NIGHT,
+      hemisphereIntensity: 0.6,
+    },
+    {
+      name: 'Sunrise',
+      sunColor: '#ffb066', moonColor: LIGHT_MOON_COLOR,
+      skyZenithColor: '#5577aa', skyHorizonColor: '#ff9d5c', groundColor: '#887766',
+      hemisphereIntensity: 1.0,
+    },
+    {
+      name: 'Day',
+      sunColor: SUN_COLOR_NOON, moonColor: LIGHT_MOON_COLOR,
+      skyZenithColor: HEMISPHERE_SKY_DAY, skyHorizonColor: '#bfe3f5', groundColor: HEMISPHERE_GROUND_DAY,
+      hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
+    },
+    {
+      name: 'Sunset',
+      sunColor: '#ff5522', moonColor: LIGHT_MOON_COLOR,
+      skyZenithColor: '#4d3380', skyHorizonColor: '#ff6622', groundColor: '#553322',
+      hemisphereIntensity: 1.0,
+    },
+  ],
 };
 
 /** Material shader settings for debug/tweaking */
@@ -301,38 +255,11 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   timeOfDay: DEFAULT_TIME_OF_DAY,
   timeSpeed: DEFAULT_TIME_SPEED,
 
-  sunColor: LIGHT_SUN_COLOR,
-  sunIntensity: LIGHT_SUN_INTENSITY,
-  sunDistance: SUN_DISTANCE,
-  sunAzimuth: 135,          // Southeast (morning sun)
-  sunElevation: 45,         // 45 degrees up
-  
-  moonColor: LIGHT_MOON_COLOR,
-  moonIntensity: LIGHT_MOON_INTENSITY,
-  moonAzimuth: 315,         // Opposite sun
-  moonElevation: -45,       // Below horizon during day
-  
-  // Hemisphere light - enabled by default for natural outdoor lighting
-  hemisphereEnabled: true,
-  hemisphereSkyColor: HEMISPHERE_SKY_DAY,
-  hemisphereGroundColor: HEMISPHERE_GROUND_DAY,
-  hemisphereIntensity: HEMISPHERE_INTENSITY_DAY,
-  
-  // Sunset/sunrise colors
-  sunsetHorizonColor: '#ff6622',  // Warm orange-red
-  sunsetZenithColor: '#4d3380',   // Cool purple
-  
-  skybox: DEFAULT_SKYBOX,
-  environmentIntensity: ENVIRONMENT_INTENSITY,
-  
   shadowBias: -0.0001,
   shadowNormalBias: 0.02,
   shadowMapSize: 4096,
   shadowBlurRadius: 8,
-  
-  toneMapping: THREE.ACESFilmicToneMapping,
-  toneMappingExposure: 1.0,
-  
+
   ssaoIntensity: 4,
   ssaoRadius: 0.1,
   bloomIntensity: 1,
@@ -341,8 +268,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   godRaysDecay: 0.90,
   godRaysExposure: 0.25,
   saturation: 1.2,  // Slightly boosted for more vivid colors
-  lightFillPower: 0.5,
-  lightFillIntensity: 2.0,
+  skyFillPower: 0.5,    // sqrt → lifts dark sky-lit areas
+  blockFillPower: 2.0,  // square → tighter block-light drop-off
   blockLightColor: '#ffb050',
   blockLightIntensity: 1.5,
 };
@@ -489,8 +416,9 @@ export interface GameState {
   setTimeOfDay: (time: number) => void;
   setTimeSpeed: (speed: number) => void;
 
-  // Day-night stage config actions
-  setDayNightConfig: (updates: { day?: Partial<DayStageConfig>; night?: Partial<NightStageConfig> }) => void;
+  // Day-night config actions
+  updateKeyframe: (index: number, updates: Partial<DayNightKeyframe>) => void;
+  setDayNightConfig: (updates: Partial<Omit<DayNightConfig, 'keyframes'>>) => void;
 
   // Material settings actions
   setMaterialSettings: (updates: Partial<MaterialSettings>) => void;
@@ -593,10 +521,10 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Environment initial state
   environment: { ...DEFAULT_ENVIRONMENT },
 
-  // Day-night stage keyframes
+  // Day-night config (globals + timing + phase palettes)
   dayNightConfig: {
-    day: { ...DEFAULT_DAY_NIGHT_CONFIG.day },
-    night: { ...DEFAULT_DAY_NIGHT_CONFIG.night },
+    ...DEFAULT_DAY_NIGHT_CONFIG,
+    keyframes: DEFAULT_DAY_NIGHT_CONFIG.keyframes.map((k) => ({ ...k })),
   },
 
   // Material settings initial state
@@ -758,11 +686,14 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     environment: { ...state.environment, timeSpeed: Math.max(0, speed) },
   })),
 
+  updateKeyframe: (index, updates) => set((state) => {
+    const keyframes = state.dayNightConfig.keyframes.map((k, i) =>
+      i === index ? { ...k, ...updates } : k
+    );
+    return { dayNightConfig: { ...state.dayNightConfig, keyframes } };
+  }),
   setDayNightConfig: (updates) => set((state) => ({
-    dayNightConfig: {
-      day: { ...state.dayNightConfig.day, ...(updates.day ?? {}) },
-      night: { ...state.dayNightConfig.night, ...(updates.night ?? {}) },
-    },
+    dayNightConfig: normalizeDayNightConfig({ ...state.dayNightConfig, ...updates }),
   })),
 
   // Material settings actions

@@ -375,7 +375,8 @@ let waterMaterial: WaterMaterial | null = null;
 export function getWaterMaterial(): WaterMaterial {
   if (!waterMaterial) {
     waterMaterial = new WaterMaterial();
-    waterMaterial.envMapIntensity = useGameStore.getState().environment.environmentIntensity;
+    // No scene environment map is assigned, so envMapIntensity is inert — keep it at 1.
+    waterMaterial.envMapIntensity = 1.0;
   }
   return waterMaterial;
 }

@@ -218,3 +218,47 @@ export function lerpColor(colorA: string, colorB: string, t: number): string {
     a.b + (b.b - a.b) * t
   );
 }
+
+/** HSV colour: h in [0,360), s & v in [0,1]. */
+export interface HSV {
+  h: number;
+  s: number;
+  v: number;
+}
+
+/**
+ * Convert RGB (0-1) to HSV (h 0-360, s/v 0-1).
+ */
+export function rgbToHsv(r: number, g: number, b: number): HSV {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  const s = max === 0 ? 0 : d / max;
+  return { h, s, v: max };
+}
+
+/**
+ * Convert HSV (h 0-360, s/v 0-1) to RGB (0-1).
+ */
+export function hsvToRgb(h: number, s: number, v: number): RGB {
+  h = ((h % 360) + 360) % 360;
+  const c = v * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+  return { r: r + m, g: g + m, b: b + m };
+}
