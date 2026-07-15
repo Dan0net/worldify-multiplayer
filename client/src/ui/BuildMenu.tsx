@@ -142,7 +142,10 @@ export function BuildMenu() {
         paddingRight: 'env(safe-area-inset-right)',
       }}
       onContextMenu={handleContextMenu}
-      onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
+      // Close on pointerdown (not click): the menu opens on the hotbar button's pointerdown, and the
+      // scrim mounts under the finger — closing on click would let that same tap's click retarget to
+      // the fresh scrim and instantly close it (mobile). Pointerdown only sees *subsequent* taps.
+      onPointerDown={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
       {/* A centered card on all sizes (never full-screen); tighter on mobile. Clicking the scrim
           outside it closes the menu (handler above). */}
@@ -168,8 +171,8 @@ export function BuildMenu() {
         </button>
       </div>
 
-      {/* Body: scrolls; thin scrollbar so the fixed 6-col grid fits the card width exactly. */}
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-compact p-3 md:p-4">
+      {/* Body: capped at ~4 tile rows tall (tiles 80/96px + 8px gaps + padding); scrolls beyond. */}
+      <div className="max-h-[368px] md:max-h-[440px] overflow-y-auto scrollbar-compact p-3 md:p-4">
         <div className="mx-auto w-full md:w-fit">
           {activeTab === 'presets' && (
             <div className="flex flex-wrap gap-2 justify-center md:grid md:grid-cols-6 md:justify-items-start">

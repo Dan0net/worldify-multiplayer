@@ -300,6 +300,9 @@ export interface GameState {
   /** True once the explore→first-person camera intro has finished — reveals the arm + hotbar. */
   firstPersonReady: boolean;
 
+  /** True when the explore camera has settled (no play→explore outro in flight) — shows explore UI. */
+  exploreReady: boolean;
+
   // Network chunk streaming
   useServerChunks: boolean;
 
@@ -366,6 +369,7 @@ export interface GameState {
   setGameMode: (mode: GameMode) => void;
   setSpawnReady: (ready: boolean) => void;
   setFirstPersonReady: (ready: boolean) => void;
+  setExploreReady: (ready: boolean) => void;
   setUseServerChunks: (enabled: boolean) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
   setServerTick: (tick: number) => void;
@@ -466,6 +470,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   gameMode: GameMode.Explore, // Start in explore mode (free camera home screen)
   spawnReady: false, // Terrain not found yet
   firstPersonReady: false, // Camera intro not finished yet
+  exploreReady: true, // Start on the home/explore screen with the explore UI shown
   useServerChunks: true, // Default to server chunks in multiplayer
   textureState: 'none',
   textureProgress: 0,
@@ -562,6 +567,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setGameMode: (mode) => set({ gameMode: mode }),
   setSpawnReady: (ready) => set({ spawnReady: ready }),
   setFirstPersonReady: (ready) => set({ firstPersonReady: ready }),
+  setExploreReady: (ready) => set({ exploreReady: ready }),
   setUseServerChunks: (enabled) => set({ useServerChunks: enabled }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),
   setServerTick: (tick) => set({ serverTick: tick }),
@@ -620,17 +626,11 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     build: { ...state.build, presetId, buildMode: false, menuOpen: false },
   })),
   cycleBuildPreset: (dir) => set((state) => {
-    // Step through the hotbar in display order (keys 1..9,0), skipping empty slots.
+    // Step one slot in display order (keys 1..9,0). Empty slots are selectable too (bare hand).
     const order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-    const metas = state.build.presetMeta;
     const start = order.indexOf(state.build.presetId);
-    for (let step = 1; step <= order.length; step++) {
-      const idx = order[((start + dir * step) % order.length + order.length) % order.length];
-      if (!slotIsEmpty(metas[idx])) {
-        return { build: { ...state.build, presetId: idx, buildMode: false, menuOpen: false } };
-      }
-    }
-    return state; // all slots empty — no-op
+    const idx = order[((start + dir) % order.length + order.length) % order.length];
+    return { build: { ...state.build, presetId: idx, buildMode: false, menuOpen: false } };
   }),
   setBuildRotation: (rotationSteps) => set((state) => ({
     build: { ...state.build, rotationSteps: rotationSteps & (BUILD_ROTATION_STEPS - 1) },

@@ -41,7 +41,7 @@ function HotbarSlot({ index }: { index: number }) {
     <button
       type="button"
       onPointerDown={(e) => { e.preventDefault(); setBuildPreset(index); }}
-      className={`relative pointer-events-auto shrink-0 aspect-square ${SLOT_SIZE} rounded-lg bg-black/25 overflow-hidden transition-shadow ${
+      className={`relative pointer-events-auto shrink-0 aspect-square ${SLOT_SIZE} rounded-lg bg-black/25 overflow-hidden ${
         active ? 'ring-2 ring-cyan-400' : ''
       }`}
       aria-label={empty ? `Slot ${keyLabel} (empty)` : `${meta?.templateName} (${keyLabel})`}

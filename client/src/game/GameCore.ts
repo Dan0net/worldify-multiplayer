@@ -665,8 +665,10 @@ export class GameCore {
       initExploreCamera(this.spectatorCenter);
       resetMarker();
       // Leaving play — slide the arm out and re-arm the reveal (hotbar + pills slide out via
-      // firstPersonReady flipping false).
+      // firstPersonReady flipping false). The explore UI slides back in only once the outro glide
+      // completes (exploreReady set below); a non-play entry (boot) has no outro, so show it now.
       if (previousMode === GameMode.Playing) startFirstPersonArmExit();
+      else useGameStore.getState().setExploreReady(true);
       useGameStore.getState().setFirstPersonReady(false);
     } else {
       setMarkerVisible(false); // hide the spawn gizmo outside explore
@@ -675,6 +677,7 @@ export class GameCore {
     // Entering Playing mode - spawn at the chosen marker if the Play button armed one
     // (works even for a re-play after pausing); otherwise the first-time spawn logic.
     if (currentMode === GameMode.Playing) {
+      useGameStore.getState().setExploreReady(false); // explore UI animates out
       const markerSpawn = consumeMarkerSpawn();
       if (markerSpawn) {
         this.playerManager.setSpawnPosition(markerSpawn);
@@ -793,6 +796,8 @@ export class GameCore {
       this.introTmpQuat.copy(camera.quaternion);
       camera.position.copy(this.cameraOutroFromPos).lerp(this.introTmpPos, eased);
       camera.quaternion.copy(this.cameraOutroFromQuat).slerp(this.introTmpQuat, eased);
+      // Outro finished → let the explore UI (world/settings/panel) animate back in.
+      if (this.cameraOutroMs === 0) useGameStore.getState().setExploreReady(true);
     }
 
     // The explore target is the world stream/shadow center; keep spectatorCenter in
