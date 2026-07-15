@@ -88,6 +88,52 @@ export interface PathwayConfig {
   waterDepth: number;
 }
 
+export interface CaveConfig {
+  /**
+   * Which cave algorithm to run:
+   * - 'off'       — no caves (terrain untouched)
+   * - 'spaghetti' — two intersected 3D noise fields → long snake-like tubes (mode A)
+   * - 'cellular'  — cellular edge network + domain warp → connected corridors + chambers (mode C)
+   */
+  mode: 'off' | 'spaghetti' | 'cellular';
+  /**
+   * Debug view: render the caves themselves as SOLID and everything else as air, skipping
+   * pathways, water, and stamps. Lets you fly around and inspect the raw cave shapes for the
+   * active `mode` without the rest of the terrain in the way. No effect when mode === 'off'.
+   */
+  invert: boolean;
+  /** Multiply Y before sampling; > 1 squashes caves vertically → flatter, more walkable tunnels. */
+  verticalSquash: number;
+  /** Voxels below the surface before carving begins (small, since surface breaches are allowed). */
+  surfaceMargin: number;
+  /** Voxels over which the carve band tapers to zero toward the surface (keeps breaches sparse). */
+  surfaceTaper: number;
+  /** Optional hard floor in meters; no caves are carved below this world Y. */
+  floorY?: number;
+
+  // --- Mode A ("spaghetti"): two 3D noise fields intersected ---
+  /** Noise frequency (1/m) — tunnel scale/length; lower = larger, longer tunnels. */
+  frequency: number;
+  /** Carve band half-width around each noise zero-surface (tube thickness + abundance). */
+  radius: number;
+  /** Low-frequency region-mask frequency so caves can cluster in regions instead of uniformly. */
+  regionFrequency: number;
+  /** Region-mask threshold in [-1, 1]; <= -1 disables the mask (caves everywhere). */
+  regionThreshold: number;
+
+  // --- Mode C ("cellular"): Voronoi edge network + domain warp ---
+  /** Cellular cell frequency (1/m) — lower = larger cells, longer corridors between junctions. */
+  cellFrequency: number;
+  /** Edge (F2−F1) threshold; edges sit near −1, so a larger value = wider corridors. */
+  edgeThreshold: number;
+  /** Cellular distance function → corridor cross-section shape. */
+  cellDistanceFunction: 'euclidean' | 'manhattan' | 'hybrid';
+  /** 3D domain-warp frequency (1/m) for organic wall wobble. */
+  warpFrequency: number;
+  /** 3D domain-warp amplitude in meters. */
+  warpAmplitude: number;
+}
+
 export interface TerrainConfig {
   /** Seed for reproducible generation */
   seed: number;
@@ -107,6 +153,8 @@ export interface TerrainConfig {
   stampConfig?: Partial<StampDistributionConfig>;
   /** Pathway generation configuration */
   pathwayConfig: PathwayConfig;
+  /** Cave-tunnel generation configuration */
+  caveConfig: CaveConfig;
 }
 
 // All pathway material options
@@ -137,6 +185,30 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   waterEnabled: true,       // Fill path dips with water
   waterMaterial: mat('water'),
   waterDepth: -1,           // Water fills 1 voxel above original terrain (negative = above)
+};
+
+// ============== Default Cave Configuration ==============
+
+export const DEFAULT_CAVE_CONFIG: CaveConfig = {
+  mode: 'spaghetti',        // start on mode A; flip to 'cellular' to compare
+  invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
+  verticalSquash: 2.0,      // caves ~half as tall as they are wide → flatter, walkable
+  surfaceMargin: 3,         // begin carving 3 voxels below the surface (breaches allowed)
+  surfaceTaper: 6,          // taper the carve band to zero over 6 voxels near the surface
+  floorY: undefined,        // no hard floor by default
+
+  // Mode A — spaghetti
+  frequency: 0.04,          // ~25 m tunnel scale
+  radius: 0.1,              // band half-width (thickness + abundance)
+  regionFrequency: 0.01,    // region-mask scale (only used if regionThreshold > -1)
+  regionThreshold: -1,      // -1 = mask disabled (caves distributed everywhere)
+
+  // Mode C — cellular
+  cellFrequency: 0.03,      // ~33 m cells → long corridors between junctions
+  edgeThreshold: -0.8,      // edges sit near -1; -0.8 gives moderate-width corridors
+  cellDistanceFunction: 'euclidean',
+  warpFrequency: 0.03,      // organic wall wobble
+  warpAmplitude: 6,         // meters
 };
 
 // ============== Default Configuration ==
@@ -176,6 +248,7 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   defaultMaterial: mat('rock2'),
   enableStamps: true,
   pathwayConfig: DEFAULT_PATHWAY_CONFIG,
+  caveConfig: DEFAULT_CAVE_CONFIG,
 };
 
 // ============== Terrain Generator ==============
@@ -191,7 +264,16 @@ export class TerrainGenerator implements HeightSampler {
   private pathwayWarpX: FastNoiseLite;
   private pathwayWarpZ: FastNoiseLite;
   private pathwayMaterialNoise: FastNoiseLite;
-  
+
+  // Cave system - 3D noise fields (seed block config.seed + 30000)
+  private caveSpaghettiA: FastNoiseLite;   // mode A: first zero-surface
+  private caveSpaghettiB: FastNoiseLite;   // mode A: second zero-surface (intersected with A)
+  private caveRegionNoise: FastNoiseLite;  // mode A: optional low-freq clustering mask
+  private caveCellular: FastNoiseLite;     // mode C: Voronoi edge network (Distance2Sub)
+  private caveWarpX: FastNoiseLite;        // mode C: 3D domain warp
+  private caveWarpY: FastNoiseLite;
+  private caveWarpZ: FastNoiseLite;
+
   // Stamp system
   private stampPointGenerator: StampPointGenerator | null = null;
   private stampPlacer: StampPlacer | null = null;
@@ -212,7 +294,10 @@ export class TerrainGenerator implements HeightSampler {
     if (config.pathwayConfig) {
       this.config.pathwayConfig = { ...DEFAULT_PATHWAY_CONFIG, ...config.pathwayConfig };
     }
-    
+    if (config.caveConfig) {
+      this.config.caveConfig = { ...DEFAULT_CAVE_CONFIG, ...config.caveConfig };
+    }
+
     // Initialize noise generators
     let seed = this.config.seed;
     
@@ -253,7 +338,36 @@ export class TerrainGenerator implements HeightSampler {
     this.pathwayMaterialNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     
     this.updatePathwayConfig();
-    
+
+    // Cave noise — fixed seed block (config.seed + 30000+) so the seed++ chain above is untouched.
+    // Both modes' generators are built up-front (cheap); only the active mode is sampled per voxel.
+    let caveSeed = this.config.seed + 30000;
+    // Mode A: two independent 3D OpenSimplex fields; their intersected zero-bands form the tubes.
+    this.caveSpaghettiA = new FastNoiseLite(caveSeed++);
+    this.caveSpaghettiA.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveSpaghettiB = new FastNoiseLite(caveSeed++);
+    this.caveSpaghettiB.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveRegionNoise = new FastNoiseLite(caveSeed++);
+    this.caveRegionNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    // Mode C: cellular edge network (F2−F1) + hand-rolled 3D FBM domain warp for organic walls.
+    this.caveCellular = new FastNoiseLite(caveSeed++);
+    this.caveCellular.SetNoiseType(FastNoiseLite.NoiseType.Cellular);
+    this.caveCellular.SetCellularReturnType(FastNoiseLite.CellularReturnType.Distance2Sub);
+    this.caveWarpX = new FastNoiseLite(caveSeed++);
+    this.caveWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveWarpX.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.caveWarpX.SetFractalOctaves(2);
+    this.caveWarpY = new FastNoiseLite(caveSeed++);
+    this.caveWarpY.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveWarpY.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.caveWarpY.SetFractalOctaves(2);
+    this.caveWarpZ = new FastNoiseLite(caveSeed++);
+    this.caveWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveWarpZ.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.caveWarpZ.SetFractalOctaves(2);
+
+    this.updateCaveConfig();
+
     // Initialize stamp system if enabled
     if (this.config.enableStamps) {
       this.initializeStampSystem();
@@ -288,12 +402,25 @@ export class TerrainGenerator implements HeightSampler {
       this.config.domainWarp = { ...this.config.domainWarp, ...config.domainWarp };
       this.updateWarpConfig();
     }
-    
+    if (config.caveConfig) {
+      this.config.caveConfig = { ...this.config.caveConfig, ...config.caveConfig };
+      this.updateCaveConfig();
+    }
+
     if (config.seed !== undefined) {
       let seed = config.seed;
       this.heightNoise.SetSeed(seed++);
       this.warpNoiseX.SetSeed(seed++);
       this.warpNoiseZ.SetSeed(seed++);
+
+      let caveSeed = config.seed + 30000;
+      this.caveSpaghettiA.SetSeed(caveSeed++);
+      this.caveSpaghettiB.SetSeed(caveSeed++);
+      this.caveRegionNoise.SetSeed(caveSeed++);
+      this.caveCellular.SetSeed(caveSeed++);
+      this.caveWarpX.SetSeed(caveSeed++);
+      this.caveWarpY.SetSeed(caveSeed++);
+      this.caveWarpZ.SetSeed(caveSeed++);
     }
   }
 
@@ -317,6 +444,103 @@ export class TerrainGenerator implements HeightSampler {
     this.pathwayWarpX.SetFrequency(path.warpFrequency);
     this.pathwayWarpZ.SetFrequency(path.warpFrequency);
     this.pathwayMaterialNoise.SetFrequency(path.materialNoiseFrequency);
+  }
+
+  /**
+   * Update cave noise configuration (frequencies + cellular distance function).
+   */
+  private updateCaveConfig(): void {
+    const cave = this.config.caveConfig;
+    this.caveSpaghettiA.SetFrequency(cave.frequency);
+    this.caveSpaghettiB.SetFrequency(cave.frequency);
+    this.caveRegionNoise.SetFrequency(cave.regionFrequency);
+    this.caveCellular.SetFrequency(cave.cellFrequency);
+    this.caveWarpX.SetFrequency(cave.warpFrequency);
+    this.caveWarpY.SetFrequency(cave.warpFrequency);
+    this.caveWarpZ.SetFrequency(cave.warpFrequency);
+
+    const distFn = cave.cellDistanceFunction === 'manhattan'
+      ? FastNoiseLite.CellularDistanceFunction.Manhattan
+      : cave.cellDistanceFunction === 'hybrid'
+        ? FastNoiseLite.CellularDistanceFunction.Hybrid
+        : FastNoiseLite.CellularDistanceFunction.Euclidean;
+    this.caveCellular.SetCellularDistanceFunction(distFn);
+  }
+
+  /**
+   * Pure predicate: is this world voxel inside a cave (to be carved to air)?
+   *
+   * Seamless by construction — it depends only on the world position, so any chunk sampling the
+   * same voxel gets the same answer with no cross-chunk bookkeeping. The caller already gates on
+   * depth/material; the depth checks here keep the function self-contained (and drive the taper).
+   *
+   * @param worldX - world X in meters
+   * @param worldYmeters - world Y in METERS (caller passes voxelY * VOXEL_SCALE — Y is voxels in the loop)
+   * @param worldZ - world Z in meters
+   * @param distanceFromSurface - voxels below the surface (>0 = underground)
+   */
+  isInsideCave(worldX: number, worldYmeters: number, worldZ: number, distanceFromSurface: number): boolean {
+    const cave = this.config.caveConfig;
+    if (cave.mode === 'off') return false;
+    if (distanceFromSurface < cave.surfaceMargin) return false;
+    if (cave.floorY !== undefined && worldYmeters < cave.floorY) return false;
+
+    // Surface taper: the carve band grows from 0 at surfaceMargin to full over surfaceTaper voxels,
+    // so tunnels pinch shut as they approach the surface → occasional narrow entrances, not gashes.
+    let taper = 1;
+    if (cave.surfaceTaper > 0) {
+      taper = Math.min(1, (distanceFromSurface - cave.surfaceMargin) / cave.surfaceTaper);
+      if (taper <= 0) return false;
+    }
+
+    // Y is squashed so caves are flatter (more walkable) than they are wide.
+    const y = worldYmeters * cave.verticalSquash;
+
+    return cave.mode === 'spaghetti'
+      ? this.isInsideSpaghettiCave(worldX, y, worldZ, taper)
+      : this.isInsideCellularCave(worldX, y, worldZ, taper);
+  }
+
+  /**
+   * Mode A — intersect two 3D noise zero-bands. Each `|n| < r` band is a thick sheet; the
+   * intersection of two independent sheets is a 1-D curve → long, branching, snake-like tubes.
+   */
+  private isInsideSpaghettiCave(x: number, y: number, z: number, taper: number): boolean {
+    const cave = this.config.caveConfig;
+    // Optional clustering: low-freq mask so caves gather in regions instead of spreading uniformly.
+    if (cave.regionThreshold > -1) {
+      if (this.caveRegionNoise.GetNoise(x, y, z) < cave.regionThreshold) return false;
+    }
+    const r = cave.radius * taper;
+    const n1 = this.caveSpaghettiA.GetNoise(x, y, z);
+    if (Math.abs(n1) >= r) return false;                    // cheap reject before the 2nd sample
+    const n2 = this.caveSpaghettiB.GetNoise(x, y, z);
+    return Math.abs(n2) < r;
+  }
+
+  /**
+   * Mode C — carve the Voronoi edge network. Distance2Sub (F2−F1) sits near −1 where a point is
+   * equidistant from two cells (a cell boundary) and rises toward the interior, so `edge < threshold`
+   * selects the connected web of boundaries → corridors with natural junctions and chambers.
+   */
+  private isInsideCellularCave(x: number, y: number, z: number, taper: number): boolean {
+    const cave = this.config.caveConfig;
+    const [wx, wy, wz] = this.applyCaveWarp(x, y, z);
+    const edge = this.caveCellular.GetNoise(wx, wy, wz);
+    // Edges sit near -1; grow the corridor width up from there. Taper narrows it near the surface.
+    return edge < (-1 + (cave.edgeThreshold + 1) * taper);
+  }
+
+  /**
+   * Hand-rolled 3D FBM domain warp for cave walls (mirrors applyPathwayWarp, extended to 3D).
+   */
+  private applyCaveWarp(x: number, y: number, z: number): [number, number, number] {
+    const amp = this.config.caveConfig.warpAmplitude;
+    return [
+      x + this.caveWarpX.GetNoise(x, y, z) * amp,
+      y + this.caveWarpY.GetNoise(x, y, z) * amp,
+      z + this.caveWarpZ.GetNoise(x, y, z) * amp,
+    ];
   }
 
   /**
@@ -704,6 +928,12 @@ export class TerrainGenerator implements HeightSampler {
     const chunkWorldY = cy * CHUNK_SIZE; // Y is in voxels for height comparison
     const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
 
+    // Debug: render the caves themselves as solid and skip all other terrain/stamps.
+    const cave = this.config.caveConfig;
+    if (cave.invert && cave.mode !== 'off') {
+      return this.generateInvertedCaveChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ);
+    }
+
     // Whether any column in this chunk is on a pathway — a free early-out that gates the
     // (otherwise per-column) pathway-wall torch scan so empty chunks pay nothing for it.
     let chunkHasPath = false;
@@ -811,9 +1041,22 @@ export class TerrainGenerator implements HeightSampler {
             }
           }
           
+          // Carve caves (air) out of solid terrain. Pure function of world position → seamless
+          // across chunks. Gated on solid, non-water, non-wall voxels below the surface margin, so
+          // the large air region above the surface and the path furniture are skipped (keeps it cheap).
+          if (cave.mode !== 'off'
+              && finalWeight > -0.5
+              && material !== waterConfig.waterMaterial
+              && material !== this.config.pathwayConfig.wallMaterial
+              && distanceFromSurface >= cave.surfaceMargin
+              && this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, distanceFromSurface)) {
+            finalWeight = -0.5;
+            material = 0; // air
+          }
+
           // Default light level
           const light = 0;
-          
+
           // Pack and store voxel
           const index = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
           data[index] = packVoxel(finalWeight, material, light);
@@ -838,6 +1081,40 @@ export class TerrainGenerator implements HeightSampler {
       }
     }
 
+    return data;
+  }
+
+  /**
+   * Debug generator (caveConfig.invert): fill a chunk with SOLID rock exactly where the active cave
+   * algorithm would carve air, and leave everything else empty. Same surface/margin/taper gating as
+   * the real carve, so the result is a faithful "negative" — fly around and see the tunnel casts
+   * sitting below where the ground used to be, with no other terrain, pathways, or stamps in the way.
+   */
+  private generateInvertedCaveChunk(data: Uint32Array, chunkWorldX: number, chunkWorldY: number, chunkWorldZ: number): Uint32Array {
+    const solidMaterial = mat('rock');
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const worldX = chunkWorldX + lx * VOXEL_SCALE;
+        const worldZ = chunkWorldZ + lz * VOXEL_SCALE;
+        const terrainHeight = this.sampleHeight(worldX, worldZ);
+
+        for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+          const voxelY = chunkWorldY + ly;
+          const distanceFromSurface = terrainHeight - voxelY;
+
+          let finalWeight = -0.5; // air
+          let material = 0;
+          if (distanceFromSurface >= this.config.caveConfig.surfaceMargin
+              && this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, distanceFromSurface)) {
+            finalWeight = 0.5; // solid cave cast
+            material = solidMaterial;
+          }
+
+          const index = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
+          data[index] = packVoxel(finalWeight, material, 0);
+        }
+      }
+    }
     return data;
   }
 
