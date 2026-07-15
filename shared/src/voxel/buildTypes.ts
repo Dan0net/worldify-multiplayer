@@ -28,6 +28,13 @@ export enum BuildMode {
   PAINT = 'paint',
   /** Fill - only fills where existing weight <= 0 */
   FILL = 'fill',
+  /**
+   * Punch - a material-filtered subtract. Carves like SUBTRACT but only removes voxels whose
+   * existing material equals `config.material` (the target material to match). Used by the
+   * left-click "punch": the match material is the voxel the crosshair hit, so punching grass digs
+   * a blob of grass without touching adjacent stone/brick.
+   */
+  PUNCH = 'punch',
 }
 
 /**

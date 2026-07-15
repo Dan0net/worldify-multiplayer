@@ -5,7 +5,7 @@
  */
 
 import { useGameStore } from './store';
-import { getPreset, BUILD_ROTATION_STEP, type BuildPreset } from '@worldify/shared';
+import { getPreset, slotIsEmpty, BUILD_ROTATION_STEP, type BuildPreset } from '@worldify/shared';
 
 /** The active build preset, merged with the slot's config + placement metadata. */
 export function getBuildPreset(): BuildPreset {
@@ -31,7 +31,8 @@ export function getBuildRotationRadians(): number {
   return (useGameStore.getState().build.rotationSteps * BUILD_ROTATION_STEP * Math.PI) / 180;
 }
 
-/** Whether build mode is active (the player is building, not just walking). */
+/** Whether build mode is active AND the selected slot has buildable geometry. */
 export function getBuildIsEnabled(): boolean {
-  return useGameStore.getState().build.buildMode;
+  const { buildMode, presetId, presetMeta } = useGameStore.getState().build;
+  return buildMode && !slotIsEmpty(presetMeta[presetId]);
 }

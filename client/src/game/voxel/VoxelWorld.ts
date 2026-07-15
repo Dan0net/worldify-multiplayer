@@ -14,6 +14,10 @@ import {
   MSG_MAP_TILE_REQUEST,
   MSG_SURFACE_COLUMN_REQUEST,
   worldToChunk,
+  worldToVoxel,
+  globalVoxelToLocal,
+  getMaterial,
+  getWeight,
   chunkKey,
   parseChunkKey,
   BuildOperation,
@@ -1177,6 +1181,20 @@ export class VoxelWorld implements ChunkProvider {
   getChunkAtWorld(x: number, y: number, z: number): Chunk | undefined {
     const { cx, cy, cz } = worldToChunk(x, y, z);
     return this.getChunk(cx, cy, cz);
+  }
+
+  /**
+   * Material of the voxel at a world position, or 0 (air/none) when the chunk isn't loaded or the
+   * voxel is empty (weight <= 0). Used by the punch tool to pick its material filter from the voxel
+   * the crosshair hit.
+   */
+  getMaterialAtWorld(x: number, y: number, z: number): number {
+    const chunk = this.getChunkAtWorld(x, y, z);
+    if (!chunk) return 0;
+    const { vx, vy, vz } = worldToVoxel(x, y, z);
+    const { local } = globalVoxelToLocal(vx, vy, vz);
+    const packed = chunk.getVoxel(local.vx, local.vy, local.vz);
+    return getWeight(packed) > 0 ? getMaterial(packed) : 0;
   }
 
   /**

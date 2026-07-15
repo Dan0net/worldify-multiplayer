@@ -6,6 +6,7 @@ import { BuildMenu } from './ui/BuildMenu';
 import { ControlsHint } from './ui/ControlsHint';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
+import { Hotbar } from './ui/Hotbar';
 import { ExploreControls } from './ui/ExploreControls';
 import { useGameStore } from './state/store';
 import { useIsTouch } from './ui/useDeviceMode';
@@ -46,6 +47,7 @@ function App() {
           {isPlaying && (
             <>
               <Hud />
+              <Hotbar />
               <BuildMenu />
               <MapOverlay />
               {!isTouch && <ControlsHint />}

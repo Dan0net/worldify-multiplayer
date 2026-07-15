@@ -11,7 +11,6 @@ import {
   INPUT_JUMP,
   INPUT_SPRINT,
   GameMode,
-  NONE_PRESET_ID,
   clamp,
   getMovementFromButtons,
   type MovementVector,
@@ -51,8 +50,11 @@ export class Controls {
    */
   public castNDC: { x: number; y: number } | null = null;
 
-  /** Callback when user clicks to place a build */
+  /** Callback when user clicks to place a build (left-click while in build mode) */
   public onBuildPlace: BuildPlaceCallback | null = null;
+
+  /** Callback when user "punches" (left-click / tap while not building): material-filtered dig */
+  public onPunch: (() => void) | null = null;
 
   /** Callback to undo the last build (Ctrl/Cmd+Z, or mobile button) */
   public onUndo: (() => void) | null = null;
@@ -87,23 +89,17 @@ export class Controls {
       return;
     }
 
-    // Build preset selection (0-9) — quick-selects a build and enters build mode
+    // Build-item selection (keys 1..9,0 → hotbar slots 1..9,0). Selecting only shows the item in
+    // hand; build mode is entered separately with right-click.
     if (e.code >= 'Digit0' && e.code <= 'Digit9') {
       const digit = parseInt(e.code.charAt(5));
-      if (digit !== NONE_PRESET_ID) {
-        useGameStore.getState().setBuildPreset(digit);
-        useGameStore.getState().setBuildMode(true);
-      }
+      useGameStore.getState().setBuildPreset(digit);
       return;
     }
 
-    // Build rotation
+    // Build rotation (Q; the mouse wheel rotates both directions). E is the build menu, below.
     if (e.code === 'KeyQ') {
       useGameStore.getState().rotateBuild(-1);
-      return;
-    }
-    if (e.code === 'KeyE') {
-      useGameStore.getState().rotateBuild(1);
       return;
     }
 
@@ -117,10 +113,10 @@ export class Controls {
       return;
     }
 
-    // Tab: not building → open the build menu; building → exit build mode.
-    if (e.code === 'Tab') {
+    // E (or Tab) toggles the build menu (the assignable preset picker).
+    if (e.code === 'KeyE' || e.code === 'Tab') {
       e.preventDefault();
-      this.toggleBuildOrMenu();
+      this.toggleBuildMenu();
       return;
     }
   };
@@ -147,10 +143,12 @@ export class Controls {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
-    // Right-click: same as Tab — not building → open the build menu; building → exit build.
+    // Right-click toggles build mode (enter shows the live preview; again exits).
     if (e.button === 2 && useGameStore.getState().gameMode === GameMode.Playing) {
       e.preventDefault();
-      this.toggleBuildOrMenu();
+      if (!useGameStore.getState().build.menuOpen) {
+        useGameStore.getState().toggleBuildMode();
+      }
       return;
     }
 
@@ -164,9 +162,13 @@ export class Controls {
       return;
     }
 
-    // Left click to place build
-    if (e.button === 0 && getBuildIsEnabled() && this.onBuildPlace) {
-      this.onBuildPlace();
+    // Left click: place the build while in build mode, otherwise punch (material-filtered dig).
+    if (e.button === 0) {
+      if (getBuildIsEnabled()) {
+        this.onBuildPlace?.();
+      } else {
+        this.onPunch?.();
+      }
     }
   };
 
@@ -206,22 +208,16 @@ export class Controls {
   }
 
   /**
-   * Tab / right-click: not building → open the build palette; already building → exit
-   * build mode. The store couples the two (opening the menu turns build mode on; turning
-   * build mode off closes the menu), so this stays a clean two-branch toggle.
+   * E / Tab / the bar button: toggle the build menu (assignable preset picker). Opening releases
+   * pointer lock for the cursor; closing re-acquires it on desktop.
    */
-  private toggleBuildOrMenu(): void {
+  public toggleBuildMenu(): void {
     const store = useGameStore.getState();
     if (store.gameMode !== GameMode.Playing) return;
     if (store.build.menuOpen) {
-      // Menu open → close it but STAY in build mode (setBuildMenuOpen(false) keeps buildMode).
       store.setBuildMenuOpen(false);
       if (!isTouch()) requestAnimationFrame(() => document.body.requestPointerLock());
-    } else if (store.build.buildMode) {
-      // Building with the menu closed → exit build mode.
-      store.setBuildMode(false);
     } else {
-      // Not building → open the palette.
       this.openBuildMenu();
     }
   }
@@ -300,6 +296,11 @@ export class Controls {
     if (getBuildIsEnabled() && this.onBuildPlace) {
       this.onBuildPlace();
     }
+  }
+
+  /** Trigger a punch/dig (mobile screen tap). */
+  triggerPunch(): void {
+    this.onPunch?.();
   }
 
   dispose(): void {

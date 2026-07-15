@@ -188,8 +188,10 @@ export function updateFirstPersonArm(opts: {
   group.position.set(baseX, baseY - punch * 0.18 - opts.headBob * ARM_BOB_SCALE, -ARM_DEPTH);
   group.rotation.set(-punch * 0.7, 0, 0);
 
-  // Held item — the real build mesh, rebuilt only when it changes.
-  if (opts.buildMode && opts.parts && opts.parts.length && opts.texturesReady) {
+  // Held item — the real build mesh for the selected slot, shown whenever an item is selected
+  // (walking or building). Empty slots have zero-size parts → createBuildItemMeshes yields nothing,
+  // so the hand is empty. Rebuilt only when the item changes.
+  if (opts.parts && opts.parts.length && opts.texturesReady) {
     const key = itemKey(opts.parts, opts.rotation, opts.variant);
     if (key !== heldKey) {
       clearHeldItem();

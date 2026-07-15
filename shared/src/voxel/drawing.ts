@@ -77,6 +77,33 @@ export function applySubtract(
 }
 
 /**
+ * Apply PUNCH mode to a voxel: a material-filtered subtract.
+ * Carves (takes minimum weight) exactly like SUBTRACT, but only when the existing voxel's material
+ * equals `targetMaterial` — voxels of any other material are left untouched. This lets a left-click
+ * "punch" dig a blob of only the hit material (e.g. grass) without disturbing neighbouring stone.
+ */
+export function applyPunch(
+  existingPacked: number,
+  newWeight: number,
+  targetMaterial: number
+): { packed: number; changed: boolean } {
+  const existing = unpackVoxel(existingPacked);
+
+  // Only carve voxels of the matched material.
+  if (existing.material !== targetMaterial) {
+    return { packed: existingPacked, changed: false };
+  }
+
+  // Same carve as SUBTRACT (newWeight is negative inside the shape); keep material + light.
+  if (newWeight < existing.weight) {
+    const newPacked = packVoxel(newWeight, existing.material, existing.light);
+    return { packed: newPacked, changed: true };
+  }
+
+  return { packed: existingPacked, changed: false };
+}
+
+/**
  * Apply PAINT mode to a voxel.
  * Only changes material where weight > 0 (solid areas) and shape overlaps.
  */
@@ -134,6 +161,7 @@ const APPLY_FUNCTIONS: Record<BuildMode, ApplyFunction> = {
   [BuildMode.SUBTRACT]: applySubtract,
   [BuildMode.PAINT]: applyPaint,
   [BuildMode.FILL]: applyFill,
+  [BuildMode.PUNCH]: applyPunch,
 };
 
 /**

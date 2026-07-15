@@ -1,5 +1,5 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { BUILD_ROTATION_STEPS, GameMode, clamp, NONE_PRESET_ID, DEFAULT_BUILD_PRESETS, presetToSlotMeta, templateToSlotMeta, PRESET_TEMPLATES, type BuildConfig, type PresetSlotMeta } from '@worldify/shared';
+import { BUILD_ROTATION_STEPS, GameMode, clamp, defaultHotbarMeta, slotIsEmpty, templateToSlotMeta, PRESET_TEMPLATES, type BuildConfig, type PresetSlotMeta } from '@worldify/shared';
 import { QUALITY_PRESETS, type QualityLevel, type QualitySettings } from '../game/quality/QualityPresets';
 import {
   MATERIAL_ROUGHNESS_MULTIPLIER,
@@ -444,11 +444,11 @@ declare global {
   }
 }
 
-/** Default build when build mode is entered — the 4×4 Brick Wall preset. */
-const firstRealPresetId = (): number =>
-  DEFAULT_BUILD_PRESETS.find((p) => p.name === 'Brick Wall')?.id
-  ?? DEFAULT_BUILD_PRESETS.find((p) => p.id !== NONE_PRESET_ID)?.id
-  ?? 0;
+/** First buildable (non-empty) hotbar slot — used when build mode is entered on an empty slot. */
+const firstBuildableSlot = (metas: PresetSlotMeta[]): number => {
+  const idx = metas.findIndex((m) => !slotIsEmpty(m));
+  return idx >= 0 ? idx : 0;
+};
 
 // Use existing store if available (HMR), otherwise create new one
 export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey] ?? create<GameState>((set) => ({
@@ -477,14 +477,14 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   // Build initial state
   build: {
     buildMode: false,   // Not building by default — walk/explore first
-    presetId: NONE_PRESET_ID,  // Becomes a real preset when build mode is entered
+    presetId: 1,        // Torch selected at spawn (shown in hand); RMB enters build mode
     rotationSteps: 0,   // No rotation
     hasValidTarget: false,
     invalidReason: null,
     snapPoint: true,    // Point snapping on by default
     snapGrid: false,    // Grid snapping off by default
     menuOpen: false,
-    presetMeta: DEFAULT_BUILD_PRESETS.map(p => presetToSlotMeta(p)),
+    presetMeta: defaultHotbarMeta(),
   },
   
   // Voxel debug initial state
@@ -596,13 +596,15 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
 
   // Build actions
   setBuildMode: (on) => set((state) => {
-    const presetId = on && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
+    const presetId = on && slotIsEmpty(state.build.presetMeta[state.build.presetId])
+      ? firstBuildableSlot(state.build.presetMeta) : state.build.presetId;
     // Leaving build mode also closes the menu.
     return { build: { ...state.build, buildMode: on, presetId, menuOpen: on ? state.build.menuOpen : false } };
   }),
   toggleBuildMode: () => set((state) => {
     const on = !state.build.buildMode;
-    const presetId = on && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
+    const presetId = on && slotIsEmpty(state.build.presetMeta[state.build.presetId])
+      ? firstBuildableSlot(state.build.presetMeta) : state.build.presetId;
     return { build: { ...state.build, buildMode: on, presetId, menuOpen: on ? state.build.menuOpen : false } };
   }),
   setBuildPreset: (presetId) => set((state) => ({
@@ -629,18 +631,13 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   toggleBuildSnapGrid: () => set((state) => ({
     build: { ...state.build, snapGrid: !state.build.snapGrid },
   })),
-  setBuildMenuOpen: (open) => set((state) => {
-    // Opening the menu implies build mode (you pick the current build there).
-    const buildMode = open ? true : state.build.buildMode;
-    const presetId = open && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
-    return { build: { ...state.build, menuOpen: open, buildMode, presetId } };
-  }),
-  toggleBuildMenu: () => set((state) => {
-    const open = !state.build.menuOpen;
-    const buildMode = open ? true : state.build.buildMode;
-    const presetId = open && state.build.presetId === NONE_PRESET_ID ? firstRealPresetId() : state.build.presetId;
-    return { build: { ...state.build, menuOpen: open, buildMode, presetId } };
-  }),
+  setBuildMenuOpen: (open) => set((state) => (
+    // The menu is just an assignable picker now — it does not force build mode.
+    { build: { ...state.build, menuOpen: open } }
+  )),
+  toggleBuildMenu: () => set((state) => (
+    { build: { ...state.build, menuOpen: !state.build.menuOpen } }
+  )),
   updatePresetConfig: (presetId, updates) => set((state) => {
     // The config tab edits the primary part (parts[0]) of the slot's geometry.
     const metas = [...state.build.presetMeta];
