@@ -13,6 +13,7 @@ import {
   StampPlacer,
   StampType,
   hashInt2,
+  makeRng,
   type StampDistributionConfig,
   type StampPlacement,
   type HeightSampler,
@@ -94,8 +95,9 @@ export interface CaveConfig {
    * - 'off'       — no caves (terrain untouched)
    * - 'spaghetti' — two intersected 3D noise fields → long snake-like tubes (mode A)
    * - 'cellular'  — cellular edge network + domain warp → connected corridors + chambers (mode C)
+   * - 'worms'     — traced "Perlin worms": individually-wandering tube tunnels (mode B)
    */
-  mode: 'off' | 'spaghetti' | 'cellular';
+  mode: 'off' | 'spaghetti' | 'cellular' | 'worms';
   /**
    * Debug view: render the caves themselves as SOLID and everything else as air, skipping
    * pathways, water, and stamps. Lets you fly around and inspect the raw cave shapes for the
@@ -132,6 +134,28 @@ export interface CaveConfig {
   warpFrequency: number;
   /** 3D domain-warp amplitude in meters. */
   warpAmplitude: number;
+
+  // --- Mode B ("worms"): traced, individually-wandering tube tunnels ---
+  /** Spawn-grid cell size in meters; one hashed batch of worms per cell (larger = sparser starts). */
+  wormCellSize: number;
+  /** Expected worms per cell (fractional — e.g. 0.6 spawns one worm ~60% of cells). */
+  wormsPerCell: number;
+  /** Number of trace steps per worm (length ≈ wormSegments × wormStep meters). */
+  wormSegments: number;
+  /** Distance advanced per trace step in meters (also the sphere spacing along the tube). */
+  wormStep: number;
+  /** Base tube radius in meters (tunnel half-width). */
+  wormRadius: number;
+  /** Per-worm radius variation, 0..1 (0 = uniform, 0.3 = ±30%). */
+  wormRadiusJitter: number;
+  /** Steering-noise frequency (1/m); lower = smoother, longer curves. */
+  wormSteerFrequency: number;
+  /** Steering strength: radians of yaw/pitch change applied per step. */
+  wormSteerStrength: number;
+  /** Pull toward horizontal each step, 0..1 (higher = flatter, more walkable worms). */
+  wormVerticalBias: number;
+  /** How far below the surface (meters) worm start depths are randomized. */
+  wormDepthRange: number;
 }
 
 export interface TerrainConfig {
@@ -193,7 +217,7 @@ const SURFACE_TAPER_MIN = 0.5;
 // ============== Default Cave Configuration ==============
 
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
-  mode: 'cellular',         // mode C — roomy caverns; flip to 'spaghetti' for tight tube caves
+  mode: 'worms',            // mode B — traced snake tunnels; 'spaghetti'/'cellular'/'off' also available
   invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
   verticalSquash: 0.8,      // < 1 → caves a touch taller than wide, so a 1.6 m player fits/walks
   surfaceMargin: 0,         // carve up to the surface voxel so tunnels can breach and be entered
@@ -212,6 +236,18 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   cellDistanceFunction: 'euclidean',
   warpFrequency: 0.03,      // organic wall wobble
   warpAmplitude: 6,         // meters
+
+  // Mode B — worms (traced snake tunnels)
+  wormCellSize: 40,         // 40 m spawn cells
+  wormsPerCell: 1.0,        // ~1 worm/cell → present but distinct tunnels (~5% underground fill)
+  wormSegments: 40,         // ~80 m long worms (40 × 2 m)
+  wormStep: 2,              // 2 m per step
+  wormRadius: 2.2,          // ~4.4 m diameter → roomy, comfortably fits the 1.6 m player
+  wormRadiusJitter: 0.3,    // ±30% radius variety between worms
+  wormSteerFrequency: 0.02, // smooth, sweeping curves
+  wormSteerStrength: 0.5,   // radians of turn per step
+  wormVerticalBias: 0.15,   // gently flattened → walkable, still dips and climbs
+  wormDepthRange: 12,       // worm starts scattered 0-12 m below the surface
 };
 
 // ============== Default Configuration ==
@@ -276,6 +312,17 @@ export class TerrainGenerator implements HeightSampler {
   private caveWarpX: FastNoiseLite;        // mode C: 3D domain warp
   private caveWarpY: FastNoiseLite;
   private caveWarpZ: FastNoiseLite;
+  private caveWormSteerYaw: FastNoiseLite;   // mode B: worm heading steering (yaw)
+  private caveWormSteerPitch: FastNoiseLite; // mode B: worm heading steering (pitch)
+
+  // Mode B worm state: traced worms cached per spawn cell, and the sphere centers (flat
+  // [x,y,z,r,...] in world meters) relevant to the chunk currently being generated.
+  private wormCellCache = new Map<string, Float64Array>();
+  private chunkWormPts: Float64Array = new Float64Array(0);
+  private chunkWormPtsFor = '';
+  /** Test-only: extra worm-gather cells added on every side. Proves the gather radius is sufficient
+   *  (regenerating with a larger radius must be byte-identical). Leave 0 in production. */
+  wormGatherExtraCells = 0;
 
   // Stamp system
   private stampPointGenerator: StampPointGenerator | null = null;
@@ -368,6 +415,15 @@ export class TerrainGenerator implements HeightSampler {
     this.caveWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.caveWarpZ.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.caveWarpZ.SetFractalOctaves(2);
+    // Mode B: two 3D FBM fields steer each worm's heading (yaw + pitch) as it's traced.
+    this.caveWormSteerYaw = new FastNoiseLite(caveSeed++);
+    this.caveWormSteerYaw.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveWormSteerYaw.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.caveWormSteerYaw.SetFractalOctaves(2);
+    this.caveWormSteerPitch = new FastNoiseLite(caveSeed++);
+    this.caveWormSteerPitch.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveWormSteerPitch.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.caveWormSteerPitch.SetFractalOctaves(2);
 
     this.updateCaveConfig();
 
@@ -408,6 +464,8 @@ export class TerrainGenerator implements HeightSampler {
     if (config.caveConfig) {
       this.config.caveConfig = { ...this.config.caveConfig, ...config.caveConfig };
       this.updateCaveConfig();
+      this.wormCellCache.clear();   // config change invalidates traced worms
+      this.chunkWormPtsFor = '';
     }
 
     if (config.seed !== undefined) {
@@ -424,6 +482,10 @@ export class TerrainGenerator implements HeightSampler {
       this.caveWarpX.SetSeed(caveSeed++);
       this.caveWarpY.SetSeed(caveSeed++);
       this.caveWarpZ.SetSeed(caveSeed++);
+      this.caveWormSteerYaw.SetSeed(caveSeed++);
+      this.caveWormSteerPitch.SetSeed(caveSeed++);
+      this.wormCellCache.clear();   // reseed invalidates traced worms
+      this.chunkWormPtsFor = '';
     }
   }
 
@@ -461,6 +523,8 @@ export class TerrainGenerator implements HeightSampler {
     this.caveWarpX.SetFrequency(cave.warpFrequency);
     this.caveWarpY.SetFrequency(cave.warpFrequency);
     this.caveWarpZ.SetFrequency(cave.warpFrequency);
+    this.caveWormSteerYaw.SetFrequency(cave.wormSteerFrequency);
+    this.caveWormSteerPitch.SetFrequency(cave.wormSteerFrequency);
 
     const distFn = cave.cellDistanceFunction === 'manhattan'
       ? FastNoiseLite.CellularDistanceFunction.Manhattan
@@ -498,7 +562,12 @@ export class TerrainGenerator implements HeightSampler {
       taper = SURFACE_TAPER_MIN + (1 - SURFACE_TAPER_MIN) * t;
     }
 
-    // Y is squashed so caves are flatter (more walkable) than they are wide.
+    // Mode B carves explicit traced tubes (real 3D geometry) — use raw Y, no field squash.
+    if (cave.mode === 'worms') {
+      return this.isInsideWormCave(worldX, worldYmeters, worldZ, taper);
+    }
+
+    // Y is squashed so field caves (A/C) are flatter (more walkable) than they are wide.
     const y = worldYmeters * cave.verticalSquash;
 
     return cave.mode === 'spaghetti'
@@ -546,6 +615,115 @@ export class TerrainGenerator implements HeightSampler {
       y + this.caveWarpY.GetNoise(x, y, z) * amp,
       z + this.caveWarpZ.GetNoise(x, y, z) * amp,
     ];
+  }
+
+  /**
+   * Mode B predicate — inside a traced worm tube? Tests the sphere centers prepared for the current
+   * chunk (a flat [x,y,z,r,…] list built by prepareChunkWorms). Linear scan with a squared-distance
+   * early-out; the list is small (only worms crossing this chunk) and empty for chunks with no worms.
+   */
+  private isInsideWormCave(x: number, y: number, z: number, taper: number): boolean {
+    const pts = this.chunkWormPts;
+    for (let i = 0; i < pts.length; i += 4) {
+      const dx = x - pts[i];
+      const dy = y - pts[i + 1];
+      const dz = z - pts[i + 2];
+      const r = pts[i + 3] * taper;
+      if (dx * dx + dy * dy + dz * dz < r * r) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Trace every worm spawned by one spawn-cell (ci,cj) and return their sphere centers as a flat
+   * [x,y,z,r,…] Float64Array in world meters. Pure function of (ci, cj, seed) — so every chunk that
+   * gathers this cell reproduces identical worms (the seam guarantee). Cached per cell.
+   */
+  private traceWormCell(ci: number, cj: number): Float64Array {
+    const cacheKey = ci + ',' + cj;
+    const cached = this.wormCellCache.get(cacheKey);
+    if (cached) return cached;
+
+    const cave = this.config.caveConfig;
+    const cs = cave.wormCellSize;
+    const rng = makeRng((hashInt2(ci, cj) ^ ((this.config.seed + 40000) >>> 0)) >>> 0);
+
+    // Fractional density: floor + a probabilistic extra worm.
+    let n = Math.floor(cave.wormsPerCell);
+    if (rng() < cave.wormsPerCell - n) n++;
+
+    const pts: number[] = [];
+    for (let w = 0; w < n; w++) {
+      // Start: jittered inside the cell, at a random depth below the surface there.
+      const sx = (ci + rng()) * cs;
+      const sz = (cj + rng()) * cs;
+      const surfaceM = this.sampleHeight(sx, sz) * VOXEL_SCALE;
+      const depth = cave.surfaceMargin * VOXEL_SCALE + rng() * cave.wormDepthRange;
+      let hx = sx, hy = surfaceM - depth, hz = sz;
+
+      let yaw = rng() * Math.PI * 2;
+      let pitch = (rng() * 2 - 1) * 0.3;                 // small initial tilt
+      const radius = cave.wormRadius * (1 + (rng() * 2 - 1) * cave.wormRadiusJitter);
+      const phase = rng() * 1000;                        // decorrelate nearby worms' steering
+
+      for (let s = 0; s <= cave.wormSegments; s++) {
+        pts.push(hx, hy, hz, radius);
+        // Steer the heading from noise sampled at the head (+ per-worm phase offset).
+        const dyaw = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase) * cave.wormSteerStrength;
+        const dpitch = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase) * cave.wormSteerStrength;
+        yaw += dyaw;
+        pitch = (pitch + dpitch) * (1 - cave.wormVerticalBias);  // restoring pull toward horizontal
+        const cp = Math.cos(pitch);
+        hx += Math.cos(yaw) * cp * cave.wormStep;
+        hy += Math.sin(pitch) * cave.wormStep;
+        hz += Math.sin(yaw) * cp * cave.wormStep;
+      }
+    }
+
+    const arr = new Float64Array(pts);
+    if (this.wormCellCache.size > 4096) this.wormCellCache.clear();  // simple bounded cache
+    this.wormCellCache.set(cacheKey, arr);
+    return arr;
+  }
+
+  /**
+   * Build the worm sphere-set relevant to a chunk. Gathers every spawn-cell within a worm's maximum
+   * reach (wormSegments × wormStep + radius) of the chunk — a hard bound, since each trace step
+   * advances a fixed distance — so no worm that could carve into the chunk is missed. This is what
+   * makes carving seamless: adjacent chunks gather overlapping cells and trace the same worms.
+   */
+  private prepareChunkWorms(cx: number, cy: number, cz: number): void {
+    const key = cx + ',' + cy + ',' + cz;
+    if (this.chunkWormPtsFor === key) return;
+
+    const cave = this.config.caveConfig;
+    const cs = cave.wormCellSize;
+    const x0 = cx * CHUNK_SIZE * VOXEL_SCALE, x1 = x0 + CHUNK_SIZE * VOXEL_SCALE;
+    const z0 = cz * CHUNK_SIZE * VOXEL_SCALE, z1 = z0 + CHUNK_SIZE * VOXEL_SCALE;
+    const y0 = cy * CHUNK_SIZE * VOXEL_SCALE, y1 = y0 + CHUNK_SIZE * VOXEL_SCALE;
+
+    const maxR = cave.wormRadius * (1 + cave.wormRadiusJitter);
+    const maxReach = cave.wormSegments * cave.wormStep + maxR;
+    const gatherCells = Math.ceil(maxReach / cs) + 1 + this.wormGatherExtraCells;
+    const ciMin = Math.floor(x0 / cs) - gatherCells, ciMax = Math.floor(x1 / cs) + gatherCells;
+    const cjMin = Math.floor(z0 / cs) - gatherCells, cjMax = Math.floor(z1 / cs) + gatherCells;
+
+    const out: number[] = [];
+    for (let cj = cjMin; cj <= cjMax; cj++) {
+      for (let ci = ciMin; ci <= ciMax; ci++) {
+        const pts = this.traceWormCell(ci, cj);
+        for (let i = 0; i < pts.length; i += 4) {
+          const px = pts[i], py = pts[i + 1], pz = pts[i + 2], pr = pts[i + 3];
+          // Keep spheres overlapping the chunk AABB (broad sphere-vs-box test per axis).
+          if (px + pr < x0 || px - pr > x1) continue;
+          if (py + pr < y0 || py - pr > y1) continue;
+          if (pz + pr < z0 || pz - pr > z1) continue;
+          out.push(px, py, pz, pr);
+        }
+      }
+    }
+    this.chunkWormPts = new Float64Array(out);
+    this.chunkWormPtsFor = key;
   }
 
   /**
@@ -933,8 +1111,11 @@ export class TerrainGenerator implements HeightSampler {
     const chunkWorldY = cy * CHUNK_SIZE; // Y is in voxels for height comparison
     const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
 
-    // Debug: render the caves themselves as solid and skip all other terrain/stamps.
+    // Mode B: gather+trace the worms relevant to this chunk once, before any per-voxel carve test.
     const cave = this.config.caveConfig;
+    if (cave.mode === 'worms') this.prepareChunkWorms(cx, cy, cz);
+
+    // Debug: render the caves themselves as solid and skip all other terrain/stamps.
     if (cave.invert && cave.mode !== 'off') {
       return this.generateInvertedCaveChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ);
     }
