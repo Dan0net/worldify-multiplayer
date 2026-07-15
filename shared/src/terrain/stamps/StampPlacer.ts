@@ -5,7 +5,7 @@
 
 import { CHUNK_SIZE, VOXEL_SCALE } from '../../voxel/constants.js';
 import { packVoxel, getWeight, voxelIndex } from '../../voxel/voxelData.js';
-import { getStamp, StampType, StampVoxel } from './StampDefinitions.js';
+import { getStamp, StampType, StampVoxel, hashInt2 } from './StampDefinitions.js';
 import { StampPlacement } from './StampPointGenerator.js';
 
 // ============== Types ==============
@@ -113,15 +113,20 @@ export class StampPlacer {
     chunkVoxelZ: number,
     heightSampler: HeightSampler
   ): void {
-    // Pass rotation to getStamp for buildings (SDF-based rotation)
-    const stamp = getStamp(placement.type, placement.variant, placement.rotation);
-    
+    // Deterministic per-building seed from world position (stable across chunks) → decorations.
+    const seed = hashInt2(
+      Math.floor(placement.worldX / VOXEL_SCALE),
+      Math.floor(placement.worldZ / VOXEL_SCALE),
+    );
+    // Pass rotation + seed to getStamp for buildings (SDF-based rotation)
+    const stamp = getStamp(placement.type, placement.variant, placement.rotation, seed);
+
     // Get terrain height at stamp position
     const terrainHeight = heightSampler.sampleHeight(placement.worldX, placement.worldZ);
-    
-    // Stamp origin in voxel coordinates
+
+    // Stamp origin in voxel coordinates (yOffset seats e.g. a torch on top of a wall)
     const stampOriginX = Math.floor(placement.worldX / VOXEL_SCALE);
-    const stampOriginY = Math.floor(terrainHeight); // Place on terrain
+    const stampOriginY = Math.floor(terrainHeight) + (placement.yOffset ?? 0);
     const stampOriginZ = Math.floor(placement.worldZ / VOXEL_SCALE);
 
     for (const voxel of stamp.voxels) {

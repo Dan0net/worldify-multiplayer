@@ -4,6 +4,8 @@
  */
 
 import { sdfBox, sdfCylinder } from '../../voxel/shapes.js';
+import { rasterizePartsToStampVoxels } from '../../voxel/drawing.js';
+import { TORCH_PARTS } from '../../voxel/buildPresets.js';
 import { mat } from '../../materials/index.js';
 
 // SDF threshold for voxel inclusion - sqrt(2)/2 handles 45° rotations
@@ -45,6 +47,7 @@ export enum StampType {
   ROCK_LARGE = 'rock_large',
   BUILDING_SMALL = 'building_small',
   BUILDING_HUT = 'building_hut',
+  TORCH = 'torch',
 }
 
 // ============== Stamp Generation Helpers ==============
@@ -337,10 +340,61 @@ function rotateXZ(x: number, z: number, cos: number, sin: number): { rx: number;
   };
 }
 
+/** Deterministic 2D integer hash → uint32 seed (per-building / per-cell decoration RNG). */
+export function hashInt2(a: number, b: number): number {
+  let h = 2166136261 >>> 0;
+  h = Math.imul(h ^ (a | 0), 16777619);
+  h = Math.imul(h ^ (b | 0), 16777619);
+  h ^= h >>> 13;
+  h = Math.imul(h, 16777619);
+  return h >>> 0;
+}
+
+/** Small seeded LCG returning values in [0, 1). */
+export function makeRng(seed: number): () => number {
+  let state = (seed >>> 0) || 1;
+  return () => {
+    state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+    return (state & 0x7fffffff) / 0x7fffffff;
+  };
+}
+
+/**
+ * Torch voxels (the Torch build preset's shape) as StampVoxels, base at the origin, +Y up.
+ * Rasterized once from the shared TORCH_PARTS via the shared parts→voxel rasterizer, so build
+ * placement and terrain generation use the exact same definition.
+ */
+const TORCH_STAMP_VOXELS: StampVoxel[] = rasterizePartsToStampVoxels(TORCH_PARTS);
+
+/**
+ * The torch laid horizontal, pointing out of the building's front (local −Z) wall: the authored +Y
+ * column is rotated −90° about X (`(x,y,z) → (x, z, −y)`), so the wood base sits at the wall face and
+ * the lava tip juts ~4 voxels out along −Z. Building yaw is applied per-voxel in `pushTorchAt`.
+ */
+const TORCH_OUT_VOXELS: StampVoxel[] = TORCH_STAMP_VOXELS.map((v) => ({
+  x: v.x, y: v.z, z: -v.y, material: v.material, weight: v.weight,
+}));
+
+/**
+ * Push an outward-pointing torch into `voxels` at building-LOCAL anchor (localX, localZ), base at
+ * `baseY`. The torch points out of the front (−Z) wall; the whole shape (anchor + each voxel's XZ)
+ * is rotated local→world by the building yaw (cos/sin) so it points out of the rotated front face.
+ */
+function pushTorchAt(
+  voxels: StampVoxel[], localX: number, localZ: number, baseY: number, cos: number, sin: number,
+): void {
+  for (const v of TORCH_OUT_VOXELS) {
+    const { rx, rz } = rotateXZ(localX + v.x, localZ + v.z, cos, sin);
+    voxels.push({
+      x: Math.round(rx), y: baseY + v.y, z: Math.round(rz), material: v.material, weight: v.weight,
+    });
+  }
+}
+
 /**
  * Generate a small rectangular building using proper SDF sampling with rotation
  */
-function generateSmallBuildingSDF(variant: number, rotation: number): StampDefinition {
+function generateSmallBuildingSDF(variant: number, rotation: number, seed: number = 0): StampDefinition {
   const voxels: StampVoxel[] = [];
   
   // Variation parameters
@@ -408,6 +462,19 @@ function generateSmallBuildingSDF(variant: number, rotation: number): StampDefin
     }
   }
   
+  // --- Decorations (deterministic per building) ---
+  const rng = makeRng(seed);
+  // Ceiling lava blob on 50% of buildings, at the ceiling centre (rotation-invariant).
+  if (rng() < 0.5) {
+    for (const v of sphere(0, heightBase - 2, 0, 2.5, mat('lava'), 0.4, seed)) voxels.push(v);
+  }
+  // Exterior torches above the door on 25% of buildings (front wall = -Z, door centred x=0).
+  if (rng() < 0.25) {
+    const zOuter = -halfDepth;
+    pushTorchAt(voxels, -(doorHalfWidth + 1), zOuter, doorHeight, cos, sin);
+    pushTorchAt(voxels, doorHalfWidth + 1, zOuter, doorHeight, cos, sin);
+  }
+
   return {
     type: StampType.BUILDING_SMALL,
     variant,
@@ -586,7 +653,7 @@ function evaluateSmallBuildingSDF(
 /**
  * Generate a round hut using proper SDF sampling with rotation
  */
-function generateHutSDF(variant: number, rotation: number): StampDefinition {
+function generateHutSDF(variant: number, rotation: number, seed: number = 0): StampDefinition {
   const voxels: StampVoxel[] = [];
   
   // Variation parameters
@@ -644,6 +711,19 @@ function generateHutSDF(variant: number, rotation: number): StampDefinition {
     }
   }
   
+  // --- Decorations (deterministic per building) ---
+  const rng = makeRng(seed);
+  // Ceiling lava blob on 50% of huts.
+  if (rng() < 0.5) {
+    for (const v of sphere(0, wallHeight - 2, 0, 2.5, mat('lava'), 0.4, seed)) voxels.push(v);
+  }
+  // Exterior torches flanking the door (front = -Z) on 25% of huts.
+  if (rng() < 0.25) {
+    const zOuter = -radius;
+    pushTorchAt(voxels, -(doorHalfWidth + 1), zOuter, doorHeight, cos, sin);
+    pushTorchAt(voxels, doorHalfWidth + 1, zOuter, doorHeight, cos, sin);
+  }
+
   return {
     type: StampType.BUILDING_HUT,
     variant,
@@ -808,19 +888,19 @@ export function isRotatableStamp(type: StampType): boolean {
  * @param variant - Variant index (0-3)
  * @param rotation - Rotation in radians around Y axis (only used for buildings)
  */
-export function getStamp(type: StampType, variant: number, rotation: number = 0): StampDefinition {
+export function getStamp(type: StampType, variant: number, rotation: number = 0, seed: number = 0): StampDefinition {
   const normalizedVariant = variant % VARIANTS_PER_TYPE;
-  
-  // Buildings are generated fresh with rotation - no caching
+
+  // Buildings are generated fresh with rotation + per-building seed - no caching
   if (isRotatableStamp(type)) {
-    return createStamp(type, normalizedVariant, rotation);
+    return createStamp(type, normalizedVariant, rotation, seed);
   }
-  
-  // Non-buildings are cached (trees, rocks don't need rotation)
+
+  // Non-buildings are cached (trees, rocks, torch — no rotation/seed needed)
   const key = `${type}:${normalizedVariant}`;
   let stamp = stampCacheNonBuildings.get(key);
   if (!stamp) {
-    stamp = createStamp(type, normalizedVariant, 0);
+    stamp = createStamp(type, normalizedVariant, 0, 0);
     stampCacheNonBuildings.set(key, stamp);
   }
   return stamp;
@@ -832,7 +912,7 @@ const stampCacheNonBuildings = new Map<string, StampDefinition>();
 /**
  * Create a new stamp definition
  */
-function createStamp(type: StampType, variant: number, rotation: number = 0): StampDefinition {
+function createStamp(type: StampType, variant: number, rotation: number = 0, seed: number = 0): StampDefinition {
   switch (type) {
     case StampType.TREE_PINE:
       return generatePineTree(variant);
@@ -843,9 +923,11 @@ function createStamp(type: StampType, variant: number, rotation: number = 0): St
     case StampType.ROCK_LARGE:
       return generateRock(type, variant);
     case StampType.BUILDING_SMALL:
-      return generateSmallBuildingSDF(variant, rotation);
+      return generateSmallBuildingSDF(variant, rotation, seed);
     case StampType.BUILDING_HUT:
-      return generateHutSDF(variant, rotation);
+      return generateHutSDF(variant, rotation, seed);
+    case StampType.TORCH:
+      return { type: StampType.TORCH, variant: 0, voxels: TORCH_STAMP_VOXELS, bounds: calculateBounds(TORCH_STAMP_VOXELS) };
     default:
       throw new Error(`Unknown stamp type: ${type}`);
   }

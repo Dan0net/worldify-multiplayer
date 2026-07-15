@@ -9,6 +9,7 @@ import {
   BuildConfig,
   BuildMode,
   BuildOperation,
+  BuildPart,
   VoxelBBox,
   clamp,
 } from './buildTypes.js';
@@ -210,6 +211,61 @@ export function getAffectedChunks(operation: BuildOperation): string[] {
   }
   
   return Array.from(chunks);
+}
+
+// ============== Parts → voxel-stamp rasterizer ==============
+
+/** A rasterized voxel: integer offset from origin + material + weight. Structurally a StampVoxel. */
+export interface RasterVoxel {
+  x: number; y: number; z: number; material: number; weight: number;
+}
+
+/**
+ * Rasterize a `BuildPart[]` (canonical +Y, voxel-unit sizes/offsets) into voxel stamps at identity
+ * rotation, reusing the SAME `sdfFromConfig` + `sdfToWeight` stack as `drawToChunk`. This lets
+ * terrain generation place any build preset (e.g. the Torch) as a stamp through one shared code
+ * path — no duplicated SDF/weight logic. Emits solid voxels (composite ADD: max weight per voxel,
+ * material of the strongest part). Returns integer voxel offsets from the parts' origin.
+ */
+export function rasterizePartsToStampVoxels(parts: BuildPart[]): RasterVoxel[] {
+  const out: RasterVoxel[] = [];
+  if (parts.length === 0) return out;
+
+  // Integer-voxel bbox over all parts (size is a voxel half-extent; +2 for the surface band).
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const p of parts) {
+    const s = p.config.size, o = p.offset;
+    const m = Math.max(s.x, s.y, s.z) + 2;
+    minX = Math.min(minX, o.x - s.x - m); maxX = Math.max(maxX, o.x + s.x + m);
+    minY = Math.min(minY, o.y - s.y - m); maxY = Math.max(maxY, o.y + s.y + m);
+    minZ = Math.min(minZ, o.z - s.z - m); maxZ = Math.max(maxZ, o.z + s.z + m);
+  }
+  const x0 = Math.floor(minX), x1 = Math.ceil(maxX);
+  const y0 = Math.floor(minY), y1 = Math.ceil(maxY);
+  const z0 = Math.floor(minZ), z1 = Math.ceil(maxZ);
+
+  const pp: Vec3 = { x: 0, y: 0, z: 0 };
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      for (let z = z0; z <= z1; z++) {
+        let bestWeight = 0;
+        let bestMat = 0;
+        for (const part of parts) {
+          // Part-local position in world metres (sdfFromConfig scales size by VOXEL_SCALE).
+          pp.x = (x - part.offset.x) * VOXEL_SCALE;
+          pp.y = (y - part.offset.y) * VOXEL_SCALE;
+          pp.z = (z - part.offset.z) * VOXEL_SCALE;
+          const d = sdfFromConfig(pp, part.config);
+          if (d > 1.5) continue;
+          const w = sdfToWeight(d);
+          if (w > bestWeight) { bestWeight = w; bestMat = part.config.material; }
+        }
+        if (bestWeight > 0) out.push({ x, y, z, material: bestMat, weight: bestWeight });
+      }
+    }
+  }
+  return out;
 }
 
 // ============== Core Drawing Function ==============

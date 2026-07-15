@@ -97,6 +97,21 @@ function part(config: BuildConfig, offset: Vec3 = { x: 0, y: 0, z: 0 }): BuildPa
 export const NONE_PRESET_ID = 1;
 
 /**
+ * The Torch shape as a parts list — the single source of truth reused by the build preset
+ * (below) AND terrain generation (rasterized into stamp voxels). Authored pointing +Y: a wood
+ * column (base at origin) with a glowing lava sphere on top.
+ */
+export const TORCH_PARTS: BuildPart[] = [
+  part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0.71, 2, 0.71), material: 2 }, { x: 0, y: 2, z: 0 }),
+  part({ shape: BuildShape.SPHERE, mode: BuildMode.ADD, size: size(1, 1, 1), material: 50 }, { x: 0, y: 4, z: 0 }),
+];
+
+/** A single-cube parts list for a material — used by material-swatch thumbnails (client + preload). */
+export function materialCubeParts(material: number, half = 4): BuildPart[] {
+  return [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(half, half, half), material })];
+}
+
+/**
  * Default build presets (10 total, mapped to keys 0-9).
  * Preset 1 is "None" (building disabled) — key 1 is the default.
  */
@@ -359,12 +374,7 @@ export const PRESET_TEMPLATES: readonly BuildPresetTemplate[] = [
     category: PresetCategory.STRUCTURAL,
     align: BuildPresetAlign.POINT_OUT,
     snapShape: BuildPresetSnapShape.NONE,
-    parts: [
-      // Column: half-height 2 → centre at +2 (base at origin).
-      part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0.71, 2, 0.71), material: 2 }, { x: 0, y: 2, z: 0 }),
-      // Lava blob at the column top (+4), emissive so the tip glows.
-      part({ shape: BuildShape.SPHERE, mode: BuildMode.ADD, size: size(1, 1, 1), material: 50 }, { x: 0, y: 4, z: 0 }),
-    ],
+    parts: TORCH_PARTS,
   },
   {
     name: 'Brick Cylinder',

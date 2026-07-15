@@ -11,7 +11,10 @@ import { smoothstep } from '../util/math.js';
 import {
   StampPointGenerator,
   StampPlacer,
+  StampType,
+  hashInt2,
   type StampDistributionConfig,
+  type StampPlacement,
   type HeightSampler,
 } from './stamps/index.js';
 
@@ -695,23 +698,28 @@ export class TerrainGenerator implements HeightSampler {
    */
   generateChunk(cx: number, cy: number, cz: number): Uint32Array {
     const data = new Uint32Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
-    
+
     // Calculate chunk's world origin
     const chunkWorldX = cx * CHUNK_SIZE * VOXEL_SCALE;
     const chunkWorldY = cy * CHUNK_SIZE; // Y is in voxels for height comparison
     const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
+
+    // Whether any column in this chunk is on a pathway — a free early-out that gates the
+    // (otherwise per-column) pathway-wall torch scan so empty chunks pay nothing for it.
+    let chunkHasPath = false;
 
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         // Calculate world position for this column
         const worldX = chunkWorldX + lx * VOXEL_SCALE;
         const worldZ = chunkWorldZ + lz * VOXEL_SCALE;
-        
+
         // Sample terrain height at this XZ position
         let terrainHeight = this.sampleHeight(worldX, worldZ);
-        
+
         // Cache pathway checks for this column (only depends on X/Z)
         const isPathColumn = this.isOnPathway(worldX, worldZ);
+        if (isPathColumn) chunkHasPath = true;
         let isWallColumn = -1; // -1 = not checked, 0 = no, 1 = yes
         let isBorderColumn = -1;
         
@@ -821,6 +829,57 @@ export class TerrainGenerator implements HeightSampler {
       this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 
+    // Torches along the cobble pathway walls (the walls that line the water-filled paths).
+    // Gated on chunkHasPath so the per-column scan only runs where a path actually is.
+    if (this.stampPlacer && chunkHasPath) {
+      const torchPlacements = this.generatePathwayWallTorches(cx, cz);
+      if (torchPlacements.length > 0) {
+        this.stampPlacer.applyStamps(data, cx, cy, cz, torchPlacements, this);
+      }
+    }
+
     return data;
+  }
+
+  // Pathway-wall torches: scan every wall column in the chunk (+ a small margin so torches
+  // straddling a chunk edge are emitted — and per-voxel culled — by every chunk they touch), and
+  // keep ~1 in TORCH_STRIDE via a per-column hash. Deterministic and seam-safe: each column decides
+  // identically from any chunk that sees it. Walls are dense along the sparse cobble paths, so this
+  // yields a visible run of torches where the old grid-snap found almost none.
+  private static readonly TORCH_MARGIN_VOX = 3;
+  private static readonly TORCH_STRIDE = 56;
+
+  /**
+   * Deterministic pathway-wall torch placements overlapping chunk (cx,cz), seated on the wall top
+   * via `yOffset = wallHeight`. One torch per ~TORCH_STRIDE wall columns.
+   */
+  private generatePathwayWallTorches(cx: number, cz: number): StampPlacement[] {
+    const cfg = this.config.pathwayConfig;
+    if (!cfg.enabled || cfg.wallHeight <= 0) return [];
+
+    const out: StampPlacement[] = [];
+    const M = TerrainGenerator.TORCH_MARGIN_VOX;
+    const stride = TerrainGenerator.TORCH_STRIDE;
+    const seedBase = (this.config.seed + 20000) >>> 0;
+    const baseVoxX = cx * CHUNK_SIZE;
+    const baseVoxZ = cz * CHUNK_SIZE;
+
+    for (let lz = -M; lz < CHUNK_SIZE + M; lz++) {
+      for (let lx = -M; lx < CHUNK_SIZE + M; lx++) {
+        const wvx = baseVoxX + lx;
+        const wvz = baseVoxZ + lz;
+        // Cheap hash gate first — most wall columns are skipped without the noise sampling.
+        if (((hashInt2(wvx, wvz) ^ seedBase) >>> 0) % stride !== 0) continue;
+        const worldX = wvx * VOXEL_SCALE;
+        const worldZ = wvz * VOXEL_SCALE;
+        if (!this.isOnPathwayWall(worldX, worldZ)) continue;
+        out.push({
+          type: StampType.TORCH, variant: 0,
+          worldX, worldZ, rotation: 0,
+          yOffset: cfg.wallHeight,
+        });
+      }
+    }
+    return out;
   }
 }
