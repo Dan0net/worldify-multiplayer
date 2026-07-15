@@ -25,7 +25,7 @@ export const MATERIAL_NORMAL_STRENGTH = 1.0;
 export const LIGHT_SUN_COLOR = '#ffcc00';
 
 /** Main directional light (sun) intensity */
-export const LIGHT_SUN_INTENSITY = 3.0;
+export const LIGHT_SUN_INTENSITY = 4.0;
 
 // ============== Environment/IBL Defaults ==============
 

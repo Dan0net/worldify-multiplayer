@@ -303,8 +303,8 @@ export class TerrainMaterial extends THREE.MeshStandardMaterial {
       // Block-light (emitter) uniforms — defaults mirror DEFAULT_ENVIRONMENT
       // (blockLightColor '#ffb050', blockLightIntensity 1.5); live-tuned via
       // applyBlockLightSettings from the debug panel.
-      shader.uniforms.uBlockLightColor = { value: new THREE.Color(0xffb050) };
-      shader.uniforms.uBlockLightIntensity = { value: 1.5 };
+      shader.uniforms.uBlockLightColor = { value: new THREE.Color(0xffd397) };
+      shader.uniforms.uBlockLightIntensity = { value: 4.0 };
 
       // Quality-driven shader defines
       // CRITICAL: shader.defines is a direct reference to material.defines.

@@ -268,8 +268,8 @@ export const DEFAULT_ENVIRONMENT: EnvironmentSettings = {
   saturation: 1.2,  // Slightly boosted for more vivid colors
   skyFillPower: 0.5,    // sqrt → lifts dark sky-lit areas
   blockFillPower: 2.0,  // square → tighter block-light drop-off
-  blockLightColor: '#ffb050',
-  blockLightIntensity: 1.5,
+  blockLightColor: '#ffd397',
+  blockLightIntensity: 4.0,
 };
 
 /** Debug panel section collapse state */

@@ -367,17 +367,27 @@ export function makeRng(seed: number): () => number {
 const TORCH_STAMP_VOXELS: StampVoxel[] = rasterizePartsToStampVoxels(TORCH_PARTS);
 
 /**
- * Push a vertical torch into `voxels` at building-LOCAL anchor (localX, localZ), base at `baseY`.
- * The anchor XZ is rotated local→world (the SDF loops use `-sin` for world→local); the torch is
- * vertical so its own voxels are only translated.
+ * The torch laid horizontal, pointing out of the building's front (local −Z) wall: the authored +Y
+ * column is rotated −90° about X (`(x,y,z) → (x, z, −y)`), so the wood base sits at the wall face and
+ * the lava tip juts ~4 voxels out along −Z. Building yaw is applied per-voxel in `pushTorchAt`.
+ */
+const TORCH_OUT_VOXELS: StampVoxel[] = TORCH_STAMP_VOXELS.map((v) => ({
+  x: v.x, y: v.z, z: -v.y, material: v.material, weight: v.weight,
+}));
+
+/**
+ * Push an outward-pointing torch into `voxels` at building-LOCAL anchor (localX, localZ), base at
+ * `baseY`. The torch points out of the front (−Z) wall; the whole shape (anchor + each voxel's XZ)
+ * is rotated local→world by the building yaw (cos/sin) so it points out of the rotated front face.
  */
 function pushTorchAt(
   voxels: StampVoxel[], localX: number, localZ: number, baseY: number, cos: number, sin: number,
 ): void {
-  const { rx, rz } = rotateXZ(localX, localZ, cos, sin);
-  const ax = Math.round(rx), az = Math.round(rz);
-  for (const v of TORCH_STAMP_VOXELS) {
-    voxels.push({ x: ax + v.x, y: baseY + v.y, z: az + v.z, material: v.material, weight: v.weight });
+  for (const v of TORCH_OUT_VOXELS) {
+    const { rx, rz } = rotateXZ(localX + v.x, localZ + v.z, cos, sin);
+    voxels.push({
+      x: Math.round(rx), y: baseY + v.y, z: Math.round(rz), material: v.material, weight: v.weight,
+    });
   }
 }
 

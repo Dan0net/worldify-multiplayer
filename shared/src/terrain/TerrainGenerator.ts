@@ -13,7 +13,6 @@ import {
   StampPlacer,
   StampType,
   hashInt2,
-  makeRng,
   type StampDistributionConfig,
   type StampPlacement,
   type HeightSampler,
@@ -699,23 +698,28 @@ export class TerrainGenerator implements HeightSampler {
    */
   generateChunk(cx: number, cy: number, cz: number): Uint32Array {
     const data = new Uint32Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
-    
+
     // Calculate chunk's world origin
     const chunkWorldX = cx * CHUNK_SIZE * VOXEL_SCALE;
     const chunkWorldY = cy * CHUNK_SIZE; // Y is in voxels for height comparison
     const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
+
+    // Whether any column in this chunk is on a pathway — a free early-out that gates the
+    // (otherwise per-column) pathway-wall torch scan so empty chunks pay nothing for it.
+    let chunkHasPath = false;
 
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         // Calculate world position for this column
         const worldX = chunkWorldX + lx * VOXEL_SCALE;
         const worldZ = chunkWorldZ + lz * VOXEL_SCALE;
-        
+
         // Sample terrain height at this XZ position
         let terrainHeight = this.sampleHeight(worldX, worldZ);
-        
+
         // Cache pathway checks for this column (only depends on X/Z)
         const isPathColumn = this.isOnPathway(worldX, worldZ);
+        if (isPathColumn) chunkHasPath = true;
         let isWallColumn = -1; // -1 = not checked, 0 = no, 1 = yes
         let isBorderColumn = -1;
         
@@ -825,8 +829,9 @@ export class TerrainGenerator implements HeightSampler {
       this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 
-    // Torches along pathway walls that border water (the only "river walls").
-    if (this.stampPlacer) {
+    // Torches along the cobble pathway walls (the walls that line the water-filled paths).
+    // Gated on chunkHasPath so the per-column scan only runs where a path actually is.
+    if (this.stampPlacer && chunkHasPath) {
       const torchPlacements = this.generatePathwayWallTorches(cx, cz);
       if (torchPlacements.length > 0) {
         this.stampPlacer.applyStamps(data, cx, cy, cz, torchPlacements, this);
@@ -836,75 +841,45 @@ export class TerrainGenerator implements HeightSampler {
     return data;
   }
 
-  // Torch grid: one candidate per 64-voxel (16 m) world cell; snapping within 12 voxels keeps
-  // any two accepted torches ≥ (16 − 2·3) m = 10 m ≈ 40 voxels apart (≥ the 32-voxel minimum),
-  // reproduced identically in every chunk from the global cell hash (seam-safe).
-  private static readonly TORCH_CELL_VOX = 64;
-  private static readonly TORCH_SNAP_VOX = 12;
+  // Pathway-wall torches: scan every wall column in the chunk (+ a small margin so torches
+  // straddling a chunk edge are emitted — and per-voxel culled — by every chunk they touch), and
+  // keep ~1 in TORCH_STRIDE via a per-column hash. Deterministic and seam-safe: each column decides
+  // identically from any chunk that sees it. Walls are dense along the sparse cobble paths, so this
+  // yields a visible run of torches where the old grid-snap found almost none.
+  private static readonly TORCH_MARGIN_VOX = 3;
+  private static readonly TORCH_STRIDE = 56;
 
   /**
-   * Deterministic pathway-wall torch placements overlapping chunk (cx,cz). World-grid hashed (à la
-   * StampPointGenerator) so client/server and neighboring chunks agree. 25% of cells; each accepted
-   * cell snaps to the nearest column that is a pathway wall bordering water, torch seated on the
-   * wall top via `yOffset = wallHeight`.
+   * Deterministic pathway-wall torch placements overlapping chunk (cx,cz), seated on the wall top
+   * via `yOffset = wallHeight`. One torch per ~TORCH_STRIDE wall columns.
    */
   private generatePathwayWallTorches(cx: number, cz: number): StampPlacement[] {
     const cfg = this.config.pathwayConfig;
     if (!cfg.enabled || cfg.wallHeight <= 0) return [];
 
     const out: StampPlacement[] = [];
-    const cellWorld = TerrainGenerator.TORCH_CELL_VOX * VOXEL_SCALE; // 16 m
-    const chunkWorld = CHUNK_SIZE * VOXEL_SCALE;                     // 8 m
-    const x0 = cx * chunkWorld, x1 = x0 + chunkWorld;
-    const z0 = cz * chunkWorld, z1 = z0 + chunkWorld;
-    const gxMin = Math.floor(x0 / cellWorld) - 1, gxMax = Math.floor(x1 / cellWorld) + 1;
-    const gzMin = Math.floor(z0 / cellWorld) - 1, gzMax = Math.floor(z1 / cellWorld) + 1;
+    const M = TerrainGenerator.TORCH_MARGIN_VOX;
+    const stride = TerrainGenerator.TORCH_STRIDE;
     const seedBase = (this.config.seed + 20000) >>> 0;
+    const baseVoxX = cx * CHUNK_SIZE;
+    const baseVoxZ = cz * CHUNK_SIZE;
 
-    for (let gz = gzMin; gz <= gzMax; gz++) {
-      for (let gx = gxMin; gx <= gxMax; gx++) {
-        const rng = makeRng(hashInt2(gx, gz) ^ seedBase);
-        if (rng() >= 0.25) continue;               // 25% of cells carry a torch
-        const cxWorld = (gx + 0.5) * cellWorld;
-        const czWorld = (gz + 0.5) * cellWorld;
-        const anchor = this.findRiverWallColumn(cxWorld, czWorld);
-        if (!anchor) continue;
+    for (let lz = -M; lz < CHUNK_SIZE + M; lz++) {
+      for (let lx = -M; lx < CHUNK_SIZE + M; lx++) {
+        const wvx = baseVoxX + lx;
+        const wvz = baseVoxZ + lz;
+        // Cheap hash gate first — most wall columns are skipped without the noise sampling.
+        if (((hashInt2(wvx, wvz) ^ seedBase) >>> 0) % stride !== 0) continue;
+        const worldX = wvx * VOXEL_SCALE;
+        const worldZ = wvz * VOXEL_SCALE;
+        if (!this.isOnPathwayWall(worldX, worldZ)) continue;
         out.push({
           type: StampType.TORCH, variant: 0,
-          worldX: anchor.x, worldZ: anchor.z, rotation: 0,
+          worldX, worldZ, rotation: 0,
           yOffset: cfg.wallHeight,
         });
       }
     }
     return out;
-  }
-
-  /** Fixed-order expanding-ring search for the nearest pathway-wall-beside-water column. */
-  private findRiverWallColumn(worldX: number, worldZ: number): { x: number; z: number } | null {
-    const R = TerrainGenerator.TORCH_SNAP_VOX;
-    for (let r = 0; r <= R; r++) {
-      for (let dz = -r; dz <= r; dz++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue; // ring shell only
-          const wx = worldX + dx * VOXEL_SCALE;
-          const wz = worldZ + dz * VOXEL_SCALE;
-          if (this.isRiverWallColumn(wx, wz)) return { x: wx, z: wz };
-        }
-      }
-    }
-    return null;
-  }
-
-  /** A pathway wall column whose adjacent path dips and holds water. */
-  private isRiverWallColumn(worldX: number, worldZ: number): boolean {
-    if (!this.isOnPathwayWall(worldX, worldZ)) return false;
-    if (!this.config.pathwayConfig.waterEnabled) return true;
-    const o = VOXEL_SCALE;
-    const probes = [[o, 0], [-o, 0], [0, o], [0, -o], [2 * o, 0], [-2 * o, 0], [0, 2 * o], [0, -2 * o]];
-    for (const [dx, dz] of probes) {
-      const px = worldX + dx, pz = worldZ + dz;
-      if (this.isOnPathway(px, pz) && this.getPathwayDepthFactor(px, pz) > 0) return true;
-    }
-    return false;
   }
 }
