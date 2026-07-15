@@ -3,12 +3,27 @@
  */
 
 import { useSyncExternalStore } from 'react';
+import { isTouch } from '../game/deviceMode';
 
-/** True on touch/coarse-pointer devices. */
+/**
+ * Reactive touch-primary flag. Delegates to the single `isTouch()` predicate (see deviceMode.ts)
+ * and re-renders when the pointer/hover capabilities change (e.g. a 2-in-1 docking its keyboard),
+ * mirroring `useIsPortrait` below.
+ */
 export function useIsTouch(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    (window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0)
+  return useSyncExternalStore(
+    (cb) => {
+      const coarse = window.matchMedia('(pointer: coarse)');
+      const hover = window.matchMedia('(hover: none)');
+      coarse.addEventListener('change', cb);
+      hover.addEventListener('change', cb);
+      return () => {
+        coarse.removeEventListener('change', cb);
+        hover.removeEventListener('change', cb);
+      };
+    },
+    () => isTouch(),
+    () => false,
   );
 }
 
