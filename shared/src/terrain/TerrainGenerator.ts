@@ -187,25 +187,28 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   waterDepth: -1,           // Water fills 1 voxel above original terrain (negative = above)
 };
 
+/** Minimum fraction of the full carve width kept at the surface (mouth width vs. deep-cave width). */
+const SURFACE_TAPER_MIN = 0.5;
+
 // ============== Default Cave Configuration ==============
 
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   mode: 'spaghetti',        // start on mode A; flip to 'cellular' to compare
   invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
-  verticalSquash: 2.0,      // caves ~half as tall as they are wide → flatter, walkable
-  surfaceMargin: 3,         // begin carving 3 voxels below the surface (breaches allowed)
-  surfaceTaper: 6,          // taper the carve band to zero over 6 voxels near the surface
+  verticalSquash: 0.8,      // < 1 → caves a touch taller than wide, so a 1.6 m player fits/walks
+  surfaceMargin: 0,         // carve up to the surface voxel so tunnels can breach and be entered
+  surfaceTaper: 4,          // narrow the mouth over the top 4 voxels (to SURFACE_TAPER_MIN width)
   floorY: undefined,        // no hard floor by default
 
   // Mode A — spaghetti
-  frequency: 0.04,          // ~25 m tunnel scale
-  radius: 0.1,              // band half-width (thickness + abundance)
+  frequency: 0.035,         // ~28 m tunnel scale
+  radius: 0.15,             // band half-width → tunnels ~3 m across (fits the 1.6 m player)
   regionFrequency: 0.01,    // region-mask scale (only used if regionThreshold > -1)
   regionThreshold: -1,      // -1 = mask disabled (caves distributed everywhere)
 
-  // Mode C — cellular
-  cellFrequency: 0.03,      // ~33 m cells → long corridors between junctions
-  edgeThreshold: -0.8,      // edges sit near -1; -0.8 gives moderate-width corridors
+  // Mode C — cellular (roomy caverns/corridors; a deliberate contrast to spaghetti's tight tubes)
+  cellFrequency: 0.012,     // ~80 m cells → large, connected caverns with long corridors
+  edgeThreshold: -0.9,      // edges sit near -1; -0.9 keeps ~5-6% fill with walkable headroom
   cellDistanceFunction: 'euclidean',
   warpFrequency: 0.03,      // organic wall wobble
   warpAmplitude: 6,         // meters
@@ -485,12 +488,14 @@ export class TerrainGenerator implements HeightSampler {
     if (distanceFromSurface < cave.surfaceMargin) return false;
     if (cave.floorY !== undefined && worldYmeters < cave.floorY) return false;
 
-    // Surface taper: the carve band grows from 0 at surfaceMargin to full over surfaceTaper voxels,
-    // so tunnels pinch shut as they approach the surface → occasional narrow entrances, not gashes.
+    // Surface taper: near the surface the carve band shrinks toward SURFACE_TAPER_MIN of its full
+    // width (over surfaceTaper voxels), so entrances open as narrow mouths that widen with depth —
+    // sparse, cave-like breaches rather than long open trenches. It never reaches zero, so caves
+    // genuinely reach the surface and can be entered.
     let taper = 1;
     if (cave.surfaceTaper > 0) {
-      taper = Math.min(1, (distanceFromSurface - cave.surfaceMargin) / cave.surfaceTaper);
-      if (taper <= 0) return false;
+      const t = Math.max(0, Math.min(1, (distanceFromSurface - cave.surfaceMargin) / cave.surfaceTaper));
+      taper = SURFACE_TAPER_MIN + (1 - SURFACE_TAPER_MIN) * t;
     }
 
     // Y is squashed so caves are flatter (more walkable) than they are wide.
