@@ -224,10 +224,15 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
 /** Minimum fraction of the full carve width kept at the surface (mouth width vs. deep-cave width). */
 const SURFACE_TAPER_MIN = 0.5;
 
-/** Max meters of per-worm steering-noise offset at wormConvergence=0 (fully independent worms). */
-const WORM_PHASE_SCALE = 800;
+/** Max meters of per-worm steering-noise offset at wormConvergence=0 (fully independent worms).
+ *  Kept small so that even at the higher steering frequency the shared flow-field (→ convergence)
+ *  survives — offset-in-noise-periods = phase × steerFrequency stays modest. */
+const WORM_PHASE_SCALE = 280;
 /** Frequency (1/m) of the along-worm radius-variation noise (low → long bulges/pinches). */
 const WORM_RADIUS_VAR_FREQ = 0.04;
+/** Hard floor on a worm's tube radius (meters) so aggressive pinching never disconnects the tunnel
+ *  (must exceed wormStep/2 to keep consecutive spheres overlapping) and stays player-passable. */
+const WORM_MIN_RADIUS = 1.0;
 
 // ============== Default Cave Configuration ==============
 
@@ -254,17 +259,17 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
 
   // Mode B — worms (traced snake tunnels)
   wormCellSize: 40,         // 40 m spawn cells
-  wormsPerCell: 4.0,        // dense, braided tunnel network (was 1 → many more worms)
-  wormSegments: 55,         // ~110 m long worms (55 × 2 m) → reach deep
-  wormStep: 2,              // 2 m per step
-  wormRadius: 2.4,          // ~4.8 m diameter → roomy; squeezes/roughness still leave it passable
-  wormRadiusJitter: 0.5,    // ±50% radius variety between worms
-  wormSteerFrequency: 0.02, // smooth, sweeping curves
-  wormSteerStrength: 0.5,   // radians of turn per step
+  wormsPerCell: 12.0,       // very dense, braided network filling the sub-surface volume
+  wormSegments: 80,         // ~120 m long worms (80 × 1.5 m) → reach deep, wander far
+  wormStep: 1.5,            // 1.5 m per step (< 2·WORM_MIN_RADIUS so spheres always overlap)
+  wormRadius: 1.5,          // ~3 m base diameter → tighter tunnels than before
+  wormRadiusJitter: 0.6,    // ±60% radius variety between worms
+  wormSteerFrequency: 0.06, // high-frequency steering → worms twist and turn rapidly
+  wormSteerStrength: 0.85,  // aggressive turns per step
   wormVerticalBias: 0.15,   // restoring strength toward the target pitch
   wormDownwardBias: 0.22,   // worms relax toward a ~13° dive → long downward passages
-  wormDepthRange: 28,       // starts shallow-biased across 0-28 m → breaches up top, mass at depth
-  wormRadiusAlongVar: 0.4,  // ±40% radius wobble along each worm → chambers + squeezes
+  wormDepthRange: 50,       // starts spread UNIFORMLY across 0-50 m → fills deep volume, no dead zones
+  wormRadiusAlongVar: 0.6,  // ±60% radius wobble along each worm → strong chambers + squeezes
   wormWallAmp: 0.7,         // 0.7 m wall roughness → organic, non-smooth walls
   wormWallFrequency: 0.15,  // bump scale on the walls
   wormConvergence: 0.45,    // share much of the steering field → frequent merges/forks (without
@@ -697,13 +702,12 @@ export class TerrainGenerator implements HeightSampler {
 
     const pts: number[] = [];
     for (let w = 0; w < n; w++) {
-      // Start: jittered inside the cell. Depth is shallow-biased (rng²) so many worms spawn near the
-      // surface — combined with the downward drift, those breach at their mouth and tunnel down.
+      // Start: jittered inside the cell, at a depth spread UNIFORMLY through wormDepthRange so worms
+      // seed the whole sub-surface volume evenly (no near-surface pile-up, no deep dead zones).
       const sx = (ci + rng()) * cs;
       const sz = (cj + rng()) * cs;
       const surfaceM = this.sampleHeight(sx, sz) * VOXEL_SCALE;
-      const r0 = rng();
-      const depth = cave.surfaceMargin * VOXEL_SCALE + r0 * r0 * cave.wormDepthRange;
+      const depth = cave.surfaceMargin * VOXEL_SCALE + rng() * cave.wormDepthRange;
       let hx = sx, hy = surfaceM - depth, hz = sz;
 
       let yaw = rng() * Math.PI * 2;
@@ -712,8 +716,12 @@ export class TerrainGenerator implements HeightSampler {
       const phase = rng() * phaseScale;
 
       for (let s = 0; s <= cave.wormSegments; s++) {
-        // Radius bulges/pinches along the worm (low-freq noise → chambers and squeezes).
-        const radius = baseR * (1 + cave.wormRadiusAlongVar * this.caveWormRadius.GetNoise(hx, hy, hz));
+        // Radius bulges/pinches along the worm (low-freq noise → chambers and squeezes), floored so
+        // a pinch never disconnects the tube or becomes impassable.
+        const radius = Math.max(
+          WORM_MIN_RADIUS,
+          baseR * (1 + cave.wormRadiusAlongVar * this.caveWormRadius.GetNoise(hx, hy, hz)),
+        );
         pts.push(hx, hy, hz, radius);
         // Steer the heading from noise sampled at the head (+ per-worm phase offset).
         const dyaw = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase) * cave.wormSteerStrength;
