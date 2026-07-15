@@ -193,7 +193,7 @@ const SURFACE_TAPER_MIN = 0.5;
 // ============== Default Cave Configuration ==============
 
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
-  mode: 'spaghetti',        // start on mode A; flip to 'cellular' to compare
+  mode: 'cellular',         // mode C — roomy caverns; flip to 'spaghetti' for tight tube caves
   invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
   verticalSquash: 0.8,      // < 1 → caves a touch taller than wide, so a 1.6 m player fits/walks
   surfaceMargin: 0,         // carve up to the surface voxel so tunnels can breach and be entered
