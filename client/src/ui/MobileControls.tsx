@@ -12,12 +12,16 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronUp, FastForward, Hammer, Undo2, RotateCw, Grid3x3, Check } from 'lucide-react';
+import { ChevronUp, FastForward, Hammer, Undo2, RotateCw, Check } from 'lucide-react';
 import { INPUT_JUMP, INPUT_SPRINT } from '@worldify/shared';
 import { controls } from '../game/player/controls';
 import { useGameStore } from '../state/store';
-import { usePresetThumbnail } from './usePresetThumbnail';
-import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
+import { useIsPortrait } from './useDeviceMode';
+import { HOTBAR_TOUCH_HEIGHT } from './Hotbar';
+
+/** A touch counts as a "tap" (→ punch) if it's brief and barely moves. */
+const TAP_MS = 250;
+const TAP_MOVE_PX = 12;
 
 const JOY_RADIUS = 55; // px of finger travel = full deflection
 const PAD_SIZE = 140;
@@ -38,13 +42,8 @@ function knobOffset(delta: number): number {
 
 export function MobileControls() {
   const buildEnabled = useGameStore((s) => s.build.buildMode);
-  const toggleBuildMenu = useGameStore((s) => s.toggleBuildMenu);
   const toggleBuildMode = useGameStore((s) => s.toggleBuildMode);
-  // Narrow selectors — the current build's config/rotation only change on
-  // selection, not per frame (unlike hasValidTarget), so this won't thrash.
-  const currentRotation = useGameStore((s) => s.build.presetMeta[s.build.presetId]?.baseRotation);
-  const currentParts = useGameStore((s) => s.build.presetMeta[s.build.presetId]?.parts);
-  const buildThumb = usePresetThumbnail(currentParts, currentRotation, { priority: THUMB_PRIORITY.HIGH });
+  const isPortrait = useIsPortrait();
 
   const [sprintOn, setSprintOn] = useState(false);
   const [joy, setJoy] = useState<{ dx: number; dy: number } | null>(null);
@@ -52,7 +51,7 @@ export function MobileControls() {
   const [reticlePos, setReticlePos] = useState<{ x: number; y: number } | null>(null);
 
   const joy0 = useRef<{ id: number; x: number; y: number } | null>(null);
-  const look0 = useRef<{ id: number; x: number; y: number; sx: number; sy: number } | null>(null);
+  const look0 = useRef<{ id: number; x: number; y: number; sx: number; sy: number; t: number } | null>(null);
   const reticleId = useRef<number | null>(null);
 
   useEffect(() => {
@@ -65,8 +64,9 @@ export function MobileControls() {
     };
   }, []);
 
-  // The build-item bar is gone, so the pads sit low in both orientations.
-  const padBottom = 24;
+  // In portrait, raise the pads + action cluster so the bottom-centre build bar sits between them
+  // without overlap. Landscape keeps the pads in the corners with the bar between them.
+  const padBottom = isPortrait ? HOTBAR_TOUCH_HEIGHT + 16 : 24;
 
   // ---- Move (left half) ----
   const onJoyDown = (e: React.PointerEvent) => {
@@ -93,7 +93,7 @@ export function MobileControls() {
   // ---- Look (right half) ----
   const onLookDown = (e: React.PointerEvent) => {
     if (look0.current !== null) return;
-    look0.current = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY };
+    look0.current = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now() };
     e.currentTarget.setPointerCapture(e.pointerId);
     setLookVis({ dx: 0, dy: 0 });
   };
@@ -106,7 +106,15 @@ export function MobileControls() {
     setLookVis({ dx: e.clientX - l.sx, dy: e.clientY - l.sy });
   };
   const onLookUp = (e: React.PointerEvent) => {
-    if (look0.current?.id !== e.pointerId) return;
+    const l = look0.current;
+    if (l?.id !== e.pointerId) return;
+    // A brief, barely-moved touch is a "tap" → punch (dig). Placing in build mode uses the Place
+    // button, so only punch when not building.
+    const moved = Math.hypot(e.clientX - l.sx, e.clientY - l.sy);
+    if (!buildEnabled && performance.now() - l.t < TAP_MS && moved < TAP_MOVE_PX) {
+      controls.castNDC = toNDC(e.clientX, e.clientY);
+      controls.triggerPunch();
+    }
     look0.current = null;
     setLookVis(null);
   };
@@ -195,12 +203,6 @@ export function MobileControls() {
               </button>
               <button className={`${btn} w-12 h-12 !bg-green-600/70 !border-green-300/70`} onPointerDown={(e) => { e.preventDefault(); controls.triggerPlace(); }} aria-label="Place build">
                 <Check size={26} strokeWidth={2.6} />
-              </button>
-              {/* Build menu — shows the current build thumbnail (same size as toggle/jump) */}
-              <button className={`${btn} w-16 h-16 overflow-hidden`} onPointerDown={(e) => { e.preventDefault(); toggleBuildMenu(); }} aria-label="Build menu">
-                {buildThumb
-                  ? <img src={buildThumb} alt="" className="w-12 h-12 object-contain" draggable={false} />
-                  : <Grid3x3 size={26} strokeWidth={2.2} />}
               </button>
             </>
           )}

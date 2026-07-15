@@ -13,7 +13,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useGameStore } from '../state/store';
 import {
-  NONE_PRESET_ID,
   MATERIAL_NAMES,
   GameMode,
   PRESET_TEMPLATES,
@@ -24,6 +23,7 @@ import { usePresetThumbnail } from './usePresetThumbnail';
 import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
 import { BuildConfigTab } from './BuildConfigTab';
 import { isTouch } from '../game/deviceMode';
+import { X } from 'lucide-react';
 
 type MenuTab = 'presets' | 'materials' | 'config';
 
@@ -97,7 +97,6 @@ export function BuildMenu() {
   const currentMeta = presetMeta[presetId];
   const currentConfig = currentMeta?.parts[0]?.config;
   const currentMaterial = currentConfig?.material ?? 0;
-  const isNonePreset = presetId === NONE_PRESET_ID;
   const currentTemplateName = currentMeta?.templateName ?? '';
 
   const [activeTab, setActiveTab] = useState<MenuTab>('presets');
@@ -112,12 +111,12 @@ export function BuildMenu() {
   }, [setBuildMenuOpen]);
 
   const handleSelectMaterial = useCallback((materialId: number) => {
-    if (!isNonePreset) updatePresetConfig(presetId, { material: materialId });
-  }, [presetId, isNonePreset, updatePresetConfig]);
+    updatePresetConfig(presetId, { material: materialId });
+  }, [presetId, updatePresetConfig]);
 
   const handleSelectTemplate = useCallback((templateIndex: number) => {
-    if (!isNonePreset) applyPresetTemplate(presetId, templateIndex);
-  }, [presetId, isNonePreset, applyPresetTemplate]);
+    applyPresetTemplate(presetId, templateIndex);
+  }, [presetId, applyPresetTemplate]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => e.preventDefault(), []);
 
@@ -135,7 +134,7 @@ export function BuildMenu() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm pointer-events-auto flex md:items-center md:justify-center"
+      className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm pointer-events-auto flex items-center justify-center"
       style={{
         paddingTop: 'env(safe-area-inset-top)',
         paddingBottom: 'env(safe-area-inset-bottom)',
@@ -143,16 +142,19 @@ export function BuildMenu() {
         paddingRight: 'env(safe-area-inset-right)',
       }}
       onContextMenu={handleContextMenu}
-      onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
+      // Close on pointerdown (not click): the menu opens on the hotbar button's pointerdown, and the
+      // scrim mounts under the finger — closing on click would let that same tap's click retarget to
+      // the fresh scrim and instantly close it (mobile). Pointerdown only sees *subsequent* taps.
+      onPointerDown={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
-      {/* Full-screen on mobile; on desktop a card that fits its content (a fixed 6-column
-          tile grid), so the header bar spans exactly the tile-grid width — not wider. */}
-      <div className="flex flex-col w-full h-full md:w-fit md:max-w-[92vw] md:h-auto md:max-h-[82vh] md:rounded-2xl md:border md:border-white/10 md:bg-neutral-900/95 md:shadow-2xl overflow-hidden">
-      {/* Header: current-build preview + tabs (does not scroll) */}
+      {/* A centered card on all sizes (never full-screen); tighter on mobile. Clicking the scrim
+          outside it closes the menu (handler above). */}
+      <div className="flex flex-col w-[94vw] max-w-[94vw] max-h-[80vh] md:w-fit md:max-w-[92vw] md:max-h-[82vh] rounded-2xl border border-white/10 bg-neutral-900/95 shadow-2xl overflow-hidden">
+      {/* Header: current-build preview + tabs + close (does not scroll) */}
       <div className="shrink-0 flex items-center gap-2 md:gap-3 p-2 md:px-4 md:py-3 border-b border-white/10">
-        <div className="shrink-0 w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-black/60 flex items-center justify-center overflow-hidden">
+        <div className="shrink-0 w-12 h-12 md:w-16 md:h-16 rounded-2xl bg-black/60 flex items-center justify-center overflow-hidden">
           {previewUrl
-            ? <img src={previewUrl} alt="" className="w-[52px] h-[52px] md:w-[60px] md:h-[60px] object-contain" draggable={false} />
+            ? <img src={previewUrl} alt="" className="w-[44px] h-[44px] md:w-[60px] md:h-[60px] object-contain" draggable={false} />
             : <span className="text-2xl text-white/40">◼</span>}
         </div>
         <div className="flex-1 flex gap-1.5 min-w-0">
@@ -160,10 +162,17 @@ export function BuildMenu() {
           {tabBtn('materials', 'Materials')}
           {tabBtn('config', 'Config')}
         </div>
+        <button
+          onClick={handleClose}
+          aria-label="Close build menu"
+          className="shrink-0 w-9 h-9 md:w-10 md:h-10 flex items-center justify-center rounded-xl text-white/60 hover:text-white hover:bg-white/10 cursor-pointer"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
-      {/* Body: scrolls; thin scrollbar so the fixed 6-col grid fits the card width exactly. */}
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-compact p-3 md:p-4">
+      {/* Body: capped at ~4 tile rows tall (tiles 80/96px + 8px gaps + padding); scrolls beyond. */}
+      <div className="max-h-[368px] md:max-h-[440px] overflow-y-auto scrollbar-compact p-3 md:p-4">
         <div className="mx-auto w-full md:w-fit">
           {activeTab === 'presets' && (
             <div className="flex flex-wrap gap-2 justify-center md:grid md:grid-cols-6 md:justify-items-start">

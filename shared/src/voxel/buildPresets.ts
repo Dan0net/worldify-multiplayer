@@ -112,6 +112,14 @@ export function materialCubeParts(material: number, half = 4): BuildPart[] {
 }
 
 /**
+ * Parts for a left-click "punch": the Blob Carve geometry (a radius-2 sphere) in PUNCH mode, which
+ * carves only voxels whose material equals `targetMaterial` (the voxel the crosshair hit).
+ */
+export function punchParts(targetMaterial: number): BuildPart[] {
+  return [part({ shape: BuildShape.SPHERE, mode: BuildMode.PUNCH, size: size(2, 2, 2), material: targetMaterial })];
+}
+
+/**
  * Default build presets (10 total, mapped to keys 0-9).
  * Preset 1 is "None" (building disabled) — key 1 is the default.
  */
@@ -442,6 +450,52 @@ export function templateToSlotMeta(template: BuildPresetTemplate): PresetSlotMet
     autoRotateY: template.autoRotateY,
     parts: clonePartsList(template.parts),
   };
+}
+
+/** Look up a catalog template by name. Throws if missing so the loadout stays honest. */
+function templateByName(name: string): BuildPresetTemplate {
+  const t = PRESET_TEMPLATES.find((tpl) => tpl.name === name);
+  if (!t) throw new Error(`Unknown preset template: ${name}`);
+  return t;
+}
+
+/** An empty (unassigned) hotbar slot: zero-size, not buildable. */
+export function emptySlotMeta(): PresetSlotMeta {
+  return {
+    templateName: 'Empty',
+    align: BuildPresetAlign.CENTER,
+    snapShape: BuildPresetSnapShape.NONE,
+    parts: [part({ shape: BuildShape.CUBE, mode: BuildMode.ADD, size: size(0, 0, 0), material: 0 })],
+  };
+}
+
+/** True when a slot has no buildable geometry (empty / all parts zero-size). */
+export function slotIsEmpty(meta: PresetSlotMeta | undefined): boolean {
+  if (!meta || meta.parts.length === 0) return true;
+  return meta.parts.every(
+    (p) => p.config.size.x === 0 && p.config.size.y === 0 && p.config.size.z === 0,
+  );
+}
+
+/**
+ * The default hotbar loadout, keyed by digit 1..9,0 = array indices 1..9,0. Built from existing
+ * catalog templates; slots 8/9/0 start empty (assignable via the build menu). Returns fresh clones
+ * so slot edits never mutate the shared catalog.
+ */
+export function defaultHotbarMeta(): PresetSlotMeta[] {
+  const t = (n: string) => templateToSlotMeta(templateByName(n));
+  const slots: PresetSlotMeta[] = new Array(10);
+  slots[1] = t('Torch');
+  slots[2] = t('Brick Wall');
+  slots[3] = t('Stone Floor');
+  slots[4] = t('Steep Stone Stairs'); // stone 45° slope
+  slots[5] = t('Wood Pillar');
+  slots[6] = t('Wood Beam');
+  slots[7] = t('Leafy Blob');
+  slots[8] = emptySlotMeta();
+  slots[9] = emptySlotMeta();
+  slots[0] = emptySlotMeta();
+  return slots;
 }
 
 /**

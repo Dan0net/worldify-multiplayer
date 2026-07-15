@@ -56,7 +56,11 @@ const HELD_ITEM_QUAT = new THREE.Quaternion().setFromRotationMatrix(
 ).invert();
 
 let swing = 0; // 1 on trigger, decays to 0
+let swingKind: 'punch' | 'build' | 'swap' = 'punch';
 let visible = false;
+let wasVisible = false;   // rising-edge detector for the reveal slide-in
+let reveal = 0;           // 1 → slide up from below; decays to 0
+let exitT = -1;           // -1 = not exiting; 0→1 slide-down progress on returning to explore
 
 /** Put an object and all descendants on a single layer. */
 function setLayerDeep(obj: THREE.Object3D, layer: number): void {
@@ -95,15 +99,42 @@ export function initFirstPersonArm(scene: THREE.Scene): void {
   vmCamera.add(group);
 }
 
-/** Trigger a one-shot punch swing (call when a build is placed/dug). */
-export function triggerArmSwing(): void {
+/** Trigger a one-shot arm swing. 'punch' throws forward; 'build' dips the hand down. */
+export function triggerArmSwing(kind: 'punch' | 'build' = 'punch'): void {
   swing = 1;
+  swingKind = kind;
 }
 
 /** Hide the arm (non-Playing modes / menu open). */
 export function setFirstPersonArmVisible(v: boolean): void {
   visible = v;
   if (group) group.visible = v;
+}
+
+/** Begin the arm's slide-down exit (call when returning play→explore). No-op if already hidden. */
+export function startFirstPersonArmExit(): void {
+  if (visible && exitT < 0) exitT = 0;
+}
+
+/**
+ * Drive the arm outside Playing mode: if an exit slide is in progress, ease it down and hide when
+ * done; otherwise ensure the arm is hidden. Called every non-Playing frame from the game loop.
+ */
+export function tickFirstPersonArmExit(dtMs: number): void {
+  if (!group) return;
+  if (exitT < 0) {
+    if (visible) { visible = false; group.visible = false; }
+    return;
+  }
+  const dt = Math.min(dtMs, 100) / 1000;
+  exitT = Math.min(1, exitT + dt * 2.6);
+  const { halfW, halfH } = sizeVmCamera();
+  const baseX = halfW * CORNER_X;
+  const baseY = -halfH * CORNER_Y;
+  group.visible = true;
+  group.position.set(baseX, baseY - exitT * exitT * (halfH * 2), -ARM_DEPTH);
+  group.rotation.set(0, 0, 0);
+  if (exitT >= 1) { exitT = -1; visible = false; group.visible = false; wasVisible = false; }
 }
 
 function disposeArmObject(obj: THREE.Object3D): void {
@@ -169,6 +200,10 @@ export function updateFirstPersonArm(opts: {
 }): void {
   if (!group || !hand) return;
 
+  // Rising edge of visibility → slide the arm up from below (played once the camera intro ends).
+  if (opts.visible && !wasVisible) { reveal = 1; exitT = -1; }
+  wasVisible = opts.visible;
+
   visible = opts.visible;
   group.visible = opts.visible;
   if (!opts.visible) return;
@@ -179,33 +214,63 @@ export function updateFirstPersonArm(opts: {
   const baseX = halfW * CORNER_X;
   const baseY = -halfH * CORNER_Y;
 
-  // Punch swing (decays 1 → 0; peaks mid-decay for an out-and-back motion).
+  // Swing (decays 1 → 0; peaks mid-decay for an out-and-back motion).
   if (swing > 0) swing = Math.max(0, swing - dt * 4.5);
   const punch = Math.sin(swing * Math.PI);
 
-  // Inverse head-bob: the arm counter-moves to the camera's walk head-bob (scaled
-  // down so the arm sway is subtle).
-  group.position.set(baseX, baseY - punch * 0.18 - opts.headBob * ARM_BOB_SCALE, -ARM_DEPTH);
-  group.rotation.set(-punch * 0.7, 0, 0);
+  // Reveal slide-in (decays 1 → 0); offsets the arm below the frustum, easing up into view.
+  if (reveal > 0) reveal = Math.max(0, reveal - dt * 2.2);
+  const revealDrop = reveal * reveal * (halfH * 2); // ease-in; halfH*2 is fully off the bottom
 
-  // Held item — the real build mesh, rebuilt only when it changes.
-  if (opts.buildMode && opts.parts && opts.parts.length && opts.texturesReady) {
+  // Animate by TRANSLATION only — no group rotation, which previously pitched the whole subtree
+  // and skewed the held item. Inverse head-bob keeps the arm counter-moving to the walk bob.
+  const bobY = baseY - opts.headBob * ARM_BOB_SCALE - revealDrop;
+  if (swingKind === 'build' || swingKind === 'swap') {
+    // Placing / swapping items: dip the hand downward.
+    group.position.set(baseX, bobY - punch * 0.22, -ARM_DEPTH);
+  } else {
+    // Punching: a quick jab up-and-toward-centre. (The view-model camera is orthographic, so a
+    // -Z "forward" thrust would be invisible — animate in X/Y instead.)
+    group.position.set(baseX - punch * 0.3, bobY + punch * 0.28, -ARM_DEPTH);
+  }
+  group.rotation.set(0, 0, 0);
+
+  // Held item — the real build mesh for the selected slot, shown whenever an item is selected
+  // (walking or building). Empty slots have zero-size parts → createBuildItemMeshes yields nothing,
+  // so the hand is empty.
+  if (opts.parts && opts.parts.length && opts.texturesReady) {
     const key = itemKey(opts.parts, opts.rotation, opts.variant);
     if (key !== heldKey) {
-      clearHeldItem();
-      const mesh = createBuildItemMeshes(opts.parts, opts.rotation);
-      if (mesh) {
-        mesh.position.set(-0.16, 0.24, -0.3);  // held in the lower-right, Minecraft-style
-        mesh.quaternion.copy(HELD_ITEM_QUAT);  // thumbnail's 3/4 view angle
-        mesh.scale.multiplyScalar(1.27);       // ~0.33 world extent (from the 0.26 base)
-        setLayerDeep(mesh, FIRST_PERSON_ITEM_LAYER); // drawn over the arm
-        hand.add(mesh);
-        heldItem = mesh;
+      if (heldItem && reveal <= 0) {
+        // Switching item while one is held: bob the arm down and swap the mesh at the bottom of
+        // the dip (old mesh on the way down, new on the way up).
+        if (swingKind !== 'swap' || swing <= 0) { swing = 1; swingKind = 'swap'; }
+        if (swing <= 0.5) { rebuildHeldItem(opts); heldKey = key; }
+      } else {
+        // First reveal / no current item: swap in place.
+        rebuildHeldItem(opts);
+        heldKey = key;
       }
-      heldKey = key;
     }
   } else if (heldItem) {
     clearHeldItem();
+    heldKey = '';
+  }
+}
+
+/** Rebuild the held-item mesh from the current opts and mount it in the hand at its resting pose. */
+function rebuildHeldItem(opts: { parts?: BuildPart[]; rotation?: Quat }): void {
+  if (!hand) return;
+  clearHeldItem();
+  if (!opts.parts || !opts.parts.length) return;
+  const mesh = createBuildItemMeshes(opts.parts, opts.rotation);
+  if (mesh) {
+    mesh.position.set(-0.16, 0.24, -0.3);  // held in the lower-right, Minecraft-style
+    mesh.quaternion.copy(HELD_ITEM_QUAT);  // thumbnail's 3/4 view angle
+    mesh.scale.multiplyScalar(1.27);       // ~0.33 world extent (from the 0.26 base)
+    setLayerDeep(mesh, FIRST_PERSON_ITEM_LAYER); // drawn over the arm
+    hand.add(mesh);
+    heldItem = mesh;
   }
 }
 

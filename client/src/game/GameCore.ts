@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
-import { initFirstPersonArm, updateFirstPersonArm, setFirstPersonArmVisible, renderFirstPersonArm } from './scene/FirstPersonArm';
+import { initFirstPersonArm, updateFirstPersonArm, startFirstPersonArmExit, tickFirstPersonArmExit, renderFirstPersonArm } from './scene/FirstPersonArm';
 import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -572,8 +572,9 @@ export class GameCore {
         break;
     }
 
-    // The first-person arm only shows in Playing (updatePlayingMode drives it).
-    if (gameMode !== GameMode.Playing) setFirstPersonArmVisible(false);
+    // Outside Playing, drive the arm's slide-down exit (or keep it hidden). updatePlayingMode
+    // drives it while playing.
+    if (gameMode !== GameMode.Playing) tickFirstPersonArmExit(deltaMs);
 
     // Refresh minimap tiles from freshly-streamed chunks (bounded per frame).
     this.flushMapTilesFromStreamedChunks();
@@ -663,6 +664,12 @@ export class GameCore {
       }
       initExploreCamera(this.spectatorCenter);
       resetMarker();
+      // Leaving play — slide the arm out and re-arm the reveal (hotbar + pills slide out via
+      // firstPersonReady flipping false). The explore UI slides back in only once the outro glide
+      // completes (exploreReady set below); a non-play entry (boot) has no outro, so show it now.
+      if (previousMode === GameMode.Playing) startFirstPersonArmExit();
+      else useGameStore.getState().setExploreReady(true);
+      useGameStore.getState().setFirstPersonReady(false);
     } else {
       setMarkerVisible(false); // hide the spawn gizmo outside explore
     }
@@ -670,6 +677,7 @@ export class GameCore {
     // Entering Playing mode - spawn at the chosen marker if the Play button armed one
     // (works even for a re-play after pausing); otherwise the first-time spawn logic.
     if (currentMode === GameMode.Playing) {
+      useGameStore.getState().setExploreReady(false); // explore UI animates out
       const markerSpawn = consumeMarkerSpawn();
       if (markerSpawn) {
         this.playerManager.setSpawnPosition(markerSpawn);
@@ -788,6 +796,8 @@ export class GameCore {
       this.introTmpQuat.copy(camera.quaternion);
       camera.position.copy(this.cameraOutroFromPos).lerp(this.introTmpPos, eased);
       camera.quaternion.copy(this.cameraOutroFromQuat).slerp(this.introTmpQuat, eased);
+      // Outro finished → let the explore UI (world/settings/panel) animate back in.
+      if (this.cameraOutroMs === 0) useGameStore.getState().setExploreReady(true);
     }
 
     // The explore target is the world stream/shadow center; keep spectatorCenter in
@@ -908,12 +918,19 @@ export class GameCore {
       camera.position.y += headBob;
     }
 
-    // First-person arm (hidden while the menu soft-pauses play).
+    // Once the explore→FP camera glide finishes, flag first-person ready so the arm + hotbar
+    // reveal together (covers no-glide re-entry too, where cameraIntroMs is already 0).
+    if (this.cameraIntroMs === 0 && !useGameStore.getState().firstPersonReady) {
+      useGameStore.getState().setFirstPersonReady(true);
+    }
+
+    // First-person arm — hidden while the menu soft-pauses play AND during the camera intro glide
+    // (it slides in once the glide completes).
     const build = useGameStore.getState().build;
     const ts = useGameStore.getState().textureState;
     const meta = build.presetMeta[build.presetId];
     updateFirstPersonArm({
-      visible: !menuPaused,
+      visible: !menuPaused && this.cameraIntroMs === 0,
       buildMode: build.buildMode,
       rotation: meta?.baseRotation,
       parts: meta?.parts,

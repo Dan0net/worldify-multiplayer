@@ -1179,6 +1179,7 @@ export class VoxelWorld implements ChunkProvider {
     return this.getChunk(cx, cy, cz);
   }
 
+
   /**
    * Get the total number of loaded chunks.
    */

@@ -121,6 +121,7 @@ const MODE_TO_NUM: Record<BuildMode, number> = {
   [BuildMode.SUBTRACT]: 1,
   [BuildMode.PAINT]: 2,
   [BuildMode.FILL]: 3,
+  [BuildMode.PUNCH]: 4,
 };
 
 const NUM_TO_MODE: BuildMode[] = [
@@ -128,6 +129,7 @@ const NUM_TO_MODE: BuildMode[] = [
   BuildMode.SUBTRACT,
   BuildMode.PAINT,
   BuildMode.FILL,
+  BuildMode.PUNCH,
 ];
 
 // ============== Types ==============

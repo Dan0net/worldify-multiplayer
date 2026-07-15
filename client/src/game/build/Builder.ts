@@ -19,7 +19,42 @@ import { getBuildPreset, getBuildIsEnabled } from '../../state/buildAccessors';
 import { Controls } from '../player/controls';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
 import { sendBinary } from '../../net/netClient';
-import { encodeVoxelBuildIntent, VoxelBuildIntent, BuildMode, BuildPresetSnapShape, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, isTransparent } from '@worldify/shared';
+import { encodeVoxelBuildIntent, VoxelBuildIntent, BuildMode, BuildPresetSnapShape, PLAYER_HEIGHT, PLAYER_RADIUS, VOXEL_SCALE, MAX_BUILD_DISTANCE, isTransparent, punchParts, worldToVoxel, voxelToWorld } from '@worldify/shared';
+
+/** Identity quaternion for un-rotated ops (e.g. the punch sphere). */
+const IDENTITY_QUAT = { x: 0, y: 0, z: 0, w: 1 };
+
+/**
+ * Material id of the terrain mesh at a raycast hit, read from the nearest face vertex. The terrain
+ * geometry carries per-vertex `materialIds` (3) + `materialWeights` (3); each vertex's own dominant
+ * material is the `materialIds` component whose `materialWeights` component is largest. Returns -1
+ * if the hit geometry has no material attribute.
+ */
+function materialAtHit(hit: THREE.Intersection): number {
+  const face = hit.face;
+  const geom = (hit.object as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+  if (!face || !geom) return -1;
+  const ids = geom.getAttribute('materialIds');
+  const wts = geom.getAttribute('materialWeights');
+  const pos = geom.getAttribute('position');
+  if (!ids || !wts || !pos) return -1;
+
+  // Pick the face vertex nearest the hit point (in world space).
+  const vidx = [face.a, face.b, face.c];
+  let best = vidx[0];
+  let bestDist = Infinity;
+  const p = new THREE.Vector3();
+  for (const v of vidx) {
+    p.fromBufferAttribute(pos, v).applyMatrix4(hit.object.matrixWorld);
+    const d = p.distanceToSquared(hit.point);
+    if (d < bestDist) { bestDist = d; best = v; }
+  }
+
+  // That vertex's own material = the id slot whose weight is max.
+  const w = [wts.getX(best), wts.getY(best), wts.getZ(best)];
+  const k = w[1] > w[0] ? (w[2] > w[1] ? 2 : 1) : (w[2] > w[0] ? 2 : 0);
+  return Math.round([ids.getX(best), ids.getY(best), ids.getZ(best)][k]);
+}
 
 const EMPTY_SET: ReadonlySet<number> = new Set();
 
@@ -62,6 +97,10 @@ export class Builder {
   /** Injected controls instance */
   private readonly controls: Controls;
 
+  /** Latest camera + reusable raycaster for the punch (works outside build mode). */
+  private lastCamera: THREE.Camera | null = null;
+  private readonly punchRaycaster = new THREE.Raycaster();
+
   /**
    * Called after a build is applied locally (offline mode) with the modified
    * chunk keys, so the host can refresh map tiles. Set by GameCore.
@@ -74,8 +113,9 @@ export class Builder {
     this.preview = new BuildPreview();
     this.snapManager = new SnapManager();
 
-    // Register for build place events from controls
+    // Register for build place + punch events from controls
     this.controls.onBuildPlace = this.handlePlace;
+    this.controls.onPunch = this.handlePunch;
   }
 
   /**
@@ -146,6 +186,10 @@ export class Builder {
    * @param playerPosition The local player's position (eye level)
    */
   update(camera: THREE.Camera, playerPosition: THREE.Vector3): void {
+    // Remember the camera so the punch (which fires outside build mode, when the marker is hidden)
+    // can raycast on demand.
+    this.lastCamera = camera;
+
     // Skip if no mesh provider
     if (!this.meshProvider) return;
 
@@ -331,8 +375,8 @@ export class Builder {
     const targetPos = this.marker.getTargetPosition();
     if (!targetPos) return;
 
-    // Swing the first-person arm on a successful place/dig.
-    triggerArmSwing();
+    // Swing the first-person arm — build dips the hand down.
+    triggerArmSwing('build');
 
     const preset = getBuildPreset();
 
@@ -370,6 +414,54 @@ export class Builder {
   };
 
   /**
+   * Handle the left-click / tap "punch": material-filtered dig. Raycasts from the camera (or the
+   * mobile reticle) to the surface, samples the material of the voxel just inside it, and carves a
+   * radius-2 blob of ONLY that material (grass digs grass, not the brick next to it). The selected
+   * hotbar item is irrelevant here — the match material comes from the hit voxel.
+   */
+  private handlePunch = (): void => {
+    const camera = this.lastCamera;
+    if (!camera || !this.meshProvider || !this.voxelWorld) return;
+
+    // Raycast: mobile uses the reticle NDC, desktop the camera-centre ray (mirrors BuildMarker).
+    const castNDC = this.controls.castNDC;
+    if (castNDC) {
+      this.punchRaycaster.setFromCamera(new THREE.Vector2(castNDC.x, castNDC.y), camera);
+    } else {
+      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      this.punchRaycaster.set(camera.position, dir);
+    }
+    this.punchRaycaster.far = MAX_BUILD_DISTANCE;
+
+    const hits = this.punchRaycaster.intersectObjects(this.meshProvider.getCollisionMeshes(), false);
+    const hit = hits[0];
+    if (!hit || !hit.face) return;
+
+    // Material = the material of the mesh vertex we actually clicked (reliable: a mesh hit is always
+    // a real surface). Reading the nearest voxel instead can land in air / the wrong material.
+    const material = materialAtHit(hit);
+    if (material < 0) return; // hit geometry had no material attribute — nothing to punch
+
+    // Centre the punch sphere on the voxel just inside the surface (along -normal).
+    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    const px = hit.point.x - n.x * VOXEL_SCALE * 0.5;
+    const py = hit.point.y - n.y * VOXEL_SCALE * 0.5;
+    const pz = hit.point.z - n.z * VOXEL_SCALE * 0.5;
+    const { vx, vy, vz } = worldToVoxel(px, py, pz);
+    const center = voxelToWorld(vx, vy, vz);
+    const parts = punchParts(material);
+
+    triggerArmSwing('punch');
+
+    if (useGameStore.getState().useServerChunks) {
+      sendBinary(encodeVoxelBuildIntent({ center, rotation: IDENTITY_QUAT, parts }));
+    } else {
+      const modified = this.voxelWorld.applyBuildOperation({ center, rotation: IDENTITY_QUAT, parts }) ?? [];
+      if (modified.length > 0) this.onBuildApplied?.(modified);
+    }
+  };
+
+  /**
    * Hand the current build preview off as a commit: moves the previewed chunks into the
    * pending-commit set so the next remesh clears the stale preview mesh and restores the
    * (preview-suppressed) group. Used by undo — it mutates voxels + dispatches a remesh but,
@@ -398,9 +490,12 @@ export class Builder {
    * Dispose of resources.
    */
   dispose(): void {
-    // Only clear callback if it's still ours
+    // Only clear callbacks if they're still ours
     if (this.controls.onBuildPlace === this.handlePlace) {
       this.controls.onBuildPlace = null;
+    }
+    if (this.controls.onPunch === this.handlePunch) {
+      this.controls.onPunch = null;
     }
     this.marker.dispose();
     this.preview.dispose();

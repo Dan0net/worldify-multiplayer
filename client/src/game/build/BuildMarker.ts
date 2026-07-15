@@ -18,7 +18,7 @@ import {
   BUILD_ROTATION_STEP,
   BUILD_PROJECTION_DEADZONE,
   composeRotation,
-  NONE_PRESET_ID,
+  slotIsEmpty,
 } from '@worldify/shared';
 import { useGameStore } from '../../state/store';
 import { getBuildPreset, getBuildRotationRadians } from '../../state/buildAccessors';
@@ -166,8 +166,8 @@ export class BuildMarker {
     const presetId = buildState.presetId;
     const rotationSteps = buildState.rotationSteps;
 
-    // Hide if build mode is off (or, defensively, the None preset is selected)
-    if (!buildState.buildMode || presetId === NONE_PRESET_ID) {
+    // Hide if build mode is off, or the selected slot has no buildable geometry (empty slot).
+    if (!buildState.buildMode || slotIsEmpty(buildState.presetMeta[presetId])) {
       this.hide();
       return { hasValidTarget: false };
     }
@@ -616,8 +616,8 @@ export class BuildMarker {
   private rebuildWireframe(preset: BuildPreset, rotationSteps: number): void {
     this.clearWireframes();
 
-    // Don't create wireframe for disabled preset
-    if (preset.id === NONE_PRESET_ID) return;
+    // Don't create wireframe for an empty slot (no buildable geometry)
+    if (slotIsEmpty(useGameStore.getState().build.presetMeta[preset.id])) return;
 
     if (this.usesPartsPath(preset)) {
       // Point-out / composite: one wireframe per part. Orientation and per-part offsets are
@@ -732,7 +732,7 @@ export class BuildMarker {
    * Returns null if no valid target or preset is disabled.
    */
   getWorldAABB(): { min: THREE.Vector3; max: THREE.Vector3 } | null {
-    if (!this.isVisible || this.currentPresetId === NONE_PRESET_ID) return null;
+    if (!this.isVisible || slotIsEmpty(useGameStore.getState().build.presetMeta[this.currentPresetId])) return null;
 
     const preset = getBuildPreset();
 

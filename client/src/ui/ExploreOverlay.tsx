@@ -101,6 +101,7 @@ function MarkerPlayButton() {
 
 export function ExploreOverlay() {
   const gameMode = useGameStore((s) => s.gameMode);
+  const exploreReady = useGameStore((s) => s.exploreReady);
   const textureState = useGameStore((s) => s.textureState);
   const textureProgress = useGameStore((s) => s.textureProgress);
   const qualityLevel = useGameStore((s) => s.qualityLevel);
@@ -118,6 +119,15 @@ export function ExploreOverlay() {
   const [activeWorldId, setActiveWorldId] = useState<string | null>(null);
   const [showNewWorld, setShowNewWorld] = useState(false);
 
+  // Keep the explore UI (Play button, world/settings bar + panel) mounted through its fade-out so it
+  // can animate when leaving to Playing; unmount ~after the transition so it can't capture input.
+  const [renderExploreUi, setRenderExploreUi] = useState(gameMode === GameMode.Explore);
+  useEffect(() => {
+    if (gameMode === GameMode.Explore) { setRenderExploreUi(true); return; }
+    const t = setTimeout(() => setRenderExploreUi(false), 550);
+    return () => clearTimeout(t);
+  }, [gameMode]);
+
   const refreshWorlds = () => {
     listWorlds().then((w) => {
       setWorlds(w.slice().sort((a, b) => b.lastPlayedAt - a.lastPlayedAt));
@@ -133,7 +143,8 @@ export function ExploreOverlay() {
 
   const activeWorldName = worlds.find((w) => w.id === activeWorldId)?.name ?? 'Worlds';
 
-  if (gameMode !== GameMode.Explore) return null;
+  // Render in Explore + Playing (the logo persists into play; the explore UI animates out/in).
+  if (gameMode !== GameMode.Explore && gameMode !== GameMode.Playing) return null;
 
   const isLoadingHD = textureState === 'loading-high';
   const hasHD = textureState === 'high';
@@ -169,13 +180,19 @@ export function ExploreOverlay() {
         className="absolute top-5 left-1/2 -translate-x-1/2 h-12 md:h-16 pointer-events-none drop-shadow-lg"
       />
 
+      {/* Explore UI (Play button + world/settings bar + panel) — fades out on entering play and
+          back in once the play→explore outro completes (exploreReady). Kept mounted briefly during
+          the fade via renderExploreUi. Opacity-only on the layer so MarkerPlayButton's own
+          marker-tracking transform is undisturbed. */}
+      {renderExploreUi && (
+      <div className={`absolute inset-0 pointer-events-none transition-opacity duration-500 ease-out ${exploreReady ? 'opacity-100' : 'opacity-0'}`}>
       {/* Marker-tracking Play button */}
       <MarkerPlayButton />
 
       {/* Bottom stack: an open panel sits directly above the Worlds/Settings bar with a
           constant gap (the flex gap), regardless of the button size. */}
       <div
-        className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3 w-[calc(100vw-2rem)] md:w-auto"
+        className={`absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3 w-[calc(100vw-2rem)] md:w-auto transition-transform duration-500 ease-out ${exploreReady ? 'translate-y-0' : 'translate-y-8'}`}
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
       {panel !== 'none' && (
@@ -310,6 +327,8 @@ export function ExploreOverlay() {
       {/* New-world prompt (name + seed) */}
       {showNewWorld && (
         <NewWorldDialog onCancel={() => setShowNewWorld(false)} onCreate={createWorld} />
+      )}
+      </div>
       )}
     </div>
   );

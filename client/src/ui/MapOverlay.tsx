@@ -25,6 +25,7 @@ export function MapOverlay() {
   const showMapOverlay = useGameStore((s) => s.showMapOverlay);
   const toggleMapOverlay = useGameStore((s) => s.toggleMapOverlay);
   const setGameMode = useGameStore((s) => s.setGameMode);
+  const gameMode = useGameStore((s) => s.gameMode);
   // Live view distance — the map zooms so the loaded tiles fill it.
   const visibilityRadius = useGameStore((s) => s.quality.visibilityRadius);
   const isTouch = useIsTouch();
@@ -62,8 +63,8 @@ export function MapOverlay() {
           </div>
         )}
 
-        {/* Menu (X) button — touch only; top-right corner of the box, above the map. */}
-        {isTouch && (
+        {/* Menu (X) button — touch only, and only while playing (in explore we're already here). */}
+        {isTouch && gameMode === GameMode.Playing && (
           <button
             onPointerDown={(e) => { e.preventDefault(); openMenu(); }}
             aria-label="Menu"

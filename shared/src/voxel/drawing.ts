@@ -77,6 +77,40 @@ export function applySubtract(
 }
 
 /**
+ * Apply PUNCH mode to a voxel: a material-filtered subtract.
+ * Carves (takes minimum weight) exactly like SUBTRACT, but only when the existing voxel's material
+ * equals `targetMaterial` — voxels of any other material are left untouched. This lets a left-click
+ * "punch" dig a blob of only the hit material (e.g. grass) without disturbing neighbouring stone.
+ */
+/** Weight removed per punch — incremental so digging is gradual (weight is 4-bit quantized). */
+const PUNCH_WEIGHT_STEP = 0.25;
+
+export function applyPunch(
+  existingPacked: number,
+  newWeight: number,
+  targetMaterial: number
+): { packed: number; changed: boolean } {
+  const existing = unpackVoxel(existingPacked);
+
+  // Only carve voxels of the matched material (material 0 is a real material — moss2 — not air).
+  if (existing.material !== targetMaterial) {
+    return { packed: existingPacked, changed: false };
+  }
+
+  // A voxel the sphere covers has newWeight > 0 (PUNCH keeps the +1 weight multiplier). Carve the
+  // whole covered volume uniformly — decrement the stored weight by a fixed step — so the blob is
+  // solid (no rim-only shell / centre hole) and incremental.
+  if (newWeight <= 0) {
+    return { packed: existingPacked, changed: false };
+  }
+  const carved = Math.max(-0.5, existing.weight - PUNCH_WEIGHT_STEP);
+  if (carved >= existing.weight) {
+    return { packed: existingPacked, changed: false };
+  }
+  return { packed: packVoxel(carved, existing.material, existing.light), changed: true };
+}
+
+/**
  * Apply PAINT mode to a voxel.
  * Only changes material where weight > 0 (solid areas) and shape overlaps.
  */
@@ -134,6 +168,7 @@ const APPLY_FUNCTIONS: Record<BuildMode, ApplyFunction> = {
   [BuildMode.SUBTRACT]: applySubtract,
   [BuildMode.PAINT]: applyPaint,
   [BuildMode.FILL]: applyFill,
+  [BuildMode.PUNCH]: applyPunch,
 };
 
 /**

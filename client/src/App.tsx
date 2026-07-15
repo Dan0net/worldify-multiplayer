@@ -6,6 +6,7 @@ import { BuildMenu } from './ui/BuildMenu';
 import { ControlsHint } from './ui/ControlsHint';
 import { MapOverlay } from './ui/MapOverlay';
 import { MobileControls } from './ui/MobileControls';
+import { Hotbar } from './ui/Hotbar';
 import { ExploreControls } from './ui/ExploreControls';
 import { useGameStore } from './state/store';
 import { useIsTouch } from './ui/useDeviceMode';
@@ -16,6 +17,7 @@ import { GameMode } from '@worldify/shared';
 function App() {
   const connectionStatus = useGameStore((s) => s.connectionStatus);
   const gameMode = useGameStore((s) => s.gameMode);
+  const firstPersonReady = useGameStore((s) => s.firstPersonReady);
   const isTouch = useIsTouch();
   const bootStarted = useRef(false);
 
@@ -47,16 +49,19 @@ function App() {
             <>
               <Hud />
               <BuildMenu />
-              <MapOverlay />
-              {!isTouch && <ControlsHint />}
             </>
           )}
+          {/* Map shows in both play and explore. */}
+          {(isPlaying || isExplore) && <MapOverlay />}
+          {/* Kept mounted across play↔explore so they slide in/out via firstPersonReady. */}
+          <Hotbar />
+          {!isTouch && <ControlsHint />}
           <DebugPanel />
         </div>
       )}
 
-      {/* Touch controls (mobile) — above the canvas, below the HUD layer */}
-      {inGame && isPlaying && isTouch && <MobileControls />}
+      {/* Touch controls (mobile) — shown only after the play-entry camera transition completes */}
+      {inGame && isPlaying && isTouch && firstPersonReady && <MobileControls />}
     </>
   );
 }
