@@ -56,6 +56,7 @@ const HELD_ITEM_QUAT = new THREE.Quaternion().setFromRotationMatrix(
 ).invert();
 
 let swing = 0; // 1 on trigger, decays to 0
+let swingKind: 'punch' | 'build' = 'punch';
 let visible = false;
 
 /** Put an object and all descendants on a single layer. */
@@ -95,9 +96,10 @@ export function initFirstPersonArm(scene: THREE.Scene): void {
   vmCamera.add(group);
 }
 
-/** Trigger a one-shot punch swing (call when a build is placed/dug). */
-export function triggerArmSwing(): void {
+/** Trigger a one-shot arm swing. 'punch' throws forward; 'build' dips the hand down. */
+export function triggerArmSwing(kind: 'punch' | 'build' = 'punch'): void {
   swing = 1;
+  swingKind = kind;
 }
 
 /** Hide the arm (non-Playing modes / menu open). */
@@ -179,14 +181,21 @@ export function updateFirstPersonArm(opts: {
   const baseX = halfW * CORNER_X;
   const baseY = -halfH * CORNER_Y;
 
-  // Punch swing (decays 1 → 0; peaks mid-decay for an out-and-back motion).
+  // Swing (decays 1 → 0; peaks mid-decay for an out-and-back motion).
   if (swing > 0) swing = Math.max(0, swing - dt * 4.5);
   const punch = Math.sin(swing * Math.PI);
 
-  // Inverse head-bob: the arm counter-moves to the camera's walk head-bob (scaled
-  // down so the arm sway is subtle).
-  group.position.set(baseX, baseY - punch * 0.18 - opts.headBob * ARM_BOB_SCALE, -ARM_DEPTH);
-  group.rotation.set(-punch * 0.7, 0, 0);
+  // Animate by TRANSLATION only — no group rotation, which previously pitched the whole subtree
+  // and skewed the held item. Inverse head-bob keeps the arm counter-moving to the walk bob.
+  const bobY = baseY - opts.headBob * ARM_BOB_SCALE;
+  if (swingKind === 'build') {
+    // Placing: dip the hand downward as if setting the item down.
+    group.position.set(baseX, bobY - punch * 0.22, -ARM_DEPTH);
+  } else {
+    // Punching: throw the arm forward, into the screen (-Z).
+    group.position.set(baseX, bobY, -ARM_DEPTH - punch * 0.5);
+  }
+  group.rotation.set(0, 0, 0);
 
   // Held item — the real build mesh for the selected slot, shown whenever an item is selected
   // (walking or building). Empty slots have zero-size parts → createBuildItemMeshes yields nothing,

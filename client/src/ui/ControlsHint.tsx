@@ -7,7 +7,7 @@ const HINTS: { keys: string; label: string }[] = [
   { keys: 'WASD', label: 'Move' },
   { keys: 'Space', label: 'Jump' },
   { keys: 'Shift', label: 'Sprint' },
-  { keys: 'RMB', label: 'Build mode' },
+  { keys: 'RMB / R', label: 'Build mode' },
   { keys: 'LMB', label: 'Place / Punch' },
   { keys: 'E / Tab', label: 'Build menu' },
   { keys: 'Q / Wheel', label: 'Rotate' },

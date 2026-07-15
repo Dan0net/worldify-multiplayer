@@ -16,6 +16,10 @@ export function getBuildPreset(): BuildPreset {
   if (meta) {
     return {
       ...base,
+      // The slot index is the real id/name — don't leak the base preset's (getPreset(1) is the
+      // legacy "None", whose id=1 would otherwise mislead id-based checks).
+      id,
+      name: meta.templateName,
       align: meta.align,
       snapShape: meta.snapShape,
       baseRotation: meta.baseRotation,

@@ -608,7 +608,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     return { build: { ...state.build, buildMode: on, presetId, menuOpen: on ? state.build.menuOpen : false } };
   }),
   setBuildPreset: (presetId) => set((state) => ({
-    build: { ...state.build, presetId },
+    // Switching the selected item always drops out of build mode (and closes the menu); the item
+    // shows in hand, and the player re-enters build mode with RMB / R.
+    build: { ...state.build, presetId, buildMode: false, menuOpen: false },
   })),
   setBuildRotation: (rotationSteps) => set((state) => ({
     build: { ...state.build, rotationSteps: rotationSteps & (BUILD_ROTATION_STEPS - 1) },

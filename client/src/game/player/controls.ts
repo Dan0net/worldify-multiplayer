@@ -119,6 +119,14 @@ export class Controls {
       this.toggleBuildMenu();
       return;
     }
+
+    // R toggles build mode (same as right-click).
+    if (e.code === 'KeyR') {
+      if (useGameStore.getState().gameMode === GameMode.Playing && !useGameStore.getState().build.menuOpen) {
+        useGameStore.getState().toggleBuildMode();
+      }
+      return;
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {

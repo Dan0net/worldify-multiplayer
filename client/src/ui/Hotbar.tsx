@@ -18,7 +18,10 @@ import { THUMB_PRIORITY } from './PresetThumbnailRenderer';
 import { controls } from '../game/player/controls';
 
 /** Vertical space (px) the bar occupies on touch — MobileControls reserves this in portrait. */
-export const HOTBAR_TOUCH_HEIGHT = 60;
+export const HOTBAR_TOUCH_HEIGHT = 72;
+
+/** Slot / menu-button sizing (≈20% larger than the original w-11 / w-14). */
+const SLOT_SIZE = 'w-[52px] h-[52px] md:w-[68px] md:h-[68px]';
 
 // Display order in key order: keys 1..9,0 map to slot indices 1..9,0.
 const DESKTOP_ORDER = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
@@ -38,7 +41,7 @@ function HotbarSlot({ index }: { index: number }) {
     <button
       type="button"
       onPointerDown={(e) => { e.preventDefault(); setBuildPreset(index); }}
-      className={`relative pointer-events-auto shrink-0 aspect-square w-11 h-11 md:w-14 md:h-14 rounded-lg bg-black/60 overflow-hidden border transition-colors ${
+      className={`relative pointer-events-auto shrink-0 aspect-square ${SLOT_SIZE} rounded-lg bg-black/60 overflow-hidden border transition-colors ${
         active ? 'border-cyan-400 ring-2 ring-cyan-400/50' : 'border-white/20'
       }`}
       aria-label={empty ? `Slot ${keyLabel} (empty)` : `${meta?.templateName} (${keyLabel})`}
@@ -59,13 +62,13 @@ export function Hotbar() {
 
   return (
     <div className="absolute bottom-0 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-      <div className="flex items-end gap-1 md:gap-1.5 px-2 pt-2 pb-0.5 rounded-t-xl bg-black/70 backdrop-blur-sm border-x border-t border-white/10">
+      <div className="flex items-end gap-1 md:gap-1.5 p-1 rounded-t-xl bg-black/70 backdrop-blur-sm border-x border-t border-white/10">
         {order.map((i) => <HotbarSlot key={i} index={i} />)}
         {/* Build-menu button — rightmost item. Badge 'E' on desktop (the key that opens it). */}
         <button
           type="button"
           onPointerDown={(e) => { e.preventDefault(); controls.toggleBuildMenu(); }}
-          className="relative pointer-events-auto shrink-0 aspect-square w-11 h-11 md:w-14 md:h-14 rounded-lg bg-black/60 border border-white/20 flex items-center justify-center text-white/90"
+          className={`relative pointer-events-auto shrink-0 aspect-square ${SLOT_SIZE} rounded-lg bg-black/60 border border-white/20 flex items-center justify-center text-white/90`}
           aria-label="Build menu"
         >
           <Grid3x3 className="w-5 h-5 md:w-6 md:h-6" />

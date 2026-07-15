@@ -82,6 +82,9 @@ export function applySubtract(
  * equals `targetMaterial` — voxels of any other material are left untouched. This lets a left-click
  * "punch" dig a blob of only the hit material (e.g. grass) without disturbing neighbouring stone.
  */
+/** Weight removed per punch — incremental so digging is gradual (weight is 4-bit quantized). */
+const PUNCH_WEIGHT_STEP = 0.25;
+
 export function applyPunch(
   existingPacked: number,
   newWeight: number,
@@ -89,18 +92,22 @@ export function applyPunch(
 ): { packed: number; changed: boolean } {
   const existing = unpackVoxel(existingPacked);
 
-  // Only carve voxels of the matched material.
+  // Only carve voxels of the matched material (material 0 is a real material — moss2 — not air).
   if (existing.material !== targetMaterial) {
     return { packed: existingPacked, changed: false };
   }
 
-  // Same carve as SUBTRACT (newWeight is negative inside the shape); keep material + light.
-  if (newWeight < existing.weight) {
-    const newPacked = packVoxel(newWeight, existing.material, existing.light);
-    return { packed: newPacked, changed: true };
+  // A voxel the sphere covers has newWeight > 0 (PUNCH keeps the +1 weight multiplier). Carve the
+  // whole covered volume uniformly — decrement the stored weight by a fixed step — so the blob is
+  // solid (no rim-only shell / centre hole) and incremental.
+  if (newWeight <= 0) {
+    return { packed: existingPacked, changed: false };
   }
-
-  return { packed: existingPacked, changed: false };
+  const carved = Math.max(-0.5, existing.weight - PUNCH_WEIGHT_STEP);
+  if (carved >= existing.weight) {
+    return { packed: existingPacked, changed: false };
+  }
+  return { packed: packVoxel(carved, existing.material, existing.light), changed: true };
 }
 
 /**

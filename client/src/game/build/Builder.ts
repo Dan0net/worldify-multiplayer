@@ -343,8 +343,8 @@ export class Builder {
     const targetPos = this.marker.getTargetPosition();
     if (!targetPos) return;
 
-    // Swing the first-person arm on a successful place/dig.
-    triggerArmSwing();
+    // Swing the first-person arm — build dips the hand down.
+    triggerArmSwing('build');
 
     const preset = getBuildPreset();
 
@@ -419,7 +419,7 @@ export class Builder {
     const center = voxelToWorld(vx, vy, vz);
     const parts = punchParts(material);
 
-    triggerArmSwing();
+    triggerArmSwing('punch');
 
     if (useGameStore.getState().useServerChunks) {
       sendBinary(encodeVoxelBuildIntent({ center, rotation: IDENTITY_QUAT, parts }));
