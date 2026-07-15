@@ -59,9 +59,11 @@ function HotbarSlot({ index }: { index: number }) {
 export function Hotbar() {
   const isTouch = useIsTouch();
   const order = isTouch ? MOBILE_ORDER : DESKTOP_ORDER;
+  // Slide up from below once the first-person camera intro completes (same moment the arm reveals).
+  const ready = useGameStore((s) => s.firstPersonReady);
 
   return (
-    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+    <div className={`absolute bottom-0 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-transform duration-500 ease-out ${ready ? 'translate-y-0' : 'translate-y-full'}`}>
       <div className="flex items-end gap-1 md:gap-1.5 p-1 rounded-t-xl bg-black/70 backdrop-blur-sm border-x border-t border-white/10">
         {order.map((i) => <HotbarSlot key={i} index={i} />)}
         {/* Build-menu button — rightmost item. Badge 'E' on desktop (the key that opens it). */}

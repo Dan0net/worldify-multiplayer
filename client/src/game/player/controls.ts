@@ -142,11 +142,15 @@ export class Controls {
 
   private onWheel = (e: WheelEvent): void => {
     if (!this.isPointerLocked) return;
-    
-    // Only handle wheel when build mode is active
+
     if (getBuildIsEnabled()) {
+      // In build mode: rotate the build.
       e.preventDefault();
       useGameStore.getState().rotateBuild(e.deltaY > 0 ? 1 : -1);
+    } else if (useGameStore.getState().gameMode === GameMode.Playing) {
+      // Not building: cycle the selected hotbar item.
+      e.preventDefault();
+      useGameStore.getState().cycleBuildPreset(e.deltaY > 0 ? 1 : -1);
     }
   };
 

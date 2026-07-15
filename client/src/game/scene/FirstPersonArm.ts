@@ -56,8 +56,10 @@ const HELD_ITEM_QUAT = new THREE.Quaternion().setFromRotationMatrix(
 ).invert();
 
 let swing = 0; // 1 on trigger, decays to 0
-let swingKind: 'punch' | 'build' = 'punch';
+let swingKind: 'punch' | 'build' | 'swap' = 'punch';
 let visible = false;
+let wasVisible = false;   // rising-edge detector for the reveal slide-in
+let reveal = 0;           // 1 → slide up from below; decays to 0
 
 /** Put an object and all descendants on a single layer. */
 function setLayerDeep(obj: THREE.Object3D, layer: number): void {
@@ -171,6 +173,10 @@ export function updateFirstPersonArm(opts: {
 }): void {
   if (!group || !hand) return;
 
+  // Rising edge of visibility → slide the arm up from below (played once the camera intro ends).
+  if (opts.visible && !wasVisible) reveal = 1;
+  wasVisible = opts.visible;
+
   visible = opts.visible;
   group.visible = opts.visible;
   if (!opts.visible) return;
@@ -185,11 +191,15 @@ export function updateFirstPersonArm(opts: {
   if (swing > 0) swing = Math.max(0, swing - dt * 4.5);
   const punch = Math.sin(swing * Math.PI);
 
+  // Reveal slide-in (decays 1 → 0); offsets the arm below the frustum, easing up into view.
+  if (reveal > 0) reveal = Math.max(0, reveal - dt * 2.2);
+  const revealDrop = reveal * reveal * (halfH * 2); // ease-in; halfH*2 is fully off the bottom
+
   // Animate by TRANSLATION only — no group rotation, which previously pitched the whole subtree
   // and skewed the held item. Inverse head-bob keeps the arm counter-moving to the walk bob.
-  const bobY = baseY - opts.headBob * ARM_BOB_SCALE;
-  if (swingKind === 'build') {
-    // Placing: dip the hand downward as if setting the item down.
+  const bobY = baseY - opts.headBob * ARM_BOB_SCALE - revealDrop;
+  if (swingKind === 'build' || swingKind === 'swap') {
+    // Placing / swapping items: dip the hand downward.
     group.position.set(baseX, bobY - punch * 0.22, -ARM_DEPTH);
   } else {
     // Punching: throw the arm forward, into the screen (-Z).
@@ -199,24 +209,40 @@ export function updateFirstPersonArm(opts: {
 
   // Held item — the real build mesh for the selected slot, shown whenever an item is selected
   // (walking or building). Empty slots have zero-size parts → createBuildItemMeshes yields nothing,
-  // so the hand is empty. Rebuilt only when the item changes.
+  // so the hand is empty.
   if (opts.parts && opts.parts.length && opts.texturesReady) {
     const key = itemKey(opts.parts, opts.rotation, opts.variant);
     if (key !== heldKey) {
-      clearHeldItem();
-      const mesh = createBuildItemMeshes(opts.parts, opts.rotation);
-      if (mesh) {
-        mesh.position.set(-0.16, 0.24, -0.3);  // held in the lower-right, Minecraft-style
-        mesh.quaternion.copy(HELD_ITEM_QUAT);  // thumbnail's 3/4 view angle
-        mesh.scale.multiplyScalar(1.27);       // ~0.33 world extent (from the 0.26 base)
-        setLayerDeep(mesh, FIRST_PERSON_ITEM_LAYER); // drawn over the arm
-        hand.add(mesh);
-        heldItem = mesh;
+      if (heldItem && reveal <= 0) {
+        // Switching item while one is held: bob the arm down and swap the mesh at the bottom of
+        // the dip (old mesh on the way down, new on the way up).
+        if (swingKind !== 'swap' || swing <= 0) { swing = 1; swingKind = 'swap'; }
+        if (swing <= 0.5) { rebuildHeldItem(opts); heldKey = key; }
+      } else {
+        // First reveal / no current item: swap in place.
+        rebuildHeldItem(opts);
+        heldKey = key;
       }
-      heldKey = key;
     }
   } else if (heldItem) {
     clearHeldItem();
+    heldKey = '';
+  }
+}
+
+/** Rebuild the held-item mesh from the current opts and mount it in the hand at its resting pose. */
+function rebuildHeldItem(opts: { parts?: BuildPart[]; rotation?: Quat }): void {
+  if (!hand) return;
+  clearHeldItem();
+  if (!opts.parts || !opts.parts.length) return;
+  const mesh = createBuildItemMeshes(opts.parts, opts.rotation);
+  if (mesh) {
+    mesh.position.set(-0.16, 0.24, -0.3);  // held in the lower-right, Minecraft-style
+    mesh.quaternion.copy(HELD_ITEM_QUAT);  // thumbnail's 3/4 view angle
+    mesh.scale.multiplyScalar(1.27);       // ~0.33 world extent (from the 0.26 base)
+    setLayerDeep(mesh, FIRST_PERSON_ITEM_LAYER); // drawn over the arm
+    hand.add(mesh);
+    heldItem = mesh;
   }
 }
 

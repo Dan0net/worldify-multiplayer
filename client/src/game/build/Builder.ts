@@ -24,6 +24,38 @@ import { encodeVoxelBuildIntent, VoxelBuildIntent, BuildMode, BuildPresetSnapSha
 /** Identity quaternion for un-rotated ops (e.g. the punch sphere). */
 const IDENTITY_QUAT = { x: 0, y: 0, z: 0, w: 1 };
 
+/**
+ * Material id of the terrain mesh at a raycast hit, read from the nearest face vertex. The terrain
+ * geometry carries per-vertex `materialIds` (3) + `materialWeights` (3); each vertex's own dominant
+ * material is the `materialIds` component whose `materialWeights` component is largest. Returns -1
+ * if the hit geometry has no material attribute.
+ */
+function materialAtHit(hit: THREE.Intersection): number {
+  const face = hit.face;
+  const geom = (hit.object as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+  if (!face || !geom) return -1;
+  const ids = geom.getAttribute('materialIds');
+  const wts = geom.getAttribute('materialWeights');
+  const pos = geom.getAttribute('position');
+  if (!ids || !wts || !pos) return -1;
+
+  // Pick the face vertex nearest the hit point (in world space).
+  const vidx = [face.a, face.b, face.c];
+  let best = vidx[0];
+  let bestDist = Infinity;
+  const p = new THREE.Vector3();
+  for (const v of vidx) {
+    p.fromBufferAttribute(pos, v).applyMatrix4(hit.object.matrixWorld);
+    const d = p.distanceToSquared(hit.point);
+    if (d < bestDist) { bestDist = d; best = v; }
+  }
+
+  // That vertex's own material = the id slot whose weight is max.
+  const w = [wts.getX(best), wts.getY(best), wts.getZ(best)];
+  const k = w[1] > w[0] ? (w[2] > w[1] ? 2 : 1) : (w[2] > w[0] ? 2 : 0);
+  return Math.round([ids.getX(best), ids.getY(best), ids.getZ(best)][k]);
+}
+
 const EMPTY_SET: ReadonlySet<number> = new Set();
 
 /**
@@ -405,16 +437,16 @@ export class Builder {
     const hit = hits[0];
     if (!hit || !hit.face) return;
 
-    // Nudge just inside the surface (opposite the face normal) so we sample the solid target voxel.
+    // Material = the material of the mesh vertex we actually clicked (reliable: a mesh hit is always
+    // a real surface). Reading the nearest voxel instead can land in air / the wrong material.
+    const material = materialAtHit(hit);
+    if (material < 0) return; // hit geometry had no material attribute — nothing to punch
+
+    // Centre the punch sphere on the voxel just inside the surface (along -normal).
     const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
     const px = hit.point.x - n.x * VOXEL_SCALE * 0.5;
     const py = hit.point.y - n.y * VOXEL_SCALE * 0.5;
     const pz = hit.point.z - n.z * VOXEL_SCALE * 0.5;
-
-    const material = this.voxelWorld.getMaterialAtWorld(px, py, pz);
-    if (material === 0) return; // air / not loaded — nothing to punch
-
-    // Centre the radius-2 punch sphere on that voxel's centre.
     const { vx, vy, vz } = worldToVoxel(px, py, pz);
     const center = voxelToWorld(vx, vy, vz);
     const parts = punchParts(material);

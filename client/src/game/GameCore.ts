@@ -663,6 +663,8 @@ export class GameCore {
       }
       initExploreCamera(this.spectatorCenter);
       resetMarker();
+      // Leaving play — re-arm the first-person reveal for the next entry.
+      useGameStore.getState().setFirstPersonReady(false);
     } else {
       setMarkerVisible(false); // hide the spawn gizmo outside explore
     }
@@ -908,12 +910,19 @@ export class GameCore {
       camera.position.y += headBob;
     }
 
-    // First-person arm (hidden while the menu soft-pauses play).
+    // Once the explore→FP camera glide finishes, flag first-person ready so the arm + hotbar
+    // reveal together (covers no-glide re-entry too, where cameraIntroMs is already 0).
+    if (this.cameraIntroMs === 0 && !useGameStore.getState().firstPersonReady) {
+      useGameStore.getState().setFirstPersonReady(true);
+    }
+
+    // First-person arm — hidden while the menu soft-pauses play AND during the camera intro glide
+    // (it slides in once the glide completes).
     const build = useGameStore.getState().build;
     const ts = useGameStore.getState().textureState;
     const meta = build.presetMeta[build.presetId];
     updateFirstPersonArm({
-      visible: !menuPaused,
+      visible: !menuPaused && this.cameraIntroMs === 0,
       buildMode: build.buildMode,
       rotation: meta?.baseRotation,
       parts: meta?.parts,

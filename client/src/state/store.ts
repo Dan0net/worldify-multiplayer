@@ -297,6 +297,9 @@ export interface GameState {
   // Spawn readiness (terrain found at spawn point)
   spawnReady: boolean;
 
+  /** True once the explore→first-person camera intro has finished — reveals the arm + hotbar. */
+  firstPersonReady: boolean;
+
   // Network chunk streaming
   useServerChunks: boolean;
 
@@ -362,6 +365,7 @@ export interface GameState {
   setPing: (ping: number) => void;
   setGameMode: (mode: GameMode) => void;
   setSpawnReady: (ready: boolean) => void;
+  setFirstPersonReady: (ready: boolean) => void;
   setUseServerChunks: (enabled: boolean) => void;
   setDebugStats: (fps: number, tickMs: number) => void;
   setServerTick: (tick: number) => void;
@@ -388,6 +392,7 @@ export interface GameState {
   setBuildMode: (on: boolean) => void;
   toggleBuildMode: () => void;
   setBuildPreset: (presetId: number) => void;
+  cycleBuildPreset: (dir: 1 | -1) => void;
   setBuildRotation: (rotationSteps: number) => void;
   rotateBuild: (direction: number) => void;
   setBuildHasValidTarget: (valid: boolean) => void;
@@ -460,6 +465,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   ping: 0,
   gameMode: GameMode.Explore, // Start in explore mode (free camera home screen)
   spawnReady: false, // Terrain not found yet
+  firstPersonReady: false, // Camera intro not finished yet
   useServerChunks: true, // Default to server chunks in multiplayer
   textureState: 'none',
   textureProgress: 0,
@@ -555,6 +561,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   setPing: (ping) => set({ ping }),
   setGameMode: (mode) => set({ gameMode: mode }),
   setSpawnReady: (ready) => set({ spawnReady: ready }),
+  setFirstPersonReady: (ready) => set({ firstPersonReady: ready }),
   setUseServerChunks: (enabled) => set({ useServerChunks: enabled }),
   setDebugStats: (fps, tickMs) => set({ fps, tickMs }),
   setServerTick: (tick) => set({ serverTick: tick }),
@@ -612,6 +619,19 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     // shows in hand, and the player re-enters build mode with RMB / R.
     build: { ...state.build, presetId, buildMode: false, menuOpen: false },
   })),
+  cycleBuildPreset: (dir) => set((state) => {
+    // Step through the hotbar in display order (keys 1..9,0), skipping empty slots.
+    const order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+    const metas = state.build.presetMeta;
+    const start = order.indexOf(state.build.presetId);
+    for (let step = 1; step <= order.length; step++) {
+      const idx = order[((start + dir * step) % order.length + order.length) % order.length];
+      if (!slotIsEmpty(metas[idx])) {
+        return { build: { ...state.build, presetId: idx, buildMode: false, menuOpen: false } };
+      }
+    }
+    return state; // all slots empty — no-op
+  }),
   setBuildRotation: (rotationSteps) => set((state) => ({
     build: { ...state.build, rotationSteps: rotationSteps & (BUILD_ROTATION_STEPS - 1) },
   })),
