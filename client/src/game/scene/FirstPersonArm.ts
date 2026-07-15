@@ -60,6 +60,7 @@ let swingKind: 'punch' | 'build' | 'swap' = 'punch';
 let visible = false;
 let wasVisible = false;   // rising-edge detector for the reveal slide-in
 let reveal = 0;           // 1 → slide up from below; decays to 0
+let exitT = -1;           // -1 = not exiting; 0→1 slide-down progress on returning to explore
 
 /** Put an object and all descendants on a single layer. */
 function setLayerDeep(obj: THREE.Object3D, layer: number): void {
@@ -108,6 +109,32 @@ export function triggerArmSwing(kind: 'punch' | 'build' = 'punch'): void {
 export function setFirstPersonArmVisible(v: boolean): void {
   visible = v;
   if (group) group.visible = v;
+}
+
+/** Begin the arm's slide-down exit (call when returning play→explore). No-op if already hidden. */
+export function startFirstPersonArmExit(): void {
+  if (visible && exitT < 0) exitT = 0;
+}
+
+/**
+ * Drive the arm outside Playing mode: if an exit slide is in progress, ease it down and hide when
+ * done; otherwise ensure the arm is hidden. Called every non-Playing frame from the game loop.
+ */
+export function tickFirstPersonArmExit(dtMs: number): void {
+  if (!group) return;
+  if (exitT < 0) {
+    if (visible) { visible = false; group.visible = false; }
+    return;
+  }
+  const dt = Math.min(dtMs, 100) / 1000;
+  exitT = Math.min(1, exitT + dt * 2.6);
+  const { halfW, halfH } = sizeVmCamera();
+  const baseX = halfW * CORNER_X;
+  const baseY = -halfH * CORNER_Y;
+  group.visible = true;
+  group.position.set(baseX, baseY - exitT * exitT * (halfH * 2), -ARM_DEPTH);
+  group.rotation.set(0, 0, 0);
+  if (exitT >= 1) { exitT = -1; visible = false; group.visible = false; wasVisible = false; }
 }
 
 function disposeArmObject(obj: THREE.Object3D): void {
@@ -174,7 +201,7 @@ export function updateFirstPersonArm(opts: {
   if (!group || !hand) return;
 
   // Rising edge of visibility → slide the arm up from below (played once the camera intro ends).
-  if (opts.visible && !wasVisible) reveal = 1;
+  if (opts.visible && !wasVisible) { reveal = 1; exitT = -1; }
   wasVisible = opts.visible;
 
   visible = opts.visible;
@@ -202,8 +229,9 @@ export function updateFirstPersonArm(opts: {
     // Placing / swapping items: dip the hand downward.
     group.position.set(baseX, bobY - punch * 0.22, -ARM_DEPTH);
   } else {
-    // Punching: throw the arm forward, into the screen (-Z).
-    group.position.set(baseX, bobY, -ARM_DEPTH - punch * 0.5);
+    // Punching: a quick jab up-and-toward-centre. (The view-model camera is orthographic, so a
+    // -Z "forward" thrust would be invisible — animate in X/Y instead.)
+    group.position.set(baseX - punch * 0.3, bobY + punch * 0.28, -ARM_DEPTH);
   }
   group.rotation.set(0, 0, 0);
 

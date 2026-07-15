@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
-import { initFirstPersonArm, updateFirstPersonArm, setFirstPersonArmVisible, renderFirstPersonArm } from './scene/FirstPersonArm';
+import { initFirstPersonArm, updateFirstPersonArm, startFirstPersonArmExit, tickFirstPersonArmExit, renderFirstPersonArm } from './scene/FirstPersonArm';
 import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -572,8 +572,9 @@ export class GameCore {
         break;
     }
 
-    // The first-person arm only shows in Playing (updatePlayingMode drives it).
-    if (gameMode !== GameMode.Playing) setFirstPersonArmVisible(false);
+    // Outside Playing, drive the arm's slide-down exit (or keep it hidden). updatePlayingMode
+    // drives it while playing.
+    if (gameMode !== GameMode.Playing) tickFirstPersonArmExit(deltaMs);
 
     // Refresh minimap tiles from freshly-streamed chunks (bounded per frame).
     this.flushMapTilesFromStreamedChunks();
@@ -663,7 +664,9 @@ export class GameCore {
       }
       initExploreCamera(this.spectatorCenter);
       resetMarker();
-      // Leaving play — re-arm the first-person reveal for the next entry.
+      // Leaving play — slide the arm out and re-arm the reveal (hotbar + pills slide out via
+      // firstPersonReady flipping false).
+      if (previousMode === GameMode.Playing) startFirstPersonArmExit();
       useGameStore.getState().setFirstPersonReady(false);
     } else {
       setMarkerVisible(false); // hide the spawn gizmo outside explore

@@ -116,7 +116,7 @@ export function materialCubeParts(material: number, half = 4): BuildPart[] {
  * carves only voxels whose material equals `targetMaterial` (the voxel the crosshair hit).
  */
 export function punchParts(targetMaterial: number): BuildPart[] {
-  return [part({ shape: BuildShape.SPHERE, mode: BuildMode.PUNCH, size: size(1, 1, 1), material: targetMaterial })];
+  return [part({ shape: BuildShape.SPHERE, mode: BuildMode.PUNCH, size: size(2, 2, 2), material: targetMaterial })];
 }
 
 /**

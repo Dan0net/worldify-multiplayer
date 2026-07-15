@@ -47,12 +47,13 @@ function App() {
           {isPlaying && (
             <>
               <Hud />
-              <Hotbar />
               <BuildMenu />
               <MapOverlay />
-              {!isTouch && <ControlsHint />}
             </>
           )}
+          {/* Kept mounted across play↔explore so they slide in/out via firstPersonReady. */}
+          <Hotbar />
+          {!isTouch && <ControlsHint />}
           <DebugPanel />
         </div>
       )}
