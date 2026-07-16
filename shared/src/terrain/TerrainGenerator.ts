@@ -274,10 +274,10 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   wormStep: 1.2,            // 1.2 m per step (dense spheres → smooth, connected tunnels)
   wormRadius: 1.5,          // ~3 m base diameter → tighter tunnels
   wormRadiusJitter: 0.6,    // ±60% radius variety between worms
-  wormSteerFrequency: 0.20, // high flow-field frequency → frequent left/right winding (spiralling)
-  wormTurnRate: 1.0,        // track the flow heading exactly → maximum coherent winding
-  wormPitchRange: 0.15,     // ±0.15 rad vertical wander → worms stay near their start depth
-  wormMaxPitch: 0.35,       // never steeper than ~20° up/down
+  wormSteerFrequency: 0.05, // low flow-field frequency → large, sweeping arcs (not tight wiggle)
+  wormTurnRate: 0.8,        // follow the flow heading closely but with a little smoothing
+  wormPitchRange: 0.7,      // ±0.7 rad vertical arc → tunnels roll up and down (~10 m span), not flat
+  wormMaxPitch: 0.8,        // clamp so vertical arcs stay sweeping, never a straight plunge
   wormDownwardDrift: 0.0,   // level on average → even Y distribution (no net dive)
   wormSurfaceOvershoot: 4,  // start band reaches 4 m above the surface → near-surface worms breach
   wormDepthRange: 50,       // starts spread UNIFORMLY across the depth band → even, no dead zones
