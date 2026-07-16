@@ -40,6 +40,15 @@ const MODE_FIELDS: Record<Exclude<CaveMode, 'off'>, Field[]> = {
     { key: 'warpFrequency', label: 'Warp frequency', min: 0.005, max: 0.08, step: 0.005 },
     { key: 'warpAmplitude', label: 'Warp amplitude', min: 0, max: 20, step: 1 },
   ],
+  worley: [
+    { key: 'worleyCutoff', label: 'Cave size', min: -0.6, max: -0.05, step: 0.01 },
+    { key: 'worleySurfaceCutoff', label: 'Surface cutoff', min: -0.6, max: 0, step: 0.01 },
+    { key: 'worleyFrequency', label: 'Cave scale', min: 0.005, max: 0.04, step: 0.002 },
+    { key: 'worleyWarpFrequency', label: 'Warp frequency', min: 0.01, max: 0.15, step: 0.005 },
+    { key: 'worleyWarpAmplitude', label: 'Warp amplitude', min: 0, max: 20, step: 1 },
+    { key: 'worleyXZCompression', label: 'Horizontal squeeze', min: 0.5, max: 3, step: 0.1 },
+    { key: 'worleyYCompression', label: 'Vertical squeeze', min: 0.5, max: 3, step: 0.1 },
+  ],
   worms: [
     { key: 'wormsPerCell', label: 'Worms / cell', min: 0, max: 20, step: 0.5 },
     { key: 'wormCellSize', label: 'Spawn cell (m)', min: 10, max: 100, step: 5 },
@@ -63,6 +72,7 @@ const MODE_FIELDS: Record<Exclude<CaveMode, 'off'>, Field[]> = {
 
 const MODES: { value: CaveMode; label: string }[] = [
   { value: 'off', label: 'Off' },
+  { value: 'worley', label: 'Worley' },
   { value: 'worms', label: 'Worms' },
   { value: 'spaghetti', label: 'Spaghetti' },
   { value: 'cellular', label: 'Cellular' },

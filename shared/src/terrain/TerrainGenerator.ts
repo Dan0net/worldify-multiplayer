@@ -96,8 +96,9 @@ export interface CaveConfig {
    * - 'spaghetti' — two intersected 3D noise fields → long snake-like tubes (mode A)
    * - 'cellular'  — cellular edge network + domain warp → connected corridors + chambers (mode C)
    * - 'worms'     — traced "Perlin worms": individually-wandering tube tunnels (mode B)
+   * - 'worley'    — Worley-noise caves (F1/F3 ratio thresholded; mimics the Worley's Caves mod)
    */
-  mode: 'off' | 'spaghetti' | 'cellular' | 'worms';
+  mode: 'off' | 'spaghetti' | 'cellular' | 'worms' | 'worley';
   /**
    * Debug view: render the caves themselves as SOLID and everything else as air, skipping
    * pathways, water, and stamps. Lets you fly around and inspect the raw cave shapes for the
@@ -171,6 +172,22 @@ export interface CaveConfig {
   wormWallFrequency: number;
   /** 0..1 — how much worms share a steering flow-field. Higher = converge/fork more (braided). */
   wormConvergence: number;
+
+  // --- Mode "worley": Worley-noise caves (mimics the Worley's Caves mod) ---
+  /** Worley noise frequency (1/m) — cave scale; lower = larger caverns. */
+  worleyFrequency: number;
+  /** Carve where the F1/F3 ratio (range ~[-1,0]) exceeds this; HIGHER = smaller caves. */
+  worleyCutoff: number;
+  /** Effective cutoff eased to at the surface (mod's surface easing → fewer breaches up top). */
+  worleySurfaceCutoff: number;
+  /** Per-axis Perlin domain-warp frequency (1/m) for organic distortion. */
+  worleyWarpFrequency: number;
+  /** Perlin warp amplitude in meters (scaled up with depth below the surface). */
+  worleyWarpAmplitude: number;
+  /** Horizontal sample-coordinate multiplier (>1 = smaller/tighter caves horizontally). */
+  worleyXZCompression: number;
+  /** Vertical sample-coordinate multiplier (>1 = flatter caves, wider than tall). */
+  worleyYCompression: number;
 }
 
 export interface TerrainConfig {
@@ -244,10 +261,21 @@ const WORM_MIN_RADIUS = 1.0;
  *  WORM_MIN_RADIUS so it never reaches past the per-sphere gather cull. */
 const WORM_CARVE_MIN = 0.9;
 
+/** Worley (mode) low-res sample lattice spacing in voxels: horizontal, vertical. The ratio field is
+ *  sampled on this GLOBAL lattice and trilinearly interpolated → smooth flowing caves + cheap, and
+ *  because the lattice is global-aligned, adjacent chunks share nodes (seamless). Mirrors the mod's
+ *  ~4-block-horizontal / ~2-block-vertical sampling. */
+const WORLEY_STEP_XZ = 4;
+const WORLEY_STEP_Y = 2;
+/** Cellular jitter: how far a feature point is offset within its cell (0..1). */
+const WORLEY_JITTER = 0.45;
+/** Depth (voxels) over which the Worley warp amplitude ramps from 0 (at surface) to full. */
+const WORLEY_WARP_DEPTH = 48;
+
 // ============== Default Cave Configuration ==============
 
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
-  mode: 'worms',            // mode B — traced snake tunnels; 'spaghetti'/'cellular'/'off' also available
+  mode: 'worley',           // Worley-noise caves (mimics the Worley's Caves mod); others via config
   invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
   verticalSquash: 0.8,      // < 1 → caves a touch taller than wide, so a 1.6 m player fits/walks
   surfaceMargin: 0,         // carve up to the surface voxel so tunnels can breach and be entered
@@ -285,6 +313,15 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   wormWallAmp: 0.7,         // 0.7 m wall roughness → organic, non-smooth walls
   wormWallFrequency: 0.15,  // bump scale on the walls
   wormConvergence: 0.45,    // worms share much of the flow-field → frequent, natural merges/forks
+
+  // Mode "worley" — Worley-noise caves (F1/F3 ratio thresholded; the Worley's Caves mod look)
+  worleyFrequency: 0.016,   // matches the mod's base cave scale (~60-voxel cells)
+  worleyCutoff: -0.33,      // carve where F1/F3-1 > cutoff; higher = smaller caves (~13% fill)
+  worleySurfaceCutoff: -0.15, // higher cutoff near the surface → caves pinch toward the top (fewer gashes)
+  worleyWarpFrequency: 0.05, // Perlin domain-warp scale
+  worleyWarpAmplitude: 8,   // voxels at full depth → organic distortion, ramps in with depth
+  worleyXZCompression: 1.0, // horizontal scale
+  worleyYCompression: 1.2,  // vertical scale slightly > 1 → a touch flatter/wider caverns
 };
 
 // ============== Default Configuration ==
@@ -353,12 +390,23 @@ export class TerrainGenerator implements HeightSampler {
   private caveWormSteerPitch: FastNoiseLite; // mode B: worm heading steering (pitch)
   private caveWormRadius: FastNoiseLite;     // mode B: low-freq along-worm radius variation
   private caveWormWall: FastNoiseLite;       // mode B: per-voxel wall roughness
+  private caveWorleyWarpX: FastNoiseLite;    // "worley" mode: per-axis Perlin domain warp
+  private caveWorleyWarpY: FastNoiseLite;
+  private caveWorleyWarpZ: FastNoiseLite;
 
   // Mode B worm state: traced worms cached per spawn cell, and the sphere centers (flat
   // [x,y,z,r,...] in world meters) relevant to the chunk currently being generated.
   private wormCellCache = new Map<string, Float64Array>();
   private chunkWormPts: Float64Array = new Float64Array(0);
   private chunkWormPtsFor = '';
+
+  // "worley" mode state: a low-res Worley-ratio lattice for the current chunk (globally aligned),
+  // trilinearly interpolated per voxel. Stores the grid + its node-space origin/dims.
+  private worleyGrid: Float32Array = new Float32Array(0);
+  private worleyGridFor = '';
+  private worleyN0x = 0; private worleyN0y = 0; private worleyN0z = 0; // min node indices
+  private worleyNx = 0; private worleyNy = 0; private worleyNz = 0;    // node counts per axis
+  private worleySeed = 0;   // hash seed for the hand-rolled Worley feature points
   /** Test-only: extra worm-gather cells added on every side. Proves the gather radius is sufficient
    *  (regenerating with a larger radius must be byte-identical). Leave 0 in production. */
   wormGatherExtraCells = 0;
@@ -471,6 +519,14 @@ export class TerrainGenerator implements HeightSampler {
     this.caveWormWall.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.caveWormWall.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.caveWormWall.SetFractalOctaves(2);
+    // "worley" mode: per-axis Perlin domain warp (mirrors the mod's displacement noise).
+    this.caveWorleyWarpX = new FastNoiseLite(caveSeed++);
+    this.caveWorleyWarpX.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+    this.caveWorleyWarpY = new FastNoiseLite(caveSeed++);
+    this.caveWorleyWarpY.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+    this.caveWorleyWarpZ = new FastNoiseLite(caveSeed++);
+    this.caveWorleyWarpZ.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+    this.worleySeed = (this.config.seed + 50000) >>> 0;
 
     this.updateCaveConfig();
 
@@ -513,6 +569,7 @@ export class TerrainGenerator implements HeightSampler {
       this.updateCaveConfig();
       this.wormCellCache.clear();   // config change invalidates traced worms
       this.chunkWormPtsFor = '';
+      this.worleyGridFor = '';
     }
 
     if (config.seed !== undefined) {
@@ -533,8 +590,13 @@ export class TerrainGenerator implements HeightSampler {
       this.caveWormSteerPitch.SetSeed(caveSeed++);
       this.caveWormRadius.SetSeed(caveSeed++);
       this.caveWormWall.SetSeed(caveSeed++);
+      this.caveWorleyWarpX.SetSeed(caveSeed++);
+      this.caveWorleyWarpY.SetSeed(caveSeed++);
+      this.caveWorleyWarpZ.SetSeed(caveSeed++);
+      this.worleySeed = (config.seed + 50000) >>> 0;
       this.wormCellCache.clear();   // reseed invalidates traced worms
       this.chunkWormPtsFor = '';
+      this.worleyGridFor = '';
     }
   }
 
@@ -575,6 +637,9 @@ export class TerrainGenerator implements HeightSampler {
     this.caveWormSteerYaw.SetFrequency(cave.wormSteerFrequency);
     this.caveWormSteerPitch.SetFrequency(cave.wormSteerFrequency);
     this.caveWormWall.SetFrequency(cave.wormWallFrequency);
+    this.caveWorleyWarpX.SetFrequency(cave.worleyWarpFrequency);
+    this.caveWorleyWarpY.SetFrequency(cave.worleyWarpFrequency);
+    this.caveWorleyWarpZ.SetFrequency(cave.worleyWarpFrequency);
 
     const distFn = cave.cellDistanceFunction === 'manhattan'
       ? FastNoiseLite.CellularDistanceFunction.Manhattan
@@ -610,6 +675,16 @@ export class TerrainGenerator implements HeightSampler {
     if (cave.surfaceTaper > 0) {
       const t = Math.max(0, Math.min(1, (distanceFromSurface - cave.surfaceMargin) / cave.surfaceTaper));
       taper = SURFACE_TAPER_MIN + (1 - SURFACE_TAPER_MIN) * t;
+    }
+
+    // "worley" mode: interpolate the prepared low-res Worley-ratio grid and threshold it. The cutoff
+    // eases from worleySurfaceCutoff at the surface to worleyCutoff at depth (mod-style surface easing).
+    if (cave.mode === 'worley') {
+      const surfaceT = cave.surfaceTaper > 0
+        ? Math.max(0, Math.min(1, (distanceFromSurface - cave.surfaceMargin) / cave.surfaceTaper))
+        : 1;
+      const cutoff = cave.worleySurfaceCutoff + (cave.worleyCutoff - cave.worleySurfaceCutoff) * surfaceT;
+      return this.isInsideWorleyCave(worldX, worldYmeters, worldZ, cutoff);
     }
 
     // Mode B carves explicit traced tubes (real 3D geometry) — use raw Y, no field squash.
@@ -810,6 +885,126 @@ export class TerrainGenerator implements HeightSampler {
     }
     this.chunkWormPts = new Float64Array(out);
     this.chunkWormPtsFor = key;
+  }
+
+  // ---- "worley" mode: Worley-noise caves (mimics the Worley's Caves mod) ----
+
+  /** FNV-style hash of a 3D integer cell → uint32 (seeded per world). */
+  private worleyHash3(ix: number, iy: number, iz: number): number {
+    let h = (2166136261 ^ this.worleySeed) >>> 0;
+    h = Math.imul(h ^ (ix | 0), 16777619);
+    h = Math.imul(h ^ (iy | 0), 16777619);
+    h = Math.imul(h ^ (iz | 0), 16777619);
+    h ^= h >>> 15;
+    return h >>> 0;
+  }
+
+  /**
+   * Hand-rolled 3D Worley noise returning `f1/f3 − 1` (nearest ÷ 3rd-nearest squared distance, minus
+   * one) over a 3×3×3 cell neighbourhood of hash-jittered feature points — the exact value the
+   * Worley's Caves mod thresholds. Range ≈ [−1, 0]: ≈ −1 deep in a cell, ≈ 0 on the equidistant
+   * network. Pure function of position → seamless. Inputs are already frequency-scaled.
+   */
+  private worleyF1F3(x: number, y: number, z: number): number {
+    const xc = Math.floor(x), yc = Math.floor(y), zc = Math.floor(z);
+    let f1 = Infinity, f2 = Infinity, f3 = Infinity;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const cx = xc + dx, cy = yc + dy, cz = zc + dz;
+          const h = this.worleyHash3(cx, cy, cz);
+          // Jittered feature point within the cell.
+          const px = cx + 0.5 + (((h & 255) / 255) - 0.5) * 2 * WORLEY_JITTER;
+          const py = cy + 0.5 + ((((h >>> 8) & 255) / 255) - 0.5) * 2 * WORLEY_JITTER;
+          const pz = cz + 0.5 + ((((h >>> 16) & 255) / 255) - 0.5) * 2 * WORLEY_JITTER;
+          const ex = px - x, ey = py - y, ez = pz - z;
+          const d = ex * ex + ey * ey + ez * ez;   // squared distance
+          if (d < f1) { f3 = f2; f2 = f1; f1 = d; }
+          else if (d < f2) { f3 = f2; f2 = d; }
+          else if (d < f3) { f3 = d; }
+        }
+      }
+    }
+    return f1 / f3 - 1;
+  }
+
+  /** Worley ratio at a world voxel position (applies compression + depth-scaled Perlin warp). */
+  private worleyRatioAt(vx: number, vy: number, vz: number, surfaceVox: number): number {
+    const cave = this.config.caveConfig;
+    // Warp grows with depth below the surface (mod behaviour) → distortion increases downward.
+    const depthFactor = Math.max(0, Math.min(1, (surfaceVox - vy) / WORLEY_WARP_DEPTH));
+    const amp = cave.worleyWarpAmplitude * depthFactor;
+    const wx = this.caveWorleyWarpX.GetNoise(vx, vy, vz) * amp;
+    const wy = this.caveWorleyWarpY.GetNoise(vx, vy, vz) * amp;
+    const wz = this.caveWorleyWarpZ.GetNoise(vx, vy, vz) * amp;
+    const f = cave.worleyFrequency;
+    return this.worleyF1F3(
+      (vx * cave.worleyXZCompression + wx) * f,
+      (vy * cave.worleyYCompression + wy) * f,
+      (vz * cave.worleyXZCompression + wz) * f,
+    );
+  }
+
+  /**
+   * Build the low-res Worley-ratio lattice for a chunk. Nodes sit on a GLOBAL grid (spacing
+   * WORLEY_STEP_XZ / WORLEY_STEP_Y voxels) covering the chunk + 1 node margin, so adjacent chunks
+   * share boundary nodes → trilinear interpolation is a pure function of world position (seamless).
+   */
+  private prepareChunkWorley(cx: number, cy: number, cz: number): void {
+    const key = cx + ',' + cy + ',' + cz;
+    if (this.worleyGridFor === key) return;
+
+    const vx0 = cx * CHUNK_SIZE, vy0 = cy * CHUNK_SIZE, vz0 = cz * CHUNK_SIZE;
+    const sxz = WORLEY_STEP_XZ, sy = WORLEY_STEP_Y;
+    // Node index range (global), +1 node past the far edge so every voxel is bracketed.
+    const n0x = Math.floor(vx0 / sxz), n1x = Math.floor((vx0 + CHUNK_SIZE - 1) / sxz) + 1;
+    const n0y = Math.floor(vy0 / sy),  n1y = Math.floor((vy0 + CHUNK_SIZE - 1) / sy) + 1;
+    const n0z = Math.floor(vz0 / sxz), n1z = Math.floor((vz0 + CHUNK_SIZE - 1) / sxz) + 1;
+    const nx = n1x - n0x + 1, ny = n1y - n0y + 1, nz = n1z - n0z + 1;
+    const grid = new Float32Array(nx * ny * nz);
+
+    for (let iz = 0; iz < nz; iz++) {
+      const vz = (n0z + iz) * sxz;
+      for (let ix = 0; ix < nx; ix++) {
+        const vx = (n0x + ix) * sxz;
+        const surfaceVox = this.sampleHeight(vx * VOXEL_SCALE, vz * VOXEL_SCALE); // per column
+        for (let iy = 0; iy < ny; iy++) {
+          const vy = (n0y + iy) * sy;
+          grid[(iz * ny + iy) * nx + ix] = this.worleyRatioAt(vx, vy, vz, surfaceVox);
+        }
+      }
+    }
+    this.worleyGrid = grid;
+    this.worleyN0x = n0x; this.worleyN0y = n0y; this.worleyN0z = n0z;
+    this.worleyNx = nx; this.worleyNy = ny; this.worleyNz = nz;
+    this.worleyGridFor = key;
+  }
+
+  /** Trilinearly interpolate the prepared Worley grid at a world position; carve if ratio > cutoff. */
+  private isInsideWorleyCave(worldX: number, worldYmeters: number, worldZ: number, cutoff: number): boolean {
+    const g = this.worleyGrid;
+    if (g.length === 0) return false;
+    const sxz = WORLEY_STEP_XZ, sy = WORLEY_STEP_Y;
+    // Position in node space (voxels / spacing), relative to the grid's min node.
+    const fx = worldX / VOXEL_SCALE / sxz - this.worleyN0x;
+    const fy = worldYmeters / VOXEL_SCALE / sy - this.worleyN0y;
+    const fz = worldZ / VOXEL_SCALE / sxz - this.worleyN0z;
+    const nx = this.worleyNx, ny = this.worleyNy, nz = this.worleyNz;
+    let ix = Math.floor(fx), iy = Math.floor(fy), iz = Math.floor(fz);
+    if (ix < 0) ix = 0; else if (ix > nx - 2) ix = nx - 2;
+    if (iy < 0) iy = 0; else if (iy > ny - 2) iy = ny - 2;
+    if (iz < 0) iz = 0; else if (iz > nz - 2) iz = nz - 2;
+    const tx = fx - ix, ty = fy - iy, tz = fz - iz;
+    const at = (i: number, j: number, k: number) => g[(k * ny + j) * nx + i];
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+    // Trilinear: X, then Y, then Z.
+    const c00 = lerp(at(ix, iy, iz), at(ix + 1, iy, iz), tx);
+    const c10 = lerp(at(ix, iy + 1, iz), at(ix + 1, iy + 1, iz), tx);
+    const c01 = lerp(at(ix, iy, iz + 1), at(ix + 1, iy, iz + 1), tx);
+    const c11 = lerp(at(ix, iy + 1, iz + 1), at(ix + 1, iy + 1, iz + 1), tx);
+    const c0 = lerp(c00, c10, ty);
+    const c1 = lerp(c01, c11, ty);
+    return lerp(c0, c1, tz) > cutoff;
   }
 
   /**
@@ -1200,6 +1395,7 @@ export class TerrainGenerator implements HeightSampler {
     // Mode B: gather+trace the worms relevant to this chunk once, before any per-voxel carve test.
     const cave = this.config.caveConfig;
     if (cave.mode === 'worms') this.prepareChunkWorms(cx, cy, cz);
+    if (cave.mode === 'worley') this.prepareChunkWorley(cx, cy, cz);
 
     // Debug: render the caves themselves as solid and skip all other terrain/stamps.
     if (cave.invert && cave.mode !== 'off') {
