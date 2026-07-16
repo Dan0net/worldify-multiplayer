@@ -10,7 +10,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Globe, Settings, Play, Plus, X, Maximize, Check } from 'lucide-react';
 import { useGameStore } from '../state/store';
-import { GameMode } from '@worldify/shared';
+import { GameMode, type CaveConfig } from '@worldify/shared';
 import { materialManager } from '../game/material';
 import { QUALITY_LABELS, QUALITY_LEVELS, MSAA_OPTIONS } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
@@ -155,9 +155,9 @@ export function ExploreOverlay() {
   };
   const selectWorld = async (id: string) => { await setActiveWorld(id); refreshWorlds(); setPanel('none'); };
   const removeWorld = async (id: string) => { await deleteWorld(id); refreshWorlds(); };
-  const createWorld = async (name: string, seed: number) => {
+  const createWorld = async (name: string, seed: number, caveConfig: CaveConfig) => {
     setShowNewWorld(false);
-    await createAndActivateWorld(name, seed);
+    await createAndActivateWorld(name, seed, caveConfig);
     refreshWorlds();
     setPanel('none');
   };

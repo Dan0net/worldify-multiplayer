@@ -9,6 +9,8 @@
  * Local (offline) mode only — the server path is unaffected.
  */
 
+import type { CaveConfig } from '@worldify/shared';
+
 // ============== Types ==============
 
 export interface WorldMeta {
@@ -23,6 +25,8 @@ export interface WorldMeta {
   lastPitch?: number;
   /** Persisted time-of-day (0-1), restored on load / world switch (optional). */
   timeOfDay?: number;
+  /** Per-world cave/terrain generation settings, chosen at creation (optional → engine defaults). */
+  caveConfig?: CaveConfig;
 }
 
 /** Player position + look snapshot for persistence. */
@@ -164,6 +168,11 @@ export function getActiveWorldSeed(): number {
   return activeWorld?.seed ?? DEFAULT_SEED;
 }
 
+/** The active world's cave/terrain settings (undefined → engine defaults). */
+export function getActiveWorldCaveConfig(): CaveConfig | undefined {
+  return activeWorld?.caveConfig;
+}
+
 /** A fresh random world seed (31-bit), matching createWorld's default. */
 export function randomWorldSeed(): number {
   return Math.floor(Math.random() * 0x7fffffff);
@@ -174,7 +183,7 @@ export async function nextWorldName(): Promise<string> {
   return `World ${(await listWorlds()).length + 1}`;
 }
 
-export async function createWorld(name?: string, seed?: number): Promise<WorldMeta> {
+export async function createWorld(name?: string, seed?: number, caveConfig?: CaveConfig): Promise<WorldMeta> {
   const existing = await listWorlds();
   const world: WorldMeta = {
     id: crypto.randomUUID(),
@@ -182,14 +191,15 @@ export async function createWorld(name?: string, seed?: number): Promise<WorldMe
     seed: seed ?? randomWorldSeed(),
     createdAt: Date.now(),
     lastPlayedAt: Date.now(),
+    ...(caveConfig ? { caveConfig } : {}),
   };
   await idbPut(STORE_WORLDS, world);
   return world;
 }
 
 /** Create a new world AND make it active (rebuilds terrain). */
-export async function createAndActivateWorld(name?: string, seed?: number): Promise<WorldMeta> {
-  const world = await createWorld(name, seed);
+export async function createAndActivateWorld(name?: string, seed?: number, caveConfig?: CaveConfig): Promise<WorldMeta> {
+  const world = await createWorld(name, seed, caveConfig);
   await setActiveWorld(world.id);
   return world;
 }

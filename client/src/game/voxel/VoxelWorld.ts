@@ -53,7 +53,7 @@ import {
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
 import { SeamStitcher } from './SeamStitcher.js';
-import { getActiveWorldSeed, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
+import { getActiveWorldSeed, getActiveWorldCaveConfig, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
 /**
  * Extra chunks generated above a column's baseline surface so stamp/tree tops
@@ -681,8 +681,8 @@ export class VoxelWorld implements ChunkProvider {
 
   private getLocalPool(): TerrainWorkerPool {
     if (!this.localPool) {
-      // Seed comes from the active local world (multi-world save/load).
-      this.localPool = new TerrainWorkerPool(getActiveWorldSeed());
+      // Seed + cave settings come from the active local world (multi-world save/load).
+      this.localPool = new TerrainWorkerPool(getActiveWorldSeed(), getActiveWorldCaveConfig());
     }
     return this.localPool;
   }
