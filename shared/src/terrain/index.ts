@@ -6,6 +6,7 @@ export {
   TerrainGenerator,
   DEFAULT_TERRAIN_CONFIG,
   DEFAULT_CAVE_CONFIG,
+  normalizeCaveConfig,
   type NoiseLayerConfig,
   type DomainWarpConfig,
   type MaterialLayerConfig,

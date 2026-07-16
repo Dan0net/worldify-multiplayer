@@ -91,48 +91,24 @@ export interface PathwayConfig {
 
 export interface CaveConfig {
   /**
-   * Which cave algorithm to run:
-   * - 'off'       — no caves (terrain untouched)
-   * - 'spaghetti' — two intersected 3D noise fields → long snake-like tubes (mode A)
-   * - 'cellular'  — cellular edge network + domain warp → connected corridors + chambers (mode C)
-   * - 'worms'     — traced "Perlin worms": individually-wandering tube tunnels (mode B)
-   * - 'worley'    — Worley-noise caves (F1/F3 ratio thresholded; mimics the Worley's Caves mod)
+   * Cave types are independently toggleable and combine — enable either, both, or neither.
+   * - wormsEnabled   — traced "Perlin worms": individually-wandering tube tunnels.
+   * - cavernsEnabled — large, tall chambers (3D-noise-warped ellipsoids) with stalagmites /
+   *                    stalactites and water pools at the bottom.
+   * Both false = no caves (terrain untouched).
    */
-  mode: 'off' | 'spaghetti' | 'cellular' | 'worms' | 'worley';
+  wormsEnabled: boolean;
+  cavernsEnabled: boolean;
   /**
    * Debug view: render the caves themselves as SOLID and everything else as air, skipping
-   * pathways, water, and stamps. Lets you fly around and inspect the raw cave shapes for the
-   * active `mode` without the rest of the terrain in the way. No effect when mode === 'off'.
+   * pathways, water, and stamps. Lets you fly around and inspect the raw cave shapes (the union of
+   * every enabled type) without the rest of the terrain in the way.
    */
   invert: boolean;
-  /** Multiply Y before sampling; > 1 squashes caves vertically → flatter, more walkable tunnels. */
-  verticalSquash: number;
   /** Optional hard floor in meters; no caves are carved below this world Y. */
   floorY?: number;
 
-  // --- Mode A ("spaghetti"): two 3D noise fields intersected ---
-  /** Noise frequency (1/m) — tunnel scale/length; lower = larger, longer tunnels. */
-  frequency: number;
-  /** Carve band half-width around each noise zero-surface (tube thickness + abundance). */
-  radius: number;
-  /** Low-frequency region-mask frequency so caves can cluster in regions instead of uniformly. */
-  regionFrequency: number;
-  /** Region-mask threshold in [-1, 1]; <= -1 disables the mask (caves everywhere). */
-  regionThreshold: number;
-
-  // --- Mode C ("cellular"): Voronoi edge network + domain warp ---
-  /** Cellular cell frequency (1/m) — lower = larger cells, longer corridors between junctions. */
-  cellFrequency: number;
-  /** Edge (F2−F1) threshold; edges sit near −1, so a larger value = wider corridors. */
-  edgeThreshold: number;
-  /** Cellular distance function → corridor cross-section shape. */
-  cellDistanceFunction: 'euclidean' | 'manhattan' | 'hybrid';
-  /** 3D domain-warp frequency (1/m) for organic wall wobble. */
-  warpFrequency: number;
-  /** 3D domain-warp amplitude in meters. */
-  warpAmplitude: number;
-
-  // --- Mode B ("worms"): traced, individually-wandering tube tunnels ---
+  // --- Worms: traced, individually-wandering tube tunnels ---
   /** Spawn-grid cell size in meters; one hashed batch of worms per cell (larger = sparser starts). */
   wormCellSize: number;
   /** Expected worms per cell (fractional — e.g. 0.6 spawns one worm ~60% of cells). */
@@ -164,19 +140,29 @@ export interface CaveConfig {
   /** 0..1 — how much worms share a steering flow-field. Higher = converge/fork more (braided). */
   wormConvergence: number;
 
-  // --- Mode "worley": Worley-noise caves (mimics the Worley's Caves mod) ---
-  /** Worley noise frequency (1/m) — cave scale; lower = larger caverns. */
-  worleyFrequency: number;
-  /** Carve where the F1/F3 ratio (range ~[-1,0]) exceeds this; HIGHER = smaller caves. */
-  worleyCutoff: number;
-  /** Per-axis Perlin domain-warp frequency (1/m) for organic distortion. */
-  worleyWarpFrequency: number;
-  /** Perlin warp amplitude in meters (scaled up with depth below the surface). */
-  worleyWarpAmplitude: number;
-  /** Horizontal sample-coordinate multiplier (>1 = smaller/tighter caves horizontally). */
-  worleyXZCompression: number;
-  /** Vertical sample-coordinate multiplier (>1 = flatter caves, wider than tall). */
-  worleyYCompression: number;
+  // --- Caverns: large tall chambers on a spacing grid (warped ellipsoids) ---
+  /** Spawn-grid cell size in meters; caverns seed one hashed batch per 3D cell (larger = sparser). */
+  cavernCellSize: number;
+  /** Expected caverns per cell (fractional — e.g. 1.0 spawns ~one cavern per cell). */
+  cavernsPerCell: number;
+  /** Base horizontal radius in meters (cavern size / width). */
+  cavernRadius: number;
+  /** Per-cavern radius variation, 0..1 (0 = uniform, 0.3 = ±30% between caverns). */
+  cavernRadiusJitter: number;
+  /** Vertical elongation: vertical radius = horizontal radius × (1 + this). Higher = taller chambers. */
+  cavernVerticality: number;
+  /** Domain-warp amplitude in meters applied to the cavern boundary (0 = clean ellipsoid walls). */
+  cavernWinding: number;
+  /** Wall-roughness displacement amplitude in meters (0 = smooth walls; adds fine bumps). */
+  cavernWallAmp: number;
+  /** Wall-roughness / shape noise frequency (1/m); higher = finer bumps. */
+  cavernWallFrequency: number;
+  /** Domain-warp noise frequency (1/m) paired with cavernWinding (lower = broader lobes). */
+  cavernWarpFrequency: number;
+  /** Fraction of a cavern's height (0..1) filled with water from the bottom (0 = dry). */
+  cavernWaterLevel: number;
+  /** 0..1 — stalagmite/stalactite abundance + size (0 = none; higher = denser, taller spikes). */
+  cavernSpikeAmount: number;
 }
 
 export interface TerrainConfig {
@@ -251,41 +237,26 @@ const WORM_MIN_RADIUS = 1.0;
  *  WORM_MIN_RADIUS so it never reaches past the per-sphere gather cull. */
 const WORM_CARVE_MIN = 0.9;
 
-/** Worley (mode) low-res sample lattice spacing in voxels: horizontal, vertical. The ratio field is
- *  sampled on this GLOBAL lattice and trilinearly interpolated → smooth flowing caves + cheap, and
- *  because the lattice is global-aligned, adjacent chunks share nodes (seamless). Mirrors the mod's
- *  ~4-block-horizontal / ~2-block-vertical sampling. */
-const WORLEY_STEP_XZ = 4;
-const WORLEY_STEP_Y = 2;
-/** Cellular jitter: how far a feature point is offset within its cell (0..1). */
-const WORLEY_JITTER = 0.45;
-/** Depth (voxels) over which the Worley warp amplitude ramps from 0 (at surface) to full. */
-const WORLEY_WARP_DEPTH = 48;
+/** Caverns only seed at or below this world Y (meters) — like WORM_SEED_TOP_Y — so chambers form
+ *  under the terrain, not floating in the sky. */
+const CAVERN_SEED_TOP_Y = 8;
+/** Stalagmite/stalactite hash-grid spacing in meters (one candidate spike per XZ cell). */
+const CAVERN_SPIKE_CELL = 3;
+/** Max stalagmite/stalactite height in meters at cavernSpikeAmount = 1. */
+const CAVERN_SPIKE_MAX_H = 7;
+/** Max spike base radius in meters at cavernSpikeAmount = 1. */
+const CAVERN_SPIKE_MAX_R = 1.3;
 
 // ============== Default Cave Configuration ==============
 
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
-  mode: 'worms',            // traced worms (the best-feeling caves); others available via config
+  wormsEnabled: true,       // traced worms on by default (the established look)
+  cavernsEnabled: false,    // caverns off until dialled in; combine with worms once refined
   invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
-  verticalSquash: 0.8,      // < 1 → field caves (spaghetti/cellular) a touch taller than wide
   floorY: undefined,        // no hard floor by default
 
-  // Mode A — spaghetti
-  frequency: 0.035,         // ~28 m tunnel scale
-  radius: 0.15,             // band half-width → tunnels ~3 m across (fits the 1.6 m player)
-  regionFrequency: 0.01,    // region-mask scale (only used if regionThreshold > -1)
-  regionThreshold: -1,      // -1 = mask disabled (caves distributed everywhere)
-
-  // Mode C — cellular (roomy caverns/corridors; a deliberate contrast to spaghetti's tight tubes)
-  cellFrequency: 0.012,     // ~80 m cells → large, connected caverns with long corridors
-  edgeThreshold: -0.9,      // edges sit near -1; -0.9 keeps ~5-6% fill with walkable headroom
-  cellDistanceFunction: 'euclidean',
-  warpFrequency: 0.03,      // organic wall wobble
-  warpAmplitude: 6,         // meters
-
-  // Mode B — worms (traced tunnels). Uniform by default: no radius variety / roughness, mostly
-  // level, moderate winding. Seeded on a 3D grid so they fill the whole depth from just above the
-  // surface downward (no surface/depth params).
+  // Worms (traced tunnels). Seeded on a 3D grid so they fill the whole depth from just above the
+  // surface downward.
   wormCellSize: 40,         // 40 m spawn cells (3D grid)
   wormsPerCell: 2.0,        // worms per 3D cell
   wormSegments: 150,        // long worms (150 × 1.2 m ≈ 180 m)
@@ -302,14 +273,47 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   wormWallFrequency: 0.4,   // fine wall bumps
   wormConvergence: 0.45,    // worms share much of the flow-field → natural merges/forks
 
-  // Mode "worley" — Worley-noise caves (F1/F3 ratio thresholded; the Worley's Caves mod look)
-  worleyFrequency: 0.006,   // widely-spaced cells → long tunnels far apart
-  worleyCutoff: -0.35,      // holds ~14% fill / ~2 m tunnels at this frequency
-  worleyWarpFrequency: 0.025, // low warp frequency → long sweeping bends
-  worleyWarpAmplitude: 18,  // strong warp → straight Voronoi edges become winding tunnels
-  worleyXZCompression: 1.0, // horizontal scale
-  worleyYCompression: 4.0,  // strongly flatten cells → horizontal network, few vertical drops
+  // Caverns (large tall chambers). Clean tall ellipsoids by default: winding / wall roughness /
+  // size variety all start at 0 so you can dial each one up from a smooth baseline.
+  cavernCellSize: 90,       // 90 m spawn cells → caverns spaced far apart
+  cavernsPerCell: 1.0,      // ~one cavern per cell
+  cavernRadius: 14,         // 14 m base horizontal radius
+  cavernRadiusJitter: 0.0,  // uniform size to start
+  cavernVerticality: 1.4,   // vertical radius ≈ 2.4× horizontal → tall chambers
+  cavernWinding: 0.0,       // clean ellipsoid walls to start
+  cavernWallAmp: 0.0,       // smooth walls to start
+  cavernWallFrequency: 0.25,// wall-bump scale (used once wall roughness > 0)
+  cavernWarpFrequency: 0.03,// domain-warp scale (used once winding > 0)
+  cavernWaterLevel: 0.15,   // bottom ~15% of each chamber filled with water
+  cavernSpikeAmount: 0.3,   // moderate stalagmites/stalactites
 };
+
+/**
+ * Back-compat: translate a legacy single-`mode` cave config into the wormsEnabled/cavernsEnabled
+ * model. Older worlds (persisted per-world in IndexedDB) and the new-world localStorage stored
+ * `mode: 'off'|'spaghetti'|'cellular'|'worms'|'worley'`. Removed types and 'off' map to both-off;
+ * 'worms'/'caverns' map to the matching toggle. Configs already in the new shape pass through. Also
+ * strips fields from the removed types so they don't linger on the object.
+ */
+export function normalizeCaveConfig(
+  input: (Partial<CaveConfig> & { mode?: string }) | null | undefined,
+): Partial<CaveConfig> {
+  if (!input) return {};
+  const { mode, ...rest } = input as Partial<CaveConfig> & { mode?: string; [k: string]: unknown };
+  const out = rest as Partial<CaveConfig> & { [k: string]: unknown };
+  if (typeof mode === 'string' && out.wormsEnabled === undefined && out.cavernsEnabled === undefined) {
+    out.wormsEnabled = mode === 'worms';
+    out.cavernsEnabled = mode === 'caverns';
+  }
+  // Drop keys from the removed spaghetti/cellular/worley types if present on a legacy object.
+  for (const k of [
+    'verticalSquash', 'frequency', 'radius', 'regionFrequency', 'regionThreshold',
+    'cellFrequency', 'edgeThreshold', 'cellDistanceFunction', 'warpFrequency', 'warpAmplitude',
+    'worleyFrequency', 'worleyCutoff', 'worleyWarpFrequency', 'worleyWarpAmplitude',
+    'worleyXZCompression', 'worleyYCompression',
+  ]) delete out[k];
+  return out;
+}
 
 // ============== Default Configuration ==
 
@@ -366,37 +370,32 @@ export class TerrainGenerator implements HeightSampler {
   private pathwayMaterialNoise: FastNoiseLite;
 
   // Cave system - 3D noise fields (seed block config.seed + 30000)
-  private caveSpaghettiA: FastNoiseLite;   // mode A: first zero-surface
-  private caveSpaghettiB: FastNoiseLite;   // mode A: second zero-surface (intersected with A)
-  private caveRegionNoise: FastNoiseLite;  // mode A: optional low-freq clustering mask
-  private caveCellular: FastNoiseLite;     // mode C: Voronoi edge network (Distance2Sub)
-  private caveWarpX: FastNoiseLite;        // mode C: 3D domain warp
-  private caveWarpY: FastNoiseLite;
-  private caveWarpZ: FastNoiseLite;
-  private caveWormSteerYaw: FastNoiseLite;   // mode B: worm heading steering (yaw)
-  private caveWormSteerPitch: FastNoiseLite; // mode B: worm heading steering (pitch)
-  private caveWormRadius: FastNoiseLite;     // mode B: low-freq along-worm radius variation
-  private caveWormWall: FastNoiseLite;       // mode B: per-voxel wall roughness
-  private caveWorleyWarpX: FastNoiseLite;    // "worley" mode: per-axis Perlin domain warp
-  private caveWorleyWarpY: FastNoiseLite;
-  private caveWorleyWarpZ: FastNoiseLite;
+  private caveWormSteerYaw: FastNoiseLite;   // worms: heading steering (yaw)
+  private caveWormSteerPitch: FastNoiseLite; // worms: heading steering (pitch)
+  private caveWormRadius: FastNoiseLite;     // worms: low-freq along-worm radius variation
+  private caveWormWall: FastNoiseLite;       // worms: per-voxel wall roughness
+  private caveCavernWarpX: FastNoiseLite;    // caverns: per-axis domain warp (winding)
+  private caveCavernWarpY: FastNoiseLite;
+  private caveCavernWarpZ: FastNoiseLite;
+  private caveCavernWall: FastNoiseLite;     // caverns: per-voxel wall roughness
 
-  // Mode B worm state: traced worms cached per spawn cell, and the sphere centers (flat
+  // Worm state: traced worms cached per spawn cell, and the sphere centers (flat
   // [x,y,z,r,...] in world meters) relevant to the chunk currently being generated.
   private wormCellCache = new Map<string, Float64Array>();
   private chunkWormPts: Float64Array = new Float64Array(0);
   private chunkWormPtsFor = '';
 
-  // "worley" mode state: a low-res Worley-ratio lattice for the current chunk (globally aligned),
-  // trilinearly interpolated per voxel. Stores the grid + its node-space origin/dims.
-  private worleyGrid: Float32Array = new Float32Array(0);
-  private worleyGridFor = '';
-  private worleyN0x = 0; private worleyN0y = 0; private worleyN0z = 0; // min node indices
-  private worleyNx = 0; private worleyNy = 0; private worleyNz = 0;    // node counts per axis
-  private worleySeed = 0;   // hash seed for the hand-rolled Worley feature points
+  // Cavern state: caverns cached per spawn cell, and the descriptors ([cx,cy,cz,rx,…] in world
+  // meters) relevant to the chunk currently being generated.
+  private cavernCellCache = new Map<string, Float64Array>();
+  private chunkCavernFeats: Float64Array = new Float64Array(0);
+  private chunkCavernFeatsFor = '';
+
   /** Test-only: extra worm-gather cells added on every side. Proves the gather radius is sufficient
    *  (regenerating with a larger radius must be byte-identical). Leave 0 in production. */
   wormGatherExtraCells = 0;
+  /** Test-only: same idea for caverns. */
+  cavernGatherExtraCells = 0;
 
   // Stamp system
   private stampPointGenerator: StampPointGenerator | null = null;
@@ -419,7 +418,7 @@ export class TerrainGenerator implements HeightSampler {
       this.config.pathwayConfig = { ...DEFAULT_PATHWAY_CONFIG, ...config.pathwayConfig };
     }
     if (config.caveConfig) {
-      this.config.caveConfig = { ...DEFAULT_CAVE_CONFIG, ...config.caveConfig };
+      this.config.caveConfig = { ...DEFAULT_CAVE_CONFIG, ...normalizeCaveConfig(config.caveConfig) };
     }
 
     // Initialize noise generators
@@ -464,32 +463,9 @@ export class TerrainGenerator implements HeightSampler {
     this.updatePathwayConfig();
 
     // Cave noise — fixed seed block (config.seed + 30000+) so the seed++ chain above is untouched.
-    // Both modes' generators are built up-front (cheap); only the active mode is sampled per voxel.
+    // All generators are built up-front (cheap); only the enabled types are sampled per voxel.
     let caveSeed = this.config.seed + 30000;
-    // Mode A: two independent 3D OpenSimplex fields; their intersected zero-bands form the tubes.
-    this.caveSpaghettiA = new FastNoiseLite(caveSeed++);
-    this.caveSpaghettiA.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.caveSpaghettiB = new FastNoiseLite(caveSeed++);
-    this.caveSpaghettiB.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.caveRegionNoise = new FastNoiseLite(caveSeed++);
-    this.caveRegionNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    // Mode C: cellular edge network (F2−F1) + hand-rolled 3D FBM domain warp for organic walls.
-    this.caveCellular = new FastNoiseLite(caveSeed++);
-    this.caveCellular.SetNoiseType(FastNoiseLite.NoiseType.Cellular);
-    this.caveCellular.SetCellularReturnType(FastNoiseLite.CellularReturnType.Distance2Sub);
-    this.caveWarpX = new FastNoiseLite(caveSeed++);
-    this.caveWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.caveWarpX.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.caveWarpX.SetFractalOctaves(2);
-    this.caveWarpY = new FastNoiseLite(caveSeed++);
-    this.caveWarpY.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.caveWarpY.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.caveWarpY.SetFractalOctaves(2);
-    this.caveWarpZ = new FastNoiseLite(caveSeed++);
-    this.caveWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.caveWarpZ.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.caveWarpZ.SetFractalOctaves(2);
-    // Mode B: two 3D FBM fields steer each worm's heading (yaw + pitch) as it's traced.
+    // Worms: two 3D FBM fields steer each worm's heading (yaw + pitch) as it's traced.
     this.caveWormSteerYaw = new FastNoiseLite(caveSeed++);
     this.caveWormSteerYaw.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.caveWormSteerYaw.SetFractalType(FastNoiseLite.FractalType.FBm);
@@ -498,7 +474,7 @@ export class TerrainGenerator implements HeightSampler {
     this.caveWormSteerPitch.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.caveWormSteerPitch.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.caveWormSteerPitch.SetFractalOctaves(2);
-    // Mode B: along-worm radius variation (low freq) + per-voxel wall roughness (higher freq).
+    // Worms: along-worm radius variation (low freq) + per-voxel wall roughness (higher freq).
     this.caveWormRadius = new FastNoiseLite(caveSeed++);
     this.caveWormRadius.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.caveWormRadius.SetFrequency(WORM_RADIUS_VAR_FREQ);
@@ -506,14 +482,17 @@ export class TerrainGenerator implements HeightSampler {
     this.caveWormWall.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.caveWormWall.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.caveWormWall.SetFractalOctaves(2);
-    // "worley" mode: per-axis Perlin domain warp (mirrors the mod's displacement noise).
-    this.caveWorleyWarpX = new FastNoiseLite(caveSeed++);
-    this.caveWorleyWarpX.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-    this.caveWorleyWarpY = new FastNoiseLite(caveSeed++);
-    this.caveWorleyWarpY.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-    this.caveWorleyWarpZ = new FastNoiseLite(caveSeed++);
-    this.caveWorleyWarpZ.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-    this.worleySeed = (this.config.seed + 50000) >>> 0;
+    // Caverns: per-axis Perlin domain warp (winding) + Perlin wall roughness.
+    this.caveCavernWarpX = new FastNoiseLite(caveSeed++);
+    this.caveCavernWarpX.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+    this.caveCavernWarpY = new FastNoiseLite(caveSeed++);
+    this.caveCavernWarpY.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+    this.caveCavernWarpZ = new FastNoiseLite(caveSeed++);
+    this.caveCavernWarpZ.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+    this.caveCavernWall = new FastNoiseLite(caveSeed++);
+    this.caveCavernWall.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.caveCavernWall.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.caveCavernWall.SetFractalOctaves(2);
 
     this.updateCaveConfig();
 
@@ -552,11 +531,9 @@ export class TerrainGenerator implements HeightSampler {
       this.updateWarpConfig();
     }
     if (config.caveConfig) {
-      this.config.caveConfig = { ...this.config.caveConfig, ...config.caveConfig };
+      this.config.caveConfig = { ...this.config.caveConfig, ...normalizeCaveConfig(config.caveConfig) };
       this.updateCaveConfig();
-      this.wormCellCache.clear();   // config change invalidates traced worms
-      this.chunkWormPtsFor = '';
-      this.worleyGridFor = '';
+      this.invalidateCaveCaches();   // config change invalidates traced worms/caverns
     }
 
     if (config.seed !== undefined) {
@@ -566,25 +543,24 @@ export class TerrainGenerator implements HeightSampler {
       this.warpNoiseZ.SetSeed(seed++);
 
       let caveSeed = config.seed + 30000;
-      this.caveSpaghettiA.SetSeed(caveSeed++);
-      this.caveSpaghettiB.SetSeed(caveSeed++);
-      this.caveRegionNoise.SetSeed(caveSeed++);
-      this.caveCellular.SetSeed(caveSeed++);
-      this.caveWarpX.SetSeed(caveSeed++);
-      this.caveWarpY.SetSeed(caveSeed++);
-      this.caveWarpZ.SetSeed(caveSeed++);
       this.caveWormSteerYaw.SetSeed(caveSeed++);
       this.caveWormSteerPitch.SetSeed(caveSeed++);
       this.caveWormRadius.SetSeed(caveSeed++);
       this.caveWormWall.SetSeed(caveSeed++);
-      this.caveWorleyWarpX.SetSeed(caveSeed++);
-      this.caveWorleyWarpY.SetSeed(caveSeed++);
-      this.caveWorleyWarpZ.SetSeed(caveSeed++);
-      this.worleySeed = (config.seed + 50000) >>> 0;
-      this.wormCellCache.clear();   // reseed invalidates traced worms
-      this.chunkWormPtsFor = '';
-      this.worleyGridFor = '';
+      this.caveCavernWarpX.SetSeed(caveSeed++);
+      this.caveCavernWarpY.SetSeed(caveSeed++);
+      this.caveCavernWarpZ.SetSeed(caveSeed++);
+      this.caveCavernWall.SetSeed(caveSeed++);
+      this.invalidateCaveCaches();   // reseed invalidates traced worms/caverns
     }
+  }
+
+  /** Drop all per-cell + per-chunk cave caches (after a config or seed change). */
+  private invalidateCaveCaches(): void {
+    this.wormCellCache.clear();
+    this.chunkWormPtsFor = '';
+    this.cavernCellCache.clear();
+    this.chunkCavernFeatsFor = '';
   }
 
   /**
@@ -610,30 +586,17 @@ export class TerrainGenerator implements HeightSampler {
   }
 
   /**
-   * Update cave noise configuration (frequencies + cellular distance function).
+   * Update cave noise configuration (frequencies).
    */
   private updateCaveConfig(): void {
     const cave = this.config.caveConfig;
-    this.caveSpaghettiA.SetFrequency(cave.frequency);
-    this.caveSpaghettiB.SetFrequency(cave.frequency);
-    this.caveRegionNoise.SetFrequency(cave.regionFrequency);
-    this.caveCellular.SetFrequency(cave.cellFrequency);
-    this.caveWarpX.SetFrequency(cave.warpFrequency);
-    this.caveWarpY.SetFrequency(cave.warpFrequency);
-    this.caveWarpZ.SetFrequency(cave.warpFrequency);
     this.caveWormSteerYaw.SetFrequency(cave.wormSteerFrequency);
     this.caveWormSteerPitch.SetFrequency(cave.wormSteerFrequency);
     this.caveWormWall.SetFrequency(cave.wormWallFrequency);
-    this.caveWorleyWarpX.SetFrequency(cave.worleyWarpFrequency);
-    this.caveWorleyWarpY.SetFrequency(cave.worleyWarpFrequency);
-    this.caveWorleyWarpZ.SetFrequency(cave.worleyWarpFrequency);
-
-    const distFn = cave.cellDistanceFunction === 'manhattan'
-      ? FastNoiseLite.CellularDistanceFunction.Manhattan
-      : cave.cellDistanceFunction === 'hybrid'
-        ? FastNoiseLite.CellularDistanceFunction.Hybrid
-        : FastNoiseLite.CellularDistanceFunction.Euclidean;
-    this.caveCellular.SetCellularDistanceFunction(distFn);
+    this.caveCavernWarpX.SetFrequency(cave.cavernWarpFrequency);
+    this.caveCavernWarpY.SetFrequency(cave.cavernWarpFrequency);
+    this.caveCavernWarpZ.SetFrequency(cave.cavernWarpFrequency);
+    this.caveCavernWall.SetFrequency(cave.cavernWallFrequency);
   }
 
   /**
@@ -649,67 +612,25 @@ export class TerrainGenerator implements HeightSampler {
    * @param distanceFromSurface - voxels below the surface (>0 = underground)
    */
   isInsideCave(worldX: number, worldYmeters: number, worldZ: number, _distanceFromSurface: number): boolean {
-    const cave = this.config.caveConfig;
-    if (cave.mode === 'off') return false;
-    if (cave.floorY !== undefined && worldYmeters < cave.floorY) return false;
-
-    // Mode B carves explicit traced tubes (real 3D geometry) — use raw Y, no field squash/taper.
-    if (cave.mode === 'worms') {
-      return this.isInsideWormCave(worldX, worldYmeters, worldZ);
-    }
-
-    // "worley" mode: interpolate the prepared low-res Worley-ratio grid and threshold it.
-    if (cave.mode === 'worley') {
-      return this.isInsideWorleyCave(worldX, worldYmeters, worldZ, cave.worleyCutoff);
-    }
-
-    // Field caves (A/C): Y is squashed so they are flatter (more walkable) than they are wide.
-    const y = worldYmeters * cave.verticalSquash;
-    return cave.mode === 'spaghetti'
-      ? this.isInsideSpaghettiCave(worldX, y, worldZ, 1)
-      : this.isInsideCellularCave(worldX, y, worldZ, 1);
+    return this.caveFillAt(worldX, worldYmeters, worldZ) !== 0;
   }
 
   /**
-   * Mode A — intersect two 3D noise zero-bands. Each `|n| < r` band is a thick sheet; the
-   * intersection of two independent sheets is a 1-D curve → long, branching, snake-like tubes.
+   * Combined per-voxel cave fill across every enabled type:
+   *   0 = solid (leave terrain), 1 = air (carve), 2 = water.
+   * Worms carve air only; caverns carve air, place water in the bottom, and leave stalagmite /
+   * stalactite spikes solid. Air wins over water, so a worm bores cleanly through a cavern pool.
+   * Pure function of world position (given the per-chunk prepared sets) → seamless.
    */
-  private isInsideSpaghettiCave(x: number, y: number, z: number, taper: number): boolean {
+  caveFillAt(worldX: number, worldYmeters: number, worldZ: number): 0 | 1 | 2 {
     const cave = this.config.caveConfig;
-    // Optional clustering: low-freq mask so caves gather in regions instead of spreading uniformly.
-    if (cave.regionThreshold > -1) {
-      if (this.caveRegionNoise.GetNoise(x, y, z) < cave.regionThreshold) return false;
+    if (cave.floorY !== undefined && worldYmeters < cave.floorY) return 0;
+    if (cave.wormsEnabled && this.isInsideWormCave(worldX, worldYmeters, worldZ)) return 1;
+    if (cave.cavernsEnabled) {
+      const c = this.sampleCavern(worldX, worldYmeters, worldZ);
+      if (c !== 0) return c;
     }
-    const r = cave.radius * taper;
-    const n1 = this.caveSpaghettiA.GetNoise(x, y, z);
-    if (Math.abs(n1) >= r) return false;                    // cheap reject before the 2nd sample
-    const n2 = this.caveSpaghettiB.GetNoise(x, y, z);
-    return Math.abs(n2) < r;
-  }
-
-  /**
-   * Mode C — carve the Voronoi edge network. Distance2Sub (F2−F1) sits near −1 where a point is
-   * equidistant from two cells (a cell boundary) and rises toward the interior, so `edge < threshold`
-   * selects the connected web of boundaries → corridors with natural junctions and chambers.
-   */
-  private isInsideCellularCave(x: number, y: number, z: number, taper: number): boolean {
-    const cave = this.config.caveConfig;
-    const [wx, wy, wz] = this.applyCaveWarp(x, y, z);
-    const edge = this.caveCellular.GetNoise(wx, wy, wz);
-    // Edges sit near -1; grow the corridor width up from there. Taper narrows it near the surface.
-    return edge < (-1 + (cave.edgeThreshold + 1) * taper);
-  }
-
-  /**
-   * Hand-rolled 3D FBM domain warp for cave walls (mirrors applyPathwayWarp, extended to 3D).
-   */
-  private applyCaveWarp(x: number, y: number, z: number): [number, number, number] {
-    const amp = this.config.caveConfig.warpAmplitude;
-    return [
-      x + this.caveWarpX.GetNoise(x, y, z) * amp,
-      y + this.caveWarpY.GetNoise(x, y, z) * amp,
-      z + this.caveWarpZ.GetNoise(x, y, z) * amp,
-    ];
+    return 0;
   }
 
   /**
@@ -862,124 +783,171 @@ export class TerrainGenerator implements HeightSampler {
     this.chunkWormPtsFor = key;
   }
 
-  // ---- "worley" mode: Worley-noise caves (mimics the Worley's Caves mod) ----
-
-  /** FNV-style hash of a 3D integer cell → uint32 (seeded per world). */
-  private worleyHash3(ix: number, iy: number, iz: number): number {
-    let h = (2166136261 ^ this.worleySeed) >>> 0;
-    h = Math.imul(h ^ (ix | 0), 16777619);
-    h = Math.imul(h ^ (iy | 0), 16777619);
-    h = Math.imul(h ^ (iz | 0), 16777619);
-    h ^= h >>> 15;
-    return h >>> 0;
-  }
+  // ---- Caverns: large tall chambers on a spacing grid (warped ellipsoids) ----
 
   /**
-   * Hand-rolled 3D Worley noise returning `f1/f3 − 1` (nearest ÷ 3rd-nearest squared distance, minus
-   * one) over a 3×3×3 cell neighbourhood of hash-jittered feature points — the exact value the
-   * Worley's Caves mod thresholds. Range ≈ [−1, 0]: ≈ −1 deep in a cell, ≈ 0 on the equidistant
-   * network. Pure function of position → seamless. Inputs are already frequency-scaled.
+   * Deterministically spawn every cavern for one 3D spawn-cell (ci,cj,ck) as a flat
+   * [centerX, centerY, centerZ, horizRadius, …] Float64Array in world meters. Pure function of
+   * (ci,cj,ck,seed) — every chunk that gathers this cell reproduces identical caverns → seamless.
+   * Cached per cell. (ci→X, cj→Z, ck→Y, matching the worm grid.)
    */
-  private worleyF1F3(x: number, y: number, z: number): number {
-    const xc = Math.floor(x), yc = Math.floor(y), zc = Math.floor(z);
-    let f1 = Infinity, f2 = Infinity, f3 = Infinity;
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const cx = xc + dx, cy = yc + dy, cz = zc + dz;
-          const h = this.worleyHash3(cx, cy, cz);
-          // Jittered feature point within the cell.
-          const px = cx + 0.5 + (((h & 255) / 255) - 0.5) * 2 * WORLEY_JITTER;
-          const py = cy + 0.5 + ((((h >>> 8) & 255) / 255) - 0.5) * 2 * WORLEY_JITTER;
-          const pz = cz + 0.5 + ((((h >>> 16) & 255) / 255) - 0.5) * 2 * WORLEY_JITTER;
-          const ex = px - x, ey = py - y, ez = pz - z;
-          const d = ex * ex + ey * ey + ez * ez;   // squared distance
-          if (d < f1) { f3 = f2; f2 = f1; f1 = d; }
-          else if (d < f2) { f3 = f2; f2 = d; }
-          else if (d < f3) { f3 = d; }
-        }
-      }
-    }
-    return f1 / f3 - 1;
-  }
+  private traceCavernCell(ci: number, cj: number, ck: number): Float64Array {
+    const cacheKey = ci + ',' + cj + ',' + ck;
+    const cached = this.cavernCellCache.get(cacheKey);
+    if (cached) return cached;
 
-  /** Worley ratio at a world voxel position (applies compression + depth-scaled Perlin warp). */
-  private worleyRatioAt(vx: number, vy: number, vz: number, surfaceVox: number): number {
     const cave = this.config.caveConfig;
-    // Warp grows with depth below the surface (mod behaviour) → distortion increases downward.
-    const depthFactor = Math.max(0, Math.min(1, (surfaceVox - vy) / WORLEY_WARP_DEPTH));
-    const amp = cave.worleyWarpAmplitude * depthFactor;
-    const wx = this.caveWorleyWarpX.GetNoise(vx, vy, vz) * amp;
-    const wy = this.caveWorleyWarpY.GetNoise(vx, vy, vz) * amp;
-    const wz = this.caveWorleyWarpZ.GetNoise(vx, vy, vz) * amp;
-    const f = cave.worleyFrequency;
-    return this.worleyF1F3(
-      (vx * cave.worleyXZCompression + wx) * f,
-      (vy * cave.worleyYCompression + wy) * f,
-      (vz * cave.worleyXZCompression + wz) * f,
-    );
+    const cs = cave.cavernCellSize;
+    const seed = (this.config.seed + 60000) >>> 0;
+    const rng = makeRng((hashInt2(hashInt2(ci, cj), ck) ^ seed) >>> 0);
+
+    let n = Math.floor(cave.cavernsPerCell);
+    if (rng() < cave.cavernsPerCell - n) n++;
+
+    const out: number[] = [];
+    for (let w = 0; w < n; w++) {
+      const cx = (ci + rng()) * cs;   // X
+      const cy = (ck + rng()) * cs;   // Y
+      const cz = (cj + rng()) * cs;   // Z
+      const rx = cave.cavernRadius * (1 + (rng() * 2 - 1) * cave.cavernRadiusJitter);
+      out.push(cx, cy, cz, rx);
+    }
+
+    const arr = new Float64Array(out);
+    if (this.cavernCellCache.size > 4096) this.cavernCellCache.clear();
+    this.cavernCellCache.set(cacheKey, arr);
+    return arr;
   }
 
   /**
-   * Build the low-res Worley-ratio lattice for a chunk. Nodes sit on a GLOBAL grid (spacing
-   * WORLEY_STEP_XZ / WORLEY_STEP_Y voxels) covering the chunk + 1 node margin, so adjacent chunks
-   * share boundary nodes → trilinear interpolation is a pure function of world position (seamless).
+   * Gather the caverns relevant to a chunk into `chunkCavernFeats` ([cx,cy,cz,rx,…]). Gathers every
+   * spawn-cell within a cavern's maximum reach (vertical radius + winding warp + wall roughness) of
+   * the chunk — a hard bound — then AABB-culls each cavern against the chunk. Seamless by
+   * construction: adjacent chunks gather overlapping cells and see the same caverns.
    */
-  private prepareChunkWorley(cx: number, cy: number, cz: number): void {
+  private prepareChunkCaverns(cx: number, cy: number, cz: number): void {
     const key = cx + ',' + cy + ',' + cz;
-    if (this.worleyGridFor === key) return;
+    if (this.chunkCavernFeatsFor === key) return;
 
-    const vx0 = cx * CHUNK_SIZE, vy0 = cy * CHUNK_SIZE, vz0 = cz * CHUNK_SIZE;
-    const sxz = WORLEY_STEP_XZ, sy = WORLEY_STEP_Y;
-    // Node index range (global), +1 node past the far edge so every voxel is bracketed.
-    const n0x = Math.floor(vx0 / sxz), n1x = Math.floor((vx0 + CHUNK_SIZE - 1) / sxz) + 1;
-    const n0y = Math.floor(vy0 / sy),  n1y = Math.floor((vy0 + CHUNK_SIZE - 1) / sy) + 1;
-    const n0z = Math.floor(vz0 / sxz), n1z = Math.floor((vz0 + CHUNK_SIZE - 1) / sxz) + 1;
-    const nx = n1x - n0x + 1, ny = n1y - n0y + 1, nz = n1z - n0z + 1;
-    const grid = new Float32Array(nx * ny * nz);
+    const cave = this.config.caveConfig;
+    const cs = cave.cavernCellSize;
+    const x0 = cx * CHUNK_SIZE * VOXEL_SCALE, x1 = x0 + CHUNK_SIZE * VOXEL_SCALE;
+    const z0 = cz * CHUNK_SIZE * VOXEL_SCALE, z1 = z0 + CHUNK_SIZE * VOXEL_SCALE;
+    const y0 = cy * CHUNK_SIZE * VOXEL_SCALE, y1 = y0 + CHUNK_SIZE * VOXEL_SCALE;
 
-    for (let iz = 0; iz < nz; iz++) {
-      const vz = (n0z + iz) * sxz;
-      for (let ix = 0; ix < nx; ix++) {
-        const vx = (n0x + ix) * sxz;
-        const surfaceVox = this.sampleHeight(vx * VOXEL_SCALE, vz * VOXEL_SCALE); // per column
-        for (let iy = 0; iy < ny; iy++) {
-          const vy = (n0y + iy) * sy;
-          grid[(iz * ny + iy) * nx + ix] = this.worleyRatioAt(vx, vy, vz, surfaceVox);
+    // Boundary can bulge out by the domain-warp amplitude (winding) + wall roughness — inflate the
+    // gather + cull bounds by both or a cavern grazing the chunk edge would be dropped (a seam).
+    const slop = cave.cavernWinding + cave.cavernWallAmp;
+    const rxMax = cave.cavernRadius * (1 + cave.cavernRadiusJitter);
+    const ryMax = rxMax * (1 + cave.cavernVerticality);
+    const reach = ryMax + slop;
+    const gatherCells = Math.ceil(reach / cs) + 1 + this.cavernGatherExtraCells;
+    const ciMin = Math.floor(x0 / cs) - gatherCells, ciMax = Math.floor(x1 / cs) + gatherCells;
+    const cjMin = Math.floor(z0 / cs) - gatherCells, cjMax = Math.floor(z1 / cs) + gatherCells;
+    const ckMin = Math.floor(y0 / cs) - gatherCells;
+    const ckMax = Math.min(Math.floor(y1 / cs) + gatherCells, Math.floor(CAVERN_SEED_TOP_Y / cs));
+
+    const out: number[] = [];
+    for (let ck = ckMin; ck <= ckMax; ck++) {
+      for (let cj = cjMin; cj <= cjMax; cj++) {
+        for (let ci = ciMin; ci <= ciMax; ci++) {
+          const feats = this.traceCavernCell(ci, cj, ck);
+          for (let i = 0; i < feats.length; i += 4) {
+            const px = feats[i], py = feats[i + 1], pz = feats[i + 2], pr = feats[i + 3];
+            const hExt = pr + slop;                          // horizontal half-extent
+            const vExt = pr * (1 + cave.cavernVerticality) + slop; // vertical half-extent
+            if (px + hExt < x0 || px - hExt > x1) continue;
+            if (py + vExt < y0 || py - vExt > y1) continue;
+            if (pz + hExt < z0 || pz - hExt > z1) continue;
+            out.push(px, py, pz, pr);
+          }
         }
       }
     }
-    this.worleyGrid = grid;
-    this.worleyN0x = n0x; this.worleyN0y = n0y; this.worleyN0z = n0z;
-    this.worleyNx = nx; this.worleyNy = ny; this.worleyNz = nz;
-    this.worleyGridFor = key;
+    this.chunkCavernFeats = new Float64Array(out);
+    this.chunkCavernFeatsFor = key;
   }
 
-  /** Trilinearly interpolate the prepared Worley grid at a world position; carve if ratio > cutoff. */
-  private isInsideWorleyCave(worldX: number, worldYmeters: number, worldZ: number, cutoff: number): boolean {
-    const g = this.worleyGrid;
-    if (g.length === 0) return false;
-    const sxz = WORLEY_STEP_XZ, sy = WORLEY_STEP_Y;
-    // Position in node space (voxels / spacing), relative to the grid's min node.
-    const fx = worldX / VOXEL_SCALE / sxz - this.worleyN0x;
-    const fy = worldYmeters / VOXEL_SCALE / sy - this.worleyN0y;
-    const fz = worldZ / VOXEL_SCALE / sxz - this.worleyN0z;
-    const nx = this.worleyNx, ny = this.worleyNy, nz = this.worleyNz;
-    let ix = Math.floor(fx), iy = Math.floor(fy), iz = Math.floor(fz);
-    if (ix < 0) ix = 0; else if (ix > nx - 2) ix = nx - 2;
-    if (iy < 0) iy = 0; else if (iy > ny - 2) iy = ny - 2;
-    if (iz < 0) iz = 0; else if (iz > nz - 2) iz = nz - 2;
-    const tx = fx - ix, ty = fy - iy, tz = fz - iz;
-    const at = (i: number, j: number, k: number) => g[(k * ny + j) * nx + i];
-    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-    // Trilinear: X, then Y, then Z.
-    const c00 = lerp(at(ix, iy, iz), at(ix + 1, iy, iz), tx);
-    const c10 = lerp(at(ix, iy + 1, iz), at(ix + 1, iy + 1, iz), tx);
-    const c01 = lerp(at(ix, iy, iz + 1), at(ix + 1, iy, iz + 1), tx);
-    const c11 = lerp(at(ix, iy + 1, iz + 1), at(ix + 1, iy + 1, iz + 1), tx);
-    const c0 = lerp(c00, c10, ty);
-    const c1 = lerp(c01, c11, ty);
-    return lerp(c0, c1, tz) > cutoff;
+  /**
+   * Cavern fill at a world voxel: 0 = solid (outside / stalagmite / stalactite), 1 = air,
+   * 2 = water. Scans the prepared caverns; each is a warped ellipsoid (domain warp = winding, plus
+   * per-voxel wall roughness). Inside a cavern, the bottom fills with water up to a flat level and
+   * hashed conical spikes rise from the floor / hang from the ceiling. Across overlapping caverns the
+   * most-open result wins (air > water > solid). Pure function of position → seamless.
+   */
+  private sampleCavern(x: number, y: number, z: number): 0 | 1 | 2 {
+    const feats = this.chunkCavernFeats;
+    if (feats.length === 0) return 0;
+    const cave = this.config.caveConfig;
+    const vert = cave.cavernVerticality;
+
+    // Domain warp (winding) — displace the sample point; clean ellipsoid when winding = 0.
+    let wx = x, wy = y, wz = z;
+    if (cave.cavernWinding > 0) {
+      const a = cave.cavernWinding;
+      wx += this.caveCavernWarpX.GetNoise(x, y, z) * a;
+      wy += this.caveCavernWarpY.GetNoise(x, y, z) * a;
+      wz += this.caveCavernWarpZ.GetNoise(x, y, z) * a;
+    }
+    // Wall roughness (meters) — a signed radius bump; 0 when wall amp = 0.
+    const wallMeters = cave.cavernWallAmp > 0 ? this.caveCavernWall.GetNoise(x, y, z) * cave.cavernWallAmp : 0;
+
+    let best = -1; // priority: 2 = air, 1 = water, 0 = solid; -1 = not inside any cavern
+    for (let i = 0; i < feats.length; i += 4) {
+      const cx = feats[i], cy = feats[i + 1], cz = feats[i + 2], rx = feats[i + 3];
+      const ry = rx * (1 + vert), rz = rx;
+      const dx = wx - cx, dy = wy - cy, dz = wz - cz;
+      const ndx = dx / rx, ndy = dy / ry, ndz = dz / rz;
+      const nd = Math.sqrt(ndx * ndx + ndy * ndy + ndz * ndz);
+      if (nd >= 1 + wallMeters / rx) continue;    // outside this cavern's (rough) boundary
+
+      // Vertical span of the ellipsoid at this column → the local floor / ceiling world-Y.
+      const rh2 = ndx * ndx + ndz * ndz;
+      const vspan = ry * Math.sqrt(Math.max(0, 1 - rh2));
+      const floorY = cy - vspan;
+      const ceilY = cy + vspan;
+      // Flat water surface for this chamber (fraction of full height from the bottom).
+      const waterY = (cy - ry) + cave.cavernWaterLevel * 2 * ry;
+
+      let fill: number;
+      if (cave.cavernWaterLevel > 0 && y < waterY) {
+        fill = 1; // water (priority 1)
+      } else if (this.cavernSpikeSolid(x, z, y, floorY, ceilY)) {
+        fill = 0; // stalagmite / stalactite (solid)
+      } else {
+        fill = 2; // open air (priority 2)
+      }
+      if (fill > best) best = fill;
+    }
+
+    if (best < 0) return 0;
+    return best === 2 ? 1 : best === 1 ? 2 : 0;  // priority → fill code
+  }
+
+  /**
+   * Is this voxel inside a stalagmite (rising from the cavern floor) or stalactite (hanging from the
+   * ceiling)? A hashed 2D XZ grid places at most one conical spike per cell; each is a pure function
+   * of its cell → seamless. Height/radius/abundance scale with cavernSpikeAmount.
+   */
+  private cavernSpikeSolid(x: number, z: number, y: number, floorY: number, ceilY: number): boolean {
+    const amount = this.config.caveConfig.cavernSpikeAmount;
+    if (amount <= 0) return false;
+    const cell = CAVERN_SPIKE_CELL;
+    const scx = Math.floor(x / cell), scz = Math.floor(z / cell);
+    const seed = (this.config.seed + 70000) >>> 0;
+    const rng = makeRng((hashInt2(hashInt2(scx, scz), seed)) >>> 0);
+    if (rng() > amount) return false;                 // this cell has no spike
+    const fx = (scx + rng()) * cell, fz = (scz + rng()) * cell;
+    const ddx = x - fx, ddz = z - fz;
+    const distXZ = Math.sqrt(ddx * ddx + ddz * ddz);
+    const baseR = CAVERN_SPIKE_MAX_R * (0.5 + 0.5 * rng());
+    if (distXZ >= baseR) return false;
+    const peakH = CAVERN_SPIKE_MAX_H * amount * (0.4 + 0.6 * rng());
+    const coneH = peakH * (1 - distXZ / baseR);
+    const stalactite = rng() < 0.5;
+    return stalactite
+      ? (ceilY - y) >= 0 && ceilY - y < coneH
+      : (y - floorY) >= 0 && y - floorY < coneH;
   }
 
   /**
@@ -1367,13 +1335,15 @@ export class TerrainGenerator implements HeightSampler {
     const chunkWorldY = cy * CHUNK_SIZE; // Y is in voxels for height comparison
     const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
 
-    // Mode B: gather+trace the worms relevant to this chunk once, before any per-voxel carve test.
+    // Gather+trace the caves relevant to this chunk once, before any per-voxel carve test. Both
+    // types are independent, so prepare whichever are enabled (they combine in caveFillAt).
     const cave = this.config.caveConfig;
-    if (cave.mode === 'worms') this.prepareChunkWorms(cx, cy, cz);
-    if (cave.mode === 'worley') this.prepareChunkWorley(cx, cy, cz);
+    const anyCave = cave.wormsEnabled || cave.cavernsEnabled;
+    if (cave.wormsEnabled) this.prepareChunkWorms(cx, cy, cz);
+    if (cave.cavernsEnabled) this.prepareChunkCaverns(cx, cy, cz);
 
     // Debug: render the caves themselves as solid and skip all other terrain/stamps.
-    if (cave.invert && cave.mode !== 'off') {
+    if (cave.invert && anyCave) {
       return this.generateInvertedCaveChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ);
     }
 
@@ -1484,16 +1454,22 @@ export class TerrainGenerator implements HeightSampler {
             }
           }
           
-          // Carve caves (air) out of solid terrain. Pure function of world position → seamless
-          // across chunks. Gated on solid, non-water, non-wall voxels below the surface margin, so
-          // the large air region above the surface and the path furniture are skipped (keeps it cheap).
-          if (cave.mode !== 'off'
+          // Carve caves out of solid terrain. Pure function of world position → seamless across
+          // chunks. Gated on solid, non-water, non-wall voxels so the open air above the surface and
+          // the path furniture are skipped (keeps it cheap). Worms/caverns combine in caveFillAt:
+          // 1 = air (carve), 2 = water (cavern pool), 0 = leave terrain (outside / spike).
+          if (anyCave
               && finalWeight > -0.5
               && material !== waterConfig.waterMaterial
-              && material !== this.config.pathwayConfig.wallMaterial
-              && this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, distanceFromSurface)) {
-            finalWeight = -0.5;
-            material = 0; // air
+              && material !== this.config.pathwayConfig.wallMaterial) {
+            const fill = this.caveFillAt(worldX, voxelY * VOXEL_SCALE, worldZ);
+            if (fill === 1) {
+              finalWeight = -0.5;
+              material = 0; // air
+            } else if (fill === 2) {
+              finalWeight = 0.5; // solid body of water; flat top where it meets the cavern air above
+              material = waterConfig.waterMaterial;
+            }
           }
 
           // Default light level
