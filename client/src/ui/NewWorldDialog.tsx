@@ -1,10 +1,10 @@
 /**
- * NewWorldDialog — prompts for a world name + seed (both pre-filled) plus the
- * terrain's cave settings when creating a new world. The cave section lets you
- * pick the cave algorithm (off / spaghetti / cellular / worms) and tune that
- * mode's parameters; each mode keeps its own parameters in one CaveConfig object,
- * so switching mode just swaps which sliders are shown. The chosen config is
- * stored on the world and drives its terrain generation.
+ * NewWorldDialog — prompts for a world name + seed plus the terrain's cave settings when creating a
+ * new world. Pick the cave algorithm (off / worms / worley / spaghetti / cellular) and tune that
+ * mode's parameters; each mode keeps its own parameters in one CaveConfig, so switching mode swaps
+ * which sliders show. Every parameter has a short description. The chosen settings are persisted to
+ * localStorage so they carry across sessions (so you can tweak → create → tweak without re-entering
+ * everything). Name/seed are always fresh.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -18,89 +18,92 @@ interface NewWorldDialogProps {
 }
 
 type CaveMode = CaveConfig['mode'];
-type Field = { key: keyof CaveConfig; label: string; min: number; max: number; step: number };
+type Field = { key: keyof CaveConfig; label: string; min: number; max: number; step: number; desc: string };
 
-// Parameter sliders shown per cave mode. Global fields apply to every carving mode.
-const GLOBAL_FIELDS: Field[] = [
-  { key: 'surfaceMargin', label: 'Surface margin', min: 0, max: 10, step: 1 },
-  { key: 'surfaceTaper', label: 'Surface taper', min: 0, max: 12, step: 1 },
-];
+// Simplified per-mode parameter sliders, each with an explainer.
 const MODE_FIELDS: Record<Exclude<CaveMode, 'off'>, Field[]> = {
+  worms: [
+    { key: 'wormsPerCell', label: 'Density', min: 0, max: 20, step: 0.5, desc: 'How many tunnels are generated in each area.' },
+    { key: 'wormCellSize', label: 'Spacing', min: 15, max: 100, step: 5, desc: 'Distance between tunnel start points — larger is sparser.' },
+    { key: 'wormSegments', label: 'Length', min: 10, max: 150, step: 5, desc: 'How far each tunnel travels before it ends.' },
+    { key: 'wormRadius', label: 'Tunnel size', min: 0.8, max: 5, step: 0.1, desc: 'Radius of the tunnels — bigger means wider caves.' },
+    { key: 'wormTurnRate', label: 'Winding', min: 0.1, max: 1, step: 0.05, desc: 'How much tunnels curve and wind (low = straighter).' },
+    { key: 'wormPitchRange', label: 'Verticality', min: 0, max: 3, step: 0.05, desc: 'How much tunnels rise and dive (0 = flat and level).' },
+  ],
+  worley: [
+    { key: 'worleyWarpFrequency', label: 'Warp frequency', min: 0.01, max: 0.1, step: 0.005, desc: 'How rapidly tunnels bend along their length.' },
+    { key: 'worleyWarpAmplitude', label: 'Warp amount', min: 0, max: 40, step: 1, desc: 'How strongly tunnels wind away from straight.' },
+    { key: 'worleyXZCompression', label: 'Horizontal squeeze', min: 0.5, max: 4, step: 0.1, desc: 'Compresses caves horizontally (higher = tighter).' },
+    { key: 'worleyYCompression', label: 'Vertical squeeze', min: 0.5, max: 6, step: 0.1, desc: 'Flattens caves — higher means fewer vertical drops.' },
+  ],
   spaghetti: [
-    { key: 'verticalSquash', label: 'Vertical squash', min: 0.3, max: 3, step: 0.1 },
-    { key: 'frequency', label: 'Frequency', min: 0.01, max: 0.15, step: 0.005 },
-    { key: 'radius', label: 'Tube radius', min: 0.03, max: 0.25, step: 0.01 },
-    { key: 'regionThreshold', label: 'Region threshold', min: -1, max: 0.8, step: 0.05 },
-    { key: 'regionFrequency', label: 'Region frequency', min: 0.002, max: 0.05, step: 0.002 },
+    { key: 'verticalSquash', label: 'Vertical squash', min: 0.3, max: 3, step: 0.1, desc: 'Flattens caves vertically (>1 = flatter, walkable).' },
+    { key: 'frequency', label: 'Frequency', min: 0.01, max: 0.15, step: 0.005, desc: 'Tunnel scale — higher is smaller and denser.' },
+    { key: 'radius', label: 'Tube radius', min: 0.03, max: 0.25, step: 0.01, desc: 'Thickness of the tubes.' },
+    { key: 'regionThreshold', label: 'Clustering', min: -1, max: 0.8, step: 0.05, desc: 'Cluster caves into regions (−1 = everywhere).' },
+    { key: 'regionFrequency', label: 'Region scale', min: 0.002, max: 0.05, step: 0.002, desc: 'Size of the clustered regions.' },
   ],
   cellular: [
-    { key: 'verticalSquash', label: 'Vertical squash', min: 0.3, max: 3, step: 0.1 },
-    { key: 'cellFrequency', label: 'Cell frequency', min: 0.005, max: 0.05, step: 0.002 },
-    { key: 'edgeThreshold', label: 'Corridor width', min: -1, max: -0.5, step: 0.02 },
-    { key: 'warpFrequency', label: 'Warp frequency', min: 0.005, max: 0.08, step: 0.005 },
-    { key: 'warpAmplitude', label: 'Warp amplitude', min: 0, max: 20, step: 1 },
-  ],
-  // Worley's two primary knobs (Cave size / Cave spacing) are handled specially below via a
-  // width-preserving coupling; these are the advanced direct params kept per request.
-  worley: [
-    { key: 'worleyWarpFrequency', label: 'Warp frequency', min: 0.01, max: 0.1, step: 0.005 },
-    { key: 'worleyWarpAmplitude', label: 'Warp amplitude', min: 0, max: 40, step: 1 },
-    { key: 'worleyXZCompression', label: 'Horizontal squeeze', min: 0.5, max: 4, step: 0.1 },
-    { key: 'worleyYCompression', label: 'Vertical squeeze', min: 0.5, max: 6, step: 0.1 },
-  ],
-  worms: [
-    { key: 'wormsPerCell', label: 'Worms / cell', min: 0, max: 20, step: 0.5 },
-    { key: 'wormCellSize', label: 'Spawn cell (m)', min: 10, max: 100, step: 5 },
-    { key: 'wormSegments', label: 'Length (steps)', min: 10, max: 150, step: 5 },
-    { key: 'wormStep', label: 'Step (m)', min: 0.5, max: 3, step: 0.1 },
-    { key: 'wormRadius', label: 'Radius (m)', min: 0.8, max: 5, step: 0.1 },
-    { key: 'wormRadiusJitter', label: 'Radius jitter', min: 0, max: 1, step: 0.05 },
-    { key: 'wormRadiusAlongVar', label: 'Radius variation', min: 0, max: 1, step: 0.05 },
-    { key: 'wormWallAmp', label: 'Wall roughness (m)', min: 0, max: 2, step: 0.1 },
-    { key: 'wormWallFrequency', label: 'Wall bump freq', min: 0.02, max: 0.4, step: 0.01 },
-    { key: 'wormSteerFrequency', label: 'Winding freq', min: 0.01, max: 0.3, step: 0.01 },
-    { key: 'wormTurnRate', label: 'Turn rate', min: 0.1, max: 1, step: 0.05 },
-    { key: 'wormPitchRange', label: 'Vertical range', min: 0, max: 3, step: 0.05 },
-    { key: 'wormMaxPitch', label: 'Max pitch', min: 0.1, max: 3, step: 0.05 },
-    { key: 'wormDownwardDrift', label: 'Downward drift', min: 0, max: 1, step: 0.02 },
-    { key: 'wormConvergence', label: 'Convergence', min: 0, max: 1, step: 0.05 },
-    { key: 'wormDepthRange', label: 'Depth range (m)', min: 5, max: 100, step: 5 },
-    { key: 'wormSurfaceOvershoot', label: 'Surface overshoot (m)', min: 0, max: 15, step: 1 },
+    { key: 'verticalSquash', label: 'Vertical squash', min: 0.3, max: 3, step: 0.1, desc: 'Flattens caverns vertically.' },
+    { key: 'cellFrequency', label: 'Cell size', min: 0.005, max: 0.05, step: 0.002, desc: 'Lower = larger caverns and longer corridors.' },
+    { key: 'edgeThreshold', label: 'Corridor width', min: -1, max: -0.5, step: 0.02, desc: 'Higher opens the corridors wider.' },
+    { key: 'warpFrequency', label: 'Warp scale', min: 0.005, max: 0.08, step: 0.005, desc: 'Frequency of the wall distortion.' },
+    { key: 'warpAmplitude', label: 'Warp amount', min: 0, max: 20, step: 1, desc: 'Strength of the wall distortion.' },
   ],
 };
 
 const MODES: { value: CaveMode; label: string }[] = [
   { value: 'off', label: 'Off' },
-  { value: 'worley', label: 'Worley' },
   { value: 'worms', label: 'Worms' },
+  { value: 'worley', label: 'Worley' },
   { value: 'spaghetti', label: 'Spaghetti' },
   { value: 'cellular', label: 'Cellular' },
 ];
 const DISTANCE_FNS: CaveConfig['cellDistanceFunction'][] = ['euclidean', 'manhattan', 'hybrid'];
 
 /**
- * Worley "Cave spacing" + "Cave size" (both 0..1) → the underlying frequency/cutoff. Spacing maps
- * to frequency (higher slider = lower frequency = caves further apart); the cutoff is coupled to the
- * frequency so tunnel WIDTH stays constant as spacing changes (empirically `cut ≈ 3·freq − 0.368`
- * holds ~14% fill), and Size shifts the cutoff on top. Defaults (0.5, 0.833) reproduce
- * DEFAULT_CAVE_CONFIG (freq 0.006, cut −0.35).
+ * Worley "Cave size" + "Cave spacing" (both 0..1) → the underlying frequency/cutoff. Spacing maps to
+ * frequency (higher = lower frequency = caves further apart); the cutoff is coupled to the frequency
+ * so tunnel WIDTH stays constant as spacing changes (`cut ≈ 3·freq − 0.368` holds ~14% fill), and
+ * Size shifts the cutoff on top. Defaults (0.5, 0.833) ≈ DEFAULT_CAVE_CONFIG (freq 0.006, cut −0.35).
  */
 function deriveWorley(size: number, spacing: number): Partial<CaveConfig> {
-  const worleyFrequency = 0.016 - 0.012 * spacing;                 // 0.016 (dense) → 0.004 (spaced)
+  const worleyFrequency = 0.016 - 0.012 * spacing;
   let worleyCutoff = 3.0 * worleyFrequency - 0.368 - (size - 0.5) * 0.18;
   worleyCutoff = Math.max(-0.55, Math.min(-0.15, worleyCutoff));
-  return { worleyFrequency, worleyCutoff, worleySurfaceCutoff: worleyCutoff + 0.18 };
+  return { worleyFrequency, worleyCutoff };
 }
 const WORLEY_DEFAULT_SIZE = 0.5;
 const WORLEY_DEFAULT_SPACING = 0.833;
 
+// Persist the chosen cave settings across sessions (name/seed stay fresh).
+const CAVE_STORE_KEY = 'worldify-new-world-cave';
+type SavedCave = { cave: CaveConfig; size: number; spacing: number };
+function loadSavedCave(): SavedCave {
+  try {
+    const raw = localStorage.getItem(CAVE_STORE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      return {
+        cave: { ...DEFAULT_CAVE_CONFIG, ...(p.cave ?? {}) },
+        size: typeof p.worleySize === 'number' ? p.worleySize : WORLEY_DEFAULT_SIZE,
+        spacing: typeof p.worleySpacing === 'number' ? p.worleySpacing : WORLEY_DEFAULT_SPACING,
+      };
+    }
+  } catch { /* ignore corrupt/absent */ }
+  return { cave: { ...DEFAULT_CAVE_CONFIG }, size: WORLEY_DEFAULT_SIZE, spacing: WORLEY_DEFAULT_SPACING };
+}
+function saveCave(cave: CaveConfig, worleySize: number, worleySpacing: number) {
+  try { localStorage.setItem(CAVE_STORE_KEY, JSON.stringify({ cave, worleySize, worleySpacing })); } catch { /* ignore */ }
+}
+
 export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
+  const initial = useRef(loadSavedCave()).current;
   const [name, setName] = useState('');
   const [seed, setSeed] = useState(() => String(randomWorldSeed()));
-  const [cave, setCave] = useState<CaveConfig>(() => ({ ...DEFAULT_CAVE_CONFIG }));
-  // Worley's two primary knobs (0..1); derive freq/cutoff into `cave` via the coupling above.
-  const [worleySize, setWorleySize] = useState(WORLEY_DEFAULT_SIZE);
-  const [worleySpacing, setWorleySpacing] = useState(WORLEY_DEFAULT_SPACING);
+  const [cave, setCave] = useState<CaveConfig>(initial.cave);
+  const [worleySize, setWorleySize] = useState(initial.size);
+  const [worleySpacing, setWorleySpacing] = useState(initial.spacing);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -110,6 +113,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
   const submit = () => {
     const parsedSeed = parseInt(seed, 10);
+    saveCave(cave, worleySize, worleySpacing);
     onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave);
   };
 
@@ -128,39 +132,28 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
       active ? 'bg-indigo-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white/70'
     }`;
 
-  const slider = (f: Field) => {
-    const value = (cave as unknown as Record<string, number>)[f.key] ?? 0;
-    return (
-      <label key={f.key} className="flex items-center justify-between gap-3">
-        <span className="text-white/70 text-xs shrink-0 w-32">{f.label}</span>
+  // A labelled slider row with a value readout and a description line beneath.
+  const sliderRow = (label: string, desc: string, value: number, min: number, max: number, step: number,
+    onChange: (v: number) => void, fmt: (v: number) => string) => (
+    <div key={label} className="flex flex-col gap-0.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-white/80 text-xs shrink-0 w-28">{label}</span>
         <input
-          type="range"
-          min={f.min}
-          max={f.max}
-          step={f.step}
-          value={value}
-          onChange={(e) => setField(f.key, parseFloat(e.target.value))}
+          type="range" min={min} max={max} step={step} value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
           className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
         />
-        <span className="text-white/50 text-xs tabular-nums w-12 text-right">
-          {Number.isInteger(f.step) ? value : value.toFixed(2)}
-        </span>
-      </label>
-    );
-  };
-
-  // A 0..1 knob (Worley Size / Spacing) shown as a percentage; recomputes the coupled worley params.
-  const knob = (label: string, value: number, set: (v: number) => void, deriveWith: (v: number) => Partial<CaveConfig>) => (
-    <label key={label} className="flex items-center justify-between gap-3">
-      <span className="text-white/70 text-xs shrink-0 w-32">{label}</span>
-      <input
-        type="range" min={0} max={1} step={0.02} value={value}
-        onChange={(e) => { const v = parseFloat(e.target.value); set(v); setCave((c) => ({ ...c, ...deriveWith(v) })); }}
-        className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-      />
-      <span className="text-white/50 text-xs tabular-nums w-12 text-right">{Math.round(value * 100)}%</span>
-    </label>
+        <span className="text-white/50 text-xs tabular-nums w-12 text-right">{fmt(value)}</span>
+      </div>
+      <span className="text-white/40 text-[10px] leading-tight">{desc}</span>
+    </div>
   );
+
+  const slider = (f: Field) => {
+    const value = (cave as unknown as Record<string, number>)[f.key] ?? 0;
+    return sliderRow(f.label, f.desc, value, f.min, f.max, f.step,
+      (v) => setField(f.key, v), (v) => (Number.isInteger(f.step) ? String(v) : v.toFixed(2)));
+  };
 
   return (
     <Modal
@@ -217,9 +210,9 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
         </div>
 
         {cave.mode !== 'off' && (
-          <div className="flex flex-col gap-2 max-h-[38vh] overflow-y-auto scrollbar-compact pr-1">
+          <div className="flex flex-col gap-2.5 max-h-[42vh] overflow-y-auto scrollbar-compact pr-1">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-white/70 text-xs">Invert (debug: caves solid)</span>
+              <span className="text-white/80 text-xs">Invert (debug)</span>
               <button className={pill(cave.invert)} onClick={() => setCave((c) => ({ ...c, invert: !c.invert }))}>
                 {cave.invert ? 'On' : 'Off'}
               </button>
@@ -227,7 +220,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
             {cave.mode === 'cellular' && (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-white/70 text-xs">Cross-section</span>
+                <span className="text-white/80 text-xs">Cross-section</span>
                 <div className="flex gap-1.5">
                   {DISTANCE_FNS.map((d) => (
                     <button key={d} className={pill(cave.cellDistanceFunction === d)}
@@ -241,12 +234,13 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
             {cave.mode === 'worley' && (
               <>
-                {knob('Cave size', worleySize, setWorleySize, (v) => deriveWorley(v, worleySpacing))}
-                {knob('Cave spacing', worleySpacing, setWorleySpacing, (v) => deriveWorley(worleySize, v))}
+                {sliderRow('Cave size', 'Overall tunnel and cavern width.', worleySize, 0, 1, 0.02,
+                  (v) => { setWorleySize(v); setCave((c) => ({ ...c, ...deriveWorley(v, worleySpacing) })); }, (v) => `${Math.round(v * 100)}%`)}
+                {sliderRow('Cave spacing', 'How far apart caves sit — tunnel size stays constant.', worleySpacing, 0, 1, 0.02,
+                  (v) => { setWorleySpacing(v); setCave((c) => ({ ...c, ...deriveWorley(worleySize, v) })); }, (v) => `${Math.round(v * 100)}%`)}
               </>
             )}
 
-            {GLOBAL_FIELDS.map(slider)}
             {MODE_FIELDS[cave.mode].map(slider)}
           </div>
         )}

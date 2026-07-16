@@ -107,10 +107,6 @@ export interface CaveConfig {
   invert: boolean;
   /** Multiply Y before sampling; > 1 squashes caves vertically → flatter, more walkable tunnels. */
   verticalSquash: number;
-  /** Voxels below the surface before carving begins (small, since surface breaches are allowed). */
-  surfaceMargin: number;
-  /** Voxels over which the carve band tapers to zero toward the surface (keeps breaches sparse). */
-  surfaceTaper: number;
   /** Optional hard floor in meters; no caves are carved below this world Y. */
   floorY?: number;
 
@@ -159,11 +155,6 @@ export interface CaveConfig {
   wormMaxPitch: number;
   /** Gentle constant downward drift in radians (0 = level on average → even Y distribution). */
   wormDownwardDrift: number;
-  /** How far ABOVE the surface (meters) the (uniform) worm start band extends, so near-surface
-   *  worms straddle the surface and carve natural entrances — no dedicated "entrance worms". */
-  wormSurfaceOvershoot: number;
-  /** How far below the surface (meters) worm start depths are spread (uniform). */
-  wormDepthRange: number;
   /** Radius variation ALONG each worm, 0..1 — low-freq bulges (chambers) and pinches (squeezes). */
   wormRadiusAlongVar: number;
   /** Wall-roughness displacement amplitude in meters (0 = perfectly smooth tube walls). */
@@ -178,8 +169,6 @@ export interface CaveConfig {
   worleyFrequency: number;
   /** Carve where the F1/F3 ratio (range ~[-1,0]) exceeds this; HIGHER = smaller caves. */
   worleyCutoff: number;
-  /** Effective cutoff eased to at the surface (mod's surface easing → fewer breaches up top). */
-  worleySurfaceCutoff: number;
   /** Per-axis Perlin domain-warp frequency (1/m) for organic distortion. */
   worleyWarpFrequency: number;
   /** Perlin warp amplitude in meters (scaled up with depth below the surface). */
@@ -243,8 +232,9 @@ export const DEFAULT_PATHWAY_CONFIG: PathwayConfig = {
   waterDepth: -1,           // Water fills 1 voxel above original terrain (negative = above)
 };
 
-/** Minimum fraction of the full carve width kept at the surface (mouth width vs. deep-cave width). */
-const SURFACE_TAPER_MIN = 0.5;
+/** Worms only seed at or below this world Y (meters) — a few metres above the max terrain height —
+ *  so worms carve down "from above the top of the terrain" without wasting traces on high-air cells. */
+const WORM_SEED_TOP_Y = 8;
 
 /** Max meters of per-worm steering-noise offset at wormConvergence=0 (fully independent worms).
  *  Kept small so that even at the higher steering frequency the shared flow-field (→ convergence)
@@ -275,11 +265,9 @@ const WORLEY_WARP_DEPTH = 48;
 // ============== Default Cave Configuration ==============
 
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
-  mode: 'worley',           // Worley-noise caves (mimics the Worley's Caves mod); others via config
+  mode: 'worms',            // traced worms (the best-feeling caves); others available via config
   invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
-  verticalSquash: 0.8,      // < 1 → caves a touch taller than wide, so a 1.6 m player fits/walks
-  surfaceMargin: 0,         // carve up to the surface voxel so tunnels can breach and be entered
-  surfaceTaper: 4,          // narrow the mouth over the top 4 voxels (to SURFACE_TAPER_MIN width)
+  verticalSquash: 0.8,      // < 1 → field caves (spaghetti/cellular) a touch taller than wide
   floorY: undefined,        // no hard floor by default
 
   // Mode A — spaghetti
@@ -295,30 +283,29 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   warpFrequency: 0.03,      // organic wall wobble
   warpAmplitude: 6,         // meters
 
-  // Mode B — worms (traced snake tunnels)
-  wormCellSize: 40,         // 40 m spawn cells
-  wormsPerCell: 12.0,       // very dense, braided network filling the sub-surface volume
-  wormSegments: 80,         // ~96 m long worms (80 × 1.2 m) → wander far
+  // Mode B — worms (traced tunnels). Uniform by default: no radius variety / roughness, mostly
+  // level, moderate winding. Seeded on a 3D grid so they fill the whole depth from just above the
+  // surface downward (no surface/depth params).
+  wormCellSize: 40,         // 40 m spawn cells (3D grid)
+  wormsPerCell: 8.0,        // worms per 3D cell → ~12% fill, even network at all depths
+  wormSegments: 60,         // ~72 m long worms (60 × 1.2 m)
   wormStep: 1.2,            // 1.2 m per step (dense spheres → smooth, connected tunnels)
-  wormRadius: 2.0,          // ~4 m base diameter; up to ~10 m at bulges → bigger carves
-  wormRadiusJitter: 0.6,    // ±60% radius variety between worms
-  wormSteerFrequency: 0.05, // low flow-field frequency → large, sweeping arcs (not tight wiggle)
-  wormTurnRate: 0.8,        // follow the flow heading closely but with a little smoothing
-  wormPitchRange: 1.75,     // ±1.75 rad vertical arc → tunnels climb/dive steeply (2.5× steeper)
-  wormMaxPitch: 2.0,        // clamp (generous — lets the steeper vertical arcs through)
-  wormDownwardDrift: 0.0,   // level on average → even Y distribution (no net dive)
-  wormSurfaceOvershoot: 4,  // start band reaches 4 m above the surface → near-surface worms breach
-  wormDepthRange: 50,       // starts spread UNIFORMLY across the depth band → even, no dead zones
-  wormRadiusAlongVar: 0.6,  // ±60% radius wobble along each worm → chambers + squeezes
-  wormWallAmp: 0.7,         // 0.7 m wall roughness → organic, non-smooth walls
-  wormWallFrequency: 0.15,  // bump scale on the walls
-  wormConvergence: 0.45,    // worms share much of the flow-field → frequent, natural merges/forks
+  wormRadius: 2.0,          // ~4 m diameter tunnels
+  wormRadiusJitter: 0.0,    // uniform radius between worms (start simple; raise for variety)
+  wormSteerFrequency: 0.05, // low flow-field frequency → large, sweeping bends
+  wormTurnRate: 0.8,        // how tightly worms follow the flow heading (winding amount)
+  wormPitchRange: 0.3,      // small vertical wander → mostly level, curve left/right
+  wormMaxPitch: 1.0,        // clamp on steepness
+  wormDownwardDrift: 0.0,   // level on average
+  wormRadiusAlongVar: 0.0,  // uniform radius along each worm (no chambers/squeezes to start)
+  wormWallAmp: 0.0,         // smooth walls (no roughness to start)
+  wormWallFrequency: 0.15,  // bump scale on the walls (only used if wormWallAmp > 0)
+  wormConvergence: 0.45,    // worms share much of the flow-field → natural merges/forks
 
   // Mode "worley" — Worley-noise caves (F1/F3 ratio thresholded; the Worley's Caves mod look)
-  worleyFrequency: 0.006,   // widely-spaced cells (~2.7× the mod scale) → long tunnels far apart
-  worleyCutoff: -0.35,      // holds ~14% fill / ~2 m tunnels at this frequency (size-preserving)
-  worleySurfaceCutoff: -0.17, // higher cutoff near the surface → caves pinch toward the top
-  worleyWarpFrequency: 0.025, // low warp frequency → long sweeping bends (winding, worm-like)
+  worleyFrequency: 0.006,   // widely-spaced cells → long tunnels far apart
+  worleyCutoff: -0.35,      // holds ~14% fill / ~2 m tunnels at this frequency
+  worleyWarpFrequency: 0.025, // low warp frequency → long sweeping bends
   worleyWarpAmplitude: 18,  // strong warp → straight Voronoi edges become winding tunnels
   worleyXZCompression: 1.0, // horizontal scale
   worleyYCompression: 4.0,  // strongly flatten cells → horizontal network, few vertical drops
@@ -661,43 +648,26 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - world Z in meters
    * @param distanceFromSurface - voxels below the surface (>0 = underground)
    */
-  isInsideCave(worldX: number, worldYmeters: number, worldZ: number, distanceFromSurface: number): boolean {
+  isInsideCave(worldX: number, worldYmeters: number, worldZ: number, _distanceFromSurface: number): boolean {
     const cave = this.config.caveConfig;
     if (cave.mode === 'off') return false;
-    if (distanceFromSurface < cave.surfaceMargin) return false;
     if (cave.floorY !== undefined && worldYmeters < cave.floorY) return false;
 
-    // Surface taper: near the surface the carve band shrinks toward SURFACE_TAPER_MIN of its full
-    // width (over surfaceTaper voxels), so entrances open as narrow mouths that widen with depth —
-    // sparse, cave-like breaches rather than long open trenches. It never reaches zero, so caves
-    // genuinely reach the surface and can be entered.
-    let taper = 1;
-    if (cave.surfaceTaper > 0) {
-      const t = Math.max(0, Math.min(1, (distanceFromSurface - cave.surfaceMargin) / cave.surfaceTaper));
-      taper = SURFACE_TAPER_MIN + (1 - SURFACE_TAPER_MIN) * t;
-    }
-
-    // "worley" mode: interpolate the prepared low-res Worley-ratio grid and threshold it. The cutoff
-    // eases from worleySurfaceCutoff at the surface to worleyCutoff at depth (mod-style surface easing).
-    if (cave.mode === 'worley') {
-      const surfaceT = cave.surfaceTaper > 0
-        ? Math.max(0, Math.min(1, (distanceFromSurface - cave.surfaceMargin) / cave.surfaceTaper))
-        : 1;
-      const cutoff = cave.worleySurfaceCutoff + (cave.worleyCutoff - cave.worleySurfaceCutoff) * surfaceT;
-      return this.isInsideWorleyCave(worldX, worldYmeters, worldZ, cutoff);
-    }
-
-    // Mode B carves explicit traced tubes (real 3D geometry) — use raw Y, no field squash.
+    // Mode B carves explicit traced tubes (real 3D geometry) — use raw Y, no field squash/taper.
     if (cave.mode === 'worms') {
-      return this.isInsideWormCave(worldX, worldYmeters, worldZ, taper);
+      return this.isInsideWormCave(worldX, worldYmeters, worldZ);
     }
 
-    // Y is squashed so field caves (A/C) are flatter (more walkable) than they are wide.
-    const y = worldYmeters * cave.verticalSquash;
+    // "worley" mode: interpolate the prepared low-res Worley-ratio grid and threshold it.
+    if (cave.mode === 'worley') {
+      return this.isInsideWorleyCave(worldX, worldYmeters, worldZ, cave.worleyCutoff);
+    }
 
+    // Field caves (A/C): Y is squashed so they are flatter (more walkable) than they are wide.
+    const y = worldYmeters * cave.verticalSquash;
     return cave.mode === 'spaghetti'
-      ? this.isInsideSpaghettiCave(worldX, y, worldZ, taper)
-      : this.isInsideCellularCave(worldX, y, worldZ, taper);
+      ? this.isInsideSpaghettiCave(worldX, y, worldZ, 1)
+      : this.isInsideCellularCave(worldX, y, worldZ, 1);
   }
 
   /**
@@ -747,7 +717,7 @@ export class TerrainGenerator implements HeightSampler {
    * chunk (a flat [x,y,z,r,…] list built by prepareChunkWorms). Linear scan with a squared-distance
    * early-out; the list is small (only worms crossing this chunk) and empty for chunks with no worms.
    */
-  private isInsideWormCave(x: number, y: number, z: number, taper: number): boolean {
+  private isInsideWormCave(x: number, y: number, z: number): boolean {
     const pts = this.chunkWormPts;
     if (pts.length === 0) return false;
     // Signed wall displacement at this voxel → bumpy, organic walls (added to every tube's radius).
@@ -757,10 +727,10 @@ export class TerrainGenerator implements HeightSampler {
       const dx = x - pts[i];
       const dy = y - pts[i + 1];
       const dz = z - pts[i + 2];
-      // Floor the effective radius so taper/negative wall-roughness can't pinch a tube below the
-      // sphere spacing and disconnect it. The floor ≤ WORM_MIN_RADIUS ≤ stored radius, so it never
-      // reaches past the gather cull → still seamless.
-      let reff = pts[i + 3] * taper + wall;
+      // Floor the effective radius so negative wall-roughness can't pinch a tube below the sphere
+      // spacing and disconnect it. The floor ≤ WORM_MIN_RADIUS ≤ stored radius, so it never reaches
+      // past the gather cull → still seamless.
+      let reff = pts[i + 3] + wall;
       if (reff < WORM_CARVE_MIN) reff = WORM_CARVE_MIN;
       if (dx * dx + dy * dy + dz * dz < reff * reff) return true;
     }
@@ -768,18 +738,21 @@ export class TerrainGenerator implements HeightSampler {
   }
 
   /**
-   * Trace every worm spawned by one spawn-cell (ci,cj) and return their sphere centers as a flat
-   * [x,y,z,r,…] Float64Array in world meters. Pure function of (ci, cj, seed) — so every chunk that
-   * gathers this cell reproduces identical worms (the seam guarantee). Cached per cell.
+   * Trace every worm spawned by one 3D spawn-cell (ci,cj,ck) and return their sphere centers as a
+   * flat [x,y,z,r,…] Float64Array in world meters. Pure function of (ci,cj,ck,seed) — so every chunk
+   * that gathers this cell reproduces identical worms (the seam guarantee). Cached per cell. Worms
+   * are seeded on a 3D grid, so they fill the whole sub-surface volume from the top of the terrain
+   * downward with no surface-margin / depth-range parameters.
    */
-  private traceWormCell(ci: number, cj: number): Float64Array {
-    const cacheKey = ci + ',' + cj;
+  private traceWormCell(ci: number, cj: number, ck: number): Float64Array {
+    const cacheKey = ci + ',' + cj + ',' + ck;
     const cached = this.wormCellCache.get(cacheKey);
     if (cached) return cached;
 
     const cave = this.config.caveConfig;
     const cs = cave.wormCellSize;
-    const rng = makeRng((hashInt2(ci, cj) ^ ((this.config.seed + 40000) >>> 0)) >>> 0);
+    const seed = (this.config.seed + 40000) >>> 0;
+    const rng = makeRng((hashInt2(hashInt2(ci, cj), ck) ^ seed) >>> 0);
 
     // Fractional density: floor + a probabilistic extra worm.
     let n = Math.floor(cave.wormsPerCell);
@@ -787,18 +760,14 @@ export class TerrainGenerator implements HeightSampler {
 
     // Per-worm steering offset; smaller with higher convergence → worms share a flow-field and braid.
     const phaseScale = WORM_PHASE_SCALE * (1 - cave.wormConvergence);
-    const startSpan = cave.wormSurfaceOvershoot + cave.wormDepthRange;
 
     const pts: number[] = [];
     for (let w = 0; w < n; w++) {
-      // Start: jittered inside the cell, at a Y spread UNIFORMLY from wormSurfaceOvershoot ABOVE the
-      // surface down to wormDepthRange below it → even vertical distribution, and the near-surface
-      // worms straddle the surface so they carve natural entrances (no dedicated entrance worms).
-      const sx = (ci + rng()) * cs;
-      const sz = (cj + rng()) * cs;
-      const surfaceM = this.sampleHeight(sx, sz) * VOXEL_SCALE;
-      const depth = -cave.wormSurfaceOvershoot + rng() * startSpan;
-      let hx = sx, hy = surfaceM - depth, hz = sz;
+      // Start: jittered anywhere inside the 3D cell (no surface reference).
+      const hx0 = (ci + rng()) * cs;
+      const hy0 = (ck + rng()) * cs;
+      const hz0 = (cj + rng()) * cs;
+      let hx = hx0, hy = hy0, hz = hz0;
 
       let yaw = rng() * Math.PI * 2;   // seeded heading; immediately steered toward the flow field
       let pitch = 0;
@@ -867,19 +836,25 @@ export class TerrainGenerator implements HeightSampler {
     const gatherCells = Math.ceil(maxReach / cs) + 1 + this.wormGatherExtraCells;
     const ciMin = Math.floor(x0 / cs) - gatherCells, ciMax = Math.floor(x1 / cs) + gatherCells;
     const cjMin = Math.floor(z0 / cs) - gatherCells, cjMax = Math.floor(z1 / cs) + gatherCells;
+    // Worms are seeded on a 3D grid → also gather vertically. Cap the top so we never trace cells
+    // whose whole span sits well above the terrain (pure air, nothing to carve).
+    const ckMin = Math.floor(y0 / cs) - gatherCells;
+    const ckMax = Math.min(Math.floor(y1 / cs) + gatherCells, Math.floor(WORM_SEED_TOP_Y / cs));
 
     const out: number[] = [];
-    for (let cj = cjMin; cj <= cjMax; cj++) {
-      for (let ci = ciMin; ci <= ciMax; ci++) {
-        const pts = this.traceWormCell(ci, cj);
-        for (let i = 0; i < pts.length; i += 4) {
-          const px = pts[i], py = pts[i + 1], pz = pts[i + 2];
-          const pr = pts[i + 3] + wallSlop;   // include wall bulge in the overlap test
-          // Keep spheres overlapping the chunk AABB (broad sphere-vs-box test per axis).
-          if (px + pr < x0 || px - pr > x1) continue;
-          if (py + pr < y0 || py - pr > y1) continue;
-          if (pz + pr < z0 || pz - pr > z1) continue;
-          out.push(px, py, pz, pts[i + 3]);   // store the true radius; wall added at test time
+    for (let ck = ckMin; ck <= ckMax; ck++) {
+      for (let cj = cjMin; cj <= cjMax; cj++) {
+        for (let ci = ciMin; ci <= ciMax; ci++) {
+          const pts = this.traceWormCell(ci, cj, ck);
+          for (let i = 0; i < pts.length; i += 4) {
+            const px = pts[i], py = pts[i + 1], pz = pts[i + 2];
+            const pr = pts[i + 3] + wallSlop;   // include wall bulge in the overlap test
+            // Keep spheres overlapping the chunk AABB (broad sphere-vs-box test per axis).
+            if (px + pr < x0 || px - pr > x1) continue;
+            if (py + pr < y0 || py - pr > y1) continue;
+            if (pz + pr < z0 || pz - pr > z1) continue;
+            out.push(px, py, pz, pts[i + 3]);   // store the true radius; wall added at test time
+          }
         }
       }
     }
@@ -1516,7 +1491,6 @@ export class TerrainGenerator implements HeightSampler {
               && finalWeight > -0.5
               && material !== waterConfig.waterMaterial
               && material !== this.config.pathwayConfig.wallMaterial
-              && distanceFromSurface >= cave.surfaceMargin
               && this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, distanceFromSurface)) {
             finalWeight = -0.5;
             material = 0; // air
@@ -1572,8 +1546,7 @@ export class TerrainGenerator implements HeightSampler {
 
           let finalWeight = -0.5; // air
           let material = 0;
-          if (distanceFromSurface >= this.config.caveConfig.surfaceMargin
-              && this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, distanceFromSurface)) {
+          if (this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, distanceFromSurface)) {
             finalWeight = 0.5; // solid cave cast
             material = solidMaterial;
           }
