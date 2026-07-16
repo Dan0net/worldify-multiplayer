@@ -315,13 +315,13 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   wormConvergence: 0.45,    // worms share much of the flow-field → frequent, natural merges/forks
 
   // Mode "worley" — Worley-noise caves (F1/F3 ratio thresholded; the Worley's Caves mod look)
-  worleyFrequency: 0.016,   // matches the mod's base cave scale (~60-voxel cells)
-  worleyCutoff: -0.33,      // carve where F1/F3-1 > cutoff; higher = smaller caves (~13% fill)
-  worleySurfaceCutoff: -0.15, // higher cutoff near the surface → caves pinch toward the top (fewer gashes)
-  worleyWarpFrequency: 0.05, // Perlin domain-warp scale
-  worleyWarpAmplitude: 8,   // voxels at full depth → organic distortion, ramps in with depth
+  worleyFrequency: 0.006,   // widely-spaced cells (~2.7× the mod scale) → long tunnels far apart
+  worleyCutoff: -0.35,      // holds ~14% fill / ~2 m tunnels at this frequency (size-preserving)
+  worleySurfaceCutoff: -0.17, // higher cutoff near the surface → caves pinch toward the top
+  worleyWarpFrequency: 0.025, // low warp frequency → long sweeping bends (winding, worm-like)
+  worleyWarpAmplitude: 18,  // strong warp → straight Voronoi edges become winding tunnels
   worleyXZCompression: 1.0, // horizontal scale
-  worleyYCompression: 1.2,  // vertical scale slightly > 1 → a touch flatter/wider caverns
+  worleyYCompression: 4.0,  // strongly flatten cells → horizontal network, few vertical drops
 };
 
 // ============== Default Configuration ==

@@ -40,14 +40,13 @@ const MODE_FIELDS: Record<Exclude<CaveMode, 'off'>, Field[]> = {
     { key: 'warpFrequency', label: 'Warp frequency', min: 0.005, max: 0.08, step: 0.005 },
     { key: 'warpAmplitude', label: 'Warp amplitude', min: 0, max: 20, step: 1 },
   ],
+  // Worley's two primary knobs (Cave size / Cave spacing) are handled specially below via a
+  // width-preserving coupling; these are the advanced direct params kept per request.
   worley: [
-    { key: 'worleyCutoff', label: 'Cave size', min: -0.6, max: -0.05, step: 0.01 },
-    { key: 'worleySurfaceCutoff', label: 'Surface cutoff', min: -0.6, max: 0, step: 0.01 },
-    { key: 'worleyFrequency', label: 'Cave scale', min: 0.005, max: 0.04, step: 0.002 },
-    { key: 'worleyWarpFrequency', label: 'Warp frequency', min: 0.01, max: 0.15, step: 0.005 },
-    { key: 'worleyWarpAmplitude', label: 'Warp amplitude', min: 0, max: 20, step: 1 },
-    { key: 'worleyXZCompression', label: 'Horizontal squeeze', min: 0.5, max: 3, step: 0.1 },
-    { key: 'worleyYCompression', label: 'Vertical squeeze', min: 0.5, max: 3, step: 0.1 },
+    { key: 'worleyWarpFrequency', label: 'Warp frequency', min: 0.01, max: 0.1, step: 0.005 },
+    { key: 'worleyWarpAmplitude', label: 'Warp amplitude', min: 0, max: 40, step: 1 },
+    { key: 'worleyXZCompression', label: 'Horizontal squeeze', min: 0.5, max: 4, step: 0.1 },
+    { key: 'worleyYCompression', label: 'Vertical squeeze', min: 0.5, max: 6, step: 0.1 },
   ],
   worms: [
     { key: 'wormsPerCell', label: 'Worms / cell', min: 0, max: 20, step: 0.5 },
@@ -79,10 +78,29 @@ const MODES: { value: CaveMode; label: string }[] = [
 ];
 const DISTANCE_FNS: CaveConfig['cellDistanceFunction'][] = ['euclidean', 'manhattan', 'hybrid'];
 
+/**
+ * Worley "Cave spacing" + "Cave size" (both 0..1) → the underlying frequency/cutoff. Spacing maps
+ * to frequency (higher slider = lower frequency = caves further apart); the cutoff is coupled to the
+ * frequency so tunnel WIDTH stays constant as spacing changes (empirically `cut ≈ 3·freq − 0.368`
+ * holds ~14% fill), and Size shifts the cutoff on top. Defaults (0.5, 0.833) reproduce
+ * DEFAULT_CAVE_CONFIG (freq 0.006, cut −0.35).
+ */
+function deriveWorley(size: number, spacing: number): Partial<CaveConfig> {
+  const worleyFrequency = 0.016 - 0.012 * spacing;                 // 0.016 (dense) → 0.004 (spaced)
+  let worleyCutoff = 3.0 * worleyFrequency - 0.368 - (size - 0.5) * 0.18;
+  worleyCutoff = Math.max(-0.55, Math.min(-0.15, worleyCutoff));
+  return { worleyFrequency, worleyCutoff, worleySurfaceCutoff: worleyCutoff + 0.18 };
+}
+const WORLEY_DEFAULT_SIZE = 0.5;
+const WORLEY_DEFAULT_SPACING = 0.833;
+
 export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const [name, setName] = useState('');
   const [seed, setSeed] = useState(() => String(randomWorldSeed()));
   const [cave, setCave] = useState<CaveConfig>(() => ({ ...DEFAULT_CAVE_CONFIG }));
+  // Worley's two primary knobs (0..1); derive freq/cutoff into `cave` via the coupling above.
+  const [worleySize, setWorleySize] = useState(WORLEY_DEFAULT_SIZE);
+  const [worleySpacing, setWorleySpacing] = useState(WORLEY_DEFAULT_SPACING);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -130,6 +148,19 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
       </label>
     );
   };
+
+  // A 0..1 knob (Worley Size / Spacing) shown as a percentage; recomputes the coupled worley params.
+  const knob = (label: string, value: number, set: (v: number) => void, deriveWith: (v: number) => Partial<CaveConfig>) => (
+    <label key={label} className="flex items-center justify-between gap-3">
+      <span className="text-white/70 text-xs shrink-0 w-32">{label}</span>
+      <input
+        type="range" min={0} max={1} step={0.02} value={value}
+        onChange={(e) => { const v = parseFloat(e.target.value); set(v); setCave((c) => ({ ...c, ...deriveWith(v) })); }}
+        className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+      />
+      <span className="text-white/50 text-xs tabular-nums w-12 text-right">{Math.round(value * 100)}%</span>
+    </label>
+  );
 
   return (
     <Modal
@@ -206,6 +237,13 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
                   ))}
                 </div>
               </div>
+            )}
+
+            {cave.mode === 'worley' && (
+              <>
+                {knob('Cave size', worleySize, setWorleySize, (v) => deriveWorley(v, worleySpacing))}
+                {knob('Cave spacing', worleySpacing, setWorleySpacing, (v) => deriveWorley(worleySize, v))}
+              </>
             )}
 
             {GLOBAL_FIELDS.map(slider)}
