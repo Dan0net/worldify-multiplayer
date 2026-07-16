@@ -287,19 +287,19 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   // level, moderate winding. Seeded on a 3D grid so they fill the whole depth from just above the
   // surface downward (no surface/depth params).
   wormCellSize: 40,         // 40 m spawn cells (3D grid)
-  wormsPerCell: 8.0,        // worms per 3D cell → ~12% fill, even network at all depths
-  wormSegments: 60,         // ~72 m long worms (60 × 1.2 m)
+  wormsPerCell: 2.0,        // worms per 3D cell
+  wormSegments: 150,        // long worms (150 × 1.2 m ≈ 180 m)
   wormStep: 1.2,            // 1.2 m per step (dense spheres → smooth, connected tunnels)
   wormRadius: 2.0,          // ~4 m diameter tunnels
-  wormRadiusJitter: 0.0,    // uniform radius between worms (start simple; raise for variety)
+  wormRadiusJitter: 0.3,    // ±30% width variety between tunnels
   wormSteerFrequency: 0.05, // low flow-field frequency → large, sweeping bends
-  wormTurnRate: 0.8,        // how tightly worms follow the flow heading (winding amount)
-  wormPitchRange: 0.3,      // small vertical wander → mostly level, curve left/right
+  wormTurnRate: 1.0,        // follow the flow heading tightly (max winding)
+  wormPitchRange: 2.5,      // strong vertical wander (clamped by wormMaxPitch)
   wormMaxPitch: 1.0,        // clamp on steepness
   wormDownwardDrift: 0.0,   // level on average
-  wormRadiusAlongVar: 0.0,  // uniform radius along each worm (no chambers/squeezes to start)
-  wormWallAmp: 0.0,         // smooth walls (no roughness to start)
-  wormWallFrequency: 0.15,  // bump scale on the walls (only used if wormWallAmp > 0)
+  wormRadiusAlongVar: 0.5,  // ±50% radius wobble along each worm → chambers + squeezes
+  wormWallAmp: 0.6,         // 0.6 m wall roughness → irregular walls
+  wormWallFrequency: 0.4,   // fine wall bumps
   wormConvergence: 0.45,    // worms share much of the flow-field → natural merges/forks
 
   // Mode "worley" — Worley-noise caves (F1/F3 ratio thresholded; the Worley's Caves mod look)
