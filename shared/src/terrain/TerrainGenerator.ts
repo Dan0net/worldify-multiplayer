@@ -148,15 +148,20 @@ export interface CaveConfig {
   wormRadius: number;
   /** Per-worm radius variation, 0..1 (0 = uniform, 0.3 = ±30%). */
   wormRadiusJitter: number;
-  /** Steering-noise frequency (1/m); lower = smoother, longer curves. */
+  /** Flow-field frequency (1/m); higher = tighter, more frequent left/right winding. */
   wormSteerFrequency: number;
-  /** Steering strength: radians of yaw/pitch change applied per step. */
-  wormSteerStrength: number;
-  /** Restoring pull toward the target pitch each step, 0..1 (higher = flatter, more walkable). */
-  wormVerticalBias: number;
-  /** Target descent angle in radians worms relax toward each step (0 = level, higher = dives deeper). */
-  wormDownwardBias: number;
-  /** How far below the surface (meters) worm start depths are randomized (shallow-biased). */
+  /** How hard a worm turns toward the local flow heading each step, 0..1 (higher = follows tightly). */
+  wormTurnRate: number;
+  /** Max vertical wander in radians (small → worms stay near their start depth, curve left/right). */
+  wormPitchRange: number;
+  /** Hard clamp on pitch magnitude in radians so no worm ever plunges/climbs too steeply. */
+  wormMaxPitch: number;
+  /** Gentle constant downward drift in radians (0 = level on average → even Y distribution). */
+  wormDownwardDrift: number;
+  /** How far ABOVE the surface (meters) the (uniform) worm start band extends, so near-surface
+   *  worms straddle the surface and carve natural entrances — no dedicated "entrance worms". */
+  wormSurfaceOvershoot: number;
+  /** How far below the surface (meters) worm start depths are spread (uniform). */
   wormDepthRange: number;
   /** Radius variation ALONG each worm, 0..1 — low-freq bulges (chambers) and pinches (squeezes). */
   wormRadiusAlongVar: number;
@@ -230,9 +235,14 @@ const SURFACE_TAPER_MIN = 0.5;
 const WORM_PHASE_SCALE = 280;
 /** Frequency (1/m) of the along-worm radius-variation noise (low → long bulges/pinches). */
 const WORM_RADIUS_VAR_FREQ = 0.04;
-/** Hard floor on a worm's tube radius (meters) so aggressive pinching never disconnects the tunnel
- *  (must exceed wormStep/2 to keep consecutive spheres overlapping) and stays player-passable. */
+/** Hard floor on a worm's stored tube radius (meters) — caps how much along-worm variation can
+ *  pinch a tube. Must stay ≥ WORM_CARVE_MIN so the carve floor never widens a worm's reach beyond
+ *  the gather bound (which would open a seam). */
 const WORM_MIN_RADIUS = 1.0;
+/** Floor on the EFFECTIVE carve radius (after taper + wall roughness), so consecutive spheres always
+ *  overlap (must exceed wormStep/2) → tunnels never break into disconnected blobs. Kept ≤
+ *  WORM_MIN_RADIUS so it never reaches past the per-sphere gather cull. */
+const WORM_CARVE_MIN = 0.9;
 
 // ============== Default Cave Configuration ==============
 
@@ -260,20 +270,21 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   // Mode B — worms (traced snake tunnels)
   wormCellSize: 40,         // 40 m spawn cells
   wormsPerCell: 12.0,       // very dense, braided network filling the sub-surface volume
-  wormSegments: 80,         // ~120 m long worms (80 × 1.5 m) → reach deep, wander far
-  wormStep: 1.5,            // 1.5 m per step (< 2·WORM_MIN_RADIUS so spheres always overlap)
-  wormRadius: 1.5,          // ~3 m base diameter → tighter tunnels than before
+  wormSegments: 80,         // ~96 m long worms (80 × 1.2 m) → wander far
+  wormStep: 1.2,            // 1.2 m per step (dense spheres → smooth, connected tunnels)
+  wormRadius: 1.5,          // ~3 m base diameter → tighter tunnels
   wormRadiusJitter: 0.6,    // ±60% radius variety between worms
-  wormSteerFrequency: 0.06, // high-frequency steering → worms twist and turn rapidly
-  wormSteerStrength: 0.85,  // aggressive turns per step
-  wormVerticalBias: 0.15,   // restoring strength toward the target pitch
-  wormDownwardBias: 0.22,   // worms relax toward a ~13° dive → long downward passages
-  wormDepthRange: 50,       // starts spread UNIFORMLY across 0-50 m → fills deep volume, no dead zones
-  wormRadiusAlongVar: 0.6,  // ±60% radius wobble along each worm → strong chambers + squeezes
+  wormSteerFrequency: 0.20, // high flow-field frequency → frequent left/right winding (spiralling)
+  wormTurnRate: 1.0,        // track the flow heading exactly → maximum coherent winding
+  wormPitchRange: 0.15,     // ±0.15 rad vertical wander → worms stay near their start depth
+  wormMaxPitch: 0.35,       // never steeper than ~20° up/down
+  wormDownwardDrift: 0.0,   // level on average → even Y distribution (no net dive)
+  wormSurfaceOvershoot: 4,  // start band reaches 4 m above the surface → near-surface worms breach
+  wormDepthRange: 50,       // starts spread UNIFORMLY across the depth band → even, no dead zones
+  wormRadiusAlongVar: 0.6,  // ±60% radius wobble along each worm → chambers + squeezes
   wormWallAmp: 0.7,         // 0.7 m wall roughness → organic, non-smooth walls
   wormWallFrequency: 0.15,  // bump scale on the walls
-  wormConvergence: 0.45,    // share much of the steering field → frequent merges/forks (without
-                            // collapsing same-cell worms into one — higher values over-merge)
+  wormConvergence: 0.45,    // worms share much of the flow-field → frequent, natural merges/forks
 };
 
 // ============== Default Configuration ==
@@ -671,8 +682,12 @@ export class TerrainGenerator implements HeightSampler {
       const dx = x - pts[i];
       const dy = y - pts[i + 1];
       const dz = z - pts[i + 2];
-      const reff = pts[i + 3] * taper + wall;
-      if (reff > 0 && dx * dx + dy * dy + dz * dz < reff * reff) return true;
+      // Floor the effective radius so taper/negative wall-roughness can't pinch a tube below the
+      // sphere spacing and disconnect it. The floor ≤ WORM_MIN_RADIUS ≤ stored radius, so it never
+      // reaches past the gather cull → still seamless.
+      let reff = pts[i + 3] * taper + wall;
+      if (reff < WORM_CARVE_MIN) reff = WORM_CARVE_MIN;
+      if (dx * dx + dy * dy + dz * dz < reff * reff) return true;
     }
     return false;
   }
@@ -695,40 +710,50 @@ export class TerrainGenerator implements HeightSampler {
     let n = Math.floor(cave.wormsPerCell);
     if (rng() < cave.wormsPerCell - n) n++;
 
-    // Descent the worm relaxes toward each step (negative pitch = downward, since hy += sin(pitch)).
-    const targetPitch = -cave.wormDownwardBias;
     // Per-worm steering offset; smaller with higher convergence → worms share a flow-field and braid.
     const phaseScale = WORM_PHASE_SCALE * (1 - cave.wormConvergence);
+    const startSpan = cave.wormSurfaceOvershoot + cave.wormDepthRange;
 
     const pts: number[] = [];
     for (let w = 0; w < n; w++) {
-      // Start: jittered inside the cell, at a depth spread UNIFORMLY through wormDepthRange so worms
-      // seed the whole sub-surface volume evenly (no near-surface pile-up, no deep dead zones).
+      // Start: jittered inside the cell, at a Y spread UNIFORMLY from wormSurfaceOvershoot ABOVE the
+      // surface down to wormDepthRange below it → even vertical distribution, and the near-surface
+      // worms straddle the surface so they carve natural entrances (no dedicated entrance worms).
       const sx = (ci + rng()) * cs;
       const sz = (cj + rng()) * cs;
       const surfaceM = this.sampleHeight(sx, sz) * VOXEL_SCALE;
-      const depth = cave.surfaceMargin * VOXEL_SCALE + rng() * cave.wormDepthRange;
+      const depth = -cave.wormSurfaceOvershoot + rng() * startSpan;
       let hx = sx, hy = surfaceM - depth, hz = sz;
 
-      let yaw = rng() * Math.PI * 2;
-      let pitch = targetPitch + (rng() * 2 - 1) * 0.3;   // start near the descent angle
+      let yaw = rng() * Math.PI * 2;   // seeded heading; immediately steered toward the flow field
+      let pitch = 0;
       const baseR = cave.wormRadius * (1 + (rng() * 2 - 1) * cave.wormRadiusJitter);
       const phase = rng() * phaseScale;
 
       for (let s = 0; s <= cave.wormSegments; s++) {
         // Radius bulges/pinches along the worm (low-freq noise → chambers and squeezes), floored so
-        // a pinch never disconnects the tube or becomes impassable.
+        // a pinch never becomes impassable.
         const radius = Math.max(
           WORM_MIN_RADIUS,
           baseR * (1 + cave.wormRadiusAlongVar * this.caveWormRadius.GetNoise(hx, hy, hz)),
         );
         pts.push(hx, hy, hz, radius);
-        // Steer the heading from noise sampled at the head (+ per-worm phase offset).
-        const dyaw = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase) * cave.wormSteerStrength;
-        const dpitch = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase) * cave.wormSteerStrength;
-        yaw += dyaw;
-        // Restore toward the (downward) target pitch rather than horizontal → sustained descent.
-        pitch = targetPitch + (pitch + dpitch - targetPitch) * (1 - cave.wormVerticalBias);
+
+        // Steer toward a SHARED flow field (pure function of position): worms passing through the
+        // same region seek the same heading → they align, converge, and split where the field
+        // diverges — coherent horizontal spiralling instead of a knotting random walk.
+        const targetYaw = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase) * Math.PI;
+        let dYaw = targetYaw - yaw;
+        dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));   // wrap to [-π, π]
+        yaw += dYaw * cave.wormTurnRate;
+
+        // Pitch stays gentle: a small vertical wander around a (near-zero) drift, hard-clamped so
+        // worms never plunge — they curve left/right and hold their depth band.
+        let targetPitch = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase) * cave.wormPitchRange - cave.wormDownwardDrift;
+        if (targetPitch > cave.wormMaxPitch) targetPitch = cave.wormMaxPitch;
+        else if (targetPitch < -cave.wormMaxPitch) targetPitch = -cave.wormMaxPitch;
+        pitch += (targetPitch - pitch) * cave.wormTurnRate;
+
         const cp = Math.cos(pitch);
         hx += Math.cos(yaw) * cp * cave.wormStep;
         hy += Math.sin(pitch) * cave.wormStep;
