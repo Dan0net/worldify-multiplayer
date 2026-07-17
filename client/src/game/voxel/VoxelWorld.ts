@@ -42,6 +42,7 @@ import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
+import { expandChunkToGrid } from './ChunkMesher.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
 import { perfStats } from '../debug/PerformanceStats.js';
@@ -76,6 +77,18 @@ function columnChunkRange(heights: ArrayLike<number>): { minCy: number; maxCy: n
 /** Shared read-only all-dark "light from above" (used for underground chunks with no chunk above
  *  loaded, so caves aren't lit as open sky). Never mutated — the sunlight pass only reads it. */
 const DARK_ABOVE = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+
+/**
+ * The 7 negative-direction neighbour offsets. A chunk's mesh reads its +X/+Y/+Z faces, edges, and
+ * corner as margin, so an edited chunk's voxels are consumed as margin by exactly these 7 neighbours
+ * (plus the chunk itself). Those neighbours' boundary GEOMETRY changes and they must fully re-mesh;
+ * every other relit chunk only changed light and takes the cheap light-only resample path.
+ */
+const NEGATIVE_MARGIN_OFFSETS_7 = [
+  [-1, 0, 0], [0, -1, 0], [0, 0, -1],
+  [-1, -1, 0], [-1, 0, -1], [0, -1, -1],
+  [-1, -1, -1],
+] as const;
 
 /** Fast typed-array equality check (same length assumed). */
 function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
@@ -1316,9 +1329,8 @@ export class VoxelWorld implements ChunkProvider {
       this.lastBFSChunk = null;
     }
 
-    // Dispatch all affected chunks as one atomic batch so every mesh
-    // updates in the same frame — no boundary flash between neighbors.
-    this.remeshPipeline.dispatchBatch(batchKeys);
+    // Re-mesh chunks whose geometry actually changed; light-only-resample the rest.
+    this.dispatchRelightBatch(batchKeys, modifiedKeys);
 
     // Persist edited chunks + record undo for the active local world.
     if (this.isLocal) {
@@ -1382,6 +1394,62 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Apply a relight result to the display: chunks whose voxels changed (`editedKeys`) plus any
+   * relit chunk that reads an edited chunk's voxels as +margin (its boundary geometry changed) get
+   * a full re-mesh; every other relit chunk only changed light and takes the light-only resample
+   * path — no SurfaceNets, no geometry realloc, no collision BVH rebuild (kills the edit judder).
+   *
+   * @param batchKeys  All chunks whose light was recomputed this edit.
+   * @param editedKeys Subset of chunks whose VOXELS changed.
+   */
+  private dispatchRelightBatch(batchKeys: Set<string>, editedKeys: string[]): void {
+    // Start with the edited chunks, then add any relit chunk that consumes an edited chunk's
+    // voxels as margin (restricted to chunks already in the relight set — we don't widen it here).
+    const remeshKeys = new Set<string>(editedKeys);
+    for (const ek of editedKeys) {
+      const c = this.chunks.get(ek);
+      if (!c) continue;
+      for (const [dx, dy, dz] of NEGATIVE_MARGIN_OFFSETS_7) {
+        const nk = chunkKey(c.cx + dx, c.cy + dy, c.cz + dz);
+        if (batchKeys.has(nk)) remeshKeys.add(nk);
+      }
+    }
+
+    // Light-only resample everyone else; fall back to a full re-mesh if resampling isn't possible
+    // (chunk not yet meshed, or a full re-mesh is already in flight and will produce fresh light).
+    for (const key of batchKeys) {
+      if (remeshKeys.has(key)) continue;
+      const chunk = this.chunks.get(key);
+      if (!chunk || !this.resampleChunkLight(chunk)) remeshKeys.add(key);
+    }
+
+    // Edited/boundary chunks re-mesh as one atomic batch (same-frame swap, no boundary flash).
+    this.remeshPipeline.dispatchBatch(remeshKeys);
+  }
+
+  /**
+   * Light-only relight of a single chunk: rebuild its 34³ grid (reading the already-updated light
+   * bits from chunk.data + neighbours) and rewrite ONLY the mesh's light attributes — no re-mesh,
+   * no BVH rebuild. Marks the owning merged group dirty so it re-copies the new light next frame.
+   *
+   * @returns true if handled by resampling; false if the caller must fall back to a full re-mesh
+   *   (no geometry yet, or a re-mesh is already in flight for this chunk).
+   */
+  private resampleChunkLight(chunk: Chunk): boolean {
+    if (this.remeshPipeline.isBusy(chunk.key)) return false; // let the in-flight re-mesh own the light
+    const geo = this.geometries.get(chunk.key);
+    if (!geo || !geo.hasGeometry()) return false;
+
+    const grid = this.meshPool.takeGrid();
+    expandChunkToGrid(chunk, this.chunks, grid);
+    const changed = geo.resampleLightFromGrid(grid);
+    this.meshPool.returnGrid(grid);
+
+    if (changed) this.chunkGrouper.markChunkDirty(chunk.key);
+    return true;
+  }
+
+  /**
    * Undo the most recent local build op (restores chunks + persists the revert).
    * @returns the reverted chunk keys (for map-tile refresh), or [] if nothing to undo.
    */
@@ -1391,10 +1459,12 @@ export class VoxelWorld implements ChunkProvider {
     if (!entry) return [];
 
     const batchKeys = new Set<string>();
+    const editedKeys: string[] = [];
     for (const snap of entry) {
       const chunk = this.chunks.get(snap.key);
       if (chunk) {
         chunk.data.set(snap.data);
+        editedKeys.push(snap.key);
         this.relightModifiedChunk(chunk, batchKeys);
         saveChunk(snap.key, chunk.data);
       } else {
@@ -1404,7 +1474,7 @@ export class VoxelWorld implements ChunkProvider {
     }
     if (batchKeys.size > 0) {
       this.lastBFSChunk = null;
-      this.remeshPipeline.dispatchBatch(batchKeys);
+      this.dispatchRelightBatch(batchKeys, editedKeys);
     }
     return entry.map((s) => s.key);
   }

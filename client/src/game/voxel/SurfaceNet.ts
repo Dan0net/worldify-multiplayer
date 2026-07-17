@@ -663,3 +663,45 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
 export function isEmptyMesh(output: SurfaceNetOutput): boolean {
   return output.vertexCount === 0 || output.triangleCount === 0;
 }
+
+/**
+ * Sample a cell's vertex light from an expanded 34³ grid, returning both channels packed
+ * into one int: `maxSky | (maxBlock << 5)` (each 0..31). This is the LIGHT-ONLY companion
+ * to the meshing hot loop above — it MUST stay bit-identical to the light computation at
+ * `meshVoxelsSplit` (the `maxLight`/`maxBlock` corner loop + the `pool.lights` write), so a
+ * re-sample of an unchanged mesh reproduces exactly the light the worker would have baked.
+ *
+ * Used by the light-only relight path (ChunkGeometry.resampleLightFromGrid): when a chunk's
+ * voxels are unchanged but neighbour light changed, we rebuild its 34³ grid and re-read each
+ * stored cell instead of re-running SurfaceNets + rebuilding its collision BVH.
+ *
+ * @param grid     Expanded 34³ voxel grid (same layout meshVoxelsSplit consumes).
+ * @param baseIdx  Cell origin index (the `cellIndices` value stored per expanded vertex).
+ */
+export function sampleCellLight(grid: Uint32Array, baseIdx: number): number {
+  let maxLight = 0;
+  let maxBlock = 0;
+  for (let g = 0; g < 8; ++g) {
+    const voxel = grid[baseIdx + cornerOffsets[g]];
+    const weight = ((voxel >> WEIGHT_SHIFT) & WEIGHT_MASK) * INV_WEIGHT_MAX_PACKED + WEIGHT_MIN;
+    const material = (voxel >> MATERIAL_SHIFT) & MATERIAL_MASK;
+    // Same non-opaque test as the mesh loop: air OR non-solid (liquid/transparent) corners.
+    if (weight < 0 || MATERIAL_TYPE_LUT[material] !== MAT_TYPE_SOLID) {
+      const light = voxel & LIGHT_MASK;
+      if (light > maxLight) maxLight = light;
+      const blockLight = (voxel >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK;
+      if (blockLight > maxBlock) maxBlock = blockLight;
+    }
+  }
+  return maxLight | (maxBlock << 5);
+}
+
+/** Normalized sky-light channel from a packed sampleCellLight() result (0.0–1.0). */
+export function unpackSkyLight(packed: number): number {
+  return (packed & 0x1f) / LIGHT_MAX;
+}
+
+/** Normalized block-light channel from a packed sampleCellLight() result (0.0–1.0). */
+export function unpackBlockLight(packed: number): number {
+  return ((packed >>> 5) & 0x1f) / BLOCK_LIGHT_MAX;
+}

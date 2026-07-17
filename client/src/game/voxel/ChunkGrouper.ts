@@ -446,6 +446,17 @@ export class ChunkGrouper {
     }
   }
 
+  /**
+   * Mark the group owning a chunk dirty so it re-merges next frame. Used by the light-only
+   * relight path: the chunk's geometry attributes (lightLevel/blockLight) were rewritten in
+   * place, so the merged buffer must re-copy them — but no re-mesh happened. No-op if the
+   * chunk isn't grouped yet.
+   */
+  markChunkDirty(chunkKey: string): void {
+    const gk = this.slots.get(chunkKey)?.groupKey;
+    if (gk) this.markGroupDirty(gk);
+  }
+
   /** Mark a group as dirty so rebuild() processes it. */
   markGroupDirty(gk: string): void {
     const group = this.groups.get(gk);
