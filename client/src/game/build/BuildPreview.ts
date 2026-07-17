@@ -214,9 +214,13 @@ export class BuildPreview {
       if (n && !n.tempData) n.copyToTemp();
     }
 
-    // PHASE 1 — geometry only. Dispatch the mesh from temp (inherited light) and return. ALL lighting
-    // is deferred to runDeferredLighting(), which runs when this batch completes — so the cursor
-    // frame is never blocked on relighting, and the mesh path is exactly as fast as before.
+    // PHASE 1 — geometry + drawn/margin light. Relight ONLY the drawn + margin chunks synchronously
+    // (cheap: it's the brush footprint + its re-meshed neighbours, no block-light spill), so the mesh
+    // bakes their correct light. Without this the moving preview goes dark — each re-mesh rebuilds
+    // from temp with inherited (stale) light until the cursor settles. The EXPENSIVE work — spill into
+    // neighbour chunks and the boundary resample that samples them — stays deferred to
+    // runDeferredLighting(), which fires only once the cursor settles (nothing new to mesh).
+    this.world.relightPreviewMeshSet(marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys);
     this.batchInFlight = true;
     this.dispatchPreviewMesh(drawnKeys, marginKeys);
   }
