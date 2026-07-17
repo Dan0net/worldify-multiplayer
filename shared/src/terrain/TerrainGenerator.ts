@@ -275,8 +275,8 @@ const CAVERN_TAPER_MIN_FRAC = 0.15;
 // ============== Default Cave Configuration ==============
 
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
-  wormsEnabled: true,       // traced worms on by default (the established look)
-  cavernsEnabled: false,    // caverns off until dialled in; combine with worms once refined
+  wormsEnabled: true,       // traced worms on by default
+  cavernsEnabled: true,     // caverns on by default too — worms + caverns combined
   floorY: undefined,        // no hard floor by default
 
   // Worms (traced tunnels). Seeded on a 3D grid so they fill the whole depth from just above the
@@ -297,31 +297,31 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   wormWallFrequency: 0.4,   // fine wall bumps
   wormConvergence: 0.45,    // worms share much of the flow-field → natural merges/forks
 
-  // Caverns (large tall chambers). Clean tall ellipsoids by default: winding / wall roughness /
-  // size variety all start at 0 so you can dial each one up from a smooth baseline.
-  cavernCellSize: 90,       // 90 m spawn cells → caverns spaced far apart
+  // Caverns (large tall chambers), dialled in to combine with worms: winding, rough walls, varied
+  // sizes, spaced moderately, tops narrowed where they breach the surface.
+  cavernCellSize: 60,       // 60 m spawn cells
   cavernsPerCell: 1.0,      // ~one cavern per cell
-  cavernRadius: 14,         // 14 m base horizontal radius
-  cavernRadiusJitter: 0.0,  // uniform size to start
-  cavernVerticality: 1.4,   // vertical radius ≈ 2.4× horizontal → tall chambers
-  cavernWinding: 0.0,       // clean ellipsoid walls to start
-  cavernWallAmp: 0.0,       // smooth walls to start
-  cavernWallFrequency: 0.25,// wall-bump scale (used once wall roughness > 0)
-  cavernWarpFrequency: 0.03,// domain-warp scale (used once winding > 0)
-  cavernWaterLevel: 0.15,   // bottom ~15% of each chamber filled with water
+  cavernRadius: 10,         // 10 m base horizontal radius
+  cavernRadiusJitter: 0.5,  // ±50% size variety between caverns
+  cavernVerticality: 1.0,   // vertical radius ≈ 2× horizontal
+  cavernWinding: 20,        // strong domain warp → organic, lobed walls
+  cavernWallAmp: 2,         // 2 m wall roughness
+  cavernWallFrequency: 0.3, // wall-bump scale
+  cavernWarpFrequency: 0.03,// domain-warp scale
+  cavernWaterLevel: 0.1,    // shallow water pool in the bottom
   cavernSpikeAmount: 0.3,   // moderate stalagmites/stalactites
-  cavernTerrainTaper: 0.6,  // narrow surface breaches to ~half size (still open)
+  cavernTerrainTaper: 0.4,  // narrow surface breaches (still open)
 };
 
 // ============== Default Terrain Layer Configuration ==============
 
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   enabled: true,            // base landscape + pathways + stamps on by default
-  pathSpacing: 125,         // ~125 m between path cells (matches pathway frequency 0.008)
-  pathWidth: 3.0,           // 3 m roads
-  pathWarpAmplitude: 90,    // strong meander
-  pathWarpFrequency: 0.011, // smooth curves
-  buildingSpacing: 50,      // largest building grid (matches the stamp default)
+  pathSpacing: 160,         // ~160 m between path cells
+  pathWidth: 6.0,           // 6 m roads
+  pathWarpAmplitude: 30,    // gentle meander
+  pathWarpFrequency: 0.006, // broad curves
+  buildingSpacing: 50,      // largest building grid
 };
 
 /**
@@ -427,6 +427,11 @@ export class TerrainGenerator implements HeightSampler {
   private cavernCellCache = new Map<string, Float64Array>();
   private chunkCavernFeats: Float64Array = new Float64Array(0);
   private chunkCavernFeatsFor = '';
+
+  // Per-(cx,cz)-tile set of columns (lx + lz*CHUNK_SIZE) where a cave breaches the surface — used to
+  // suppress surface features (stamps + pathways) over cave openings. Cached per tile.
+  private breachCols: Set<number> | null = null;
+  private breachColsFor = '';
 
   /** Test-only: extra worm-gather cells added on every side. Proves the gather radius is sufficient
    *  (regenerating with a larger radius must be byte-identical). Leave 0 in production. */
@@ -604,6 +609,8 @@ export class TerrainGenerator implements HeightSampler {
     this.chunkWormPtsFor = '';
     this.cavernCellCache.clear();
     this.chunkCavernFeatsFor = '';
+    this.breachColsFor = '';
+    this.breachCols = null;
   }
 
   /**
@@ -709,8 +716,7 @@ export class TerrainGenerator implements HeightSampler {
    * chunk (a flat [x,y,z,r,…] list built by prepareChunkWorms). Linear scan with a squared-distance
    * early-out; the list is small (only worms crossing this chunk) and empty for chunks with no worms.
    */
-  private isInsideWormCave(x: number, y: number, z: number): boolean {
-    const pts = this.chunkWormPts;
+  private isInsideWormCave(x: number, y: number, z: number, pts: Float64Array = this.chunkWormPts): boolean {
     if (pts.length === 0) return false;
     // Signed wall displacement at this voxel → bumpy, organic walls (added to every tube's radius).
     const cave = this.config.caveConfig;
@@ -812,7 +818,13 @@ export class TerrainGenerator implements HeightSampler {
   private prepareChunkWorms(cx: number, cy: number, cz: number): void {
     const key = cx + ',' + cy + ',' + cz;
     if (this.chunkWormPtsFor === key) return;
+    this.chunkWormPts = this.gatherWormPts(cx, cy, cz);
+    this.chunkWormPtsFor = key;
+  }
 
+  /** Gather the worm sphere-set overlapping a chunk (see prepareChunkWorms) and return it without
+   *  touching the per-chunk carve state — usable for point queries (e.g. breach detection). */
+  private gatherWormPts(cx: number, cy: number, cz: number): Float64Array {
     const cave = this.config.caveConfig;
     const cs = cave.wormCellSize;
     const x0 = cx * CHUNK_SIZE * VOXEL_SCALE, x1 = x0 + CHUNK_SIZE * VOXEL_SCALE;
@@ -850,8 +862,7 @@ export class TerrainGenerator implements HeightSampler {
         }
       }
     }
-    this.chunkWormPts = new Float64Array(out);
-    this.chunkWormPtsFor = key;
+    return new Float64Array(out);
   }
 
   // ---- Caverns: large tall chambers on a spacing grid (warped ellipsoids) ----
@@ -899,7 +910,13 @@ export class TerrainGenerator implements HeightSampler {
   private prepareChunkCaverns(cx: number, cy: number, cz: number): void {
     const key = cx + ',' + cy + ',' + cz;
     if (this.chunkCavernFeatsFor === key) return;
+    this.chunkCavernFeats = this.gatherCavernFeats(cx, cy, cz);
+    this.chunkCavernFeatsFor = key;
+  }
 
+  /** Gather the cavern descriptors overlapping a chunk (see prepareChunkCaverns) and return them
+   *  without touching the per-chunk carve state — usable for point queries (e.g. breach detection). */
+  private gatherCavernFeats(cx: number, cy: number, cz: number): Float64Array {
     const cave = this.config.caveConfig;
     const cs = cave.cavernCellSize;
     const x0 = cx * CHUNK_SIZE * VOXEL_SCALE, x1 = x0 + CHUNK_SIZE * VOXEL_SCALE;
@@ -935,8 +952,7 @@ export class TerrainGenerator implements HeightSampler {
         }
       }
     }
-    this.chunkCavernFeats = new Float64Array(out);
-    this.chunkCavernFeatsFor = key;
+    return new Float64Array(out);
   }
 
   /**
@@ -946,8 +962,7 @@ export class TerrainGenerator implements HeightSampler {
    * hashed conical spikes rise from the floor / hang from the ceiling. Across overlapping caverns the
    * most-open result wins (air > water > solid). Pure function of position → seamless.
    */
-  private sampleCavern(x: number, y: number, z: number, surfaceMeters: number): 0 | 1 | 2 {
-    const feats = this.chunkCavernFeats;
+  private sampleCavern(x: number, y: number, z: number, surfaceMeters: number, feats: Float64Array = this.chunkCavernFeats): 0 | 1 | 2 {
     if (feats.length === 0) return 0;
     const cave = this.config.caveConfig;
     const vert = cave.cavernVerticality;
@@ -1029,6 +1044,68 @@ export class TerrainGenerator implements HeightSampler {
     return stalactite
       ? (ceilY - y) >= 0 && ceilY - y < coneH
       : (y - floorY) >= 0 && y - floorY < coneH;
+  }
+
+  // ---- Surface-breach map: where caves open the surface (to suppress surface features there) ----
+
+  /**
+   * Set of columns (keyed `lx + lz*CHUNK_SIZE`) in the (cx,cz) tile where an enabled cave layer
+   * carves air at the terrain surface — i.e. a breach the player can see/fall into. Used to skip
+   * pathways and stamps (trees / rocks / buildings) over cave openings. Computed by gathering the
+   * caves for each column's SURFACE chunk (grouped, so usually 1–2 gathers) into scratch arrays and
+   * testing a thin band at the top of the terrain; cached per tile. Pure function of the tile → the
+   * suppression is the same from whichever cy chunk asks, so multi-chunk stamps stay consistent.
+   */
+  private breachedColumns(cx: number, cz: number): Set<number> {
+    const key = cx + ',' + cz;
+    if (this.breachColsFor === key && this.breachCols) return this.breachCols;
+
+    const cave = this.config.caveConfig;
+    const set = new Set<number>();
+    // One gathered feature-set per distinct surface chunk cy in this tile (reused across columns).
+    const wormByCy = new Map<number, Float64Array>();
+    const cavByCy = new Map<number, Float64Array>();
+
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const worldX = (cx * CHUNK_SIZE + lx) * VOXEL_SCALE;
+        const worldZ = (cz * CHUNK_SIZE + lz) * VOXEL_SCALE;
+        const sh = this.sampleHeight(worldX, worldZ);          // surface height in voxels
+        const cyS = Math.floor(sh / CHUNK_SIZE);
+        const surfaceMeters = sh * VOXEL_SCALE;
+
+        let breached = false;
+        // Test the top few voxels of the terrain — where a cave that reaches the surface carves air.
+        for (let dy = 1; dy >= -3 && !breached; dy--) {
+          const y = (sh + dy) * VOXEL_SCALE;
+          if (cave.wormsEnabled) {
+            let pts = wormByCy.get(cyS);
+            if (!pts) { pts = this.gatherWormPts(cx, cyS, cz); wormByCy.set(cyS, pts); }
+            if (this.isInsideWormCave(worldX, y, worldZ, pts)) breached = true;
+          }
+          if (!breached && cave.cavernsEnabled) {
+            let feats = cavByCy.get(cyS);
+            if (!feats) { feats = this.gatherCavernFeats(cx, cyS, cz); cavByCy.set(cyS, feats); }
+            if (this.sampleCavern(worldX, y, worldZ, surfaceMeters, feats) === 1) breached = true;
+          }
+        }
+        if (breached) set.add(lx + lz * CHUNK_SIZE);
+      }
+    }
+
+    this.breachCols = set;
+    this.breachColsFor = key;
+    return set;
+  }
+
+  /** True if the column containing (worldX, worldZ) — within the given tile's breach set — is a cave
+   *  breach. Columns outside the tile return false (their breach is that tile's concern). */
+  private isBreachColumn(worldX: number, worldZ: number, breach: Set<number> | null, cx: number, cz: number): boolean {
+    if (!breach || breach.size === 0) return false;
+    const lx = Math.floor(worldX / VOXEL_SCALE) - cx * CHUNK_SIZE;
+    const lz = Math.floor(worldZ / VOXEL_SCALE) - cz * CHUNK_SIZE;
+    if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE) return false;
+    return breach.has(lx + lz * CHUNK_SIZE);
   }
 
   /**
@@ -1432,6 +1509,10 @@ export class TerrainGenerator implements HeightSampler {
         : data;
     }
 
+    // Columns where a cave breaches the surface — suppress pathways + stamps there so nothing is left
+    // floating over (or bridging across) a cave opening. Null when no cave layer is enabled.
+    const breach = anyCave ? this.breachedColumns(cx, cz) : null;
+
     // Whether any column in this chunk is on a pathway — a free early-out that gates the
     // (otherwise per-column) pathway-wall torch scan so empty chunks pay nothing for it.
     let chunkHasPath = false;
@@ -1445,11 +1526,13 @@ export class TerrainGenerator implements HeightSampler {
         // Sample terrain height at this XZ position
         let terrainHeight = this.sampleHeight(worldX, worldZ);
 
-        // Cache pathway checks for this column (only depends on X/Z)
-        const isPathColumn = this.isOnPathway(worldX, worldZ);
+        // Cache pathway checks for this column (only depends on X/Z). A cave breach here suppresses
+        // the path (and its wall/water below) so roads don't run across an open cave mouth.
+        const columnBreached = breach !== null && breach.has(lx + lz * CHUNK_SIZE);
+        const isPathColumn = this.isOnPathway(worldX, worldZ) && !columnBreached;
         if (isPathColumn) chunkHasPath = true;
-        let isWallColumn = -1; // -1 = not checked, 0 = no, 1 = yes
-        let isBorderColumn = -1;
+        let isWallColumn = columnBreached ? 0 : -1; // -1 = not checked, 0 = no, 1 = yes
+        let isBorderColumn = columnBreached ? 0 : -1; // suppress path borders over a breach too
         
         // Store original terrain height before dip (for water level calculation)
         const originalTerrainHeight = terrainHeight;
@@ -1570,8 +1653,10 @@ export class TerrainGenerator implements HeightSampler {
     // Apply stamps (trees, rocks) if enabled
     if (this.stampPointGenerator && this.stampPlacer) {
       const allPlacements = this.stampPointGenerator.generateForChunk(cx, cz);
-      // Filter out placements that are on pathways
-      const placements = allPlacements.filter(p => !this.isOnPathway(p.worldX, p.worldZ));
+      // Drop stamps (trees / rocks / buildings) on pathways, and over cave breaches so nothing is left
+      // floating above an open cave mouth.
+      const placements = allPlacements.filter(p =>
+        !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ, breach, cx, cz));
       this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 
