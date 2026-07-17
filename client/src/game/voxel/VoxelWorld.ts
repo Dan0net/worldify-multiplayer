@@ -42,6 +42,7 @@ import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
+import { LightWorkerPool, type LightChunk } from './LightWorkerPool.js';
 import { expandChunkToGrid } from './ChunkMesher.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
@@ -184,6 +185,12 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Worker pool for off-thread mesh generation */
   readonly meshPool: MeshWorkerPool;
+
+  /** Single worker that relights the preview spill region off the main thread. */
+  readonly lightPool: LightWorkerPool = new LightWorkerPool();
+
+  /** In-flight preview spill relight job id (superseded when a newer spill relight starts). */
+  private previewLightJob: number | null = null;
 
   /** Number of mesh worker threads */
   private static readonly MESH_WORKER_COUNT = 2;
@@ -958,102 +965,172 @@ export class VoxelWorld implements ChunkProvider {
   };
 
   /**
-   * Relight the region a preview edit affects, synchronously on TEMP buffers (non-destructive),
-   * through the shared relightRegion() so preview and commit don't drift. Scope:
-   *  - DRAWN chunks (the brush changed them): sky + block. The caller meshes these from temp.
-   *  - SPILL neighbours (changed by LIGHT, not by the draw): the 6 face neighbours for sky border
-   *    bleed, plus the loaded 3×3×3 for block when a torch/emitter is involved. These are NOT
-   *    re-meshed — their geometry is unchanged — instead their displayed light is refreshed via a
-   *    light-only resample of their existing geometry (rewrites the two light attributes in place,
-   *    no SurfaceNets, no BVH), so a torch near a chunk edge lights the adjacent chunk in preview.
-   *
-   * Everything is light-only + on the main thread, so meshing never waits and it stays responsive.
-   *
-   * @returns the spill neighbour keys whose displayed light was overridden with preview light — the
-   *   caller tracks these and calls restorePreviewChunkLight() when they leave preview.
+   * Whether preview block relight is warranted: an emitter in a drawn chunk, or existing block
+   * light anywhere in the drawn chunks' 3×3×3 region.
    */
-  relightPreviewRegion(drawnKeys: string[]): string[] {
+  private previewRunBlock(drawn: Chunk[]): boolean {
+    if (drawn.some((c) => chunkHasEmitter(c.tempData!) || c.hasBlockLight)) return true;
+    for (const c of drawn) {
+      for (let dz = -1; dz <= 1; dz++)
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            if (this.chunks.get(chunkKey(c.cx + dx, c.cy + dy, c.cz + dz))?.hasBlockLight) return true;
+          }
+    }
+    return false;
+  }
+
+  /**
+   * Relight ONLY the drawn preview chunks, synchronously on their temp buffers (cheap — a handful of
+   * chunks), through the shared relightRegion() so preview and commit don't drift. Runs before
+   * meshing so the drawn preview shows correct light immediately, waiting on nothing. Light spilling
+   * into NEIGHBOURS is computed off-thread by relightPreviewSpillAsync().
+   */
+  relightPreviewDrawnSync(drawnKeys: string[]): void {
     const drawn = drawnKeys
       .map((k) => this.chunks.get(k))
       .filter((c): c is Chunk => !!c && !!c.tempData);
-    if (drawn.length === 0) return [];
+    if (drawn.length === 0) return;
+
+    const runBlock = this.previewRunBlock(drawn);
+    const targets: RelightTarget[] = drawn.map((c) => ({
+      cx: c.cx,
+      cy: c.cy,
+      cz: c.cz,
+      sky: true,
+      block: runBlock,
+      skyAbove: this.chunks.has(chunkKey(c.cx, c.cy + 1, c.cz))
+        ? undefined
+        : this.sunlightFromAbove(c.cx, c.cy, c.cz),
+    }));
+    targets.sort((a, b) => b.cy - a.cy);
+
+    perfStats.begin('lighting');
+    relightRegion(this.tempGetData, targets);
+    perfStats.end('lighting');
+  }
+
+  /**
+   * Relight the SPILL neighbours — chunks changed by LIGHT but not by the draw (the 6 face
+   * neighbours for sky border bleed, plus the loaded 3×3×3 for block when a torch/emitter is
+   * involved) — on the lighting WORKER, reading the already-relit drawn chunks as context. When the
+   * worker returns, the relit light is written into the neighbours' temp buffers and their DISPLAY is
+   * refreshed with a light-only resample of their existing geometry (no re-mesh, no BVH). Meshing
+   * never waits on this, so preview stays responsive; a torch's glow on the next chunk over arrives
+   * a moment later. Falls back to a synchronous relight when the worker isn't available. Supersedes
+   * any spill job still in flight (only the latest cursor matters). Returns a cancel function that
+   * drops the pending result.
+   *
+   * @param onReady called with the spill neighbour keys whose display was overridden (for tracking).
+   */
+  relightPreviewSpillAsync(drawnKeys: string[], onReady: (spillKeys: string[]) => void): () => void {
+    const drawn = drawnKeys
+      .map((k) => this.chunks.get(k))
+      .filter((c): c is Chunk => !!c && !!c.tempData);
+    if (drawn.length === 0) { onReady([]); return () => {}; }
     const drawnSet = new Set(drawnKeys);
+    const runBlock = this.previewRunBlock(drawn);
 
-    // Block gate mirrors commit: emitter in a drawn chunk, or existing block light in the region.
-    let runBlock = drawn.some((c) => chunkHasEmitter(c.tempData!) || c.hasBlockLight);
-    if (!runBlock) {
-      for (const c of drawn) {
-        for (let dz = -1; dz <= 1 && !runBlock; dz++)
-          for (let dy = -1; dy <= 1 && !runBlock; dy++)
-            for (let dx = -1; dx <= 1; dx++) {
-              if (this.chunks.get(chunkKey(c.cx + dx, c.cy + dy, c.cz + dz))?.hasBlockLight) {
-                runBlock = true;
-                break;
-              }
-            }
-        if (runBlock) break;
-      }
-    }
-
+    // Collect the spill targets (exclude the drawn chunks — those are relit + meshed already).
     const targetMap = new Map<string, RelightTarget>();
-    const ensure = (cx: number, cy: number, cz: number): RelightTarget => {
+    const ensure = (cx: number, cy: number, cz: number): RelightTarget | null => {
       const k = chunkKey(cx, cy, cz);
+      if (drawnSet.has(k) || !this.chunks.has(k)) return null;
       let t = targetMap.get(k);
       if (!t) { t = { cx, cy, cz, sky: false, block: false }; targetMap.set(k, t); }
       return t;
     };
 
     for (const c of drawn) {
-      const t = ensure(c.cx, c.cy, c.cz);
-      t.sky = true;
-      if (runBlock) t.block = true;
-      // Sky spill: face neighbours pick up the changed border light.
       for (const [dx, dy, dz] of FACE_OFFSETS_6) {
-        if (this.chunks.has(chunkKey(c.cx + dx, c.cy + dy, c.cz + dz))) {
-          ensure(c.cx + dx, c.cy + dy, c.cz + dz).sky = true;
-        }
+        const t = ensure(c.cx + dx, c.cy + dy, c.cz + dz);
+        if (t) t.sky = true;
       }
-      // Block spill: the loaded 3×3×3 when a torch/emitter is involved.
       if (runBlock) {
         for (let dz = -1; dz <= 1; dz++)
           for (let dy = -1; dy <= 1; dy++)
             for (let dx = -1; dx <= 1; dx++) {
-              if (this.chunks.has(chunkKey(c.cx + dx, c.cy + dy, c.cz + dz))) {
-                ensure(c.cx + dx, c.cy + dy, c.cz + dz).block = true;
-              }
+              const t = ensure(c.cx + dx, c.cy + dy, c.cz + dz);
+              if (t) t.block = true;
             }
       }
     }
 
-    // Give every non-drawn target a temp copy so relighting it doesn't touch committed data, and
-    // seed the "light from above" where the chunk above isn't loaded.
-    for (const t of targetMap.values()) {
-      const key = chunkKey(t.cx, t.cy, t.cz);
-      if (!drawnSet.has(key)) {
-        const n = this.chunks.get(key);
-        if (n && !n.tempData) n.copyToTemp();
-      }
+    const spillTargets = [...targetMap.values()];
+    if (spillTargets.length === 0) { onReady([]); return () => {}; }
+
+    // Temp copy each spill chunk (non-destructive) + seed light-from-above where none is loaded.
+    for (const t of spillTargets) {
+      const n = this.chunks.get(chunkKey(t.cx, t.cy, t.cz));
+      if (n && !n.tempData) n.copyToTemp();
       if (t.sky && !this.chunks.has(chunkKey(t.cx, t.cy + 1, t.cz))) {
         t.skyAbove = this.sunlightFromAbove(t.cx, t.cy, t.cz);
       }
     }
+    spillTargets.sort((a, b) => b.cy - a.cy);
+    const spillKeys = spillTargets.map((t) => chunkKey(t.cx, t.cy, t.cz));
 
-    const targets = [...targetMap.values()].sort((a, b) => b.cy - a.cy);
+    // Apply relit temp light to the spill neighbours' DISPLAY via a light-only resample.
+    const applyResult = (): void => {
+      const applied: string[] = [];
+      for (const key of spillKeys) {
+        if (this.resamplePreviewChunkLight(key, true)) applied.push(key);
+      }
+      onReady(applied);
+    };
 
-    perfStats.begin('lighting');
-    relightRegion(this.tempGetData, targets);
-
-    // Light-only refresh of the spill neighbours' DISPLAY (no re-mesh). Drawn chunks are meshed by
-    // the caller, so skip them here.
-    const spillKeys: string[] = [];
-    for (const t of targets) {
-      const key = chunkKey(t.cx, t.cy, t.cz);
-      if (drawnSet.has(key)) continue;
-      if (this.resamplePreviewChunkLight(key, true)) spillKeys.push(key);
+    // Synchronous fallback when the worker didn't spin up.
+    if (!this.lightPool.available) {
+      perfStats.begin('lighting');
+      relightRegion(this.tempGetData, spillTargets);
+      perfStats.end('lighting');
+      applyResult();
+      return () => {};
     }
-    perfStats.end('lighting');
 
-    return spillKeys;
+    // Supersede any spill relight still in flight.
+    if (this.previewLightJob !== null) this.lightPool.cancel(this.previewLightJob);
+
+    const snapshot = this.snapshotRegion(spillTargets, this.tempGetData);
+    const jobId = this.lightPool.dispatch(snapshot, spillTargets, (results) => {
+      if (this.previewLightJob === jobId) this.previewLightJob = null;
+      for (const { key, data } of results) {
+        const c = this.chunks.get(key);
+        if (c?.tempData && c.tempData.length === data.length) c.tempData.set(data);
+      }
+      applyResult();
+    });
+    this.previewLightJob = jobId;
+
+    return () => {
+      this.lightPool.cancel(jobId);
+      if (this.previewLightJob === jobId) this.previewLightJob = null;
+    };
+  }
+
+  /**
+   * Snapshot the region a relight reads — every target plus its 6 face neighbours (the borders
+   * relightRegion injects from, including the already-relit drawn chunks) — as copies keyed by
+   * chunkKey, so they can be transferred to the lighting worker without disturbing live/temp buffers.
+   */
+  private snapshotRegion(
+    targets: RelightTarget[],
+    getBacking: (cx: number, cy: number, cz: number) => Uint32Array | null,
+  ): LightChunk[] {
+    const seen = new Set<string>();
+    const out: LightChunk[] = [];
+    const add = (cx: number, cy: number, cz: number): void => {
+      const k = chunkKey(cx, cy, cz);
+      if (seen.has(k)) return;
+      seen.add(k);
+      const data = getBacking(cx, cy, cz);
+      if (data) out.push({ key: k, data: new Uint32Array(data) });
+    };
+    for (const t of targets) {
+      add(t.cx, t.cy, t.cz);
+      for (const [dx, dy, dz] of FACE_OFFSETS_6) add(t.cx + dx, t.cy + dy, t.cz + dz);
+    }
+    return out;
   }
 
   /**
@@ -1587,6 +1664,7 @@ export class VoxelWorld implements ChunkProvider {
     // Terminate workers unless told to keep them
     if (!keepWorkers) {
       this.meshPool.dispose();
+      this.lightPool.dispose();
       this.localPool?.dispose();
       this.localPool = null;
     }
