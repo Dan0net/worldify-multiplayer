@@ -56,6 +56,14 @@ interface ChunkSlot {
    * cleared when the chunk leaves the merged set or its group.
    */
   coveredByMerge: boolean;
+  /**
+   * Per-layer position of this chunk's vertices within its group's merged buffer, recorded at merge
+   * time. Lets a light-only update overwrite just this chunk's lightLevel/blockLight slice in place
+   * (updateChunkLight) instead of re-merging the whole group. Null per layer when the chunk didn't
+   * contribute geometry to that layer's merge; invalidated (via the group's `dirty` flag) whenever
+   * the group re-merges or any member's geometry changes.
+   */
+  mergedSlices: ({ vertexOffset: number; vertexCount: number } | null)[];
 }
 
 /** Tracks pre-allocated buffer capacity per layer so we can reuse them. */
@@ -190,6 +198,7 @@ export class ChunkGrouper {
         groupKey: gk,
         standaloneMeshes: [null, null, null],
         coveredByMerge: false,
+        mergedSlices: [null, null, null],
       };
       this.slots.set(key, slot);
       this.addToGroup(key, gk, cx, cy, cz);
@@ -455,6 +464,60 @@ export class ChunkGrouper {
   markChunkDirty(chunkKey: string): void {
     const gk = this.slots.get(chunkKey)?.groupKey;
     if (gk) this.markGroupDirty(gk);
+  }
+
+  /**
+   * Light-only update: overwrite just this chunk's lightLevel/blockLight slice in its group's merged
+   * buffer, in place — a ranged GPU upload, NOT a full group re-merge. Used after a light-only
+   * resample rewrote the chunk geometry's two light attributes. Cheap enough to run for many spill
+   * neighbours per frame (the whole point of the light-only relight path).
+   *
+   * Falls back to a full re-merge (markGroupDirty) when the recorded slice can't be trusted: the
+   * group has a pending re-merge, the chunk isn't currently baked into the live merge, or its vertex
+   * count changed since the merge. When the group is suppressed for preview the chunk is drawn via a
+   * standalone that shares its geometry (already updated by the resample), so there's nothing to copy.
+   */
+  updateChunkLight(chunkKey: string): void {
+    const slot = this.slots.get(chunkKey);
+    if (!slot) return;
+    const group = this.groups.get(slot.groupKey);
+    if (!group) return;
+
+    // Suppressed → shown via a standalone that shares the (already-resampled) geometry.
+    if (group.previewSuppressed) return;
+
+    // Stale slices (a re-merge is pending or the chunk isn't in the current merge) → full re-merge.
+    if (group.dirty || !group.merged || !slot.coveredByMerge) {
+      this.markGroupDirty(slot.groupKey);
+      return;
+    }
+
+    for (let layer = 0; layer < LAYER_COUNT; layer++) {
+      const slice = slot.mergedSlices[layer];
+      const src = slot.geometries[layer];
+      const mesh = group.meshes[layer];
+      if (!slice || !src || !mesh) continue;
+
+      const srcLight = src.getAttribute('lightLevel') as THREE.BufferAttribute | undefined;
+      const srcBlock = src.getAttribute('blockLight') as THREE.BufferAttribute | undefined;
+      if (!srcLight || !srcBlock) continue;
+
+      // Geometry changed since the merge → offsets are stale; re-merge instead.
+      if (srcLight.count !== slice.vertexCount) {
+        this.markGroupDirty(slot.groupKey);
+        return;
+      }
+
+      const merged = mesh.geometry;
+      const dstLight = merged.getAttribute('lightLevel') as THREE.BufferAttribute;
+      const dstBlock = merged.getAttribute('blockLight') as THREE.BufferAttribute;
+      (dstLight.array as Float32Array).set(srcLight.array as Float32Array, slice.vertexOffset);
+      (dstBlock.array as Float32Array).set(srcBlock.array as Float32Array, slice.vertexOffset);
+      dstLight.addUpdateRange(slice.vertexOffset, slice.vertexCount);
+      dstLight.needsUpdate = true;
+      dstBlock.addUpdateRange(slice.vertexOffset, slice.vertexCount);
+      dstBlock.needsUpdate = true;
+    }
   }
 
   /** Mark a group as dirty so rebuild() processes it. */
@@ -826,21 +889,27 @@ export class ChunkGrouper {
         dstAttr.needsUpdate = true;
       }
 
-      // ---- Fill index buffer ----
+      // ---- Fill index buffer + record each chunk's vertex slice (for light-only updates) ----
       const idxAttr = merged.index!;
       const indices = idxAttr.array as Uint32Array;
       let idxOffset = 0;
       let vertBase = 0;
       for (let si = 0; si < visibleSlots.length; si++) {
-        const geo = visibleSlots[si].geometries[layer];
-        if (!geo || !geo.index || geo.index.count === 0) continue;
+        const slot = visibleSlots[si];
+        const geo = slot.geometries[layer];
+        if (!geo || !geo.index || geo.index.count === 0) {
+          slot.mergedSlices[layer] = null;
+          continue;
+        }
+        const vertCount = geo.getAttribute('position').count;
+        slot.mergedSlices[layer] = { vertexOffset: vertBase, vertexCount: vertCount };
         const srcIdx = geo.index;
         const srcArr = srcIdx.array;
         for (let i = 0; i < srcIdx.count; i++) {
           indices[idxOffset + i] = srcArr[i] + vertBase;
         }
         idxOffset += srcIdx.count;
-        vertBase += geo.getAttribute('position').count;
+        vertBase += vertCount;
       }
       idxAttr.clearUpdateRanges();
       idxAttr.addUpdateRange(0, totalIndices);

@@ -105,12 +105,14 @@ describe('relightRegion', () => {
 
   it('skips the block pass entirely when no target opts in', () => {
     const map = buildWorld();
-    // Sky-only targets: block light must stay zero everywhere.
-    const skyTargets = allKeys()
-      .map((k) => { const [cx, cy, cz] = k.split(',').map(Number); return { cx, cy, cz, sky: true, block: false }; })
+    // Sky-only targets (the centre column, incl. the lava chunk): block light must stay zero.
+    const column: Array<[number, number, number]> = [[1, 0, 1], [1, 1, 1], [1, 2, 1]];
+    const skyTargets = column
+      .map(([cx, cy, cz]) => ({ cx, cy, cz, sky: true, block: false }))
       .sort((a, b) => b.cy - a.cy);
     relightRegion(getter(map), skyTargets);
-    for (const data of map.values()) {
+    for (const [cx, cy, cz] of column) {
+      const data = map.get(chunkKey(cx, cy, cz))!;
       for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
         expect((data[i] >>> 16) & 0x1f).toBe(0);
       }

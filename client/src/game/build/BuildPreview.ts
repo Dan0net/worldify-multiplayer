@@ -58,9 +58,6 @@ export class BuildPreview {
   /** Cancel function for in-flight batch */
   private cancelBatch: (() => void) | null = null;
 
-  /** Cancel function for the in-flight preview spill relight (lighting worker) */
-  private cancelLight: (() => void) | null = null;
-
   /** Whether a mesh batch is currently in flight */
   private batchInFlight: boolean = false;
 
@@ -205,20 +202,20 @@ export class BuildPreview {
 
     this.batchInFlight = true;
     this.dispatchPreviewMesh(drawnKeys);
+    // newActiveChunksBuf now holds the chunks being re-meshed this preview (drawn + Pass 2b margin
+    // neighbours), populated synchronously by dispatchPreviewMesh.
+    const meshed = new Set(this.newActiveChunksBuf);
 
-    // Relight the SPILL neighbours (light bleeding into chunks the draw didn't touch — e.g. a torch
-    // lighting the next chunk over) on the lighting WORKER. When it returns, their light-only
-    // display refresh is applied and we restore any neighbour that dropped out of the region.
-    // Meshing above never waits on this, so preview stays responsive.
-    if (this.cancelLight) this.cancelLight();
-    this.cancelLight = this.world.relightPreviewSpillAsync(drawnKeys, (spillKeys) => {
-      this.cancelLight = null;
-      const spill = new Set(spillKeys);
-      for (const key of this.previewSpillKeys) {
-        if (!spill.has(key)) this.world?.restorePreviewChunkLight(key);
-      }
-      this.previewSpillKeys = spill;
-    });
+    // Light-only spill relight of neighbours changed by LIGHT but not re-meshed (a torch lighting the
+    // next chunk over, sky bleed at a border). Excludes the re-meshed set so we never light-resample
+    // a chunk whose margin geometry changed (that would leave a dark seam). Cheap + synchronous —
+    // resample + a ranged write into the merged buffer, no re-mesh, no group re-merge. Restore any
+    // neighbour that dropped out of the region since last update.
+    const spill = new Set(this.world.relightPreviewSpill(drawnKeys, meshed));
+    for (const key of this.previewSpillKeys) {
+      if (!spill.has(key)) this.world.restorePreviewChunkLight(key);
+    }
+    this.previewSpillKeys = spill;
   }
 
   /**
@@ -352,10 +349,6 @@ export class BuildPreview {
    * Cancel any in-flight worker batch and reset dispatch state.
    */
   private cancelInFlightBatch(): void {
-    if (this.cancelLight) {
-      this.cancelLight();
-      this.cancelLight = null;
-    }
     if (this.cancelBatch) {
       this.cancelBatch();
       this.cancelBatch = null;

@@ -42,7 +42,6 @@ import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
-import { LightWorkerPool, type LightChunk } from './LightWorkerPool.js';
 import { expandChunkToGrid } from './ChunkMesher.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
@@ -185,12 +184,6 @@ export class VoxelWorld implements ChunkProvider {
 
   /** Worker pool for off-thread mesh generation */
   readonly meshPool: MeshWorkerPool;
-
-  /** Single worker that relights the preview spill region off the main thread. */
-  readonly lightPool: LightWorkerPool = new LightWorkerPool();
-
-  /** In-flight preview spill relight job id (superseded when a newer spill relight starts). */
-  private previewLightJob: number | null = null;
 
   /** Number of mesh worker threads */
   private static readonly MESH_WORKER_COUNT = 2;
@@ -984,7 +977,7 @@ export class VoxelWorld implements ChunkProvider {
    * Relight ONLY the drawn preview chunks, synchronously on their temp buffers (cheap — a handful of
    * chunks), through the shared relightRegion() so preview and commit don't drift. Runs before
    * meshing so the drawn preview shows correct light immediately, waiting on nothing. Light spilling
-   * into NEIGHBOURS is computed off-thread by relightPreviewSpillAsync().
+   * into NEIGHBOURS is handled separately by relightPreviewSpill().
    */
   relightPreviewDrawnSync(drawnKeys: string[]): void {
     const drawn = drawnKeys
@@ -1013,29 +1006,29 @@ export class VoxelWorld implements ChunkProvider {
   /**
    * Relight the SPILL neighbours — chunks changed by LIGHT but not by the draw (the 6 face
    * neighbours for sky border bleed, plus the loaded 3×3×3 for block when a torch/emitter is
-   * involved) — on the lighting WORKER, reading the already-relit drawn chunks as context. When the
-   * worker returns, the relit light is written into the neighbours' temp buffers and their DISPLAY is
-   * refreshed with a light-only resample of their existing geometry (no re-mesh, no BVH). Meshing
-   * never waits on this, so preview stays responsive; a torch's glow on the next chunk over arrives
-   * a moment later. Falls back to a synchronous relight when the worker isn't available. Supersedes
-   * any spill job still in flight (only the latest cursor matters). Returns a cancel function that
-   * drops the pending result.
+   * involved) — synchronously, reading the already-relit drawn chunks. The relight itself is cheap;
+   * each neighbour's display is refreshed with a light-only resample + a ranged write into its
+   * group's merged buffer (no re-mesh, no group re-merge — see ChunkGrouper.updateChunkLight).
    *
-   * @param onReady called with the spill neighbour keys whose display was overridden (for tracking).
+   * `excludeKeys` are chunks already being re-meshed this preview (the drawn chunks and their
+   * margin-consumer neighbours from Pass 2b). Those are skipped: their geometry — and therefore the
+   * margin a light-only resample would read — changed, so resampling stale geometry would leave dark
+   * seams; the re-mesh gives them correct light instead.
+   *
+   * @returns the spill neighbour keys whose display was overridden (caller restores them on exit).
    */
-  relightPreviewSpillAsync(drawnKeys: string[], onReady: (spillKeys: string[]) => void): () => void {
+  relightPreviewSpill(drawnKeys: string[], excludeKeys: Set<string>): string[] {
     const drawn = drawnKeys
       .map((k) => this.chunks.get(k))
       .filter((c): c is Chunk => !!c && !!c.tempData);
-    if (drawn.length === 0) { onReady([]); return () => {}; }
-    const drawnSet = new Set(drawnKeys);
+    if (drawn.length === 0) return [];
     const runBlock = this.previewRunBlock(drawn);
 
-    // Collect the spill targets (exclude the drawn chunks — those are relit + meshed already).
+    // Collect the spill targets, excluding any chunk that's drawn or being re-meshed this preview.
     const targetMap = new Map<string, RelightTarget>();
     const ensure = (cx: number, cy: number, cz: number): RelightTarget | null => {
       const k = chunkKey(cx, cy, cz);
-      if (drawnSet.has(k) || !this.chunks.has(k)) return null;
+      if (excludeKeys.has(k) || !this.chunks.has(k)) return null;
       let t = targetMap.get(k);
       if (!t) { t = { cx, cy, cz, sky: false, block: false }; targetMap.set(k, t); }
       return t;
@@ -1057,7 +1050,7 @@ export class VoxelWorld implements ChunkProvider {
     }
 
     const spillTargets = [...targetMap.values()];
-    if (spillTargets.length === 0) { onReady([]); return () => {}; }
+    if (spillTargets.length === 0) return [];
 
     // Temp copy each spill chunk (non-destructive) + seed light-from-above where none is loaded.
     for (const t of spillTargets) {
@@ -1068,69 +1061,19 @@ export class VoxelWorld implements ChunkProvider {
       }
     }
     spillTargets.sort((a, b) => b.cy - a.cy);
-    const spillKeys = spillTargets.map((t) => chunkKey(t.cx, t.cy, t.cz));
 
-    // Apply relit temp light to the spill neighbours' DISPLAY via a light-only resample.
-    const applyResult = (): void => {
-      const applied: string[] = [];
-      for (const key of spillKeys) {
-        if (this.resamplePreviewChunkLight(key, true)) applied.push(key);
-      }
-      onReady(applied);
-    };
+    perfStats.begin('lighting');
+    relightRegion(this.tempGetData, spillTargets);
 
-    // Synchronous fallback when the worker didn't spin up.
-    if (!this.lightPool.available) {
-      perfStats.begin('lighting');
-      relightRegion(this.tempGetData, spillTargets);
-      perfStats.end('lighting');
-      applyResult();
-      return () => {};
+    // Light-only refresh of each spill neighbour's display (resample + merged-buffer slice write).
+    const spillKeys: string[] = [];
+    for (const t of spillTargets) {
+      const key = chunkKey(t.cx, t.cy, t.cz);
+      if (this.resamplePreviewChunkLight(key, true)) spillKeys.push(key);
     }
+    perfStats.end('lighting');
 
-    // Supersede any spill relight still in flight.
-    if (this.previewLightJob !== null) this.lightPool.cancel(this.previewLightJob);
-
-    const snapshot = this.snapshotRegion(spillTargets, this.tempGetData);
-    const jobId = this.lightPool.dispatch(snapshot, spillTargets, (results) => {
-      if (this.previewLightJob === jobId) this.previewLightJob = null;
-      for (const { key, data } of results) {
-        const c = this.chunks.get(key);
-        if (c?.tempData && c.tempData.length === data.length) c.tempData.set(data);
-      }
-      applyResult();
-    });
-    this.previewLightJob = jobId;
-
-    return () => {
-      this.lightPool.cancel(jobId);
-      if (this.previewLightJob === jobId) this.previewLightJob = null;
-    };
-  }
-
-  /**
-   * Snapshot the region a relight reads — every target plus its 6 face neighbours (the borders
-   * relightRegion injects from, including the already-relit drawn chunks) — as copies keyed by
-   * chunkKey, so they can be transferred to the lighting worker without disturbing live/temp buffers.
-   */
-  private snapshotRegion(
-    targets: RelightTarget[],
-    getBacking: (cx: number, cy: number, cz: number) => Uint32Array | null,
-  ): LightChunk[] {
-    const seen = new Set<string>();
-    const out: LightChunk[] = [];
-    const add = (cx: number, cy: number, cz: number): void => {
-      const k = chunkKey(cx, cy, cz);
-      if (seen.has(k)) return;
-      seen.add(k);
-      const data = getBacking(cx, cy, cz);
-      if (data) out.push({ key: k, data: new Uint32Array(data) });
-    };
-    for (const t of targets) {
-      add(t.cx, t.cy, t.cz);
-      for (const [dx, dy, dz] of FACE_OFFSETS_6) add(t.cx + dx, t.cy + dy, t.cz + dz);
-    }
-    return out;
+    return spillKeys;
   }
 
   /**
@@ -1146,7 +1089,9 @@ export class VoxelWorld implements ChunkProvider {
     expandChunkToGrid(chunk, this.chunks, grid, useTemp);
     const changed = geo.resampleLightFromGrid(grid);
     this.meshPool.returnGrid(grid);
-    if (changed) this.chunkGrouper.markChunkDirty(key);
+    // Push the two rewritten light attributes into the group's merged buffer as a ranged write —
+    // no full group re-merge (that churn was the preview slowdown).
+    if (changed) this.chunkGrouper.updateChunkLight(key);
     return true;
   }
 
@@ -1606,7 +1551,8 @@ export class VoxelWorld implements ChunkProvider {
     const changed = geo.resampleLightFromGrid(grid);
     this.meshPool.returnGrid(grid);
 
-    if (changed) this.chunkGrouper.markChunkDirty(chunk.key);
+    // Ranged write into the merged buffer instead of a full group re-merge (cuts edit judder).
+    if (changed) this.chunkGrouper.updateChunkLight(chunk.key);
     return true;
   }
 
@@ -1664,7 +1610,6 @@ export class VoxelWorld implements ChunkProvider {
     // Terminate workers unless told to keep them
     if (!keepWorkers) {
       this.meshPool.dispose();
-      this.lightPool.dispose();
       this.localPool?.dispose();
       this.localPool = null;
     }
