@@ -9,7 +9,7 @@
  * Local (offline) mode only — the server path is unaffected.
  */
 
-import type { CaveConfig } from '@worldify/shared';
+import type { CaveConfig, TerrainLayerConfig } from '@worldify/shared';
 
 // ============== Types ==============
 
@@ -25,8 +25,10 @@ export interface WorldMeta {
   lastPitch?: number;
   /** Persisted time-of-day (0-1), restored on load / world switch (optional). */
   timeOfDay?: number;
-  /** Per-world cave/terrain generation settings, chosen at creation (optional → engine defaults). */
+  /** Per-world cave generation settings, chosen at creation (optional → engine defaults). */
   caveConfig?: CaveConfig;
+  /** Per-world base-terrain layer settings, chosen at creation (optional → engine defaults). */
+  terrainConfig?: TerrainLayerConfig;
 }
 
 /** Player position + look snapshot for persistence. */
@@ -168,9 +170,14 @@ export function getActiveWorldSeed(): number {
   return activeWorld?.seed ?? DEFAULT_SEED;
 }
 
-/** The active world's cave/terrain settings (undefined → engine defaults). */
+/** The active world's cave settings (undefined → engine defaults). */
 export function getActiveWorldCaveConfig(): CaveConfig | undefined {
   return activeWorld?.caveConfig;
+}
+
+/** The active world's base-terrain layer settings (undefined → engine defaults). */
+export function getActiveWorldTerrainConfig(): TerrainLayerConfig | undefined {
+  return activeWorld?.terrainConfig;
 }
 
 /** A fresh random world seed (31-bit), matching createWorld's default. */
@@ -183,7 +190,9 @@ export async function nextWorldName(): Promise<string> {
   return `World ${(await listWorlds()).length + 1}`;
 }
 
-export async function createWorld(name?: string, seed?: number, caveConfig?: CaveConfig): Promise<WorldMeta> {
+export async function createWorld(
+  name?: string, seed?: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig,
+): Promise<WorldMeta> {
   const existing = await listWorlds();
   const world: WorldMeta = {
     id: crypto.randomUUID(),
@@ -192,14 +201,17 @@ export async function createWorld(name?: string, seed?: number, caveConfig?: Cav
     createdAt: Date.now(),
     lastPlayedAt: Date.now(),
     ...(caveConfig ? { caveConfig } : {}),
+    ...(terrainConfig ? { terrainConfig } : {}),
   };
   await idbPut(STORE_WORLDS, world);
   return world;
 }
 
 /** Create a new world AND make it active (rebuilds terrain). */
-export async function createAndActivateWorld(name?: string, seed?: number, caveConfig?: CaveConfig): Promise<WorldMeta> {
-  const world = await createWorld(name, seed, caveConfig);
+export async function createAndActivateWorld(
+  name?: string, seed?: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig,
+): Promise<WorldMeta> {
+  const world = await createWorld(name, seed, caveConfig, terrainConfig);
   await setActiveWorld(world.id);
   return world;
 }

@@ -1,26 +1,36 @@
 /**
- * NewWorldDialog — prompts for a world name + seed plus the terrain's cave settings when creating a
- * new world. Worms and caverns are independent, combinable cave types: toggle either, both, or
- * neither, and tune each one's parameters (both share one CaveConfig). Every parameter has a short
- * description. The chosen settings are persisted to localStorage so they carry across sessions (tweak
- * → create → tweak without re-entering everything). Name/seed are always fresh.
+ * NewWorldDialog — prompts for a world name + seed plus the generation layers when creating a new
+ * world. Terrain, Worms, and Caverns are independent, combinable layers: toggle any of them, and
+ * tune each one's parameters. Terrain is the base landscape (land + roads/water + trees/buildings);
+ * with it off, enabled cave layers render as solid casts so you can inspect their shapes. Every
+ * parameter has a short description. Settings persist to localStorage so they carry across sessions
+ * (tweak → create → tweak). Name/seed are always fresh.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { nextWorldName, randomWorldSeed } from '../game/world/WorldManager';
-import { DEFAULT_CAVE_CONFIG, normalizeCaveConfig, type CaveConfig } from '@worldify/shared';
+import {
+  DEFAULT_CAVE_CONFIG, DEFAULT_TERRAIN_LAYER_CONFIG, normalizeCaveConfig,
+  type CaveConfig, type TerrainLayerConfig,
+} from '@worldify/shared';
 
 interface NewWorldDialogProps {
   onCancel: () => void;
-  onCreate: (name: string, seed: number, caveConfig: CaveConfig) => void;
+  onCreate: (name: string, seed: number, caveConfig: CaveConfig, terrainConfig: TerrainLayerConfig) => void;
 }
 
-type Field = { key: keyof CaveConfig; label: string; min: number; max: number; step: number; desc: string };
+type Field<T> = { key: keyof T; label: string; min: number; max: number; step: number; desc: string };
 
-// Per-type parameter sliders, each with an explainer. Worms and caverns share several concepts
-// (spacing, size, winding, verticality, wall roughness, roughness scale, size variety).
-const WORM_FIELDS: Field[] = [
+const TERRAIN_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'pathSpacing', label: 'Path spacing', min: 40, max: 220, step: 5, desc: 'Distance between roads/paths — larger is sparser.' },
+  { key: 'pathWidth', label: 'Path width', min: 1, max: 8, step: 0.5, desc: 'Width of the roads/paths in meters.' },
+  { key: 'pathWarpAmplitude', label: 'Path warp amount', min: 0, max: 150, step: 5, desc: 'How strongly paths meander away from straight.' },
+  { key: 'pathWarpFrequency', label: 'Path warp scale', min: 0.002, max: 0.05, step: 0.002, desc: 'Size of the path wiggles — higher is tighter.' },
+  { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between buildings — larger means fewer.' },
+];
+
+const WORM_FIELDS: Field<CaveConfig>[] = [
   { key: 'wormsPerCell', label: 'Density', min: 0, max: 20, step: 0.5, desc: 'How many tunnels are generated in each area.' },
   { key: 'wormCellSize', label: 'Spacing', min: 15, max: 100, step: 5, desc: 'Distance between tunnel start points — larger is sparser.' },
   { key: 'wormSegments', label: 'Length', min: 10, max: 150, step: 5, desc: 'How far each tunnel travels before it ends.' },
@@ -33,7 +43,7 @@ const WORM_FIELDS: Field[] = [
   { key: 'wormRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'How much tunnel width differs from one tunnel to the next.' },
 ];
 
-const CAVERN_FIELDS: Field[] = [
+const CAVERN_FIELDS: Field<CaveConfig>[] = [
   { key: 'cavernsPerCell', label: 'Density', min: 0, max: 4, step: 0.25, desc: 'How many caverns form in each area.' },
   { key: 'cavernCellSize', label: 'Spacing', min: 40, max: 160, step: 5, desc: 'Distance between caverns — larger spaces them further apart.' },
   { key: 'cavernRadius', label: 'Size', min: 6, max: 30, step: 1, desc: 'Base width of each chamber.' },
@@ -44,30 +54,35 @@ const CAVERN_FIELDS: Field[] = [
   { key: 'cavernRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'How much chamber size differs from one to the next.' },
   { key: 'cavernWaterLevel', label: 'Water level', min: 0, max: 0.6, step: 0.05, desc: 'How deep the water pool at the bottom of each chamber is.' },
   { key: 'cavernSpikeAmount', label: 'Stalagmites', min: 0, max: 1, step: 0.05, desc: 'Abundance and size of stalagmites and stalactites.' },
+  { key: 'cavernTerrainTaper', label: 'Terrain taper', min: 0, max: 20, step: 1, desc: 'Pinches cavern tops shut near the surface (0 = full-size breaches).' },
 ];
 
-// Persist the chosen cave settings across sessions (name/seed stay fresh).
-const CAVE_STORE_KEY = 'worldify-new-world-cave';
-function loadSavedCave(): CaveConfig {
+// Persist the chosen generation settings across sessions (name/seed stay fresh).
+const STORE_KEY = 'worldify-new-world-cave';
+type Saved = { cave: CaveConfig; terrain: TerrainLayerConfig };
+function loadSaved(): Saved {
   try {
-    const raw = localStorage.getItem(CAVE_STORE_KEY);
+    const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const p = JSON.parse(raw);
-      // Merge over defaults + migrate any legacy `mode` field to the worms/caverns toggles.
-      return { ...DEFAULT_CAVE_CONFIG, ...normalizeCaveConfig(p.cave ?? p) };
+      return {
+        cave: { ...DEFAULT_CAVE_CONFIG, ...normalizeCaveConfig(p.cave ?? p) },
+        terrain: { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...(p.terrain ?? {}) },
+      };
     }
   } catch { /* ignore corrupt/absent */ }
-  return { ...DEFAULT_CAVE_CONFIG };
+  return { cave: { ...DEFAULT_CAVE_CONFIG }, terrain: { ...DEFAULT_TERRAIN_LAYER_CONFIG } };
 }
-function saveCave(cave: CaveConfig) {
-  try { localStorage.setItem(CAVE_STORE_KEY, JSON.stringify({ cave })); } catch { /* ignore */ }
+function saveSettings(cave: CaveConfig, terrain: TerrainLayerConfig) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ cave, terrain })); } catch { /* ignore */ }
 }
 
 export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
-  const initial = useRef(loadSavedCave()).current;
+  const initial = useRef(loadSaved()).current;
   const [name, setName] = useState('');
   const [seed, setSeed] = useState(() => String(randomWorldSeed()));
-  const [cave, setCave] = useState<CaveConfig>(initial);
+  const [cave, setCave] = useState<CaveConfig>(initial.cave);
+  const [terrain, setTerrain] = useState<TerrainLayerConfig>(initial.terrain);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -77,12 +92,9 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
   const submit = () => {
     const parsedSeed = parseInt(seed, 10);
-    saveCave(cave);
-    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave);
+    saveSettings(cave, terrain);
+    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, terrain);
   };
-
-  const setField = (key: keyof CaveConfig, v: number) =>
-    setCave((c) => ({ ...c, [key]: v }) as CaveConfig);
 
   const inputCls =
     'w-full rounded-lg bg-black/50 border border-white/15 px-3 py-2 text-sm text-white ' +
@@ -113,13 +125,20 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
     </div>
   );
 
-  const slider = (f: Field) => {
-    const value = (cave as unknown as Record<string, number>)[f.key] ?? 0;
+  // Render a slider bound to one field of a config object + its setter.
+  function fieldSlider<T>(f: Field<T>, obj: T, set: (patch: Partial<T>) => void) {
+    const value = (obj as unknown as Record<string, number>)[f.key as string] ?? 0;
     return sliderRow(f.label, f.desc, value, f.min, f.max, f.step,
-      (v) => setField(f.key, v), (v) => (Number.isInteger(f.step) ? String(v) : v.toFixed(2)));
-  };
+      (v) => set({ [f.key]: v } as Partial<T>),
+      (v) => (Number.isInteger(f.step) ? String(v) : v.toFixed(2)));
+  }
+  const patchCave = (p: Partial<CaveConfig>) => setCave((c) => ({ ...c, ...p }));
+  const patchTerrain = (p: Partial<TerrainLayerConfig>) => setTerrain((t) => ({ ...t, ...p }));
 
-  const anyCave = cave.wormsEnabled || cave.cavernsEnabled;
+  const anyLayer = terrain.enabled || cave.wormsEnabled || cave.cavernsEnabled;
+  const subheading = (text: string) => (
+    <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">{text}</span>
+  );
 
   return (
     <Modal
@@ -162,40 +181,41 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
         </div>
       </label>
 
-      {/* Cave settings: enable worms and/or caverns, then tune each enabled type (scrolls if tall). */}
+      {/* Generation layers: toggle Terrain / Worms / Caverns, then tune each enabled layer. */}
       <div className="flex flex-col gap-2 border-t border-white/10 pt-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-white/60 text-xs">Caves</span>
+          <span className="text-white/60 text-xs">Layers</span>
           <div className="flex gap-1.5 flex-wrap justify-end">
-            <button className={pill(cave.wormsEnabled)} onClick={() => setCave((c) => ({ ...c, wormsEnabled: !c.wormsEnabled }))}>
+            <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
+              Terrain
+            </button>
+            <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
             </button>
-            <button className={pill(cave.cavernsEnabled)} onClick={() => setCave((c) => ({ ...c, cavernsEnabled: !c.cavernsEnabled }))}>
+            <button className={pill(cave.cavernsEnabled)} onClick={() => patchCave({ cavernsEnabled: !cave.cavernsEnabled })}>
               Caverns
             </button>
           </div>
         </div>
 
-        {anyCave && (
+        {anyLayer && (
           <div className="flex flex-col gap-2.5 max-h-[42vh] overflow-y-auto scrollbar-compact pr-1">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-white/80 text-xs">Invert (debug)</span>
-              <button className={pill(cave.invert)} onClick={() => setCave((c) => ({ ...c, invert: !c.invert }))}>
-                {cave.invert ? 'On' : 'Off'}
-              </button>
-            </div>
-
-            {cave.wormsEnabled && (
+            {terrain.enabled && (
               <>
-                <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">Worms</span>
-                {WORM_FIELDS.map(slider)}
+                {subheading('Terrain')}
+                {TERRAIN_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
               </>
             )}
-
+            {cave.wormsEnabled && (
+              <>
+                {subheading('Worms')}
+                {WORM_FIELDS.map((f) => fieldSlider(f, cave, patchCave))}
+              </>
+            )}
             {cave.cavernsEnabled && (
               <>
-                <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">Caverns</span>
-                {CAVERN_FIELDS.map(slider)}
+                {subheading('Caverns')}
+                {CAVERN_FIELDS.map((f) => fieldSlider(f, cave, patchCave))}
               </>
             )}
           </div>

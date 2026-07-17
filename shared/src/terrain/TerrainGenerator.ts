@@ -12,6 +12,7 @@ import {
   StampPointGenerator,
   StampPlacer,
   StampType,
+  DEFAULT_STAMP_DISTRIBUTION,
   hashInt2,
   makeRng,
   type StampDistributionConfig,
@@ -99,12 +100,6 @@ export interface CaveConfig {
    */
   wormsEnabled: boolean;
   cavernsEnabled: boolean;
-  /**
-   * Debug view: render the caves themselves as SOLID and everything else as air, skipping
-   * pathways, water, and stamps. Lets you fly around and inspect the raw cave shapes (the union of
-   * every enabled type) without the rest of the terrain in the way.
-   */
-  invert: boolean;
   /** Optional hard floor in meters; no caves are carved below this world Y. */
   floorY?: number;
 
@@ -163,6 +158,30 @@ export interface CaveConfig {
   cavernWaterLevel: number;
   /** 0..1 — stalagmite/stalactite abundance + size (0 = none; higher = denser, taller spikes). */
   cavernSpikeAmount: number;
+  /** Meters below the surface over which a cavern pinches shut, so tops that breach the surface stay
+   *  small (0 = no taper, full-size breaches; higher = smaller / closed tops). */
+  cavernTerrainTaper: number;
+}
+
+/**
+ * Per-world "Terrain" generation layer — the base landscape (heightmap land, pathway roads with
+ * their walls + water, and stamps: trees / rocks / buildings). Toggleable and tunable alongside the
+ * worms/caverns cave layers. When disabled, the base terrain is skipped entirely (and any enabled
+ * cave layer is rendered as solid casts for inspection).
+ */
+export interface TerrainLayerConfig {
+  /** Master toggle for the base landscape + pathways + stamps. */
+  enabled: boolean;
+  /** Pathway network spacing in meters (distance between path cells; larger = sparser roads). */
+  pathSpacing: number;
+  /** Pathway width in meters. */
+  pathWidth: number;
+  /** Pathway domain-warp amplitude in meters (how far roads meander from straight). */
+  pathWarpAmplitude: number;
+  /** Pathway domain-warp frequency (1/m); higher = tighter wiggles. */
+  pathWarpFrequency: number;
+  /** Building spacing in meters (grid spacing for the largest building type; larger = fewer). */
+  buildingSpacing: number;
 }
 
 export interface TerrainConfig {
@@ -186,6 +205,8 @@ export interface TerrainConfig {
   pathwayConfig: PathwayConfig;
   /** Cave-tunnel generation configuration */
   caveConfig: CaveConfig;
+  /** Base-terrain generation layer (land + pathways + stamps) toggle + tunables */
+  terrainLayer: TerrainLayerConfig;
 }
 
 // All pathway material options
@@ -252,7 +273,6 @@ const CAVERN_SPIKE_MAX_R = 1.3;
 export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   wormsEnabled: true,       // traced worms on by default (the established look)
   cavernsEnabled: false,    // caverns off until dialled in; combine with worms once refined
-  invert: false,            // set true to inspect raw cave shapes (solid caves, air elsewhere)
   floorY: undefined,        // no hard floor by default
 
   // Worms (traced tunnels). Seeded on a 3D grid so they fill the whole depth from just above the
@@ -286,6 +306,18 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   cavernWarpFrequency: 0.03,// domain-warp scale (used once winding > 0)
   cavernWaterLevel: 0.15,   // bottom ~15% of each chamber filled with water
   cavernSpikeAmount: 0.3,   // moderate stalagmites/stalactites
+  cavernTerrainTaper: 6,    // pinch shut over the last 6 m below the surface → small breaches
+};
+
+// ============== Default Terrain Layer Configuration ==============
+
+export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
+  enabled: true,            // base landscape + pathways + stamps on by default
+  pathSpacing: 125,         // ~125 m between path cells (matches pathway frequency 0.008)
+  pathWidth: 3.0,           // 3 m roads
+  pathWarpAmplitude: 90,    // strong meander
+  pathWarpFrequency: 0.011, // smooth curves
+  buildingSpacing: 50,      // largest building grid (matches the stamp default)
 };
 
 /**
@@ -353,6 +385,7 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   enableStamps: true,
   pathwayConfig: DEFAULT_PATHWAY_CONFIG,
   caveConfig: DEFAULT_CAVE_CONFIG,
+  terrainLayer: DEFAULT_TERRAIN_LAYER_CONFIG,
 };
 
 // ============== Terrain Generator ==============
@@ -420,6 +453,12 @@ export class TerrainGenerator implements HeightSampler {
     if (config.caveConfig) {
       this.config.caveConfig = { ...DEFAULT_CAVE_CONFIG, ...normalizeCaveConfig(config.caveConfig) };
     }
+    if (config.terrainLayer) {
+      this.config.terrainLayer = { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...config.terrainLayer };
+    }
+    // Fold the friendly Terrain-layer tunables onto pathwayConfig + stampConfig (single source of
+    // truth). No-op at defaults, so a default generator stays byte-identical to before.
+    this.applyTerrainLayer();
 
     // Initialize noise generators
     let seed = this.config.seed;
@@ -564,6 +603,33 @@ export class TerrainGenerator implements HeightSampler {
   }
 
   /**
+   * Fold the friendly Terrain-layer tunables onto the underlying pathway + stamp configs, which is
+   * where the generator actually reads them. At the defaults this reproduces the built-in pathway /
+   * building settings exactly (so a default world is unchanged). Called before the pathway/stamp
+   * systems are (re)built.
+   */
+  private applyTerrainLayer(): void {
+    const t = this.config.terrainLayer;
+    this.config.pathwayConfig = {
+      ...this.config.pathwayConfig,
+      frequency: 1 / Math.max(1, t.pathSpacing),  // cell size in meters ≈ 1/frequency
+      pathWidth: t.pathWidth,
+      warpAmplitude: t.pathWarpAmplitude,
+      warpFrequency: t.pathWarpFrequency,
+    };
+    // Scale only the building distributions by buildingSpacing; leave rocks/trees as-is. Keeps the
+    // default (50 m) byte-identical to DEFAULT_STAMP_DISTRIBUTION.
+    const distributions = DEFAULT_STAMP_DISTRIBUTION.distributions.map((d) => {
+      if (d.type === StampType.BUILDING_SMALL)
+        return { ...d, gridSize: t.buildingSpacing, exclusionRadius: t.buildingSpacing * 0.4 };
+      if (d.type === StampType.BUILDING_HUT)
+        return { ...d, gridSize: t.buildingSpacing * 0.6, exclusionRadius: t.buildingSpacing * 0.3 };
+      return d;
+    });
+    this.config.stampConfig = { ...this.config.stampConfig, distributions };
+  }
+
+  /**
    * Update domain warp noise configuration
    */
   private updateWarpConfig(): void {
@@ -611,8 +677,8 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - world Z in meters
    * @param distanceFromSurface - voxels below the surface (>0 = underground)
    */
-  isInsideCave(worldX: number, worldYmeters: number, worldZ: number, _distanceFromSurface: number): boolean {
-    return this.caveFillAt(worldX, worldYmeters, worldZ) !== 0;
+  isInsideCave(worldX: number, worldYmeters: number, worldZ: number, surfaceMeters: number): boolean {
+    return this.caveFillAt(worldX, worldYmeters, worldZ, surfaceMeters) !== 0;
   }
 
   /**
@@ -620,14 +686,15 @@ export class TerrainGenerator implements HeightSampler {
    *   0 = solid (leave terrain), 1 = air (carve), 2 = water.
    * Worms carve air only; caverns carve air, place water in the bottom, and leave stalagmite /
    * stalactite spikes solid. Air wins over water, so a worm bores cleanly through a cavern pool.
-   * Pure function of world position (given the per-chunk prepared sets) → seamless.
+   * `surfaceMeters` is the terrain top at this column (meters) — used only by the cavern surface
+   * taper. Pure function of world position (given the per-chunk prepared sets) → seamless.
    */
-  caveFillAt(worldX: number, worldYmeters: number, worldZ: number): 0 | 1 | 2 {
+  caveFillAt(worldX: number, worldYmeters: number, worldZ: number, surfaceMeters: number): 0 | 1 | 2 {
     const cave = this.config.caveConfig;
     if (cave.floorY !== undefined && worldYmeters < cave.floorY) return 0;
     if (cave.wormsEnabled && this.isInsideWormCave(worldX, worldYmeters, worldZ)) return 1;
     if (cave.cavernsEnabled) {
-      const c = this.sampleCavern(worldX, worldYmeters, worldZ);
+      const c = this.sampleCavern(worldX, worldYmeters, worldZ, surfaceMeters);
       if (c !== 0) return c;
     }
     return 0;
@@ -875,11 +942,15 @@ export class TerrainGenerator implements HeightSampler {
    * hashed conical spikes rise from the floor / hang from the ceiling. Across overlapping caverns the
    * most-open result wins (air > water > solid). Pure function of position → seamless.
    */
-  private sampleCavern(x: number, y: number, z: number): 0 | 1 | 2 {
+  private sampleCavern(x: number, y: number, z: number, surfaceMeters: number): 0 | 1 | 2 {
     const feats = this.chunkCavernFeats;
     if (feats.length === 0) return 0;
     const cave = this.config.caveConfig;
     const vert = cave.cavernVerticality;
+    // Surface taper: pinch the cavern shut over the last `cavernTerrainTaper` meters below the
+    // surface so tops that breach the terrain stay small (factor 0 at/above the surface → 1 deep).
+    const taperDist = cave.cavernTerrainTaper;
+    const taper = taperDist > 0 ? Math.max(0, Math.min(1, (surfaceMeters - y) / taperDist)) : 1;
 
     // Domain warp (winding) — displace the sample point; clean ellipsoid when winding = 0.
     let wx = x, wy = y, wz = z;
@@ -899,7 +970,7 @@ export class TerrainGenerator implements HeightSampler {
       const dx = wx - cx, dy = wy - cy, dz = wz - cz;
       const ndx = dx / rx, ndy = dy / ry, ndz = dz / rz;
       const nd = Math.sqrt(ndx * ndx + ndy * ndy + ndz * ndz);
-      if (nd >= 1 + wallMeters / rx) continue;    // outside this cavern's (rough) boundary
+      if (nd >= taper * (1 + wallMeters / rx)) continue;  // outside the (rough, surface-tapered) boundary
 
       // Vertical span of the ellipsoid at this column → the local floor / ceiling world-Y.
       const rh2 = ndx * ndx + ndz * ndz;
@@ -1342,9 +1413,13 @@ export class TerrainGenerator implements HeightSampler {
     if (cave.wormsEnabled) this.prepareChunkWorms(cx, cy, cz);
     if (cave.cavernsEnabled) this.prepareChunkCaverns(cx, cy, cz);
 
-    // Debug: render the caves themselves as solid and skip all other terrain/stamps.
-    if (cave.invert && anyCave) {
-      return this.generateInvertedCaveChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ);
+    // Terrain layer OFF → skip the base landscape, pathways, and stamps entirely. Any enabled cave
+    // layer is rendered as SOLID casts in otherwise-empty space so the raw cave shapes can be
+    // inspected; with no caves either, the chunk is empty air.
+    if (!this.config.terrainLayer.enabled) {
+      return anyCave
+        ? this.generateCaveCastChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ)
+        : data;
     }
 
     // Whether any column in this chunk is on a pathway — a free early-out that gates the
@@ -1462,7 +1537,7 @@ export class TerrainGenerator implements HeightSampler {
               && finalWeight > -0.5
               && material !== waterConfig.waterMaterial
               && material !== this.config.pathwayConfig.wallMaterial) {
-            const fill = this.caveFillAt(worldX, voxelY * VOXEL_SCALE, worldZ);
+            const fill = this.caveFillAt(worldX, voxelY * VOXEL_SCALE, worldZ, terrainHeight * VOXEL_SCALE);
             if (fill === 1) {
               finalWeight = -0.5;
               material = 0; // air
@@ -1503,12 +1578,12 @@ export class TerrainGenerator implements HeightSampler {
   }
 
   /**
-   * Debug generator (caveConfig.invert): fill a chunk with SOLID rock exactly where the active cave
-   * algorithm would carve air, and leave everything else empty. Same surface/margin/taper gating as
-   * the real carve, so the result is a faithful "negative" — fly around and see the tunnel casts
-   * sitting below where the ground used to be, with no other terrain, pathways, or stamps in the way.
+   * Cave-cast generator (Terrain layer OFF): fill a chunk with SOLID rock exactly where the enabled
+   * cave layers would carve air/water, and leave everything else empty. The result is a faithful
+   * "negative" — fly around and see the tunnel / chamber casts sitting where the ground used to be,
+   * with no other terrain, pathways, or stamps in the way.
    */
-  private generateInvertedCaveChunk(data: Uint32Array, chunkWorldX: number, chunkWorldY: number, chunkWorldZ: number): Uint32Array {
+  private generateCaveCastChunk(data: Uint32Array, chunkWorldX: number, chunkWorldY: number, chunkWorldZ: number): Uint32Array {
     const solidMaterial = mat('rock');
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -1518,11 +1593,10 @@ export class TerrainGenerator implements HeightSampler {
 
         for (let ly = 0; ly < CHUNK_SIZE; ly++) {
           const voxelY = chunkWorldY + ly;
-          const distanceFromSurface = terrainHeight - voxelY;
 
           let finalWeight = -0.5; // air
           let material = 0;
-          if (this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, distanceFromSurface)) {
+          if (this.isInsideCave(worldX, voxelY * VOXEL_SCALE, worldZ, terrainHeight * VOXEL_SCALE)) {
             finalWeight = 0.5; // solid cave cast
             material = solidMaterial;
           }
