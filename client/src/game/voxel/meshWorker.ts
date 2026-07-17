@@ -64,6 +64,7 @@ self.onmessage = (e: MessageEvent<MeshWorkerRequest>) => {
         slot.materialWeights.buffer as ArrayBuffer,
         slot.lightLevels.buffer as ArrayBuffer,
         slot.blockLightLevels.buffer as ArrayBuffer,
+        slot.cellIndices.buffer as ArrayBuffer,
         slot.indices.buffer as ArrayBuffer,
         slot.boundary.indices.buffer as ArrayBuffer,
         slot.boundary.faceOffsets.buffer as ArrayBuffer,

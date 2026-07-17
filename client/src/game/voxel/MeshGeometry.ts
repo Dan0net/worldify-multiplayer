@@ -41,6 +41,9 @@ export interface ExpandedMeshData {
   materialWeights: Float32Array;
   lightLevels: Float32Array;
   blockLightLevels: Float32Array;
+  /** Per-expanded-vertex grid cell index (for re-sampling light without re-meshing). Not a GPU
+   *  attribute — kept on the main thread for the light-only relight path. */
+  cellIndices: Uint16Array;
   indices: Uint32Array;
   /**
    * Boundary (seam) vertices grouped by chunk face, for normal reconciliation.
@@ -70,6 +73,7 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
   const materialWeights = new Float32Array(expandedVertexCount * 3);
   const lightLevels = new Float32Array(expandedVertexCount);
   const blockLightLevels = new Float32Array(expandedVertexCount);
+  const cellIndices = new Uint16Array(expandedVertexCount);
   const indices = new Uint32Array(expandedVertexCount);
 
   // Per-face buckets of expanded-vertex indices that sit on a chunk boundary plane.
@@ -143,6 +147,11 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
     blockLightLevels[v1] = output.blockLights[i1];
     blockLightLevels[v2] = output.blockLights[i2];
 
+    // Cell index per expanded vertex (for light re-sampling without re-meshing)
+    cellIndices[v0] = output.cellIndices[i0];
+    cellIndices[v1] = output.cellIndices[i1];
+    cellIndices[v2] = output.cellIndices[i2];
+
     indices[v0] = v0;
     indices[v1] = v1;
     indices[v2] = v2;
@@ -166,7 +175,7 @@ export function expandGeometry(output: SurfaceNetOutput): ExpandedMeshData | nul
   }
 
   return {
-    positions, normals, materialIds, materialWeights, lightLevels, blockLightLevels, indices,
+    positions, normals, materialIds, materialWeights, lightLevels, blockLightLevels, cellIndices, indices,
     boundary: { indices: boundaryIndices, faceOffsets },
   };
 }
