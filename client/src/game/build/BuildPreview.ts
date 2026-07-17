@@ -307,10 +307,16 @@ export class BuildPreview {
       const allImmediate = this.suppressGroupsForActivePreview();
 
       if (allImmediate) {
-        // All groups are already merged — safe to show preview now, then do all the lighting.
+        // Show the geometry immediately. Mesh always wins: if the cursor has already moved on,
+        // dispatch the next mesh NOW and skip lighting — the mesh tracks the cursor at full worker
+        // cadence. Lighting runs only once the cursor settles (no pending op), in a single atomic
+        // pass, so it's never in front of the next mesh and never lands a partial update.
         this.applyPreviewResults(results, chunksToRemove, world, scene);
-        this.runDeferredLighting(drawnKeys, marginKeys);
-        this.processPending();
+        if (this.pendingOperation) {
+          this.processPending();
+        } else {
+          this.runDeferredLighting(drawnKeys, marginKeys);
+        }
       } else {
         // Some groups need to be merged first — defer preview visibility.
         // Store results; finalizeDeferredPreview() picks them up once
@@ -696,10 +702,14 @@ export class BuildPreview {
     this.deferredMarginKeys = null;
 
     this.applyPreviewResults(results, chunksToRemove, this.world, this.scene);
-    this.runDeferredLighting(drawnKeys, marginKeys);
 
-    // Process any pending operation that arrived while we were waiting
-    this.processPending();
+    // Mesh wins: if a newer cursor position is waiting, dispatch it now and skip lighting; relight
+    // only once the cursor settles, so lighting never delays the next mesh and lands atomically.
+    if (this.pendingOperation) {
+      this.processPending();
+    } else {
+      this.runDeferredLighting(drawnKeys, marginKeys);
+    }
   }
 
   /**
