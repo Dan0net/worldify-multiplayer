@@ -59,15 +59,18 @@ import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConf
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
 /**
- * Topmost chunk Y that must be loaded to render a column's surface, from its (stamp-corrected)
- * heights. Uses maxHeight + 1: the top face of the highest solid voxel is meshed from the voxel
- * ABOVE it, so a flat top flush with a chunk's top row (localY 31) needs the next chunk up loaded to
- * supply the air margin — otherwise the extrapolated margin repeats the solid voxel and the top face
- * is culled (flat roofs clipped). Non-flush tops resolve to their own chunk (no extra chunk loaded).
+ * Chunk-Y range for a column from its (stamp-corrected) heights.
+ * - maxCy: topmost chunk to LOAD, from maxHeight + 1 — the top face of the highest solid voxel is
+ *   meshed from the voxel ABOVE it, so a flat top flush with a chunk's top row (localY 31) needs the
+ *   next chunk up loaded to supply the air margin (else the extrapolated margin repeats the solid
+ *   voxel and the top face is culled → flat roofs clipped). Non-flush tops resolve to their own chunk.
+ * - minCy: chunk of the LOWEST surface point. Chunks strictly below it are fully underground (no open
+ *   sky anywhere in the footprint), so they may safely default to dark when the chunk above isn't
+ *   loaded. Surface chunks (slopes, flush tops, BFS-edge columns) are at cy >= minCy and stay lit.
  */
-function surfaceTopChunkCy(heights: ArrayLike<number>): number {
-  const { maxHeight } = getChunkRangeFromHeights(heights);
-  return Math.floor((maxHeight + 1) / CHUNK_SIZE);
+function columnChunkRange(heights: ArrayLike<number>): { minCy: number; maxCy: number } {
+  const { minCy, maxHeight } = getChunkRangeFromHeights(heights);
+  return { minCy, maxCy: Math.floor((maxHeight + 1) / CHUNK_SIZE) };
 }
 
 /** Shared read-only all-dark "light from above" (used for underground chunks with no chunk above
@@ -110,8 +113,10 @@ export class VoxelWorld implements ChunkProvider {
   private pendingColumnTimes: Map<string, number> = new Map();
   private pendingTileTimes: Map<string, number> = new Map();
 
-  /** Column info from received tiles: maxCy for the column. Keyed by "tx,tz" */
-  private columnInfo: Map<string, { maxCy: number }> = new Map();
+  /** Column info from received tiles. maxCy = top chunk to load (stamp-inclusive, highest surface
+   *  point). minCy = chunk of the LOWEST surface point — chunks below it are fully underground.
+   *  Keyed by "tx,tz". */
+  private columnInfo: Map<string, { maxCy: number; minCy: number }> = new Map();
 
   /** Local terrain generation worker pool (offline mode). Created lazily. */
   private localPool: TerrainWorkerPool | null = null;
@@ -796,8 +801,8 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTiles.delete(columnKey);
     this.pendingTileTimes.delete(columnKey);
     
-    // Compute and store the column's top chunk from the (stamp-corrected) tile heights.
-    this.columnInfo.set(columnKey, { maxCy: surfaceTopChunkCy(heights) });
+    // Compute and store the column's chunk range from the (stamp-corrected) tile heights.
+    this.columnInfo.set(columnKey, columnChunkRange(heights));
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
@@ -927,16 +932,18 @@ export class VoxelWorld implements ChunkProvider {
 
   /**
    * Per-column light entering the top of a chunk. Uses the loaded chunk above if present; otherwise
-   * assumes open sky ONLY when the chunk is at/above the column's surface-top chunk. Chunks below
-   * the surface with no chunk above loaded default to DARK — so an underground cave isn't lit as
-   * open sky when the (solid) chunk above it hasn't loaded (and, since the BFS can't traverse solid
-   * rock, may never load). When that above chunk does load, ingest relights this chunk correctly.
+   * assumes open sky UNLESS the chunk is fully underground — i.e. below the column's LOWEST surface
+   * point (cy < minCy), where there's no open sky anywhere in the footprint. Those default to DARK,
+   * so an underground cave isn't lit as open sky when the (solid) chunk above it hasn't loaded (and,
+   * since the BFS can't traverse solid rock, may never load). Surface chunks — slopes, flush tops,
+   * and columns at the BFS edge whose air chunk above isn't loaded — are at cy >= minCy and stay lit.
+   * When a missing chunk above does load, ingest relights this chunk correctly.
    */
   private sunlightFromAbove(cx: number, cy: number, cz: number): Uint8Array | null {
     const fromAbove = getSunlitAbove(this.chunks.get(chunkKey(cx, cy + 1, cz))?.data);
     if (fromAbove) return fromAbove; // chunk above loaded → real propagated light
     const info = this.columnInfo.get(`${cx},${cz}`);
-    return info && cy < info.maxCy ? DARK_ABOVE : null; // below surface → dark, else open sky
+    return info && cy < info.minCy ? DARK_ABOVE : null; // fully underground → dark, else open sky
   }
 
   /**
@@ -1063,8 +1070,8 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumns.delete(columnKey);
     this.pendingColumnTimes.delete(columnKey);
     
-    // Store the column's top chunk from the (stamp-corrected) tile heights.
-    this.columnInfo.set(columnKey, { maxCy: surfaceTopChunkCy(heights) });
+    // Store the column's chunk range from the (stamp-corrected) tile heights.
+    this.columnInfo.set(columnKey, columnChunkRange(heights));
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
