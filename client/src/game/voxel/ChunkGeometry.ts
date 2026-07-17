@@ -12,8 +12,7 @@ import * as THREE from 'three';
 import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import type { SplitSurfaceNetOutput } from './SurfaceNet.js';
-import { expandGeometry, createGeometryFromSurfaceNet, createBufferGeometry, type ExpandedMeshData } from './MeshGeometry.js';
-import { sampleCellLight, unpackSkyLight, unpackBlockLight } from './SurfaceNet.js';
+import { expandGeometry, createGeometryFromSurfaceNet, createBufferGeometry, resampleLightAttributes, type ExpandedMeshData } from './MeshGeometry.js';
 import { createLayerMesh, LAYER_SOLID, LAYER_TRANSPARENT, LAYER_LIQUID, LAYER_COUNT } from './LayerConfig.js';
 
 // Re-export for external consumers
@@ -184,22 +183,7 @@ export class ChunkGeometry {
       const cells = this.cellIndices[layer];
       const geo = this.mainMeshes[layer]?.geometry;
       if (!cells || !geo) continue;
-
-      const skyAttr = geo.getAttribute('lightLevel') as THREE.BufferAttribute | undefined;
-      const blockAttr = geo.getAttribute('blockLight') as THREE.BufferAttribute | undefined;
-      if (!skyAttr || !blockAttr) continue;
-
-      const sky = skyAttr.array as Float32Array;
-      const block = blockAttr.array as Float32Array;
-      const count = cells.length;
-      for (let v = 0; v < count; v++) {
-        const packed = sampleCellLight(grid, cells[v]);
-        sky[v] = unpackSkyLight(packed);
-        block[v] = unpackBlockLight(packed);
-      }
-      skyAttr.needsUpdate = true;
-      blockAttr.needsUpdate = true;
-      changed = true;
+      if (resampleLightAttributes(geo, cells, grid)) changed = true;
     }
     return changed;
   }

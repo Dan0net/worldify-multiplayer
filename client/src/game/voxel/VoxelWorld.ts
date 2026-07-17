@@ -43,6 +43,7 @@ import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
 import { expandChunkToGrid } from './ChunkMesher.js';
+import { resampleLightAttributes } from './MeshGeometry.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
 import { perfStats } from '../debug/PerformanceStats.js';
@@ -1107,6 +1108,29 @@ export class VoxelWorld implements ChunkProvider {
     const chunk = this.chunks.get(key);
     if (chunk) chunk.discardTemp();
     this.resamplePreviewChunkLight(key, false);
+  }
+
+  /**
+   * Light-only resample of a build-preview mesh (owned by BuildPreview, not a ChunkGeometry) from
+   * the chunk's relit temp grid. Rewrites just the mesh's two light attributes — no re-mesh. Called
+   * in the deferred lighting phase, AFTER the whole region (incl. this chunk's neighbours) is relit,
+   * so boundary vertices sample their neighbours' updated light (fixes the dark border at edits).
+   */
+  resamplePreviewMeshLight(
+    key: string,
+    meshes: (THREE.Mesh | null)[],
+    cellIndices: (Uint16Array | null)[],
+  ): void {
+    const chunk = this.chunks.get(key);
+    if (!chunk || !chunk.tempData) return;
+    const grid = this.meshPool.takeGrid();
+    expandChunkToGrid(chunk, this.chunks, grid, true);
+    for (let layer = 0; layer < meshes.length; layer++) {
+      const mesh = meshes[layer];
+      const cells = cellIndices[layer];
+      if (mesh && cells) resampleLightAttributes(mesh.geometry, cells, grid);
+    }
+    this.meshPool.returnGrid(grid);
   }
 
   /**

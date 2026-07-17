@@ -83,8 +83,15 @@ export class BuildPreview {
   /** Chunks to remove from preview after deferred results are applied */
   private deferredChunksToRemove: string[] | null = null;
 
+  /** The deferred cycle's re-mesh sets, so runDeferredLighting knows what to relight when it fires. */
+  private deferredDrawnKeys: string[] | null = null;
+  private deferredMarginKeys: string[] | null = null;
+
   /** Preview meshes per chunk (solid, transparent, liquid slots) */
   private previewMeshes: Map<string, (THREE.Mesh | null)[]> = new Map();
+
+  /** Per-preview-mesh per-layer cell indices, so a preview mesh's light can be resampled in Phase 2. */
+  private previewCellIndices: Map<string, (Uint16Array | null)[]> = new Map();
 
   // Reusable scratch buffers to avoid per-dispatch allocations
   private drawnChunksBuf: string[] = [];
@@ -200,35 +207,18 @@ export class BuildPreview {
     const drawnKeys = drawnChunks.slice();
 
     // Margin-consumer neighbours: chunks whose +margin (a drawn chunk's boundary) changed, so they
-    // must be RE-MESHED (Pass 2b). Give them a temp buffer and relight them together with the drawn
-    // chunks, so their new mesh carries the preview's block/sky light instead of stale committed
-    // light — otherwise the torch's light stops dead at the chunk edge (the dark-border bug).
+    // must be RE-MESHED (Pass 2b). Give them a temp buffer so Pass 2b can mesh them.
     const marginKeys = this.collectMarginNeighbours(drawnKeys);
     for (const nk of marginKeys) {
       const n = this.world.chunks.get(nk);
       if (n && !n.tempData) n.copyToTemp();
     }
 
-    // Relight the whole re-mesh set (drawn + margin neighbours) synchronously (cheap). The mesh below
-    // reads this relit light and never waits on it.
-    this.world.relightPreviewMeshSet(marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys);
-
+    // PHASE 1 — geometry only. Dispatch the mesh from temp (inherited light) and return. ALL lighting
+    // is deferred to runDeferredLighting(), which runs when this batch completes — so the cursor
+    // frame is never blocked on relighting, and the mesh path is exactly as fast as before.
     this.batchInFlight = true;
     this.dispatchPreviewMesh(drawnKeys, marginKeys);
-    // newActiveChunksBuf now holds the chunks being re-meshed this preview (drawn + margin
-    // neighbours), populated synchronously by dispatchPreviewMesh.
-    const meshed = new Set(this.newActiveChunksBuf);
-
-    // Light-only spill relight of neighbours changed by LIGHT but not re-meshed (a torch lighting the
-    // next chunk over, sky bleed at a border). Excludes the re-meshed set so we never light-resample
-    // a chunk whose margin geometry changed (that would leave a dark seam). Cheap + synchronous —
-    // resample + a ranged write into the merged buffer, no re-mesh, no group re-merge. Restore any
-    // neighbour that dropped out of the region since last update.
-    const spill = new Set(this.world.relightPreviewSpill(drawnKeys, meshed));
-    for (const key of this.previewSpillKeys) {
-      if (!spill.has(key)) this.world.restorePreviewChunkLight(key);
-    }
-    this.previewSpillKeys = spill;
   }
 
   /**
@@ -317,8 +307,9 @@ export class BuildPreview {
       const allImmediate = this.suppressGroupsForActivePreview();
 
       if (allImmediate) {
-        // All groups are already merged — safe to show preview now
+        // All groups are already merged — safe to show preview now, then do all the lighting.
         this.applyPreviewResults(results, chunksToRemove, world, scene);
+        this.runDeferredLighting(drawnKeys, marginKeys);
         this.processPending();
       } else {
         // Some groups need to be merged first — defer preview visibility.
@@ -333,8 +324,45 @@ export class BuildPreview {
         }
         this.deferredPreviewResults = results;
         this.deferredChunksToRemove = chunksToRemove;
+        this.deferredDrawnKeys = drawnKeys;
+        this.deferredMarginKeys = marginKeys;
       }
     });
+  }
+
+  /**
+   * PHASE 2 — all preview lighting, run once the geometry is on screen (off the cursor frame).
+   *  1. Relight the re-mesh set (drawn + margin) on temp.
+   *  2. Relight the spill neighbours (light-affected but not re-meshed) + refresh their committed
+   *     geometry's light.
+   *  3. Resample the drawn + margin PREVIEW meshes now that every neighbour is relit — so their
+   *     boundary vertices sample the neighbours' updated light (fixes the dark border at edits).
+   */
+  private runDeferredLighting(drawnKeys: string[], marginKeys: string[]): void {
+    const world = this.world;
+    if (!world) return;
+
+    world.relightPreviewMeshSet(marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys);
+
+    const meshed = new Set(drawnKeys);
+    for (const k of marginKeys) meshed.add(k);
+    const spill = new Set(world.relightPreviewSpill(drawnKeys, meshed));
+    for (const key of this.previewSpillKeys) {
+      if (!spill.has(key)) world.restorePreviewChunkLight(key);
+    }
+    this.previewSpillKeys = spill;
+
+    for (const key of drawnKeys) this.resamplePreviewMeshLight(key);
+    for (const key of marginKeys) this.resamplePreviewMeshLight(key);
+  }
+
+  /** Resample one preview mesh's light from its chunk's relit temp grid (light-only, no re-mesh). */
+  private resamplePreviewMeshLight(key: string): void {
+    const meshes = this.previewMeshes.get(key);
+    const cells = this.previewCellIndices.get(key);
+    if (meshes && cells && this.world) {
+      this.world.resamplePreviewMeshLight(key, meshes, cells);
+    }
   }
 
   /**
@@ -367,6 +395,8 @@ export class BuildPreview {
     this.pendingOperation = null;
     this.deferredPreviewResults = null;
     this.deferredChunksToRemove = null;
+    this.deferredDrawnKeys = null;
+    this.deferredMarginKeys = null;
   }
 
   /**
@@ -600,8 +630,11 @@ export class BuildPreview {
       const data = [result.solid, result.transparent, result.liquid];
       const existing = this.previewMeshes.get(result.chunkKey);
       const meshes: (THREE.Mesh | null)[] = existing ?? [null, null, null];
+      // Keep each layer's per-vertex cell indices so Phase 2 can light-resample this preview mesh.
+      const cells: (Uint16Array | null)[] = [null, null, null];
 
       for (let i = 0; i < LAYER_COUNT; i++) {
+        cells[i] = data[i]?.cellIndices ?? null;
         const oldMesh = meshes[i];
 
         if (!data[i]) {
@@ -634,6 +667,7 @@ export class BuildPreview {
       }
 
       this.previewMeshes.set(result.chunkKey, meshes);
+      this.previewCellIndices.set(result.chunkKey, cells);
       world.previewChunks.add(result.chunkKey);
       world.markVisibilityDirty();
     }
@@ -654,10 +688,15 @@ export class BuildPreview {
     // All groups are now merged and suppressed — safe to show preview
     const results = this.deferredPreviewResults;
     const chunksToRemove = this.deferredChunksToRemove ?? [];
+    const drawnKeys = this.deferredDrawnKeys ?? [];
+    const marginKeys = this.deferredMarginKeys ?? [];
     this.deferredPreviewResults = null;
     this.deferredChunksToRemove = null;
+    this.deferredDrawnKeys = null;
+    this.deferredMarginKeys = null;
 
     this.applyPreviewResults(results, chunksToRemove, this.world, this.scene);
+    this.runDeferredLighting(drawnKeys, marginKeys);
 
     // Process any pending operation that arrived while we were waiting
     this.processPending();
@@ -715,6 +754,7 @@ export class BuildPreview {
       }
     }
     this.previewMeshes.delete(key);
+    this.previewCellIndices.delete(key);
   }
 
   /** Dispose all preview meshes for all chunks. */
@@ -723,6 +763,7 @@ export class BuildPreview {
       this.disposePreviewMeshesForChunk(key);
     }
     this.previewMeshes.clear();
+    this.previewCellIndices.clear();
   }
 
   // ============== Boundary Change Detection ==============

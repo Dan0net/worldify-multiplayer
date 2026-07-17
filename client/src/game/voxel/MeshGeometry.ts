@@ -18,7 +18,7 @@
 
 import * as THREE from 'three';
 import { VOXEL_SCALE, CHUNK_SIZE, MESH_MARGIN } from '@worldify/shared';
-import { SurfaceNetOutput } from './SurfaceNet.js';
+import { SurfaceNetOutput, sampleCellLight, unpackSkyLight, unpackBlockLight } from './SurfaceNet.js';
 
 /**
  * Conservative local-space extent of a chunk mesh, in world units. SurfaceNets places
@@ -205,6 +205,36 @@ export function createBufferGeometry(data: ExpandedMeshData): THREE.BufferGeomet
     CHUNK_BOUND_RADIUS,
   );
   return geometry;
+}
+
+/**
+ * Rewrite ONLY the `lightLevel` + `blockLight` vertex attributes of a geometry, re-reading each
+ * vertex's cell from an expanded 34³ grid (via the per-vertex `cellIndices`). No SurfaceNets, no
+ * geometry realloc — valid only when the geometry's voxels are unchanged so the stored cells still
+ * describe it. Shared by ChunkGeometry (committed chunks) and the build-preview meshes.
+ *
+ * @returns true if the geometry had the two light attributes (and was rewritten).
+ */
+export function resampleLightAttributes(
+  geometry: THREE.BufferGeometry,
+  cellIndices: Uint16Array,
+  grid: Uint32Array,
+): boolean {
+  const skyAttr = geometry.getAttribute('lightLevel') as THREE.BufferAttribute | undefined;
+  const blockAttr = geometry.getAttribute('blockLight') as THREE.BufferAttribute | undefined;
+  if (!skyAttr || !blockAttr) return false;
+
+  const sky = skyAttr.array as Float32Array;
+  const block = blockAttr.array as Float32Array;
+  const count = cellIndices.length;
+  for (let v = 0; v < count; v++) {
+    const packed = sampleCellLight(grid, cellIndices[v]);
+    sky[v] = unpackSkyLight(packed);
+    block[v] = unpackBlockLight(packed);
+  }
+  skyAttr.needsUpdate = true;
+  blockAttr.needsUpdate = true;
+  return true;
 }
 
 /**
