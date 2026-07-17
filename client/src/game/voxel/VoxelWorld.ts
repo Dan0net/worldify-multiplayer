@@ -28,7 +28,6 @@ import {
   MapTileResponse,
   computeVisibility,
   getChunkRangeFromHeights,
-  chunkHasContent,
   isVoxelSolid,
   voxelIndex,
   getSunlitAbove,
@@ -846,17 +845,6 @@ export class VoxelWorld implements ChunkProvider {
       this.lastBFSChunk = null;
     }
 
-    // Keep the column's vertical cap at/above any content chunk, so stamps taller than the
-    // terrain-only surface (tree canopies, tall buildings) are never gated out of future
-    // requests (see requestVisibleChunks maxCy gate).
-    if (chunkHasContent(chunk.data)) {
-      const colInfo = this.columnInfo.get(`${cx},${cz}`);
-      if (colInfo && cy > colInfo.maxCy) {
-        colInfo.maxCy = cy;
-        this.lastBFSChunk = null;
-      }
-    }
-
     // Relight and re-queue face-adjacent neighbors so their border light and
     // margin data are up to date. Runs for both new and updated chunks —
     // updated chunks may carry build modifications that change boundary voxels.
@@ -1051,11 +1039,8 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumns.delete(columnKey);
     this.pendingColumnTimes.delete(columnKey);
     
-    // Store column info. Use the CONTENT-based top (highest chunk actually sent, which the source
-    // includes up to the tallest stamp — tree canopy / building) rather than terrain-only heights,
-    // so no stamp is ever clipped at a chunk boundary. Fall back to the height-derived value.
-    let maxCy = getChunkRangeFromHeights(heights).maxCy;
-    for (const c of chunks) if (c.chunkY > maxCy) maxCy = c.chunkY;
+    // Store column info from the (stamp-corrected) tile heights.
+    const { maxCy } = getChunkRangeFromHeights(heights);
     this.columnInfo.set(columnKey, { maxCy });
 
     // Notify external systems (map cache)
