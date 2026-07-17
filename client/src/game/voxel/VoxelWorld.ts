@@ -58,6 +58,18 @@ import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConf
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
+/**
+ * Topmost chunk Y that must be loaded to render a column's surface, from its (stamp-corrected)
+ * heights. Uses maxHeight + 1: the top face of the highest solid voxel is meshed from the voxel
+ * ABOVE it, so a flat top flush with a chunk's top row (localY 31) needs the next chunk up loaded to
+ * supply the air margin — otherwise the extrapolated margin repeats the solid voxel and the top face
+ * is culled (flat roofs clipped). Non-flush tops resolve to their own chunk (no extra chunk loaded).
+ */
+function surfaceTopChunkCy(heights: ArrayLike<number>): number {
+  const { maxHeight } = getChunkRangeFromHeights(heights);
+  return Math.floor((maxHeight + 1) / CHUNK_SIZE);
+}
+
 /** Fast typed-array equality check (same length assumed). */
 function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
   if (a.length !== b.length) return false;
@@ -780,15 +792,14 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTiles.delete(columnKey);
     this.pendingTileTimes.delete(columnKey);
     
-    // Compute and store column info from tile heights
-    const { maxCy } = getChunkRangeFromHeights(heights);
-    this.columnInfo.set(columnKey, { maxCy });
-    
+    // Compute and store the column's top chunk from the (stamp-corrected) tile heights.
+    this.columnInfo.set(columnKey, { maxCy: surfaceTopChunkCy(heights) });
+
     // Notify external systems (map cache)
     if (this.onTileReceived) {
       this.onTileReceived(tx, tz, heights, materials);
     }
-    
+
     // Invalidate BFS cache so chunk requests can proceed for this column
     this.lastBFSChunk = null;
   }
@@ -1034,9 +1045,8 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumns.delete(columnKey);
     this.pendingColumnTimes.delete(columnKey);
     
-    // Store column info from the (stamp-corrected) tile heights.
-    const { maxCy } = getChunkRangeFromHeights(heights);
-    this.columnInfo.set(columnKey, { maxCy });
+    // Store the column's top chunk from the (stamp-corrected) tile heights.
+    this.columnInfo.set(columnKey, { maxCy: surfaceTopChunkCy(heights) });
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
