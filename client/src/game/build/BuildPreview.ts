@@ -312,9 +312,9 @@ export class BuildPreview {
         // cadence. Lighting runs only once the cursor settles (no pending op), in a single atomic
         // pass, so it's never in front of the next mesh and never lands a partial update.
         this.applyPreviewResults(results, chunksToRemove, world, scene);
-        if (this.pendingOperation) {
-          this.processPending();
-        } else {
+        // Mesh wins: if the cursor genuinely moved, dispatch the next mesh and skip lighting. Only
+        // when nothing new was meshed (cursor settled) run the full relight, once.
+        if (!this.processPending()) {
           this.runDeferredLighting(drawnKeys, marginKeys);
         }
       } else {
@@ -375,18 +375,25 @@ export class BuildPreview {
    * After a batch completes, check if there's a pending operation.
    * If so, dispatch it immediately for a seamless catch-up.
    */
-  private processPending(): void {
-    if (!this.pendingOperation) return;
+  /**
+   * If a newer cursor position is pending, dispatch it. Returns true iff it actually dispatched a
+   * new mesh batch — false when there's nothing pending or the pending op equals what's already on
+   * screen (i.e. the cursor has settled). Callers use the return value to decide whether to run the
+   * deferred lighting: only when nothing new was meshed.
+   */
+  private processPending(): boolean {
+    if (!this.pendingOperation) return false;
 
     const { center, rotation, parts } = this.pendingOperation;
     this.pendingOperation = null;
 
-    // Skip if the pending operation matches what we just rendered
-    if (this.isSameOperation(center, rotation, parts)) return;
+    // Pending matches what we just rendered — the cursor has settled, nothing new to mesh.
+    if (this.isSameOperation(center, rotation, parts)) return false;
 
     const operation = this.createOperation(center, rotation, parts);
     this.storeOperation(center, rotation, parts);
     this.dispatchPreviewBatch(operation);
+    return true;
   }
 
   /**
@@ -704,10 +711,9 @@ export class BuildPreview {
     this.applyPreviewResults(results, chunksToRemove, this.world, this.scene);
 
     // Mesh wins: if a newer cursor position is waiting, dispatch it now and skip lighting; relight
-    // only once the cursor settles, so lighting never delays the next mesh and lands atomically.
-    if (this.pendingOperation) {
-      this.processPending();
-    } else {
+    // only once the cursor settles (nothing new to mesh), so lighting never delays the next mesh
+    // and lands atomically.
+    if (!this.processPending()) {
       this.runDeferredLighting(drawnKeys, marginKeys);
     }
   }
