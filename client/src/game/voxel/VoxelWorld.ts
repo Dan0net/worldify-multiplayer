@@ -32,10 +32,10 @@ import {
   voxelIndex,
   getSunlitAbove,
   computeAndPropagateLight,
-  computeSkyLight,
-  clearBlockLight,
-  propagateBlockLight,
+  relightRegion,
+  type RelightTarget,
   chunkHasEmitter,
+  chunkHasBlockLight,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
@@ -935,14 +935,6 @@ export class VoxelWorld implements ChunkProvider {
     );
   }
 
-  /** Recompute only the SKY-light channel for a chunk (order-independent; used by edit relights). */
-  private computeChunkSkyLight(cx: number, cy: number, cz: number, data: Uint32Array): void {
-    perfStats.begin('lighting');
-    const lightFromAbove = this.sunlightFromAbove(cx, cy, cz);
-    computeSkyLight(data, lightFromAbove, this.gatherFaceNeighbors(cx, cy, cz));
-    perfStats.end('lighting');
-  }
-
   /**
    * Per-column light entering the top of a chunk. Uses the loaded chunk above if present; otherwise
    * assumes open sky UNLESS the chunk is fully underground — i.e. below the column's LOWEST surface
@@ -960,100 +952,85 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Incrementally recompute BLOCK light after an edit, over the 3×3×3 chunk region
-   * around the edit (block light reaches ~31 voxels ≈ one chunk, so diagonal neighbors
-   * are affected too). Clears the whole region first, then propagates to a fixed point —
-   * monotonic max-merge means this darkens correctly when an emitter is removed (the bug
-   * where a single per-chunk pass re-absorbed stale light from an uncleared neighbor).
+   * Relight the PREVIEW temp buffers for a build preview, through the SAME shared region
+   * orchestration commit uses (relightRegion) — so preview light matches the committed result with
+   * no drift. `drawnKeys` are the chunks the preview op actually changed (they already hold a drawn
+   * tempData). Sky is recomputed for the drawn chunks; block light is recomputed over the loaded
+   * 3×3×3 around them when an emitter/existing block light is present — and THAT is what makes a
+   * torch placed near a chunk edge light up the adjacent chunk in preview (previously it stopped at
+   * the drawn chunk's border). Spill chunks pulled in for block light get a temp copy so preview
+   * stays non-destructive.
    *
-   * Gated: skips entirely unless the edited chunk contains an emitter or some chunk in
-   * the region already holds block light, so ordinary edits stay cheap. Returns the set
-   * of chunks whose block light changed (for remeshing), added to `batchKeys`.
+   * @returns every chunk that now holds preview light on a temp buffer (drawn + block spill) — the
+   *   caller meshes exactly this set so the preview display matches the relit region.
    */
-  private relightBlockRegion(cx: number, cy: number, cz: number, batchKeys: Set<string>): void {
-    const editedChunk = this.chunks.get(chunkKey(cx, cy, cz));
-    // Collect the loaded 3×3×3 region.
-    const region: Chunk[] = [];
-    let anyLit = false;
-    for (let dz = -1; dz <= 1; dz++)
-      for (let dy = -1; dy <= 1; dy++)
-        for (let dx = -1; dx <= 1; dx++) {
-          const c = this.chunks.get(chunkKey(cx + dx, cy + dy, cz + dz));
-          if (!c) continue;
-          region.push(c);
-          if (c.hasBlockLight) anyLit = true;
-        }
-
-    // Nothing to do if no block light exists here and the edit introduced no emitter.
-    const hasEmitter = editedChunk ? chunkHasEmitter(editedChunk.data) : false;
-    if (!anyLit && !hasEmitter) return;
-
-    perfStats.begin('lighting');
-    // Clear the region's block field once, then propagate to a fixed point.
-    for (const c of region) clearBlockLight(c.data);
-    const litThisRun = new Set<Chunk>();
-    for (let pass = 0; pass < 4; pass++) {
-      let changed = false;
-      for (const c of region) {
-        const neighbors = this.gatherFaceNeighbors(c.cx, c.cy, c.cz);
-        if (propagateBlockLight(c.data, neighbors)) { changed = true; litThisRun.add(c); }
-      }
-      if (!changed) break;
-    }
-    perfStats.end('lighting');
-
-    // Update cached flags + mark every region chunk for remesh (its block light may
-    // have changed — including chunks that just went dark).
-    for (const c of region) {
-      c.hasBlockLight = litThisRun.has(c);
-      c.dirty = true;
-      batchKeys.add(chunkKey(c.cx, c.cy, c.cz));
-    }
-  }
-
-  /**
-   * Relight the PREVIEW temp buffers of the given drawn chunks, mirroring the committed relight
-   * (executeBuildOperation → computeChunkSkyLight + relightBlockRegion). Without this the preview
-   * shows raw inherited light: freshly-carved air stays at light 0 and emitters (lava) don't glow.
-   * Reads temp buffers for drawn chunks and committed data for their neighbours; block light is
-   * propagated only over the drawn chunks (their committed neighbours already hold correct light).
-   */
-  relightPreview(drawnKeys: string[]): void {
-    if (drawnKeys.length === 0) return;
-    const drawn = new Set(drawnKeys);
-    // Buffer selector: temp for drawn chunks (post-draw), committed data otherwise.
-    const buf = (cx: number, cy: number, cz: number): Uint32Array | null => {
-      const c = this.chunks.get(chunkKey(cx, cy, cz));
-      if (!c) return null;
-      return drawn.has(chunkKey(cx, cy, cz)) && c.tempData ? c.tempData : c.data;
-    };
-    const faceNeighbors = (cx: number, cy: number, cz: number): (Uint32Array | null)[] =>
-      FACE_OFFSETS_6.map(([dx, dy, dz]) => buf(cx + dx, cy + dy, cz + dz));
-
-    const drawnChunks = drawnKeys
+  relightPreview(drawnKeys: string[]): string[] {
+    const drawn = drawnKeys
       .map((k) => this.chunks.get(k))
       .filter((c): c is Chunk => !!c && !!c.tempData);
-    if (drawnChunks.length === 0) return;
+    if (drawn.length === 0) return [];
 
-    perfStats.begin('lighting');
-    // Sky light: recompute each drawn chunk's temp buffer from scratch (floods from above).
-    for (const c of drawnChunks) {
-      const lightFromAbove = getSunlitAbove(buf(c.cx, c.cy + 1, c.cz) ?? undefined);
-      computeSkyLight(c.tempData!, lightFromAbove, faceNeighbors(c.cx, c.cy, c.cz));
-    }
-    // Block light: only when an emitter is present or block light already exists here.
-    const anyLit = drawnChunks.some((c) => c.hasBlockLight || chunkHasEmitter(c.tempData!));
-    if (anyLit) {
-      for (const c of drawnChunks) clearBlockLight(c.tempData!);
-      for (let pass = 0; pass < 4; pass++) {
-        let changed = false;
-        for (const c of drawnChunks) {
-          if (propagateBlockLight(c.tempData!, faceNeighbors(c.cx, c.cy, c.cz))) changed = true;
-        }
-        if (!changed) break;
+    // Temp-aware accessor: preview (temp) data where present, else committed context (read-only).
+    const getData = (cx: number, cy: number, cz: number): Uint32Array | null => {
+      const c = this.chunks.get(chunkKey(cx, cy, cz));
+      return c ? (c.tempData ?? c.data) : null;
+    };
+
+    // Block gate mirrors commit: emitter in a drawn chunk, or existing block light in the region.
+    let runBlock = drawn.some((c) => chunkHasEmitter(c.tempData!) || c.hasBlockLight);
+    if (!runBlock) {
+      for (const c of drawn) {
+        for (let dz = -1; dz <= 1 && !runBlock; dz++)
+          for (let dy = -1; dy <= 1 && !runBlock; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (this.chunks.get(chunkKey(c.cx + dx, c.cy + dy, c.cz + dz))?.hasBlockLight) {
+                runBlock = true;
+                break;
+              }
+            }
+        if (runBlock) break;
       }
     }
+
+    const targetMap = new Map<string, RelightTarget>();
+    const ensure = (cx: number, cy: number, cz: number): RelightTarget => {
+      const k = chunkKey(cx, cy, cz);
+      let t = targetMap.get(k);
+      if (!t) { t = { cx, cy, cz, sky: false, block: false }; targetMap.set(k, t); }
+      return t;
+    };
+
+    for (const c of drawn) {
+      const t = ensure(c.cx, c.cy, c.cz);
+      t.sky = true;
+      if (runBlock) t.block = true;
+      if (!this.chunks.has(chunkKey(c.cx, c.cy + 1, c.cz))) {
+        t.skyAbove = this.sunlightFromAbove(c.cx, c.cy, c.cz);
+      }
+    }
+
+    // Pull the loaded 3×3×3 into the block pass; give spill chunks a temp copy so the relight
+    // doesn't touch their committed data (preview must stay non-destructive).
+    if (runBlock) {
+      for (const c of drawn) {
+        for (let dz = -1; dz <= 1; dz++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              const n = this.chunks.get(chunkKey(c.cx + dx, c.cy + dy, c.cz + dz));
+              if (!n) continue;
+              if (!n.tempData) n.copyToTemp();
+              if (n.tempData) ensure(n.cx, n.cy, n.cz).block = true;
+            }
+      }
+    }
+
+    const targets = [...targetMap.values()].sort((a, b) => b.cy - a.cy);
+
+    perfStats.begin('lighting');
+    relightRegion(getData, targets);
     perfStats.end('lighting');
+
+    return targets.map((t) => chunkKey(t.cx, t.cy, t.cz));
   }
 
   /**
@@ -1304,11 +1281,11 @@ export class VoxelWorld implements ChunkProvider {
    */
   private executeBuildOperation(operation: BuildOperation, affectedKeys: string[]): string[] {
     const modifiedKeys: string[] = [];
-    const batchKeys = new Set<string>();
 
     // Before-images (local only) so the op can be undone.
     const undoSnapshots: ChunkSnapshot[] = [];
 
+    const editedChunks: Chunk[] = [];
     for (const key of affectedKeys) {
       const chunk = this.chunks.get(key)!;
 
@@ -1318,8 +1295,8 @@ export class VoxelWorld implements ChunkProvider {
       const changed = drawToChunk(chunk, operation);
       if (changed) {
         modifiedKeys.push(key);
+        editedChunks.push(chunk);
         if (before) undoSnapshots.push({ key, data: before });
-        this.relightModifiedChunk(chunk, batchKeys);
       }
     }
 
@@ -1329,7 +1306,9 @@ export class VoxelWorld implements ChunkProvider {
       this.lastBFSChunk = null;
     }
 
-    // Re-mesh chunks whose geometry actually changed; light-only-resample the rest.
+    // Relight the whole affected region in one shared pass, then re-mesh the chunks whose
+    // geometry changed and light-only-resample the rest.
+    const batchKeys = this.relightEditedChunks(editedChunks);
     this.dispatchRelightBatch(batchKeys, modifiedKeys);
 
     // Persist edited chunks + record undo for the active local world.
@@ -1344,53 +1323,107 @@ export class VoxelWorld implements ChunkProvider {
     return modifiedKeys;
   }
 
+  /** Live-data accessor for relightRegion — reads committed chunk voxel arrays. */
+  private readonly liveGetData = (cx: number, cy: number, cz: number): Uint32Array | null =>
+    this.chunks.get(chunkKey(cx, cy, cz))?.data ?? null;
+
   /**
-   * Recompute visibility + relight a modified chunk and cascade lighting to its
-   * vertical column and horizontal face-neighbors. Shared by build + undo.
+   * Collect the relight target set for an edit to `editedChunks` (loaded chunks only), matching the
+   * previous per-chunk cascade but as one region:
+   *  - SKY: each edited chunk + its loaded column below + the chunk above + the 4 horizontal faces.
+   *  - BLOCK: the loaded 3×3×3 around each edited chunk — but only when warranted (an edited chunk
+   *    emits, or some region chunk already holds block light), so ordinary edits stay cheap.
+   * Sky targets are returned sorted top-down (cy descending) so the shared relight sees each chunk's
+   * freshly-relit neighbour above. Edge chunks whose chunk-above isn't loaded carry a skyAbove seed.
    */
-  private relightModifiedChunk(chunk: Chunk, batchKeys: Set<string>): void {
-    chunk.dirty = true;
-    batchKeys.add(chunkKey(chunk.cx, chunk.cy, chunk.cz));
+  private collectRelightTargets(editedChunks: Chunk[]): RelightTarget[] {
+    const map = new Map<string, RelightTarget>();
+    const ensure = (cx: number, cy: number, cz: number): RelightTarget => {
+      const k = chunkKey(cx, cy, cz);
+      let t = map.get(k);
+      if (!t) { t = { cx, cy, cz, sky: false, block: false }; map.set(k, t); }
+      return t;
+    };
 
-    chunk.visibilityBits = computeVisibility(chunk.data);
-    // Sky light is recomputed per chunk (order-independent — anchored by the sun column).
-    this.computeChunkSkyLight(chunk.cx, chunk.cy, chunk.cz, chunk.data);
-
-    // Cascade SKY relighting downward — sunlight may now pass (or be blocked)
-    let belowCy = chunk.cy - 1;
-    while (true) {
-      const belowKey = chunkKey(chunk.cx, belowCy, chunk.cz);
-      const belowChunk = this.chunks.get(belowKey);
-      if (!belowChunk) break;
-      this.computeChunkSkyLight(chunk.cx, belowCy, chunk.cz, belowChunk.data);
-      belowChunk.dirty = true;
-      batchKeys.add(belowKey);
-      belowCy--;
+    // Block gate: emitter in an edited chunk, or existing block light anywhere in a 3×3×3.
+    let runBlock = editedChunks.some((e) => chunkHasEmitter(e.data));
+    if (!runBlock) {
+      for (const e of editedChunks) {
+        for (let dz = -1; dz <= 1 && !runBlock; dz++)
+          for (let dy = -1; dy <= 1 && !runBlock; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (this.chunks.get(chunkKey(e.cx + dx, e.cy + dy, e.cz + dz))?.hasBlockLight) {
+                runBlock = true;
+                break;
+              }
+            }
+        if (runBlock) break;
+      }
     }
 
-    // Cascade SKY relighting upward — removing a floor lets light enter from below
-    const aboveKey = chunkKey(chunk.cx, chunk.cy + 1, chunk.cz);
-    const aboveChunk = this.chunks.get(aboveKey);
-    if (aboveChunk) {
-      this.computeChunkSkyLight(chunk.cx, chunk.cy + 1, chunk.cz, aboveChunk.data);
-      aboveChunk.dirty = true;
-      batchKeys.add(aboveKey);
+    for (const e of editedChunks) {
+      ensure(e.cx, e.cy, e.cz).sky = true;
+      // Cascade sky down the loaded column and up one.
+      for (let by = e.cy - 1; this.chunks.has(chunkKey(e.cx, by, e.cz)); by--) {
+        ensure(e.cx, by, e.cz).sky = true;
+      }
+      if (this.chunks.has(chunkKey(e.cx, e.cy + 1, e.cz))) ensure(e.cx, e.cy + 1, e.cz).sky = true;
+      // Horizontal face neighbours (border sky light).
+      for (const [dx, dy, dz] of FACE_OFFSETS_6) {
+        if (dy !== 0) continue;
+        if (this.chunks.has(chunkKey(e.cx + dx, e.cy + dy, e.cz + dz))) {
+          ensure(e.cx + dx, e.cy + dy, e.cz + dz).sky = true;
+        }
+      }
+      // Block region (loaded 3×3×3), when warranted.
+      if (runBlock) {
+        for (let dz = -1; dz <= 1; dz++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (this.chunks.has(chunkKey(e.cx + dx, e.cy + dy, e.cz + dz))) {
+                ensure(e.cx + dx, e.cy + dy, e.cz + dz).block = true;
+              }
+            }
+      }
     }
 
-    // Relight face-adjacent horizontal neighbors so their SKY border light updates.
-    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
-      if (dy !== 0) continue; // vertical already handled above
-      const nKey = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
-      const nChunk = this.chunks.get(nKey);
-      if (!nChunk) continue;
-      this.computeChunkSkyLight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
-      nChunk.dirty = true;
-      batchKeys.add(nKey);
+    // Seed the "light from above" for sky targets whose chunk above isn't loaded (region edge).
+    for (const t of map.values()) {
+      if (t.sky && !this.chunks.has(chunkKey(t.cx, t.cy + 1, t.cz))) {
+        t.skyAbove = this.sunlightFromAbove(t.cx, t.cy, t.cz);
+      }
     }
 
-    // Block light: incremental region recompute (clear-once + propagate-to-fixed-point),
-    // so removing an emitter darkens correctly and diagonal neighbors are covered.
-    this.relightBlockRegion(chunk.cx, chunk.cy, chunk.cz, batchKeys);
+    return [...map.values()].sort((a, b) => b.cy - a.cy);
+  }
+
+  /**
+   * Relight the region affected by edits to `editedChunks` (shared by build commit + undo). Runs the
+   * single shared region orchestration over live data, updates cached block-light flags + dirty
+   * marks, recomputes visibility for the edited chunks, and returns every relit chunk key.
+   */
+  private relightEditedChunks(editedChunks: Chunk[]): Set<string> {
+    const batchKeys = new Set<string>();
+    if (editedChunks.length === 0) return batchKeys;
+
+    const targets = this.collectRelightTargets(editedChunks);
+
+    perfStats.begin('lighting');
+    relightRegion(this.liveGetData, targets);
+    perfStats.end('lighting');
+
+    for (const t of targets) {
+      const key = chunkKey(t.cx, t.cy, t.cz);
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue;
+      if (t.block) chunk.hasBlockLight = chunkHasBlockLight(chunk.data);
+      chunk.dirty = true;
+      batchKeys.add(key);
+    }
+    // Visibility only depends on voxels, so recompute it just for the edited chunks.
+    for (const e of editedChunks) e.visibilityBits = computeVisibility(e.data);
+
+    return batchKeys;
   }
 
   /**
@@ -1458,23 +1491,22 @@ export class VoxelWorld implements ChunkProvider {
     const entry = popUndo();
     if (!entry) return [];
 
-    const batchKeys = new Set<string>();
-    const editedKeys: string[] = [];
+    const editedChunks: Chunk[] = [];
     for (const snap of entry) {
       const chunk = this.chunks.get(snap.key);
       if (chunk) {
         chunk.data.set(snap.data);
-        editedKeys.push(snap.key);
-        this.relightModifiedChunk(chunk, batchKeys);
+        editedChunks.push(chunk);
         saveChunk(snap.key, chunk.data);
       } else {
         // Chunk not loaded — revert the persisted copy so it reloads undone.
         saveChunk(snap.key, snap.data);
       }
     }
-    if (batchKeys.size > 0) {
+    if (editedChunks.length > 0) {
       this.lastBFSChunk = null;
-      this.dispatchRelightBatch(batchKeys, editedKeys);
+      const batchKeys = this.relightEditedChunks(editedChunks);
+      this.dispatchRelightBatch(batchKeys, editedChunks.map((c) => c.key));
     }
     return entry.map((s) => s.key);
   }

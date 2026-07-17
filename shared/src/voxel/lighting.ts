@@ -499,6 +499,14 @@ export function chunkHasEmitter(data: Uint32Array): boolean {
   return false;
 }
 
+/** True if the chunk currently holds any block light (any voxel with a non-zero block field). */
+export function chunkHasBlockLight(data: Uint32Array): boolean {
+  for (let i = 0; i < VOXELS_PER_CHUNK; i++) {
+    if ((data[i] & BLOCK_LIGHT_FIELD) !== 0) return true;
+  }
+  return false;
+}
+
 /**
  * Propagate the block-light channel (in-place) WITHOUT clearing first — monotonic
  * (max-merge, only ever raises values). Stamps emitters, injects from loaded neighbor
@@ -570,4 +578,93 @@ export function propagateBlockLight(data: Uint32Array, neighbors: (Uint32Array |
 export function computeBlockLight(data: Uint32Array, neighbors: (Uint32Array | null)[]): boolean {
   clearBlockLight(data);
   return propagateBlockLight(data, neighbors);
+}
+
+// ============== Region relight (shared by commit, preview, and the lighting worker) ==============
+
+/** Chunk-space face offsets in the +X,-X,+Y,-Y,+Z,-Z order the neighbour arrays expect. */
+const REGION_FACE_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+];
+
+/** One chunk to relight within a region. */
+export interface RelightTarget {
+  cx: number;
+  cy: number;
+  cz: number;
+  /** Recompute this chunk's SKY light (column + border + BFS). */
+  sky: boolean;
+  /** Include this chunk in the BLOCK-light clear + propagate-to-fixed-point pass. */
+  block: boolean;
+  /**
+   * Per-column light entering this chunk's top, used ONLY when the chunk directly above is not
+   * reachable via `getData` (region edge). null → full open sky; an all-zero array → dark
+   * (fully underground). When the chunk above IS available it is read dynamically instead, so a
+   * top-down cascade sees freshly-relit values.
+   */
+  skyAbove?: Uint8Array | null;
+}
+
+/** Read the 6 face-neighbour voxel arrays for (cx,cy,cz) via an accessor, null where absent. */
+function regionFaceNeighbors(
+  getData: (cx: number, cy: number, cz: number) => Uint32Array | null,
+  cx: number,
+  cy: number,
+  cz: number,
+): (Uint32Array | null)[] {
+  const out: (Uint32Array | null)[] = new Array(6);
+  for (let f = 0; f < 6; f++) {
+    const [dx, dy, dz] = REGION_FACE_OFFSETS[f];
+    out[f] = getData(cx + dx, cy + dy, cz + dz);
+  }
+  return out;
+}
+
+/**
+ * Relight a region of chunks in place — the SINGLE lighting orchestration shared by edit commit,
+ * build preview, and the off-thread lighting worker (so all three stay bit-identical, no drift).
+ *
+ * Data is reached only through `getData`, so the caller decides the backing store: live chunk data
+ * (commit), temp preview buffers (preview), or a transferred snapshot Map (worker). Target arrays
+ * are mutated; everything else `getData` returns is treated as read-only context (borders).
+ *
+ * Two passes, matching the previous per-chunk flow:
+ *  1. SKY — for each `sky` target (caller MUST pass them ordered top-down per column so a chunk's
+ *     freshly-relit neighbour above is visible), run the column + border + BFS pass. The light
+ *     entering the top comes from the chunk above when `getData` has it, else `skyAbove`.
+ *  2. BLOCK — clear every `block` target's block field once, then propagate to a fixed point across
+ *     the block targets (monotonic max-merge, so removing an emitter darkens correctly). Skipped
+ *     entirely when no target sets `block` (the caller gates on emitters / pre-existing block light).
+ */
+export function relightRegion(
+  getData: (cx: number, cy: number, cz: number) => Uint32Array | null,
+  targets: RelightTarget[],
+): void {
+  // --- SKY ---
+  for (const t of targets) {
+    if (!t.sky) continue;
+    const data = getData(t.cx, t.cy, t.cz);
+    if (!data) continue;
+    const above = getData(t.cx, t.cy + 1, t.cz);
+    const lightFromAbove = above ? getSunlitAbove(above) : (t.skyAbove ?? null);
+    computeSkyLight(data, lightFromAbove, regionFaceNeighbors(getData, t.cx, t.cy, t.cz));
+  }
+
+  // --- BLOCK (clear-once, propagate to fixed point) ---
+  const blockTargets = targets.filter((t) => t.block);
+  if (blockTargets.length === 0) return;
+
+  for (const t of blockTargets) {
+    const data = getData(t.cx, t.cy, t.cz);
+    if (data) clearBlockLight(data);
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    for (const t of blockTargets) {
+      const data = getData(t.cx, t.cy, t.cz);
+      if (!data) continue;
+      if (propagateBlockLight(data, regionFaceNeighbors(getData, t.cx, t.cy, t.cz))) changed = true;
+    }
+    if (!changed) break;
+  }
 }

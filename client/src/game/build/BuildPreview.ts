@@ -174,9 +174,11 @@ export class BuildPreview {
       }
     }
 
-    // Relight the temp buffers so the preview matches the committed result (freshly-carved
-    // air lights up; emitters like lava glow) instead of showing stale/zero light.
-    this.world.relightPreview(drawnChunks);
+    // Relight the temp buffers through the shared region pass so the preview matches the committed
+    // result (freshly-carved air lights up; a torch near a chunk edge lights the ADJACENT chunk too)
+    // instead of showing stale/zero light. Returns every chunk now carrying preview light on temp —
+    // the drawn chunks plus any block-light spill neighbours — which is exactly the set to display.
+    const relitKeys = this.world.relightPreview(drawnChunks);
 
     // === Pass 2: Expand grids and dispatch (neighbors' tempData is now ready) ===
     const batchItems: Array<{
@@ -187,8 +189,9 @@ export class BuildPreview {
     const newActiveChunks = this.newActiveChunksBuf;
     newActiveChunks.clear();
 
-    for (const key of drawnChunks) {
-      const chunk = this.world.chunks.get(key)!;
+    for (const key of relitKeys) {
+      const chunk = this.world.chunks.get(key);
+      if (!chunk || !chunk.tempData) continue;
 
       // Expand grid on main thread, dispatch to worker
       const grid = this.meshPool.takeGrid();
