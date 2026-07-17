@@ -55,14 +55,20 @@ import { TerrainWorkerPool } from './TerrainWorkerPool.js';
 import { SeamStitcher } from './SeamStitcher.js';
 import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConfig, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
-/**
- * Extra chunks generated above a column's baseline surface so stamp/tree tops
- * (which sit above the terrain-only tile height) are not clipped.
- */
-const SURFACE_CHUNK_MARGIN = 1;
-
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
+
+/**
+ * Topmost chunk Y that must be loaded to render a column's surface, from its (stamp-corrected)
+ * heights. Uses maxHeight + 1: the top face of the highest solid voxel is meshed from the voxel
+ * ABOVE it, so a flat top flush with a chunk's top row (localY 31) needs the next chunk up loaded to
+ * supply the air margin — otherwise the extrapolated margin repeats the solid voxel and the top face
+ * is culled (flat roofs clipped). Non-flush tops resolve to their own chunk (no extra chunk loaded).
+ */
+function surfaceTopChunkCy(heights: ArrayLike<number>): number {
+  const { maxHeight } = getChunkRangeFromHeights(heights);
+  return Math.floor((maxHeight + 1) / CHUNK_SIZE);
+}
 
 /** Fast typed-array equality check (same length assumed). */
 function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
@@ -573,9 +579,10 @@ export class VoxelWorld implements ChunkProvider {
       // Don't request chunks for columns without tile data yet
       if (!info) continue;
       
-      // Skip chunks above the surface, keeping a margin so stamp/tree tops
-      // (above the terrain-only tile height) and top-face stitching are covered.
-      if (cy > info.maxCy + SURFACE_CHUNK_MARGIN) continue;
+      // Skip chunks above the surface. maxCy is the STAMP-INCLUSIVE top (the chunk holding the
+      // highest tree/building voxel), so it's exactly right on its own — no margin, so no empty
+      // sky chunk is loaded above the canopy. The top face meshes against extrapolated air.
+      if (cy > info.maxCy) continue;
       
       this.requestChunkFromServer(cx, cy, cz);
       chunkRequests++;
@@ -785,15 +792,14 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTiles.delete(columnKey);
     this.pendingTileTimes.delete(columnKey);
     
-    // Compute and store column info from tile heights
-    const { maxCy } = getChunkRangeFromHeights(heights);
-    this.columnInfo.set(columnKey, { maxCy });
-    
+    // Compute and store the column's top chunk from the (stamp-corrected) tile heights.
+    this.columnInfo.set(columnKey, { maxCy: surfaceTopChunkCy(heights) });
+
     // Notify external systems (map cache)
     if (this.onTileReceived) {
       this.onTileReceived(tx, tz, heights, materials);
     }
-    
+
     // Invalidate BFS cache so chunk requests can proceed for this column
     this.lastBFSChunk = null;
   }
@@ -1039,15 +1045,14 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumns.delete(columnKey);
     this.pendingColumnTimes.delete(columnKey);
     
-    // Store column info from tile heights
-    const { maxCy } = getChunkRangeFromHeights(heights);
-    this.columnInfo.set(columnKey, { maxCy });
-    
+    // Store the column's top chunk from the (stamp-corrected) tile heights.
+    this.columnInfo.set(columnKey, { maxCy: surfaceTopChunkCy(heights) });
+
     // Notify external systems (map cache)
     if (this.onTileReceived) {
       this.onTileReceived(tx, tz, heights, materials);
     }
-    
+
     // Process chunks top-down so sunlight propagates correctly from sky to ground.
     // Server sends them bottom-up, so reverse the order.
     for (let i = chunks.length - 1; i >= 0; i--) {

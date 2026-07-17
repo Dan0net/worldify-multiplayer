@@ -87,17 +87,14 @@ export class LocalTerrainSource {
     };
   }
 
-  /** Generate a terrain-baseline tile (equivalent of a MAP_TILE_DATA response). */
-  generateTile(tx: number, tz: number): MapTileResponse {
-    const tile = this.baselineTile(tx, tz);
-    return { tx, tz, heights: tile.heights, materials: tile.materials };
-  }
-
   /**
-   * Generate a bootstrap surface column: tile + the chunks that intersect the
-   * surface. Mirrors SurfaceColumnProvider.generateColumn.
+   * Build the surface column for a tile: the surface chunks + a tile whose heights are corrected to
+   * include stamps (tree canopies, buildings) that rise above the bare-terrain surface. Shared by
+   * generateTile and generateColumn so BOTH report the true (stamp-inclusive) surface height — the
+   * client's vertical load cap comes from these heights, so a terrain-only height would clip stamp
+   * tops at the chunk boundary.
    */
-  generateColumn(tx: number, tz: number): SurfaceColumnResponse {
+  private buildSurfaceColumn(tx: number, tz: number): { tile: ReturnType<typeof createMapTile>; chunks: SurfaceColumnChunk[] } {
     const tile = this.baselineTile(tx, tz);
 
     const { minCy: terrainMinCy, maxCy: terrainMaxCy } = getChunkRangeFromHeights(tile.heights);
@@ -109,8 +106,8 @@ export class LocalTerrainSource {
     for (let cy = minCy; cy <= terrainMaxCy + MAX_CHUNKS_ABOVE; cy++) {
       const data = this.rawChunk(tx, cy, tz);
       const hasContent = chunkHasContent(data);
-
-      // Always include terrain chunks; above terrain, stop at first empty chunk.
+      // Always include terrain chunks; above terrain, include chunks with content (canopies,
+      // buildings), stopping at the first empty chunk above the terrain top.
       if (cy <= terrainMaxCy || hasContent) {
         chunkDatas.push({ cy, data });
         chunks.push({ chunkY: cy, lastBuildSeq: 0, voxelData: data });
@@ -118,7 +115,7 @@ export class LocalTerrainSource {
       if (cy > terrainMaxCy && !hasContent) break;
     }
 
-    // Capture stamps/trees spanning chunks into the tile surface.
+    // Correct the tile's surface heights to include stamps spanning chunks (canopy / building tops).
     for (const c of chunkDatas) {
       updateTileFromChunk(
         tile,
@@ -127,6 +124,21 @@ export class LocalTerrainSource {
       );
     }
 
+    return { tile, chunks };
+  }
+
+  /** Generate a tile with stamp-corrected surface heights (equivalent of a MAP_TILE_DATA response). */
+  generateTile(tx: number, tz: number): MapTileResponse {
+    const { tile } = this.buildSurfaceColumn(tx, tz);
+    return { tx, tz, heights: tile.heights, materials: tile.materials };
+  }
+
+  /**
+   * Generate a bootstrap surface column: tile + the chunks that intersect the
+   * surface. Mirrors SurfaceColumnProvider.generateColumn.
+   */
+  generateColumn(tx: number, tz: number): SurfaceColumnResponse {
+    const { tile, chunks } = this.buildSurfaceColumn(tx, tz);
     return { tx, tz, heights: tile.heights, materials: tile.materials, chunks };
   }
 }
