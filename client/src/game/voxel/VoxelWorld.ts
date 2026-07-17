@@ -70,6 +70,10 @@ function surfaceTopChunkCy(heights: ArrayLike<number>): number {
   return Math.floor((maxHeight + 1) / CHUNK_SIZE);
 }
 
+/** Shared read-only all-dark "light from above" (used for underground chunks with no chunk above
+ *  loaded, so caves aren't lit as open sky). Never mutated — the sunlight pass only reads it. */
+const DARK_ABOVE = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+
 /** Fast typed-array equality check (same length assumed). */
 function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
   if (a.length !== b.length) return false;
@@ -896,7 +900,7 @@ export class VoxelWorld implements ChunkProvider {
    */
   private computeChunkSunlight(cx: number, cy: number, cz: number, data: Uint32Array): void {
     perfStats.begin('lighting');
-    const lightFromAbove = getSunlitAbove(this.chunks.get(chunkKey(cx, cy + 1, cz))?.data);
+    const lightFromAbove = this.sunlightFromAbove(cx, cy, cz);
     const neighbors = this.gatherFaceNeighbors(cx, cy, cz);
     // Combined pipeline: sky (column + BFS) then block (emitter BFS). Returns whether
     // the chunk holds any block light, cached on the Chunk to gate future relights.
@@ -916,9 +920,23 @@ export class VoxelWorld implements ChunkProvider {
   /** Recompute only the SKY-light channel for a chunk (order-independent; used by edit relights). */
   private computeChunkSkyLight(cx: number, cy: number, cz: number, data: Uint32Array): void {
     perfStats.begin('lighting');
-    const lightFromAbove = getSunlitAbove(this.chunks.get(chunkKey(cx, cy + 1, cz))?.data);
+    const lightFromAbove = this.sunlightFromAbove(cx, cy, cz);
     computeSkyLight(data, lightFromAbove, this.gatherFaceNeighbors(cx, cy, cz));
     perfStats.end('lighting');
+  }
+
+  /**
+   * Per-column light entering the top of a chunk. Uses the loaded chunk above if present; otherwise
+   * assumes open sky ONLY when the chunk is at/above the column's surface-top chunk. Chunks below
+   * the surface with no chunk above loaded default to DARK — so an underground cave isn't lit as
+   * open sky when the (solid) chunk above it hasn't loaded (and, since the BFS can't traverse solid
+   * rock, may never load). When that above chunk does load, ingest relights this chunk correctly.
+   */
+  private sunlightFromAbove(cx: number, cy: number, cz: number): Uint8Array | null {
+    const fromAbove = getSunlitAbove(this.chunks.get(chunkKey(cx, cy + 1, cz))?.data);
+    if (fromAbove) return fromAbove; // chunk above loaded → real propagated light
+    const info = this.columnInfo.get(`${cx},${cz}`);
+    return info && cy < info.maxCy ? DARK_ABOVE : null; // below surface → dark, else open sky
   }
 
   /**
