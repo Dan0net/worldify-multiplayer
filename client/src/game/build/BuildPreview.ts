@@ -51,6 +51,10 @@ export class BuildPreview {
   /** Set of chunk keys currently showing preview */
   private activePreviewChunks: Set<string> = new Set();
 
+  /** Spill neighbours (not drawn) whose displayed light is overridden with preview light. Tracked
+   *  so they can be restored to committed light when they leave the preview region or it ends. */
+  private previewSpillKeys: Set<string> = new Set();
+
   /** Cancel function for in-flight batch */
   private cancelBatch: (() => void) | null = null;
 
@@ -189,10 +193,15 @@ export class BuildPreview {
       return;
     }
 
-    // Relight the drawn chunks synchronously (cheap — only the chunks the brush changed) so the mesh
-    // shows correct light immediately. Meshing does NOT wait on any worker: the relight, grid
-    // expansion, and mesh dispatch all happen inline, exactly as responsive as before P3.
-    this.world.relightPreviewDrawnSync(drawnChunks);
+    // Relight the affected region synchronously (cheap — no re-mesh, no worker) so the mesh shows
+    // correct light immediately. Drawn chunks are relit for meshing below; spill neighbours (changed
+    // by light, not by the draw — e.g. a torch lighting the next chunk over) get a light-only
+    // display refresh and are returned here. Restore any neighbour that dropped out of the region.
+    const spill = new Set(this.world.relightPreviewRegion(drawnChunks));
+    for (const key of this.previewSpillKeys) {
+      if (!spill.has(key) && !this.drawnSetBuf.has(key)) this.world.restorePreviewChunkLight(key);
+    }
+    this.previewSpillKeys = spill;
 
     // Snapshot drawn keys — drawnChunksBuf is reused on the next dispatch.
     const drawnKeys = drawnChunks.slice();
@@ -361,6 +370,11 @@ export class BuildPreview {
       this.pendingCommitChunks.add(key);
     }
 
+    // Revert the light-only override on spill neighbours (their committed geometry). On a commit the
+    // subsequent region relight repaints them with the new committed light; on a cancel this is the
+    // full revert.
+    this.restoreSpillLight();
+
     this.activePreviewChunks.clear();
     this.clearLastOperation();
   }
@@ -376,6 +390,9 @@ export class BuildPreview {
     // Restore suppressed groups before clearing preview chunks
     this.restoreAllSuppressedGroups();
 
+    // Revert the light-only override on spill neighbours.
+    this.restoreSpillLight();
+
     for (const key of this.activePreviewChunks) {
       this.clearChunkPreview(key);
     }
@@ -389,6 +406,15 @@ export class BuildPreview {
 
     this.activePreviewChunks.clear();
     this.clearLastOperation();
+  }
+
+  /** Revert the light-only preview override on all tracked spill neighbours (restore committed light). */
+  private restoreSpillLight(): void {
+    if (this.previewSpillKeys.size === 0 || !this.world) return;
+    for (const key of this.previewSpillKeys) {
+      this.world.restorePreviewChunkLight(key);
+    }
+    this.previewSpillKeys.clear();
   }
 
   /**
