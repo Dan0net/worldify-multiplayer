@@ -108,14 +108,13 @@ export class LocalTerrainSource {
 
     for (let cy = minCy; cy <= terrainMaxCy + MAX_CHUNKS_ABOVE; cy++) {
       const data = this.rawChunk(tx, cy, tz);
-      const hasContent = chunkHasContent(data);
-
-      // Always include terrain chunks; above terrain, stop at first empty chunk.
-      if (cy <= terrainMaxCy || hasContent) {
+      // Always include terrain chunks; above terrain, include ANY chunk with content
+      // (tree canopies, tall buildings). Skip empties but keep scanning to MAX_CHUNKS_ABOVE
+      // so a canopy separated from the terrain top by an empty chunk is still captured.
+      if (cy <= terrainMaxCy || chunkHasContent(data)) {
         chunkDatas.push({ cy, data });
         chunks.push({ chunkY: cy, lastBuildSeq: 0, voxelData: data });
       }
-      if (cy > terrainMaxCy && !hasContent) break;
     }
 
     // Capture stamps/trees spanning chunks into the tile surface.

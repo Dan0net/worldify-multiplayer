@@ -91,21 +91,16 @@ export class SurfaceColumnProvider {
     
     for (let cy = minCy; cy <= terrainMaxCy + MAX_CHUNKS_ABOVE; cy++) {
       const chunk = await this.chunkProvider.getOrCreateAsync(tx, cy, tz);
-      const hasContent = chunkHasContent(chunk.data);
-      
-      // Always include terrain chunks. Above terrain, stop at first empty chunk.
-      if (cy <= terrainMaxCy || hasContent) {
+      // Always include terrain chunks. Above terrain, include ANY chunk with content
+      // (tree canopies, tall buildings); skip empties but keep scanning to MAX_CHUNKS_ABOVE
+      // so a canopy separated from the terrain top by an empty chunk is still captured.
+      if (cy <= terrainMaxCy || chunkHasContent(chunk.data)) {
         chunkDatas.push(chunk);
         chunks.push({
           cy,
           lastBuildSeq: chunk.lastBuildSeq,
           data: chunk.data,
         });
-      }
-      
-      // Stop if we're above terrain and hit an empty chunk
-      if (cy > terrainMaxCy && !hasContent) {
-        break;
       }
     }
     
