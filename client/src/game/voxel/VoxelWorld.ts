@@ -55,12 +55,6 @@ import { TerrainWorkerPool } from './TerrainWorkerPool.js';
 import { SeamStitcher } from './SeamStitcher.js';
 import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConfig, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
-/**
- * Extra chunks generated above a column's baseline surface so stamp/tree tops
- * (which sit above the terrain-only tile height) are not clipped.
- */
-const SURFACE_CHUNK_MARGIN = 1;
-
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
 
@@ -573,9 +567,10 @@ export class VoxelWorld implements ChunkProvider {
       // Don't request chunks for columns without tile data yet
       if (!info) continue;
       
-      // Skip chunks above the surface, keeping a margin so stamp/tree tops
-      // (above the terrain-only tile height) and top-face stitching are covered.
-      if (cy > info.maxCy + SURFACE_CHUNK_MARGIN) continue;
+      // Skip chunks above the surface. maxCy is the STAMP-INCLUSIVE top (the chunk holding the
+      // highest tree/building voxel), so it's exactly right on its own — no margin, so no empty
+      // sky chunk is loaded above the canopy. The top face meshes against extrapolated air.
+      if (cy > info.maxCy) continue;
       
       this.requestChunkFromServer(cx, cy, cz);
       chunkRequests++;
