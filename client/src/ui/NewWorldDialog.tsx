@@ -54,7 +54,7 @@ const CAVERN_FIELDS: Field<CaveConfig>[] = [
   { key: 'cavernRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'How much chamber size differs from one to the next.' },
   { key: 'cavernWaterLevel', label: 'Water level', min: 0, max: 0.6, step: 0.05, desc: 'How deep the water pool at the bottom of each chamber is.' },
   { key: 'cavernSpikeAmount', label: 'Stalagmites', min: 0, max: 1, step: 0.05, desc: 'Abundance and size of stalagmites and stalactites.' },
-  { key: 'cavernTerrainTaper', label: 'Terrain taper', min: 0, max: 20, step: 1, desc: 'Pinches cavern tops shut near the surface (0 = full-size breaches).' },
+  { key: 'cavernTerrainTaper', label: 'Terrain taper', min: 0, max: 1, step: 0.05, desc: 'Shrinks cavern openings where they breach the surface (0 = full-size; never fully sealed).' },
 ];
 
 // Persist the chosen generation settings across sessions (name/seed stay fresh).
@@ -83,6 +83,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const [seed, setSeed] = useState(() => String(randomWorldSeed()));
   const [cave, setCave] = useState<CaveConfig>(initial.cave);
   const [terrain, setTerrain] = useState<TerrainLayerConfig>(initial.terrain);
+  const [copied, setCopied] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -94,6 +95,19 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
     const parsedSeed = parseInt(seed, 10);
     saveSettings(cave, terrain);
     onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, terrain);
+  };
+
+  // Copy the dialed-in generation settings to the clipboard as JSON, so they can be shared (e.g. to
+  // set as new engine defaults). Falls back to a prompt if the clipboard API is unavailable.
+  const exportSettings = async () => {
+    const json = JSON.stringify({ cave, terrain }, null, 2);
+    try {
+      await navigator.clipboard.writeText(json);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      window.prompt('Copy your generation settings:', json);
+    }
   };
 
   const inputCls =
@@ -146,6 +160,9 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
       onClose={onCancel}
       footer={
         <>
+          <button className={`${btn(false)} mr-auto`} onClick={exportSettings} title="Copy these settings to the clipboard to share">
+            {copied ? 'Copied!' : 'Export'}
+          </button>
           <button className={btn(false)} onClick={onCancel}>Cancel</button>
           <button className={btn(true)} onClick={submit}>Create</button>
         </>

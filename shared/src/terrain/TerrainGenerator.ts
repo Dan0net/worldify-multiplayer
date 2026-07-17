@@ -158,8 +158,8 @@ export interface CaveConfig {
   cavernWaterLevel: number;
   /** 0..1 — stalagmite/stalactite abundance + size (0 = none; higher = denser, taller spikes). */
   cavernSpikeAmount: number;
-  /** Meters below the surface over which a cavern pinches shut, so tops that breach the surface stay
-   *  small (0 = no taper, full-size breaches; higher = smaller / closed tops). */
+  /** 0..1 — how much cavern tops narrow where they breach the surface (0 = full-size breaches; higher
+   *  = smaller openings, but never fully sealed). */
   cavernTerrainTaper: number;
 }
 
@@ -267,6 +267,10 @@ const CAVERN_SPIKE_CELL = 3;
 const CAVERN_SPIKE_MAX_H = 7;
 /** Max spike base radius in meters at cavernSpikeAmount = 1. */
 const CAVERN_SPIKE_MAX_R = 1.3;
+/** Meters below the surface over which a surface-tapered cavern widens back to full radius. */
+const CAVERN_TAPER_BAND = 24;
+/** Tightest surface opening as a fraction of full radius at cavernTerrainTaper = 1 (still breaches). */
+const CAVERN_TAPER_MIN_FRAC = 0.15;
 
 // ============== Default Cave Configuration ==============
 
@@ -306,7 +310,7 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   cavernWarpFrequency: 0.03,// domain-warp scale (used once winding > 0)
   cavernWaterLevel: 0.15,   // bottom ~15% of each chamber filled with water
   cavernSpikeAmount: 0.3,   // moderate stalagmites/stalactites
-  cavernTerrainTaper: 6,    // pinch shut over the last 6 m below the surface → small breaches
+  cavernTerrainTaper: 0.6,  // narrow surface breaches to ~half size (still open)
 };
 
 // ============== Default Terrain Layer Configuration ==============
@@ -947,10 +951,16 @@ export class TerrainGenerator implements HeightSampler {
     if (feats.length === 0) return 0;
     const cave = this.config.caveConfig;
     const vert = cave.cavernVerticality;
-    // Surface taper: pinch the cavern shut over the last `cavernTerrainTaper` meters below the
-    // surface so tops that breach the terrain stay small (factor 0 at/above the surface → 1 deep).
-    const taperDist = cave.cavernTerrainTaper;
-    const taper = taperDist > 0 ? Math.max(0, Math.min(1, (surfaceMeters - y) / taperDist)) : 1;
+    // Surface taper: narrow (but never seal) cavern tops that breach the surface. `cavernTerrainTaper`
+    // is a 0..1 amount — at the surface the boundary shrinks toward CAVERN_TAPER_MIN_FRAC of full
+    // radius as taper→1, easing back to full radius CAVERN_TAPER_BAND m below. taper=0 → no narrowing.
+    const taperAmt = cave.cavernTerrainTaper > 0 ? Math.min(1, cave.cavernTerrainTaper) : 0;
+    let taper = 1;
+    if (taperAmt > 0) {
+      const surfaceFactor = 1 - taperAmt * (1 - CAVERN_TAPER_MIN_FRAC);
+      const t = Math.max(0, Math.min(1, (surfaceMeters - y) / CAVERN_TAPER_BAND));
+      taper = surfaceFactor + (1 - surfaceFactor) * t;
+    }
 
     // Domain warp (winding) — displace the sample point; clean ellipsoid when winding = 0.
     let wx = x, wy = y, wz = z;
