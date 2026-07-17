@@ -54,10 +54,7 @@ export class BuildPreview {
   /** Cancel function for in-flight batch */
   private cancelBatch: (() => void) | null = null;
 
-  /** Cancel function for the in-flight preview relight (lighting-worker) stage */
-  private cancelLight: (() => void) | null = null;
-
-  /** Whether a batch is currently in flight (covers the lighting stage AND the mesh stage) */
+  /** Whether a mesh batch is currently in flight */
   private batchInFlight: boolean = false;
 
   /** Last rendered operation fields for change detection (avoids string hashing) */
@@ -192,33 +189,29 @@ export class BuildPreview {
       return;
     }
 
-    // Snapshot drawn keys — drawnChunksBuf is reused, and the mesh stage runs async in a callback.
+    // Relight the drawn chunks synchronously (cheap — only the chunks the brush changed) so the mesh
+    // shows correct light immediately. Meshing does NOT wait on any worker: the relight, grid
+    // expansion, and mesh dispatch all happen inline, exactly as responsive as before P3.
+    this.world.relightPreviewDrawnSync(drawnChunks);
+
+    // Snapshot drawn keys — drawnChunksBuf is reused on the next dispatch.
     const drawnKeys = drawnChunks.slice();
 
-    // Mark in flight for the whole lighting+mesh cycle.
     this.batchInFlight = true;
-
-    // === Stage 1: relight the region off the main thread. When it returns, mesh the relit set. ===
-    // relightPreview* returns every chunk now carrying preview light (drawn + block-light spill),
-    // so a torch near a chunk edge lights the adjacent chunk in preview and the mesh set matches
-    // the relit set. Its temp buffers are updated before the callback fires.
-    this.cancelLight = this.world.relightPreviewAsync(drawnKeys, (relitKeys) => {
-      this.cancelLight = null;
-      this.dispatchPreviewMesh(relitKeys, drawnKeys);
-    });
+    this.dispatchPreviewMesh(drawnKeys);
   }
 
   /**
-   * Stage 2: mesh the relit chunk set (from temp buffers) and atomically show the preview.
-   * Runs in the lighting-stage callback.
+   * Mesh the drawn chunk set (from temp buffers) plus the boundary neighbours whose margin reads
+   * them, and atomically show the preview.
    */
-  private dispatchPreviewMesh(relitKeys: string[], drawnKeys: string[]): void {
+  private dispatchPreviewMesh(drawnKeys: string[]): void {
     const world = this.world;
     const scene = this.scene;
     const meshPool = this.meshPool;
     if (!world || !scene || !meshPool) { this.batchInFlight = false; return; }
 
-    // === Pass 2: Expand grids for the relit set and dispatch (tempData already relit) ===
+    // === Pass 2: Expand grids for the drawn chunks and dispatch (tempData already relit) ===
     const batchItems: Array<{
       chunkKey: string;
       grid: Uint32Array;
@@ -227,7 +220,7 @@ export class BuildPreview {
     const newActiveChunks = this.newActiveChunksBuf;
     newActiveChunks.clear();
 
-    for (const key of relitKeys) {
+    for (const key of drawnKeys) {
       const chunk = world.chunks.get(key);
       if (!chunk || !chunk.tempData) continue;
 
@@ -339,10 +332,6 @@ export class BuildPreview {
    * Cancel any in-flight worker batch and reset dispatch state.
    */
   private cancelInFlightBatch(): void {
-    if (this.cancelLight) {
-      this.cancelLight();
-      this.cancelLight = null;
-    }
     if (this.cancelBatch) {
       this.cancelBatch();
       this.cancelBatch = null;
