@@ -54,7 +54,10 @@ export class BuildPreview {
   /** Cancel function for in-flight batch */
   private cancelBatch: (() => void) | null = null;
 
-  /** Whether a batch is currently in flight */
+  /** Cancel function for the in-flight preview relight (lighting-worker) stage */
+  private cancelLight: (() => void) | null = null;
+
+  /** Whether a batch is currently in flight (covers the lighting stage AND the mesh stage) */
   private batchInFlight: boolean = false;
 
   /** Last rendered operation fields for change detection (avoids string hashing) */
@@ -135,8 +138,13 @@ export class BuildPreview {
   }
 
   /**
-   * Dispatch a preview batch to workers. Sets batchInFlight = true.
-   * On completion, atomically applies meshes then checks for pending.
+   * Dispatch a preview batch. Sets batchInFlight = true for the whole cycle (lighting + meshing).
+   *
+   * Two async stages: (1) draw temp (sync) → relight the region on the lighting worker; (2) when
+   * light returns, mesh the relit set on the mesh workers and atomically show it. Splitting the
+   * relight off the main thread keeps preview smooth even while dragging a torch (per-frame block
+   * relight over a 3×3×3). batchInFlight spans both stages, so a cursor move mid-cycle is stored as
+   * pendingOperation and dispatched on completion — the existing "let it finish, then catch up".
    */
   private dispatchPreviewBatch(operation: BuildOperation): void {
     if (!this.world || !this.scene || !this.meshPool) return;
@@ -174,13 +182,43 @@ export class BuildPreview {
       }
     }
 
-    // Relight the temp buffers through the shared region pass so the preview matches the committed
-    // result (freshly-carved air lights up; a torch near a chunk edge lights the ADJACENT chunk too)
-    // instead of showing stale/zero light. Returns every chunk now carrying preview light on temp —
-    // the drawn chunks plus any block-light spill neighbours — which is exactly the set to display.
-    const relitKeys = this.world.relightPreview(drawnChunks);
+    if (drawnChunks.length === 0) {
+      // Aim moved but nothing changed — clear any stale preview and bail (no cycle needed).
+      const stale = [...this.activePreviewChunks];
+      for (const key of stale) {
+        this.clearChunkPreview(key);
+        this.activePreviewChunks.delete(key);
+      }
+      return;
+    }
 
-    // === Pass 2: Expand grids and dispatch (neighbors' tempData is now ready) ===
+    // Snapshot drawn keys — drawnChunksBuf is reused, and the mesh stage runs async in a callback.
+    const drawnKeys = drawnChunks.slice();
+
+    // Mark in flight for the whole lighting+mesh cycle.
+    this.batchInFlight = true;
+
+    // === Stage 1: relight the region off the main thread. When it returns, mesh the relit set. ===
+    // relightPreview* returns every chunk now carrying preview light (drawn + block-light spill),
+    // so a torch near a chunk edge lights the adjacent chunk in preview and the mesh set matches
+    // the relit set. Its temp buffers are updated before the callback fires.
+    this.cancelLight = this.world.relightPreviewAsync(drawnKeys, (relitKeys) => {
+      this.cancelLight = null;
+      this.dispatchPreviewMesh(relitKeys, drawnKeys);
+    });
+  }
+
+  /**
+   * Stage 2: mesh the relit chunk set (from temp buffers) and atomically show the preview.
+   * Runs in the lighting-stage callback.
+   */
+  private dispatchPreviewMesh(relitKeys: string[], drawnKeys: string[]): void {
+    const world = this.world;
+    const scene = this.scene;
+    const meshPool = this.meshPool;
+    if (!world || !scene || !meshPool) { this.batchInFlight = false; return; }
+
+    // === Pass 2: Expand grids for the relit set and dispatch (tempData already relit) ===
     const batchItems: Array<{
       chunkKey: string;
       grid: Uint32Array;
@@ -190,31 +228,31 @@ export class BuildPreview {
     newActiveChunks.clear();
 
     for (const key of relitKeys) {
-      const chunk = this.world.chunks.get(key);
+      const chunk = world.chunks.get(key);
       if (!chunk || !chunk.tempData) continue;
 
-      // Expand grid on main thread, dispatch to worker
-      const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.world.chunks, grid, true);
+      const grid = meshPool.takeGrid();
+      const skipHighBoundary = expandChunkToGrid(chunk, world.chunks, grid, true);
       batchItems.push({ chunkKey: key, grid, skipHighBoundary });
       newActiveChunks.add(key);
     }
 
     // === Pass 2b: Include negative-face neighbors whose high-side margin reads drawn chunk data ===
-    for (const key of drawnChunks) {
-      const chunk = this.world.chunks.get(key)!;
+    for (const key of drawnKeys) {
+      const chunk = world.chunks.get(key);
+      if (!chunk || !chunk.tempData) continue;
       const data = chunk.data;
-      const temp = chunk.tempData!;
+      const temp = chunk.tempData;
 
       for (let axis = 0; axis < 3; axis++) {
         if (!BuildPreview.hasBoundaryChanges(data, temp, axis)) continue;
         const [dx, dy, dz] = NEGATIVE_FACE_OFFSETS_3[axis];
         const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
         if (newActiveChunks.has(nk)) continue;
-        const neighbor = this.world.chunks.get(nk);
+        const neighbor = world.chunks.get(nk);
         if (!neighbor) continue;
-        const grid = this.meshPool.takeGrid();
-        const skipHighBoundary = expandChunkToGrid(neighbor, this.world.chunks, grid, true);
+        const grid = meshPool.takeGrid();
+        const skipHighBoundary = expandChunkToGrid(neighbor, world.chunks, grid, true);
         batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
         newActiveChunks.add(nk);
       }
@@ -223,7 +261,6 @@ export class BuildPreview {
     // Capture which old preview chunks to clear — any previously active chunk
     // that is NOT in the new batch needs its preview reverted. Computed AFTER
     // Pass 2b so boundary neighbors aren't incorrectly marked for removal.
-    // Allocated fresh since it's captured by the async callback closure
     const chunksToRemove: string[] = [];
     for (const key of this.activePreviewChunks) {
       if (!newActiveChunks.has(key)) {
@@ -239,23 +276,18 @@ export class BuildPreview {
     }
 
     if (batchItems.length === 0) {
-      // No chunks to mesh — clear stale previews now
+      // No chunks to mesh — clear stale previews now, end the cycle, catch up on any pending op.
       for (const key of chunksToRemove) {
         this.clearChunkPreview(key);
         this.activePreviewChunks.delete(key);
       }
+      this.batchInFlight = false;
+      this.processPending();
       return;
     }
 
-    // Mark in flight
-    this.batchInFlight = true;
-
-    // Capture refs for async callback
-    const world = this.world;
-    const scene = this.scene;
-
     // Dispatch priority batch — callback fires only when ALL chunks complete
-    this.cancelBatch = this.meshPool.dispatchBatch(batchItems, (results: MeshResult[]) => {
+    this.cancelBatch = meshPool.dispatchBatch(batchItems, (results: MeshResult[]) => {
       this.cancelBatch = null;
       this.batchInFlight = false;
 
@@ -307,6 +339,10 @@ export class BuildPreview {
    * Cancel any in-flight worker batch and reset dispatch state.
    */
   private cancelInFlightBatch(): void {
+    if (this.cancelLight) {
+      this.cancelLight();
+      this.cancelLight = null;
+    }
     if (this.cancelBatch) {
       this.cancelBatch();
       this.cancelBatch = null;
