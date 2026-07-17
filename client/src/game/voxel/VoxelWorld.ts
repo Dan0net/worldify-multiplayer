@@ -974,13 +974,16 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Relight ONLY the drawn preview chunks, synchronously on their temp buffers (cheap — a handful of
-   * chunks), through the shared relightRegion() so preview and commit don't drift. Runs before
-   * meshing so the drawn preview shows correct light immediately, waiting on nothing. Light spilling
-   * into NEIGHBOURS is handled separately by relightPreviewSpill().
+   * Relight the chunks that will be RE-MESHED this preview, synchronously on their temp buffers
+   * (cheap — a handful of chunks), through the shared relightRegion() so preview and commit don't
+   * drift. This is the drawn chunks PLUS their margin-consumer neighbours (whose +margin geometry
+   * changed and so are re-meshed by Pass 2b) — every re-meshed chunk must carry preview light or its
+   * new mesh shows stale/dark light at the edit (the dark-border bug). Runs before meshing so the
+   * mesh shows correct light immediately, waiting on nothing. Light spilling into chunks that are NOT
+   * re-meshed is handled separately by relightPreviewSpill(). Each passed chunk needs a temp buffer.
    */
-  relightPreviewDrawnSync(drawnKeys: string[]): void {
-    const drawn = drawnKeys
+  relightPreviewMeshSet(meshKeys: string[]): void {
+    const drawn = meshKeys
       .map((k) => this.chunks.get(k))
       .filter((c): c is Chunk => !!c && !!c.tempData);
     if (drawn.length === 0) return;

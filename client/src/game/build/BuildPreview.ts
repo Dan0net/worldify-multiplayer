@@ -190,19 +190,32 @@ export class BuildPreview {
         this.clearChunkPreview(key);
         this.activePreviewChunks.delete(key);
       }
+      // Also revert any spill light-override still applied from the previous position (Bug 1a) —
+      // otherwise moving onto empty space leaves a tinted band on the old neighbours.
+      this.restoreSpillLight();
       return;
     }
-
-    // Relight the DRAWN chunks synchronously (cheap — just the chunks the brush changed) so the mesh
-    // shows correct light immediately, waiting on nothing. Then mesh + show.
-    this.world.relightPreviewDrawnSync(drawnChunks);
 
     // Snapshot drawn keys — drawnChunksBuf is reused on the next dispatch.
     const drawnKeys = drawnChunks.slice();
 
+    // Margin-consumer neighbours: chunks whose +margin (a drawn chunk's boundary) changed, so they
+    // must be RE-MESHED (Pass 2b). Give them a temp buffer and relight them together with the drawn
+    // chunks, so their new mesh carries the preview's block/sky light instead of stale committed
+    // light — otherwise the torch's light stops dead at the chunk edge (the dark-border bug).
+    const marginKeys = this.collectMarginNeighbours(drawnKeys);
+    for (const nk of marginKeys) {
+      const n = this.world.chunks.get(nk);
+      if (n && !n.tempData) n.copyToTemp();
+    }
+
+    // Relight the whole re-mesh set (drawn + margin neighbours) synchronously (cheap). The mesh below
+    // reads this relit light and never waits on it.
+    this.world.relightPreviewMeshSet(marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys);
+
     this.batchInFlight = true;
-    this.dispatchPreviewMesh(drawnKeys);
-    // newActiveChunksBuf now holds the chunks being re-meshed this preview (drawn + Pass 2b margin
+    this.dispatchPreviewMesh(drawnKeys, marginKeys);
+    // newActiveChunksBuf now holds the chunks being re-meshed this preview (drawn + margin
     // neighbours), populated synchronously by dispatchPreviewMesh.
     const meshed = new Set(this.newActiveChunksBuf);
 
@@ -219,10 +232,10 @@ export class BuildPreview {
   }
 
   /**
-   * Mesh the drawn chunk set (from temp buffers) plus the boundary neighbours whose margin reads
-   * them, and atomically show the preview.
+   * Mesh the drawn chunk set + the margin-consumer neighbours (both already relit on temp), and
+   * atomically show the preview. `marginKeys` come from collectMarginNeighbours().
    */
-  private dispatchPreviewMesh(drawnKeys: string[]): void {
+  private dispatchPreviewMesh(drawnKeys: string[], marginKeys: string[]): void {
     const world = this.world;
     const scene = this.scene;
     const meshPool = this.meshPool;
@@ -247,25 +260,15 @@ export class BuildPreview {
       newActiveChunks.add(key);
     }
 
-    // === Pass 2b: Include negative-face neighbors whose high-side margin reads drawn chunk data ===
-    for (const key of drawnKeys) {
-      const chunk = world.chunks.get(key);
-      if (!chunk || !chunk.tempData) continue;
-      const data = chunk.data;
-      const temp = chunk.tempData;
-
-      for (let axis = 0; axis < 3; axis++) {
-        if (!BuildPreview.hasBoundaryChanges(data, temp, axis)) continue;
-        const [dx, dy, dz] = NEGATIVE_FACE_OFFSETS_3[axis];
-        const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
-        if (newActiveChunks.has(nk)) continue;
-        const neighbor = world.chunks.get(nk);
-        if (!neighbor) continue;
-        const grid = meshPool.takeGrid();
-        const skipHighBoundary = expandChunkToGrid(neighbor, world.chunks, grid, true);
-        batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
-        newActiveChunks.add(nk);
-      }
+    // === Pass 2b: Mesh the margin-consumer neighbours (relit on temp above) ===
+    for (const nk of marginKeys) {
+      if (newActiveChunks.has(nk)) continue;
+      const neighbor = world.chunks.get(nk);
+      if (!neighbor || !neighbor.tempData) continue;
+      const grid = meshPool.takeGrid();
+      const skipHighBoundary = expandChunkToGrid(neighbor, world.chunks, grid, true);
+      batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
+      newActiveChunks.add(nk);
     }
 
     // Capture which old preview chunks to clear — any previously active chunk
@@ -321,6 +324,13 @@ export class BuildPreview {
         // Some groups need to be merged first — defer preview visibility.
         // Store results; finalizeDeferredPreview() picks them up once
         // rebuild() finalizes the pending suppressions.
+        //
+        // If a previous cycle was still deferred (fast movement into unmerged terrain), fold its
+        // pending stale-chunk clears into this batch so they aren't lost — otherwise those far
+        // preview meshes never get disposed (Bug 1b).
+        if (this.deferredChunksToRemove) {
+          for (const k of this.deferredChunksToRemove) chunksToRemove.push(k);
+        }
         this.deferredPreviewResults = results;
         this.deferredChunksToRemove = chunksToRemove;
       }
@@ -651,6 +661,33 @@ export class BuildPreview {
 
     // Process any pending operation that arrived while we were waiting
     this.processPending();
+  }
+
+  /**
+   * The negative-face neighbours whose high-side margin reads a drawn chunk's changed low boundary —
+   * i.e. the chunks whose mesh geometry depends on the edit and must be re-meshed. Mirrors the old
+   * inline Pass 2b detection; computed up front so those neighbours can be relit before meshing.
+   */
+  private collectMarginNeighbours(drawnKeys: string[]): string[] {
+    const world = this.world;
+    if (!world) return [];
+    const out: string[] = [];
+    const seen = new Set<string>(drawnKeys);
+    for (const key of drawnKeys) {
+      const chunk = world.chunks.get(key);
+      if (!chunk || !chunk.tempData) continue;
+      const data = chunk.data;
+      const temp = chunk.tempData;
+      for (let axis = 0; axis < 3; axis++) {
+        if (!BuildPreview.hasBoundaryChanges(data, temp, axis)) continue;
+        const [dx, dy, dz] = NEGATIVE_FACE_OFFSETS_3[axis];
+        const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
+        if (seen.has(nk) || !world.chunks.has(nk)) continue;
+        seen.add(nk);
+        out.push(nk);
+      }
+    }
+    return out;
   }
 
   /**
