@@ -8,9 +8,9 @@
  */
 
 import { LocalTerrainSource } from './LocalTerrainSource.js';
-import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse } from '@worldify/shared';
+import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse, CaveConfig, TerrainLayerConfig } from '@worldify/shared';
 
-type InitMessage = { type: 'init'; seed: number };
+type InitMessage = { type: 'init'; seed: number; caveConfig?: CaveConfig; terrainConfig?: TerrainLayerConfig };
 type ChunkMessage = { type: 'chunk'; id: number; cx: number; cy: number; cz: number };
 type TileMessage = { type: 'tile'; id: number; tx: number; tz: number };
 type ColumnMessage = { type: 'column'; id: number; tx: number; tz: number };
@@ -27,7 +27,7 @@ self.onmessage = (e: MessageEvent<TerrainWorkerRequest>) => {
   const msg = e.data;
 
   if (msg.type === 'init') {
-    source = new LocalTerrainSource(msg.seed);
+    source = new LocalTerrainSource(msg.seed, msg.caveConfig, msg.terrainConfig);
     return;
   }
   if (!source) return;

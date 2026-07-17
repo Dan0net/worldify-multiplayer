@@ -341,6 +341,9 @@ export class GameCore {
     this.posSaveAccumMs = 0;
     resetMarker(); // re-auto-place the spawn marker for the new world
     getMapTileCache().clear();
+    // Clear the cached surface spawn so the new world computes a FRESH one on its own terrain —
+    // otherwise the previous world's spawn point can leak in until collision meshes rebuild.
+    this.spawnManager?.reset();
 
     // Re-center the orbit camera + chunk streaming on the NEW world's saved position
     // (WorldManager.activate has already loaded it). With no saved position, center on

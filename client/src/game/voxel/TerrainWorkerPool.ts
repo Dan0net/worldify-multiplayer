@@ -7,7 +7,7 @@
  * receive* methods, exactly like the network path.
  */
 
-import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse } from '@worldify/shared';
+import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse, CaveConfig, TerrainLayerConfig } from '@worldify/shared';
 import type { TerrainWorkerResponse } from './terrainWorker.js';
 
 export class TerrainWorkerPool {
@@ -16,10 +16,10 @@ export class TerrainWorkerPool {
   private nextId = 0;
   private nextWorker = 0;
 
-  constructor(seed: number, poolSize = 3) {
+  constructor(seed: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig, poolSize = 3) {
     for (let i = 0; i < poolSize; i++) {
       const worker = new Worker(new URL('./terrainWorker.ts', import.meta.url), { type: 'module' });
-      worker.postMessage({ type: 'init', seed });
+      worker.postMessage({ type: 'init', seed, caveConfig, terrainConfig });
       worker.onmessage = (e: MessageEvent<TerrainWorkerResponse>) => {
         const cb = this.callbacks.get(e.data.id);
         if (cb) {

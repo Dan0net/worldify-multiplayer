@@ -2,13 +2,18 @@
  * Terrain generation module exports
  */
 
-export { 
-  TerrainGenerator, 
+export {
+  TerrainGenerator,
   DEFAULT_TERRAIN_CONFIG,
+  DEFAULT_CAVE_CONFIG,
+  DEFAULT_TERRAIN_LAYER_CONFIG,
+  normalizeCaveConfig,
   type NoiseLayerConfig,
   type DomainWarpConfig,
   type MaterialLayerConfig,
   type TerrainConfig,
+  type CaveConfig,
+  type TerrainLayerConfig,
 } from './TerrainGenerator.js';
 
 // Stamp system re-exports

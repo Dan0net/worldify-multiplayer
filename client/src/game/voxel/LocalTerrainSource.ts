@@ -26,6 +26,8 @@ import {
   type MapTileResponse,
   type SurfaceColumnResponse,
   type SurfaceColumnChunk,
+  type CaveConfig,
+  type TerrainLayerConfig,
 } from '@worldify/shared';
 
 /** Matches SurfaceColumnProvider on the server. */
@@ -37,8 +39,12 @@ export class LocalTerrainSource {
   /** Cache raw generated chunk data so tile scanning and chunk requests agree. */
   private readonly cache = new Map<string, Uint32Array>();
 
-  constructor(seed: number) {
-    this.gen = new TerrainGenerator({ seed });
+  constructor(seed: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig) {
+    this.gen = new TerrainGenerator({
+      seed,
+      ...(caveConfig ? { caveConfig } : {}),
+      ...(terrainConfig ? { terrainLayer: terrainConfig } : {}),
+    });
   }
 
   private rawChunk(cx: number, cy: number, cz: number): Uint32Array {
