@@ -12,7 +12,7 @@ import { Globe, Settings, Play, Plus, X, Maximize, Check } from 'lucide-react';
 import { useGameStore } from '../state/store';
 import { GameMode, type CaveConfig, type TerrainLayerConfig } from '@worldify/shared';
 import { materialManager } from '../game/material';
-import { QUALITY_LABELS, QUALITY_LEVELS, MSAA_OPTIONS } from '../game/quality/QualityPresets';
+import { QUALITY_LABELS, QUALITY_LEVELS, MSAA_OPTIONS, VIEW_DISTANCES } from '../game/quality/QualityPresets';
 import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
 import { getCamera } from '../game/scene/camera';
 import { formatTimeOfDay } from '../game/scene/DayNightCycle';
@@ -253,11 +253,14 @@ export function ExploreOverlay() {
               <div className="flex items-center justify-between gap-3">
                 <span className="text-white/70 text-sm whitespace-nowrap">View</span>
                 <div className="flex gap-1 flex-1">
-                  {([{ label: 'Near', value: 2 }, { label: 'Close', value: 4 }, { label: 'Far', value: 6 }, { label: 'Max', value: 8 }] as const).map((opt) => (
-                    <button key={opt.value} onClick={() => applyVisibilityRadius(opt.value)} className={pill(visibilityRadius === opt.value)}>
-                      {opt.label}
-                    </button>
-                  ))}
+                  {(['Near', 'Close', 'Far', 'Max'] as const).map((label, i) => {
+                    const value = VIEW_DISTANCES[i];
+                    return (
+                      <button key={value} onClick={() => applyVisibilityRadius(value)} className={pill(visibilityRadius === value)}>
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
               <div className="flex items-center justify-between gap-3">
