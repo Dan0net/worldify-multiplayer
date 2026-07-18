@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import { CHUNK_WORLD_SIZE } from '@worldify/shared';
+import { CHUNK_WORLD_SIZE, MESH_MARGIN, VOXEL_SCALE } from '@worldify/shared';
 import { createLayerMesh, LAYER_LIQUID, LAYER_COUNT, TERRAIN_ATTRS } from './LayerConfig.js';
 import { getShadowRadius } from '../quality/QualityManager.js';
 
@@ -21,6 +21,16 @@ import { getShadowRadius } from '../quality/QualityManager.js';
 
 /** Chunks per axis per spatial group */
 const GROUP_GRID = 4;
+
+/**
+ * How far a chunk's SurfaceNets geometry can overhang its nominal cube, in world units.
+ * The mesher runs over a 34³ grid (CHUNK_SIZE + MESH_MARGIN) and places high-boundary vertices at
+ * grid coords up to CHUNK_SIZE + MESH_MARGIN, so geometry extends MESH_MARGIN voxels past the chunk
+ * origin cube on the +X/+Y/+Z sides (never negative). Per-chunk geometry already accounts for this
+ * (MeshGeometry.CHUNK_MESH_EXTENT); the merged-group bounds must too, or three.js frustum-culls the
+ * merged mesh against a box that clips the boundary-crossing verts — they pop in/out with camera angle.
+ */
+const MESH_OVERHANG = MESH_MARGIN * VOXEL_SCALE;
 
 /** Growth factor when a merged buffer needs to be reallocated */
 const BUFFER_GROWTH = 1.5;
@@ -929,9 +939,11 @@ export class ChunkGrouper {
         if (slot.wx < minX) minX = slot.wx;
         if (slot.wy < minY) minY = slot.wy;
         if (slot.wz < minZ) minZ = slot.wz;
-        const ex = slot.wx + CHUNK_WORLD_SIZE;
-        const ey = slot.wy + CHUNK_WORLD_SIZE;
-        const ez = slot.wz + CHUNK_WORLD_SIZE;
+        // Include the high-side mesh overhang so boundary-crossing verts stay inside the merged
+        // bounding box (and thus its frustum-cull sphere). Low side never overhangs.
+        const ex = slot.wx + CHUNK_WORLD_SIZE + MESH_OVERHANG;
+        const ey = slot.wy + CHUNK_WORLD_SIZE + MESH_OVERHANG;
+        const ez = slot.wz + CHUNK_WORLD_SIZE + MESH_OVERHANG;
         if (ex > maxX) maxX = ex;
         if (ey > maxY) maxY = ey;
         if (ez > maxZ) maxZ = ez;

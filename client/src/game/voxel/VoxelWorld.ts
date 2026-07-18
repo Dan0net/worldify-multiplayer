@@ -9,6 +9,7 @@ import {
   CHUNK_SIZE,
   FACE_OFFSETS_6,
   NEGATIVE_MARGIN_OFFSETS_7,
+  POSITIVE_MARGIN_OFFSETS_7,
   REQUEST_TIMEOUT_MS,
   MSG_VOXEL_CHUNK_REQUEST,
   MSG_MAP_TILE_REQUEST,
@@ -40,7 +41,7 @@ import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
-import { expandChunkToGrid } from './ChunkMesher.js';
+import { expandChunkToGrid, setEmptyAirPredicate } from './ChunkMesher.js';
 import { resampleLightAttributes } from './MeshGeometry.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
@@ -76,6 +77,13 @@ function columnChunkRange(heights: ArrayLike<number>): { minCy: number; maxCy: n
 /** Shared read-only all-dark "light from above" (used for underground chunks with no chunk above
  *  loaded, so caves aren't lit as open sky). Never mutated — the sunlight pass only reads it. */
 const DARK_ABOVE = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+
+/** The 6 axis-aligned face-neighbour offsets, for one-ring dilation of the reachable render set. */
+const FACE_NEIGHBOR_OFFSETS_6: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 0], [-1, 0, 0],
+  [0, 1, 0], [0, -1, 0],
+  [0, 0, 1], [0, 0, -1],
+];
 
 /** Fast typed-array equality check (same length assumed). */
 function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
@@ -194,7 +202,11 @@ export class VoxelWorld implements ChunkProvider {
       this.chunkGrouper,
       this.meshPool,
       this.pendingChunks,
+      (cx, cy, cz) => this.isMarginSourceExpected(cx, cy, cz),
     );
+    // Let the mesher distinguish open sky from not-yet-loaded, so terrain tops that meet a chunk
+    // boundary against sky mesh against air (capped) instead of being skipped/extrapolated → no gap.
+    setEmptyAirPredicate((cx, cy, cz) => this.isEmptyAir(cx, cy, cz));
     this.seamStitcher = new SeamStitcher(this.geometries, (ck) => {
       const gk = this.chunkGrouper.getGroupKey(ck);
       if (gk) this.chunkGrouper.markGroupDirty(gk);
@@ -349,6 +361,23 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * P4 mesh-readiness: is this positive margin-source neighbour EXPECTED to load but not here yet?
+   * If so, the consumer should defer meshing so its high-side border is built once with real voxels
+   * instead of extrapolated-now / re-meshed-when-it-arrives.
+   *   - loaded            → not expected (ready to use)
+   *   - genuine open sky   → never loads (extrapolation = air), ready
+   *   - pending or reachable-but-unloaded → the BFS will bring it → EXPECTED, wait
+   *   - anything else (not loaded, not void, not wanted) → not coming soon → ready (mesh now; P8's
+   *     re-mesh trigger still corrects a rare late arrival)
+   */
+  private isMarginSourceExpected(cx: number, cy: number, cz: number): boolean {
+    const key = chunkKey(cx, cy, cz);
+    if (this.chunks.has(key)) return false;
+    if (this.isEmptyAir(cx, cy, cz)) return false;
+    return this.pendingChunks.has(key) || this.cachedReachable.has(key);
+  }
+
+  /**
    * Update the world based on player position.
    * Uses visibility BFS for loading and rendering.
    * @param playerPos Player world position
@@ -378,6 +407,7 @@ export class VoxelWorld implements ChunkProvider {
 
     // Report queue stats for debug overlay
     perfStats.setVoxelQueueStats(this.remeshPipeline.size, this.pendingChunks.size);
+    perfStats.setMeshDispatches(this.remeshPipeline.meshDispatches);
   }
 
   /**
@@ -424,6 +454,7 @@ export class VoxelWorld implements ChunkProvider {
         playerPos
       );
       this.cachedReachable = reachable;
+      this.addMarginSourceRequests(reachable, toRequest);
       this.requestVisibleChunks(toRequest);
 
       this.updateMeshVisibility(this.cachedReachable);
@@ -469,6 +500,28 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Request the 7 positive margin-source neighbours (+X/+Y/+Z faces, edges, corner) of every
+   * reachable chunk. A rendered chunk's mesh reads those neighbours' voxels to place its high-side
+   * border verts; the visibility BFS culls the ones behind opaque faces (occlusion is for SIGHT), but
+   * their voxels are still needed to mesh the shared boundary — the source of the terrain gaps.
+   * Loading them alongside the reachable frontier fixes the gaps AND shrinks the mesh-readiness wait
+   * (a chunk's margins arrive with it, not a ring later). Bounded: one +ring around reachable, NO
+   * cascade — we only ring reachable chunks, never the ring itself, so it can't flood-fill.
+   */
+  private addMarginSourceRequests(reachable: Set<string>, toRequest: Set<string>): void {
+    for (const key of reachable) {
+      const { cx, cy, cz } = parseChunkKey(key);
+      for (const [dx, dy, dz] of POSITIVE_MARGIN_OFFSETS_7) {
+        const nx = cx + dx, ny = cy + dy, nz = cz + dz;
+        const nKey = chunkKey(nx, ny, nz);
+        if (this.chunks.has(nKey) || this.pendingChunks.has(nKey)) continue; // already have / coming
+        if (this.isEmptyAir(nx, ny, nz)) continue;                            // open sky, won't load
+        toRequest.add(nKey);
+      }
+    }
+  }
+
+  /**
    * Request visible chunks (two-phase):
    * Phase 1: Request tiles for columns we don't know about yet
    * Phase 2: Request individual chunks for columns where we have tile data
@@ -484,9 +537,25 @@ export class VoxelWorld implements ChunkProvider {
     const MAX_PENDING_TILES = 4;
     const MAX_PENDING_CHUNKS = 4;
 
-    // Phase 1: Identify columns that need tiles
+    // Request NEAREST-FIRST. Only a few requests fit per call (throttle), so ordering decides what
+    // loads now — and the margin-source loader appends occluded neighbours, which would otherwise sit
+    // behind the whole frontier. Sorting by distance to the player means a near chunk AND its near
+    // margins load together, so terrain around the player meshes immediately instead of after the
+    // entire queue drains (the "delay before anything renders").
+    const p = this.lastPlayerChunk;
+    const sorted = [...toRequest];
+    if (p) {
+      const dist = new Map<string, number>();
+      for (const key of sorted) {
+        const { cx, cy, cz } = parseChunkKey(key);
+        dist.set(key, (cx - p.cx) ** 2 + (cy - p.cy) ** 2 + (cz - p.cz) ** 2);
+      }
+      sorted.sort((a, b) => dist.get(a)! - dist.get(b)!);
+    }
+
+    // Phase 1: Identify columns that need tiles (nearest-first)
     const columnsNeedingTiles = new Set<string>();
-    for (const key of toRequest) {
+    for (const key of sorted) {
       const [cx, , cz] = key.split(',').map(Number);
       const columnKey = `${cx},${cz}`;
       if (!this.columnInfo.has(columnKey) && !this.pendingTiles.has(columnKey) && !this.pendingColumns.has(columnKey)) {
@@ -501,9 +570,9 @@ export class VoxelWorld implements ChunkProvider {
       this.requestTileFromServer(tx, tz);
     }
 
-    // Phase 2: Request chunks only for columns we have tile info for
+    // Phase 2: Request chunks only for columns we have tile info for (nearest-first)
     let chunkRequests = 0;
-    for (const key of toRequest) {
+    for (const key of sorted) {
       if (this.pendingChunks.size >= MAX_PENDING_CHUNKS) break;
       if (chunkRequests >= MAX_PENDING_CHUNKS) break;
       if (this.pendingChunks.has(key)) continue;
@@ -543,8 +612,28 @@ export class VoxelWorld implements ChunkProvider {
       // Preview chunks: their groups are suppressed and preview meshes render instead — never touch
       // their visibility here.
       if (this.previewChunks.has(key)) continue;
-      this.chunkGrouper.setVisible(key, reachable.has(key));
+      this.chunkGrouper.setVisible(key, this.isRenderable(key, reachable));
     }
+  }
+
+  /**
+   * A chunk renders if the BFS reached it OR it shares a face with a reached chunk (one-ring dilation
+   * of the reachable set). The per-chunk visibility graph is too coarse to hide chunks by exactly:
+   * a surface chunk's air region often doesn't connect its solid-side faces, and the BFS only seeds
+   * ALL six faces from the camera chunk itself — so a chunk whose visible surface sits on the boundary
+   * with a reachable neighbour (e.g. the terrain directly below where you stand) gets reached only
+   * when you're in the chunk right beside it, and pops out the moment you cross away. Rendering the
+   * face-ring around `reachable` keeps that boundary geometry on screen from every adjacent position,
+   * while occlusion still hides anything two-or-more chunks deep behind a wall (the perf win). Loading
+   * stays driven by the un-dilated BFS — these neighbours are already resident as margin sources.
+   */
+  private isRenderable(key: string, reachable: Set<string>): boolean {
+    if (reachable.has(key)) return true;
+    const { cx, cy, cz } = parseChunkKey(key);
+    for (const [dx, dy, dz] of FACE_NEIGHBOR_OFFSETS_6) {
+      if (reachable.has(chunkKey(cx + dx, cy + dy, cz + dz))) return true;
+    }
+    return false;
   }
 
   /**

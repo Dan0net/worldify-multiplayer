@@ -524,6 +524,7 @@ export function DebugPanel() {
               <div>Meshes:</div><div>{voxelStats.meshesVisible}</div>
               <div>Remesh Q:</div><div className={perfStats.remeshQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.remeshQueueSize}</div>
               <div>Pending:</div><div>{perfStats.pendingChunks}</div>
+              <div>Mesh calls:</div><div>{perfStats.meshDispatches}</div>
               <div>Collider Q:</div><div className={perfStats.colliderQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.colliderQueueSize}</div>
             </div>
           </div>

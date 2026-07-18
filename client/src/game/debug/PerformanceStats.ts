@@ -59,6 +59,7 @@ export interface PerfSnapshot {
   colliderQueueSize: number;
   groupsRebuilt: number;    // chunk-groups re-merged this frame
   bufferReallocs: number;   // merged-buffer reallocations this frame
+  meshDispatches: number;   // cumulative mesh-worker dispatches (streaming re-mesh churn gauge)
 
   // Memory (when available)
   jsHeapMB: number;
@@ -69,7 +70,7 @@ const EMPTY_SNAPSHOT: PerfSnapshot = {
   buildPreview: 0, players: 0, environment: 0, render: 0,
   drawCalls: 0, triangles: 0, geometries: 0, textures: 0, programs: 0,
   remeshQueueSize: 0, pendingChunks: 0, colliderQueueSize: 0,
-  groupsRebuilt: 0, bufferReallocs: 0, jsHeapMB: 0,
+  groupsRebuilt: 0, bufferReallocs: 0, meshDispatches: 0, jsHeapMB: 0,
 };
 
 /** Rolling average window size (frames) */
@@ -105,6 +106,7 @@ class PerformanceStatsCollector {
   private _colliderQueueSize = 0;
   private _groupsRebuilt = 0;
   private _bufferReallocs = 0;
+  private _meshDispatches = 0;
 
   /** Start timing a section */
   begin(section: PerfSection): void {
@@ -147,6 +149,11 @@ class PerformanceStatsCollector {
     this._bufferReallocs = bufferReallocs;
   }
 
+  /** Cumulative mesh-worker dispatch count (called from VoxelWorld) — churn gauge for streaming. */
+  setMeshDispatches(total: number): void {
+    this._meshDispatches = total;
+  }
+
   /** Call at the end of each frame to compute averages and flush */
   endFrame(): void {
     // Fold a sample for EVERY section into its rolling window each frame — using the
@@ -177,6 +184,7 @@ class PerformanceStatsCollector {
     this.snapshot.colliderQueueSize = this._colliderQueueSize;
     this.snapshot.groupsRebuilt = this._groupsRebuilt;
     this.snapshot.bufferReallocs = this._bufferReallocs;
+    this.snapshot.meshDispatches = this._meshDispatches;
 
     // JS heap (Chrome-only)
     const mem = (performance as any).memory;
