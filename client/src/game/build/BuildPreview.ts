@@ -29,6 +29,7 @@ import {
   voxelIndex,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
+import { useGameStore } from '../../state/store.js';
 import { expandChunkToGrid } from '../voxel/ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from '../voxel/MeshWorkerPool.js';
 import { createBufferGeometry } from '../voxel/MeshGeometry.js';
@@ -221,20 +222,28 @@ export class BuildPreview {
     // neighbour chunks and the boundary resample that samples them — stays deferred to
     // runDeferredLighting(), which fires only once the cursor settles (nothing new to mesh).
     const meshKeys = marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys;
-    this.world.relightPreviewMeshSet(meshKeys);
+    const mode = useGameStore.getState().buildPreviewLighting;
 
-    // Reconcile spill overrides for the NEW cursor position: restore any previously-overridden spill
-    // neighbour no longer adjacent to the draw, so stale light bands don't linger on far chunks while
-    // dragging (the moving-neighbour flicker). Keys only — cheap; the spill RELIGHT stays deferred to
-    // settle. A neighbour that just BECAME drawn/margin keeps its temp (it'll be re-meshed) — we only
-    // drop it from tracking so the deferred pass doesn't later revert an in-use chunk.
-    if (this.previewSpillKeys.size > 0) {
-      const remeshSet = new Set(meshKeys);
-      const spillNow = this.world.collectSpillKeys(drawnKeys, remeshSet);
-      for (const key of [...this.previewSpillKeys]) {
-        if (spillNow.has(key)) continue;
-        this.previewSpillKeys.delete(key);
-        if (!remeshSet.has(key)) this.world.restorePreviewChunkLight(key);
+    if (mode === 'off') {
+      // No preview lighting — the mesh bakes inherited (pre-edit) light; nothing lights until commit.
+      // Drop any overrides left from a previous mode so no tinted bands linger.
+      this.restoreSpillLight();
+    } else {
+      this.world.relightPreviewMeshSet(meshKeys);
+
+      // Reconcile spill overrides for the NEW cursor position: restore any previously-overridden spill
+      // neighbour no longer adjacent to the draw, so stale light bands don't linger on far chunks while
+      // dragging (the moving-neighbour flicker). Keys only — cheap; in 'deferred' the spill RELIGHT
+      // stays deferred to settle. A neighbour that just BECAME drawn/margin keeps its temp (it'll be
+      // re-meshed) — we only drop it from tracking so the deferred pass doesn't later revert it.
+      if (this.previewSpillKeys.size > 0) {
+        const remeshSet = new Set(meshKeys);
+        const spillNow = this.world.collectSpillKeys(drawnKeys, remeshSet);
+        for (const key of [...this.previewSpillKeys]) {
+          if (spillNow.has(key)) continue;
+          this.previewSpillKeys.delete(key);
+          if (!remeshSet.has(key)) this.world.restorePreviewChunkLight(key);
+        }
       }
     }
 
@@ -333,11 +342,7 @@ export class BuildPreview {
         // cadence. Lighting runs only once the cursor settles (no pending op), in a single atomic
         // pass, so it's never in front of the next mesh and never lands a partial update.
         this.applyPreviewResults(results, chunksToRemove, world, scene);
-        // Mesh wins: if the cursor genuinely moved, dispatch the next mesh and skip lighting. Only
-        // when nothing new was meshed (cursor settled) run the full relight, once.
-        if (!this.processPending()) {
-          this.runDeferredLighting(drawnKeys, marginKeys);
-        }
+        this.applyPreviewLighting(drawnKeys, marginKeys);
       } else {
         // Some groups need to be merged first — defer preview visibility.
         // Store results; finalizeDeferredPreview() picks them up once
@@ -381,6 +386,21 @@ export class BuildPreview {
 
     for (const key of drawnKeys) this.resamplePreviewMeshLight(key);
     for (const key of marginKeys) this.resamplePreviewMeshLight(key);
+  }
+
+  /**
+   * Decide what lighting runs once a preview batch's geometry is on screen, per the debug mode:
+   *  - 'off'      — no lighting; just catch up to any pending cursor move.
+   *  - 'full'     — run the full relight (drawn+margin+spill + boundary resample) on EVERY batch,
+   *                 then catch up — real-time spill, paid every frame.
+   *  - 'deferred' — mesh wins: if the cursor already moved, dispatch the next mesh and skip lighting;
+   *                 only when nothing new is pending (cursor settled) run the relight once.
+   */
+  private applyPreviewLighting(drawnKeys: string[], marginKeys: string[]): void {
+    const mode = useGameStore.getState().buildPreviewLighting;
+    if (mode === 'off') { this.processPending(); return; }
+    if (mode === 'full') { this.runDeferredLighting(drawnKeys, marginKeys); this.processPending(); return; }
+    if (!this.processPending()) this.runDeferredLighting(drawnKeys, marginKeys);
   }
 
   /** Resample one preview mesh's light from its chunk's relit temp grid (light-only, no re-mesh). */
@@ -730,13 +750,7 @@ export class BuildPreview {
     this.deferredMarginKeys = null;
 
     this.applyPreviewResults(results, chunksToRemove, this.world, this.scene);
-
-    // Mesh wins: if a newer cursor position is waiting, dispatch it now and skip lighting; relight
-    // only once the cursor settles (nothing new to mesh), so lighting never delays the next mesh
-    // and lands atomically.
-    if (!this.processPending()) {
-      this.runDeferredLighting(drawnKeys, marginKeys);
-    }
+    this.applyPreviewLighting(drawnKeys, marginKeys);
   }
 
   /**

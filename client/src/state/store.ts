@@ -38,6 +38,23 @@ export const TERRAIN_DEBUG_MODE_NAMES = ['Off', 'Sunlight', 'Albedo', 'Normal', 
 export const TERRAIN_DEBUG_MODE_ORDER: readonly TerrainDebugMode[] = [0, 1, 12, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 export type TerrainDebugMode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 
+/**
+ * Build-preview lighting mode (debug):
+ *  - 'off'      — no preview lighting at all; the preview mesh shows inherited (pre-edit) light and
+ *                 nothing relights until the edit is committed.
+ *  - 'deferred' — drawn+margin lit immediately; spill into neighbours is deferred to when the cursor
+ *                 settles (cheap while dragging; neighbours light a beat after you stop). Default.
+ *  - 'full'     — real-time spill: the full relight (drawn+margin+spill) runs on every preview batch,
+ *                 never deferred (correct while moving, but pays the spill cost every frame).
+ */
+export type BuildPreviewLighting = 'off' | 'deferred' | 'full';
+export const BUILD_PREVIEW_LIGHTING_ORDER: readonly BuildPreviewLighting[] = ['off', 'deferred', 'full'];
+export const BUILD_PREVIEW_LIGHTING_LABELS: Record<BuildPreviewLighting, string> = {
+  off: 'Off (commit only)',
+  deferred: 'Deferred',
+  full: 'Full real-time',
+};
+
 /** Voxel debug visualization toggles */
 export interface VoxelDebugToggles {
   showChunkBounds: boolean;
@@ -327,7 +344,10 @@ export interface GameState {
   
   // Terrain shader debug
   terrainDebugMode: TerrainDebugMode;
-  
+
+  // Build-preview lighting mode (debug)
+  buildPreviewLighting: BuildPreviewLighting;
+
   // Quality settings.
   // `quality` is the single source of truth for the active QualitySettings
   // (seeded from QUALITY_PRESETS, overridden at runtime). `qualityLevel` is the
@@ -383,7 +403,10 @@ export interface GameState {
   // Terrain debug actions
   setTerrainDebugMode: (mode: TerrainDebugMode) => void;
   cycleTerrainDebugMode: () => void;
-  
+
+  // Build-preview lighting mode action
+  setBuildPreviewLighting: (mode: BuildPreviewLighting) => void;
+
   // Quality actions
   setQualityLevel: (level: QualityLevel) => void;
   setQuality: (settings: QualitySettings) => void;
@@ -515,6 +538,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   
   // Terrain debug initial state
   terrainDebugMode: 0 as TerrainDebugMode,
+  buildPreviewLighting: 'deferred' as BuildPreviewLighting,
   
   // Quality initial state (auto-detect / restore overrides on first load)
   qualityLevel: 'ultra' as QualityLevel,
@@ -598,7 +622,9 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
   cycleTerrainDebugMode: () => set((state) => ({
     terrainDebugMode: ((state.terrainDebugMode + 1) % 13) as TerrainDebugMode,
   })),
-  
+
+  setBuildPreviewLighting: (mode) => set({ buildPreviewLighting: mode }),
+
   // Quality actions
   setQualityLevel: (level) => set({ qualityLevel: level }),
   setQuality: (settings) => set({ quality: settings }),
