@@ -25,7 +25,7 @@ import {
   chunkKey,
   CHUNK_SIZE,
   MESH_MARGIN,
-  NEGATIVE_FACE_OFFSETS_3,
+  NEGATIVE_MARGIN_OFFSETS_7,
   voxelIndex,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
@@ -220,7 +220,24 @@ export class BuildPreview {
     // from temp with inherited (stale) light until the cursor settles. The EXPENSIVE work — spill into
     // neighbour chunks and the boundary resample that samples them — stays deferred to
     // runDeferredLighting(), which fires only once the cursor settles (nothing new to mesh).
-    this.world.relightPreviewMeshSet(marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys);
+    const meshKeys = marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys;
+    this.world.relightPreviewMeshSet(meshKeys);
+
+    // Reconcile spill overrides for the NEW cursor position: restore any previously-overridden spill
+    // neighbour no longer adjacent to the draw, so stale light bands don't linger on far chunks while
+    // dragging (the moving-neighbour flicker). Keys only — cheap; the spill RELIGHT stays deferred to
+    // settle. A neighbour that just BECAME drawn/margin keeps its temp (it'll be re-meshed) — we only
+    // drop it from tracking so the deferred pass doesn't later revert an in-use chunk.
+    if (this.previewSpillKeys.size > 0) {
+      const remeshSet = new Set(meshKeys);
+      const spillNow = this.world.collectSpillKeys(drawnKeys, remeshSet);
+      for (const key of [...this.previewSpillKeys]) {
+        if (spillNow.has(key)) continue;
+        this.previewSpillKeys.delete(key);
+        if (!remeshSet.has(key)) this.world.restorePreviewChunkLight(key);
+      }
+    }
+
     this.batchInFlight = true;
     this.dispatchPreviewMesh(drawnKeys, marginKeys);
   }
@@ -723,9 +740,12 @@ export class BuildPreview {
   }
 
   /**
-   * The negative-face neighbours whose high-side margin reads a drawn chunk's changed low boundary —
-   * i.e. the chunks whose mesh geometry depends on the edit and must be re-meshed. Mirrors the old
-   * inline Pass 2b detection; computed up front so those neighbours can be relit before meshing.
+   * The negative-direction neighbours whose high-side margin reads a drawn chunk's changed low
+   * boundary — the chunks whose mesh geometry depends on the edit and must be re-meshed. Covers all
+   * 7 margin consumers (3 faces + 3 edges + corner), matching the commit path (NEGATIVE_MARGIN_-
+   * OFFSETS_7) so preview and commit re-mesh the SAME set: a diagonal neighbour that consumes a
+   * touched chunk corner is re-meshed too, so it can't keep a stale (dark) corner/edge boundary. Each
+   * neighbour is added only if the specific sub-region it reads actually changed.
    */
   private collectMarginNeighbours(drawnKeys: string[]): string[] {
     const world = this.world;
@@ -737,9 +757,10 @@ export class BuildPreview {
       if (!chunk || !chunk.tempData) continue;
       const data = chunk.data;
       const temp = chunk.tempData;
-      for (let axis = 0; axis < 3; axis++) {
-        if (!BuildPreview.hasBoundaryChanges(data, temp, axis)) continue;
-        const [dx, dy, dz] = NEGATIVE_FACE_OFFSETS_3[axis];
+      for (const [dx, dy, dz] of NEGATIVE_MARGIN_OFFSETS_7) {
+        // A neighbour reads THIS chunk's low margin only on the axes where its offset is negative;
+        // re-mesh it only if that sub-region changed (a face slab, edge bar, or corner cube).
+        if (!BuildPreview.hasLowMarginChange(data, temp, dx !== 0, dy !== 0, dz !== 0)) continue;
         const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
         if (seen.has(nk) || !world.chunks.has(nk)) continue;
         seen.add(nk);
@@ -789,27 +810,28 @@ export class BuildPreview {
   // ============== Boundary Change Detection ==============
 
   /**
-   * Check if the first MESH_MARGIN voxel layers on the low side of an axis differ
-   * between original data and tempData. The mesh grid's high-side margin means
-   * only the negative-direction neighbor reads from these layers.
-   *
-   * @param axis 0=X, 1=Y, 2=Z
-   * Returns true as soon as any difference is found (early-exit).
+   * Whether any voxel in a drawn chunk's LOW margin sub-region changed between committed data and
+   * tempData. The region is the intersection of the low MESH_MARGIN slabs on each flagged axis: a
+   * full low slab for one axis (a face neighbour reads it), a bar for two (an edge neighbour), a
+   * small cube for three (the corner neighbour). This is exactly the sub-region a negative-direction
+   * margin consumer reads as its high-side margin, so a change here means that neighbour's boundary
+   * geometry is stale and it must re-mesh. Early-exits on the first difference.
    */
-  private static hasBoundaryChanges(
+  private static hasLowMarginChange(
     data: Uint32Array,
     temp: Uint32Array,
-    axis: number,
+    lowX: boolean,
+    lowY: boolean,
+    lowZ: boolean,
   ): boolean {
     const CS = CHUNK_SIZE;
-    const coords = [0, 0, 0];
-    for (let layer = 0; layer < MESH_MARGIN; layer++) {
-      for (let a = 0; a < CS; a++) {
-        for (let b = 0; b < CS; b++) {
-          coords[axis] = layer;
-          coords[(axis + 1) % 3] = a;
-          coords[(axis + 2) % 3] = b;
-          const idx = voxelIndex(coords[0], coords[1], coords[2]);
+    const mx = lowX ? MESH_MARGIN : CS;
+    const my = lowY ? MESH_MARGIN : CS;
+    const mz = lowZ ? MESH_MARGIN : CS;
+    for (let x = 0; x < mx; x++) {
+      for (let y = 0; y < my; y++) {
+        for (let z = 0; z < mz; z++) {
+          const idx = voxelIndex(x, y, z);
           if (data[idx] !== temp[idx]) return true;
         }
       }

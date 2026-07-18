@@ -198,3 +198,17 @@ export const POSITIVE_FACE_OFFSETS_3: readonly (readonly [number, number, number
 export const NEGATIVE_FACE_OFFSETS_3: readonly (readonly [number, number, number])[] = [
   [-1, 0, 0], [0, -1, 0], [0, 0, -1],
 ] as const;
+
+/**
+ * Negative-direction margin-consumer offsets (7): the 3 faces, 3 edges, and 1 corner of the negative
+ * octant. A chunk's mesh reads its +X/+Y/+Z faces, edges, and corner as margin, so a changed chunk's
+ * voxels are consumed as margin by exactly these 7 neighbours (plus itself). Their boundary GEOMETRY
+ * changes when the chunk changes, so they must fully re-mesh — build preview and commit share this
+ * set so their re-mesh sets can't drift. Each offset's non-zero axes are the ones whose LOW margin the
+ * neighbour reads (used to test which drawn-chunk sub-region a neighbour actually consumes).
+ */
+export const NEGATIVE_MARGIN_OFFSETS_7: readonly (readonly [number, number, number])[] = [
+  [-1, 0, 0], [0, -1, 0], [0, 0, -1],
+  [-1, -1, 0], [-1, 0, -1], [0, -1, -1],
+  [-1, -1, -1],
+] as const;

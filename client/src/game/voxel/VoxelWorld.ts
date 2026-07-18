@@ -8,6 +8,7 @@ import {
   VISIBILITY_UNLOAD_BUFFER,
   CHUNK_SIZE,
   FACE_OFFSETS_6,
+  NEGATIVE_MARGIN_OFFSETS_7,
   MESH_MARGIN,
   REQUEST_TIMEOUT_MS,
   MSG_VOXEL_CHUNK_REQUEST,
@@ -78,18 +79,6 @@ function columnChunkRange(heights: ArrayLike<number>): { minCy: number; maxCy: n
 /** Shared read-only all-dark "light from above" (used for underground chunks with no chunk above
  *  loaded, so caves aren't lit as open sky). Never mutated — the sunlight pass only reads it. */
 const DARK_ABOVE = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
-
-/**
- * The 7 negative-direction neighbour offsets. A chunk's mesh reads its +X/+Y/+Z faces, edges, and
- * corner as margin, so an edited chunk's voxels are consumed as margin by exactly these 7 neighbours
- * (plus the chunk itself). Those neighbours' boundary GEOMETRY changes and they must fully re-mesh;
- * every other relit chunk only changed light and takes the cheap light-only resample path.
- */
-const NEGATIVE_MARGIN_OFFSETS_7 = [
-  [-1, 0, 0], [0, -1, 0], [0, 0, -1],
-  [-1, -1, 0], [-1, 0, -1], [0, -1, -1],
-  [-1, -1, -1],
-] as const;
 
 /** Fast typed-array equality check (same length assumed). */
 function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
@@ -990,20 +979,13 @@ export class VoxelWorld implements ChunkProvider {
     if (drawn.length === 0) return;
 
     const runBlock = this.previewRunBlock(drawn);
-    const targets: RelightTarget[] = drawn.map((c) => ({
-      cx: c.cx,
-      cy: c.cy,
-      cz: c.cz,
-      sky: true,
-      block: runBlock,
-      skyAbove: this.chunks.has(chunkKey(c.cx, c.cy + 1, c.cz))
-        ? undefined
-        : this.sunlightFromAbove(c.cx, c.cy, c.cz),
-    }));
-    targets.sort((a, b) => b.cy - a.cy);
+    const map = new Map<string, RelightTarget>();
+    for (const c of drawn) {
+      map.set(c.key, { cx: c.cx, cy: c.cy, cz: c.cz, sky: true, block: runBlock });
+    }
 
     perfStats.begin('lighting');
-    relightRegion(this.tempGetData, targets);
+    relightRegion(this.tempGetData, this.finalizeTargets(map));
     perfStats.end('lighting');
   }
 
@@ -1026,18 +1008,51 @@ export class VoxelWorld implements ChunkProvider {
       .map((k) => this.chunks.get(k))
       .filter((c): c is Chunk => !!c && !!c.tempData);
     if (drawn.length === 0) return [];
-    const runBlock = this.previewRunBlock(drawn);
 
-    // Collect the spill targets, excluding any chunk that's drawn or being re-meshed this preview.
-    const targetMap = new Map<string, RelightTarget>();
+    const map = this.collectSpillTargets(drawn, excludeKeys, this.previewRunBlock(drawn));
+    if (map.size === 0) return [];
+
+    // Temp copy each spill chunk (non-destructive) before relighting reads/writes it.
+    for (const t of map.values()) {
+      const n = this.chunks.get(chunkKey(t.cx, t.cy, t.cz));
+      if (n && !n.tempData) n.copyToTemp();
+    }
+    const spillTargets = this.finalizeTargets(map);
+
+    perfStats.begin('lighting');
+    relightRegion(this.tempGetData, spillTargets);
+
+    // Light-only refresh of each spill neighbour's display (resample + merged-buffer slice write).
+    const spillKeys: string[] = [];
+    for (const t of spillTargets) {
+      const key = chunkKey(t.cx, t.cy, t.cz);
+      if (this.resamplePreviewChunkLight(key, true)) spillKeys.push(key);
+    }
+    perfStats.end('lighting');
+
+    return spillKeys;
+  }
+
+  /**
+   * The spill target map for a preview around `drawn`: the 6 sky-face neighbours of each drawn chunk,
+   * plus the 3×3×3 block region when a torch/emitter is involved (`runBlock`). Loaded chunks only,
+   * excluding `excludeKeys` (the re-meshed set — those get correct light from their re-mesh instead).
+   * Shared by relightPreviewSpill (which relights the map) and collectSpillKeys (keys only) so the
+   * two can't drift on which neighbours count as spill.
+   */
+  private collectSpillTargets(
+    drawn: Chunk[],
+    excludeKeys: Set<string>,
+    runBlock: boolean,
+  ): Map<string, RelightTarget> {
+    const map = new Map<string, RelightTarget>();
     const ensure = (cx: number, cy: number, cz: number): RelightTarget | null => {
       const k = chunkKey(cx, cy, cz);
       if (excludeKeys.has(k) || !this.chunks.has(k)) return null;
-      let t = targetMap.get(k);
-      if (!t) { t = { cx, cy, cz, sky: false, block: false }; targetMap.set(k, t); }
+      let t = map.get(k);
+      if (!t) { t = { cx, cy, cz, sky: false, block: false }; map.set(k, t); }
       return t;
     };
-
     for (const c of drawn) {
       for (const [dx, dy, dz] of FACE_OFFSETS_6) {
         const t = ensure(c.cx + dx, c.cy + dy, c.cz + dz);
@@ -1052,32 +1067,35 @@ export class VoxelWorld implements ChunkProvider {
             }
       }
     }
+    return map;
+  }
 
-    const spillTargets = [...targetMap.values()];
-    if (spillTargets.length === 0) return [];
+  /**
+   * The spill neighbour keys for a preview at `drawnKeys` (loaded, minus `excludeKeys`) — keys only,
+   * no relight or temp copy. Lets BuildPreview reconcile which spill overrides to drop as the cursor
+   * moves (restoring far neighbours that are no longer adjacent) cheaply, every frame, while the
+   * spill RELIGHT itself stays deferred to settle.
+   */
+  collectSpillKeys(drawnKeys: string[], excludeKeys: Set<string>): Set<string> {
+    const drawn = drawnKeys
+      .map((k) => this.chunks.get(k))
+      .filter((c): c is Chunk => !!c && !!c.tempData);
+    if (drawn.length === 0) return new Set();
+    return new Set(this.collectSpillTargets(drawn, excludeKeys, this.previewRunBlock(drawn)).keys());
+  }
 
-    // Temp copy each spill chunk (non-destructive) + seed light-from-above where none is loaded.
-    for (const t of spillTargets) {
-      const n = this.chunks.get(chunkKey(t.cx, t.cy, t.cz));
-      if (n && !n.tempData) n.copyToTemp();
+  /**
+   * Finalize a relight target map: seed each sky target that has no loaded chunk above with the
+   * column's light-from-above, then return the targets sorted top-down (cy descending) so the shared
+   * relight sees each chunk's freshly-relit neighbour above. Shared by commit + both preview passes.
+   */
+  private finalizeTargets(map: Map<string, RelightTarget>): RelightTarget[] {
+    for (const t of map.values()) {
       if (t.sky && !this.chunks.has(chunkKey(t.cx, t.cy + 1, t.cz))) {
         t.skyAbove = this.sunlightFromAbove(t.cx, t.cy, t.cz);
       }
     }
-    spillTargets.sort((a, b) => b.cy - a.cy);
-
-    perfStats.begin('lighting');
-    relightRegion(this.tempGetData, spillTargets);
-
-    // Light-only refresh of each spill neighbour's display (resample + merged-buffer slice write).
-    const spillKeys: string[] = [];
-    for (const t of spillTargets) {
-      const key = chunkKey(t.cx, t.cy, t.cz);
-      if (this.resamplePreviewChunkLight(key, true)) spillKeys.push(key);
-    }
-    perfStats.end('lighting');
-
-    return spillKeys;
+    return [...map.values()].sort((a, b) => b.cy - a.cy);
   }
 
   /**
@@ -1487,14 +1505,8 @@ export class VoxelWorld implements ChunkProvider {
       }
     }
 
-    // Seed the "light from above" for sky targets whose chunk above isn't loaded (region edge).
-    for (const t of map.values()) {
-      if (t.sky && !this.chunks.has(chunkKey(t.cx, t.cy + 1, t.cz))) {
-        t.skyAbove = this.sunlightFromAbove(t.cx, t.cy, t.cz);
-      }
-    }
-
-    return [...map.values()].sort((a, b) => b.cy - a.cy);
+    // Seed light-from-above for region-edge sky targets + sort top-down (shared with preview).
+    return this.finalizeTargets(map);
   }
 
   /**
