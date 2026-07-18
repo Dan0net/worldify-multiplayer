@@ -30,9 +30,9 @@ const PINCH_ZOOM = 0.006;     // per pixel of pinch distance change
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _fwd = new THREE.Vector3();
 
-// Recenter glide: eases `target` from where it was to a new spawn point, so tapping/
-// dragging the spawn marker brings it smoothly back to screen center.
-const GLIDE_DURATION_MS = 250;
+// Recenter glide: eases `target` (ease-in-out) from where it was to a new spawn point, so
+// tapping/dragging the spawn marker pans smoothly to re-center on it.
+const GLIDE_DURATION_MS = 350;
 const glideFrom = new THREE.Vector3();
 const glideTo = new THREE.Vector3();
 let glideMs = 0;

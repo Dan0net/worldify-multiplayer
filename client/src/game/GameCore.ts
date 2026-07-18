@@ -459,6 +459,9 @@ export class GameCore {
   private introTmpPos = new THREE.Vector3();
   private introTmpQuat = new THREE.Quaternion();
   private static readonly CAMERA_INTRO_DURATION_MS = 1350;
+  // Time constant (ms) for easing the explore orbit height onto the surface, so the camera
+  // doesn't judder as terrain height steps between columns / streams in during a pan.
+  private static readonly EXPLORE_Y_SMOOTH_MS = 140;
 
   /**
    * Fold a bounded batch of freshly-streamed chunks into the minimap each frame.
@@ -817,7 +820,14 @@ export class GameCore {
       if ((moved || !isMarkerPlaced()) && placeMarkerAtColumn(target.x, target.z)) {
         this.lastFollowX = target.x;
         this.lastFollowZ = target.z;
-        target.y = getMarkerBase().y;   // orbit the surface point → spawn at screen center
+      }
+      // Ease the orbit height onto the marker's surface instead of snapping, so the camera
+      // doesn't judder as the surface height changes across a pan (or as chunks stream in).
+      // Runs every frame (not gated on x/z movement) so it keeps settling after a pan stops
+      // and gives a smooth one-time rise onto the surface when a world opens.
+      if (isMarkerPlaced()) {
+        const k = 1 - Math.exp(-deltaMs / GameCore.EXPLORE_Y_SMOOTH_MS);
+        target.y += (getMarkerBase().y - target.y) * k;
       }
     }
 
