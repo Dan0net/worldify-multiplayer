@@ -98,6 +98,7 @@ export interface PerfSnapshot {
   colliderQueueSize: number;
   groupsRebuilt: number;
   bufferReallocs: number;
+  meshDispatches: number;
   // Memory
   jsHeapMB: number;
 }
@@ -505,7 +506,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     buildPreview: 0, players: 0, environment: 0, render: 0,
     drawCalls: 0, triangles: 0, geometries: 0, textures: 0, programs: 0,
     remeshQueueSize: 0, pendingChunks: 0, colliderQueueSize: 0,
-    groupsRebuilt: 0, bufferReallocs: 0, jsHeapMB: 0,
+    groupsRebuilt: 0, bufferReallocs: 0, meshDispatches: 0, jsHeapMB: 0,
   },
   
   // Build initial state

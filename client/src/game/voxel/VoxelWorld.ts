@@ -194,6 +194,7 @@ export class VoxelWorld implements ChunkProvider {
       this.chunkGrouper,
       this.meshPool,
       this.pendingChunks,
+      (cx, cy, cz) => this.isMarginSourceExpected(cx, cy, cz),
     );
     this.seamStitcher = new SeamStitcher(this.geometries, (ck) => {
       const gk = this.chunkGrouper.getGroupKey(ck);
@@ -349,6 +350,23 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * P4 mesh-readiness: is this positive margin-source neighbour EXPECTED to load but not here yet?
+   * If so, the consumer should defer meshing so its high-side border is built once with real voxels
+   * instead of extrapolated-now / re-meshed-when-it-arrives.
+   *   - loaded            → not expected (ready to use)
+   *   - genuine open sky   → never loads (extrapolation = air), ready
+   *   - pending or reachable-but-unloaded → the BFS will bring it → EXPECTED, wait
+   *   - anything else (not loaded, not void, not wanted) → not coming soon → ready (mesh now; P8's
+   *     re-mesh trigger still corrects a rare late arrival)
+   */
+  private isMarginSourceExpected(cx: number, cy: number, cz: number): boolean {
+    const key = chunkKey(cx, cy, cz);
+    if (this.chunks.has(key)) return false;
+    if (this.isEmptyAir(cx, cy, cz)) return false;
+    return this.pendingChunks.has(key) || this.cachedReachable.has(key);
+  }
+
+  /**
    * Update the world based on player position.
    * Uses visibility BFS for loading and rendering.
    * @param playerPos Player world position
@@ -378,6 +396,7 @@ export class VoxelWorld implements ChunkProvider {
 
     // Report queue stats for debug overlay
     perfStats.setVoxelQueueStats(this.remeshPipeline.size, this.pendingChunks.size);
+    perfStats.setMeshDispatches(this.remeshPipeline.meshDispatches);
   }
 
   /**

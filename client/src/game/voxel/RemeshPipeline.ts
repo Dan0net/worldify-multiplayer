@@ -44,6 +44,9 @@ export class RemeshPipeline {
   /** Maximum dispatches per frame (~0.5ms each → 8 = ~4ms) */
   private static readonly MAX_DISPATCHES = 8;
 
+  /** Cumulative count of mesh-worker dispatches — a churn gauge for streaming (surfaced in perf). */
+  meshDispatches = 0;
+
   // ---- Dependencies (injected) ----
   private readonly chunks: Map<string, Chunk>;
   private readonly geometries: Map<string, ChunkGeometry>;
@@ -51,18 +54,29 @@ export class RemeshPipeline {
   private readonly meshPool: MeshWorkerPool;
   private readonly pendingChunks: Set<string>;
 
+  /**
+   * True when the positive margin-source neighbour at (cx,cy,cz) is EXPECTED to load but isn't ready
+   * yet — meshing should wait for it so a chunk's border is built once with real data instead of
+   * extrapolated-now / re-meshed-later. Injected by VoxelWorld (which knows loaded / pending /
+   * reachable / empty-air). Defaults to a pending-only check when omitted.
+   */
+  private readonly isMarginSourceExpected: (cx: number, cy: number, cz: number) => boolean;
+
   constructor(
     chunks: Map<string, Chunk>,
     geometries: Map<string, ChunkGeometry>,
     grouper: ChunkGrouper,
     meshPool: MeshWorkerPool,
     pendingChunks: Set<string>,
+    isMarginSourceExpected?: (cx: number, cy: number, cz: number) => boolean,
   ) {
     this.chunks = chunks;
     this.geometries = geometries;
     this.grouper = grouper;
     this.meshPool = meshPool;
     this.pendingChunks = pendingChunks;
+    this.isMarginSourceExpected = isMarginSourceExpected
+      ?? ((cx, cy, cz) => this.pendingChunks.has(chunkKey(cx, cy, cz)));
   }
 
   // ---- Listeners ----
@@ -120,7 +134,7 @@ export class RemeshPipeline {
 
       if (this.meshPool.isInFlight(key)) continue;
       if (this.meshPool.isPreviewChunk(key)) continue;
-      if (this.hasNeighborsPending(chunk.cx, chunk.cy, chunk.cz)) continue;
+      if (!this.marginSourcesReady(chunk.cx, chunk.cy, chunk.cz)) continue;
 
       const grid = this.meshPool.takeGrid();
       const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
@@ -128,6 +142,7 @@ export class RemeshPipeline {
       this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {
         this.applyResult(result);
       });
+      this.meshDispatches++;
 
       this.queue.delete(key);
       dispatched++;
@@ -222,16 +237,18 @@ export class RemeshPipeline {
   }
 
   /**
-   * Check if any positive-direction margin source is still in-flight. A mesh's high-side margin is
-   * filled from all 7 positive neighbours (+X/+Y/+Z faces, edges, corner — see expandChunkData), so
-   * if one is still PENDING (about to arrive) we defer meshing rather than extrapolate its margin and
-   * immediately re-mesh once it lands. Only blocks on pending (loading) neighbours — an absent/culled
-   * one never stalls a frontier chunk; if it arrives later, its ingest re-meshes this chunk anyway.
+   * True once every positive margin source is resolved — loaded, or confirmed not-coming — so the
+   * chunk can mesh its high-side border ONCE with real neighbour data. A mesh's high-side margin is
+   * filled from all 7 positive neighbours (+X/+Y/+Z faces, edges, corner — see expandChunkData); we
+   * defer while any is still EXPECTED to load (pending or reachable-but-unloaded, per
+   * isMarginSourceExpected), which turns "mesh extrapolated now → re-mesh when the neighbour arrives"
+   * into a single mesh. The dependency only points +XYZ, so it terminates at the frontier (no cycles):
+   * the outermost chunks — whose + neighbours aren't coming — mesh first and readiness cascades inward.
    */
-  private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
+  private marginSourcesReady(cx: number, cy: number, cz: number): boolean {
     for (const [dx, dy, dz] of POSITIVE_MARGIN_OFFSETS_7) {
-      if (this.pendingChunks.has(chunkKey(cx + dx, cy + dy, cz + dz))) return true;
+      if (this.isMarginSourceExpected(cx + dx, cy + dy, cz + dz)) return false;
     }
-    return false;
+    return true;
   }
 }
