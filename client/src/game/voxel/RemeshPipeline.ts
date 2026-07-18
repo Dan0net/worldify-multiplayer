@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import {
   CHUNK_WORLD_SIZE,
-  POSITIVE_FACE_OFFSETS_3,
+  POSITIVE_MARGIN_OFFSETS_7,
   chunkKey,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
@@ -222,11 +222,14 @@ export class RemeshPipeline {
   }
 
   /**
-   * Check if any positive-face neighbor (+X, +Y, +Z) is still pending.
-   * Only these 3 supply margin data for this chunk's mesh.
+   * Check if any positive-direction margin source is still in-flight. A mesh's high-side margin is
+   * filled from all 7 positive neighbours (+X/+Y/+Z faces, edges, corner — see expandChunkData), so
+   * if one is still PENDING (about to arrive) we defer meshing rather than extrapolate its margin and
+   * immediately re-mesh once it lands. Only blocks on pending (loading) neighbours — an absent/culled
+   * one never stalls a frontier chunk; if it arrives later, its ingest re-meshes this chunk anyway.
    */
   private hasNeighborsPending(cx: number, cy: number, cz: number): boolean {
-    for (const [dx, dy, dz] of POSITIVE_FACE_OFFSETS_3) {
+    for (const [dx, dy, dz] of POSITIVE_MARGIN_OFFSETS_7) {
       if (this.pendingChunks.has(chunkKey(cx + dx, cy + dy, cz + dz))) return true;
     }
     return false;

@@ -218,3 +218,15 @@ export const NEGATIVE_MARGIN_OFFSETS_7: readonly (readonly [number, number, numb
   [-1, -1, 0], [-1, 0, -1], [0, -1, -1],
   [-1, -1, -1],
 ] as const;
+
+/**
+ * Positive-direction margin-source offsets (7): the 3 faces, 3 edges, and 1 corner of the POSITIVE
+ * octant — exactly the neighbours a chunk's mesh reads as its high-side (+X/+Y/+Z) margin (see
+ * expandChunkData). A chunk must have all 7 present to mesh its boundary without extrapolation; the
+ * mirror of NEGATIVE_MARGIN_OFFSETS_7 (which are the chunks that consume THIS chunk as their margin).
+ */
+export const POSITIVE_MARGIN_OFFSETS_7: readonly (readonly [number, number, number])[] = [
+  [1, 0, 0], [0, 1, 0], [0, 0, 1],
+  [1, 1, 0], [1, 0, 1], [0, 1, 1],
+  [1, 1, 1],
+] as const;

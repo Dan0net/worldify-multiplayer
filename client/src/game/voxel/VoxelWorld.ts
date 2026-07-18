@@ -787,6 +787,16 @@ export class VoxelWorld implements ChunkProvider {
       this.remeshPipeline.add(nKey);
     }
 
+    // Re-mesh every chunk that consumes THIS chunk as a margin source (its 7 negative-direction
+    // neighbours: faces, edges, corner). The loops above refresh light + the 6 faces; this closes the
+    // edge/corner case — a diagonal neighbour that meshed before this chunk arrived was reading an
+    // extrapolated margin, so its shared corner/edge verts are misaligned until it re-meshes with
+    // this chunk present. Deduped by the remesh queue (Set). Applies to every ingest path.
+    for (const [dx, dy, dz] of NEGATIVE_MARGIN_OFFSETS_7) {
+      const nKey = chunkKey(cx + dx, cy + dy, cz + dz);
+      if (this.chunks.has(nKey)) this.remeshPipeline.add(nKey);
+    }
+
     // Execute any build operations that were waiting for this chunk
     this.drainDeferredBuildOps();
 
@@ -1166,12 +1176,14 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Queue face-neighbor chunks for remeshing (for seamless boundaries).
-   * Only the 6 face neighbors can share margin data with this chunk.
-   * Public so build system can trigger neighbor remesh after commits.
+   * Re-mesh every chunk that reads chunk (cx,cy,cz) as a margin source — its 7 negative-direction
+   * neighbours (faces, edges, corner). A mesh's high-side margin is filled from its +X/+Y/+Z faces,
+   * edges, and corner (see expandChunkData), so those exact 7 neighbours must re-mesh when this
+   * chunk's voxels change/arrive, or a diagonal neighbour keeps an extrapolated margin → misaligned
+   * corner/edge boundary verts (a seam gap). Public so the build system can trigger it after commits.
    */
   queueNeighborRemesh(cx: number, cy: number, cz: number): void {
-    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
+    for (const [dx, dy, dz] of NEGATIVE_MARGIN_OFFSETS_7) {
       const key = chunkKey(cx + dx, cy + dy, cz + dz);
       if (this.chunks.has(key)) {
         this.remeshPipeline.add(key);
