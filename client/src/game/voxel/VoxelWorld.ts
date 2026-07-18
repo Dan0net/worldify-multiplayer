@@ -390,18 +390,23 @@ export class VoxelWorld implements ChunkProvider {
       return;
     }
 
-    // Check if player moved to a new chunk (hysteresis)
+    // Check if player moved to a new chunk.
     const chunkChanged = !this.lastBFSChunk ||
       playerChunk.cx !== this.lastBFSChunk.cx ||
       playerChunk.cy !== this.lastBFSChunk.cy ||
       playerChunk.cz !== this.lastBFSChunk.cz;
 
-    if (chunkChanged) {
+    // Recompute the visibility BFS when the player crosses a chunk OR the frontier changes (a chunk
+    // was meshed / removed, flagged via visibilityDirty). The BFS only traverses through LOADED
+    // chunks, so each newly-streamed chunk extends the reachable set by a ring — re-running on
+    // frontier change (not only on chunk-cross) is what lets a chunk become visible the moment it
+    // loads, instead of waiting for the next cross. Cheap: a zero-alloc typed-array BFS over the
+    // radius, and only on frames where the player moved or geometry actually changed.
+    if (chunkChanged || this.visibilityDirty) {
+      if (chunkChanged) this.lastBFSChunk = { ...playerChunk };
+
       const frustum = getFrustumFromCamera(this.camera);
       const cameraDir = getCameraDirection(this.camera);
-      // Recompute BFS from new chunk
-      this.lastBFSChunk = { ...playerChunk };
-      
       const { reachable, toRequest } = getVisibleChunks(
         playerChunk,
         cameraDir,
@@ -410,17 +415,9 @@ export class VoxelWorld implements ChunkProvider {
         this._visibilityRadius,
         playerPos
       );
-
-      // Update cached reachable set
       this.cachedReachable = reachable;
-
-      // Request missing chunks that are in frustum
       this.requestVisibleChunks(toRequest);
-    }
 
-    // Only rescan visibility when inputs actually changed:
-    // chunkChanged → new BFS reachable set; visibilityDirty → geometry added/removed
-    if (chunkChanged || this.visibilityDirty) {
       this.updateMeshVisibility(this.cachedReachable);
       this.visibilityDirty = false;
     }
@@ -602,50 +599,24 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Update mesh visibility based on reachable chunks and distance.
-   * Uses hysteresis: show if reachable OR (loaded AND within extended radius).
-   * This prevents popping when player crosses chunk boundaries.
-   * 
-   * Also applies shadow distance culling: chunks beyond the shadow radius
-   * have castShadow disabled so they don't contribute to the shadow pass.
-   * 
-   * NOTE: We intentionally do NOT frustum-cull here. Three.js's built-in per-mesh
-   * frustum culling tests each mesh against the active camera independently (main
-   * camera for the scene pass, light camera for shadow maps). Manual culling against
-   * the main camera would hide chunks that still need to cast shadows into view.
+   * Occlusion-cull rendered chunks against the visibility BFS: a chunk's merged group is shown ONLY
+   * if the BFS reached it from the player (through connected openings, on a non-reversing path).
+   * Everything else stays RESIDENT — loaded within the cube (see unloadDistantChunks) — but hidden,
+   * so geometry behind solid rock, or around a corner the player can't see, doesn't draw. This is the
+   * step that actually applies the visibility graph to what's on screen; loading uses the coarse cube,
+   * rendering uses the reachable set.
+   *
+   * NOTE: We intentionally do NOT frustum-cull here. Three.js's built-in per-mesh frustum culling
+   * tests each mesh against the active camera independently (main camera for the scene pass, light
+   * camera for shadow maps). Manual culling against the main camera would hide chunks that still need
+   * to cast shadows into view.
    */
   private updateMeshVisibility(reachable: Set<string>): void {
-    if (!this.lastPlayerChunk) return;
-    
-    const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
-    const visibilityRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
-
     for (const [key] of this.geometries) {
-      const chunk = this.chunks.get(key);
-      if (!chunk) {
-        this.chunkGrouper.setVisible(key, false);
-        continue;
-      }
-
-      // Hysteresis: show if reachable OR within extended radius
-      const inReachable = reachable.has(key);
-      const dx = Math.abs(chunk.cx - pcx);
-      const dy = Math.abs(chunk.cy - pcy);
-      const dz = Math.abs(chunk.cz - pcz);
-      const inExtendedRadius = dx <= visibilityRadius && dy <= visibilityRadius && dz <= visibilityRadius;
-
-      if (!inReachable && !inExtendedRadius) {
-        this.chunkGrouper.setVisible(key, false);
-        continue;
-      }
-
-      // Skip preview chunks — their groups are suppressed, don't touch visibility
-      if (this.previewChunks.has(key)) {
-        continue;
-      }
-
-      this.chunkGrouper.setVisible(key, true);
-      // Shadow culling is handled per-group in ChunkGrouper.rebuild()
+      // Preview chunks: their groups are suppressed and preview meshes render instead — never touch
+      // their visibility here.
+      if (this.previewChunks.has(key)) continue;
+      this.chunkGrouper.setVisible(key, reachable.has(key));
     }
   }
 
