@@ -25,10 +25,11 @@ import {
   chunkKey,
   CHUNK_SIZE,
   MESH_MARGIN,
-  NEGATIVE_FACE_OFFSETS_3,
+  NEGATIVE_MARGIN_OFFSETS_7,
   voxelIndex,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
+import { useGameStore } from '../../state/store.js';
 import { expandChunkToGrid } from '../voxel/ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from '../voxel/MeshWorkerPool.js';
 import { createBufferGeometry } from '../voxel/MeshGeometry.js';
@@ -51,10 +52,14 @@ export class BuildPreview {
   /** Set of chunk keys currently showing preview */
   private activePreviewChunks: Set<string> = new Set();
 
+  /** Spill neighbours (not drawn) whose displayed light is overridden with preview light. Tracked
+   *  so they can be restored to committed light when they leave the preview region or it ends. */
+  private previewSpillKeys: Set<string> = new Set();
+
   /** Cancel function for in-flight batch */
   private cancelBatch: (() => void) | null = null;
 
-  /** Whether a batch is currently in flight */
+  /** Whether a mesh batch is currently in flight */
   private batchInFlight: boolean = false;
 
   /** Last rendered operation fields for change detection (avoids string hashing) */
@@ -79,8 +84,15 @@ export class BuildPreview {
   /** Chunks to remove from preview after deferred results are applied */
   private deferredChunksToRemove: string[] | null = null;
 
+  /** The deferred cycle's re-mesh sets, so runDeferredLighting knows what to relight when it fires. */
+  private deferredDrawnKeys: string[] | null = null;
+  private deferredMarginKeys: string[] | null = null;
+
   /** Preview meshes per chunk (solid, transparent, liquid slots) */
   private previewMeshes: Map<string, (THREE.Mesh | null)[]> = new Map();
+
+  /** Per-preview-mesh per-layer cell indices, so a preview mesh's light can be resampled in Phase 2. */
+  private previewCellIndices: Map<string, (Uint16Array | null)[]> = new Map();
 
   // Reusable scratch buffers to avoid per-dispatch allocations
   private drawnChunksBuf: string[] = [];
@@ -135,8 +147,13 @@ export class BuildPreview {
   }
 
   /**
-   * Dispatch a preview batch to workers. Sets batchInFlight = true.
-   * On completion, atomically applies meshes then checks for pending.
+   * Dispatch a preview batch. Sets batchInFlight = true for the whole cycle (lighting + meshing).
+   *
+   * Two async stages: (1) draw temp (sync) → relight the region on the lighting worker; (2) when
+   * light returns, mesh the relit set on the mesh workers and atomically show it. Splitting the
+   * relight off the main thread keeps preview smooth even while dragging a torch (per-frame block
+   * relight over a 3×3×3). batchInFlight spans both stages, so a cursor move mid-cycle is stored as
+   * pendingOperation and dispatched on completion — the existing "let it finish, then catch up".
    */
   private dispatchPreviewBatch(operation: BuildOperation): void {
     if (!this.world || !this.scene || !this.meshPool) return;
@@ -174,11 +191,77 @@ export class BuildPreview {
       }
     }
 
-    // Relight the temp buffers so the preview matches the committed result (freshly-carved
-    // air lights up; emitters like lava glow) instead of showing stale/zero light.
-    this.world.relightPreview(drawnChunks);
+    if (drawnChunks.length === 0) {
+      // Aim moved but nothing changed — clear any stale preview and bail (no cycle needed).
+      const stale = [...this.activePreviewChunks];
+      for (const key of stale) {
+        this.clearChunkPreview(key);
+        this.activePreviewChunks.delete(key);
+      }
+      // Also revert any spill light-override still applied from the previous position (Bug 1a) —
+      // otherwise moving onto empty space leaves a tinted band on the old neighbours.
+      this.restoreSpillLight();
+      return;
+    }
 
-    // === Pass 2: Expand grids and dispatch (neighbors' tempData is now ready) ===
+    // Snapshot drawn keys — drawnChunksBuf is reused on the next dispatch.
+    const drawnKeys = drawnChunks.slice();
+
+    // Margin-consumer neighbours: chunks whose +margin (a drawn chunk's boundary) changed, so they
+    // must be RE-MESHED (Pass 2b). Give them a temp buffer so Pass 2b can mesh them.
+    const marginKeys = this.collectMarginNeighbours(drawnKeys);
+    for (const nk of marginKeys) {
+      const n = this.world.chunks.get(nk);
+      if (n && !n.tempData) n.copyToTemp();
+    }
+
+    // PHASE 1 — geometry + drawn/margin light. Relight ONLY the drawn + margin chunks synchronously
+    // (cheap: it's the brush footprint + its re-meshed neighbours, no block-light spill), so the mesh
+    // bakes their correct light. Without this the moving preview goes dark — each re-mesh rebuilds
+    // from temp with inherited (stale) light until the cursor settles. The EXPENSIVE work — spill into
+    // neighbour chunks and the boundary resample that samples them — stays deferred to
+    // runDeferredLighting(), which fires only once the cursor settles (nothing new to mesh).
+    const meshKeys = marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys;
+    const mode = useGameStore.getState().buildPreviewLighting;
+
+    if (mode === 'off') {
+      // No preview lighting — the mesh bakes inherited (pre-edit) light; nothing lights until commit.
+      // Drop any overrides left from a previous mode so no tinted bands linger.
+      this.restoreSpillLight();
+    } else {
+      this.world.relightPreviewMeshSet(meshKeys);
+
+      // Reconcile spill overrides for the NEW cursor position: restore any previously-overridden spill
+      // neighbour no longer adjacent to the draw, so stale light bands don't linger on far chunks while
+      // dragging (the moving-neighbour flicker). Keys only — cheap; in 'deferred' the spill RELIGHT
+      // stays deferred to settle. A neighbour that just BECAME drawn/margin keeps its temp (it'll be
+      // re-meshed) — we only drop it from tracking so the deferred pass doesn't later revert it.
+      if (this.previewSpillKeys.size > 0) {
+        const remeshSet = new Set(meshKeys);
+        const spillNow = this.world.collectSpillKeys(drawnKeys, remeshSet);
+        for (const key of [...this.previewSpillKeys]) {
+          if (spillNow.has(key)) continue;
+          this.previewSpillKeys.delete(key);
+          if (!remeshSet.has(key)) this.world.restorePreviewChunkLight(key);
+        }
+      }
+    }
+
+    this.batchInFlight = true;
+    this.dispatchPreviewMesh(drawnKeys, marginKeys);
+  }
+
+  /**
+   * Mesh the drawn chunk set + the margin-consumer neighbours (both already relit on temp), and
+   * atomically show the preview. `marginKeys` come from collectMarginNeighbours().
+   */
+  private dispatchPreviewMesh(drawnKeys: string[], marginKeys: string[]): void {
+    const world = this.world;
+    const scene = this.scene;
+    const meshPool = this.meshPool;
+    if (!world || !scene || !meshPool) { this.batchInFlight = false; return; }
+
+    // === Pass 2: Expand grids for the drawn chunks and dispatch (tempData already relit) ===
     const batchItems: Array<{
       chunkKey: string;
       grid: Uint32Array;
@@ -187,40 +270,30 @@ export class BuildPreview {
     const newActiveChunks = this.newActiveChunksBuf;
     newActiveChunks.clear();
 
-    for (const key of drawnChunks) {
-      const chunk = this.world.chunks.get(key)!;
+    for (const key of drawnKeys) {
+      const chunk = world.chunks.get(key);
+      if (!chunk || !chunk.tempData) continue;
 
-      // Expand grid on main thread, dispatch to worker
-      const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.world.chunks, grid, true);
+      const grid = meshPool.takeGrid();
+      const skipHighBoundary = expandChunkToGrid(chunk, world.chunks, grid, true);
       batchItems.push({ chunkKey: key, grid, skipHighBoundary });
       newActiveChunks.add(key);
     }
 
-    // === Pass 2b: Include negative-face neighbors whose high-side margin reads drawn chunk data ===
-    for (const key of drawnChunks) {
-      const chunk = this.world.chunks.get(key)!;
-      const data = chunk.data;
-      const temp = chunk.tempData!;
-
-      for (let axis = 0; axis < 3; axis++) {
-        if (!BuildPreview.hasBoundaryChanges(data, temp, axis)) continue;
-        const [dx, dy, dz] = NEGATIVE_FACE_OFFSETS_3[axis];
-        const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
-        if (newActiveChunks.has(nk)) continue;
-        const neighbor = this.world.chunks.get(nk);
-        if (!neighbor) continue;
-        const grid = this.meshPool.takeGrid();
-        const skipHighBoundary = expandChunkToGrid(neighbor, this.world.chunks, grid, true);
-        batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
-        newActiveChunks.add(nk);
-      }
+    // === Pass 2b: Mesh the margin-consumer neighbours (relit on temp above) ===
+    for (const nk of marginKeys) {
+      if (newActiveChunks.has(nk)) continue;
+      const neighbor = world.chunks.get(nk);
+      if (!neighbor || !neighbor.tempData) continue;
+      const grid = meshPool.takeGrid();
+      const skipHighBoundary = expandChunkToGrid(neighbor, world.chunks, grid, true);
+      batchItems.push({ chunkKey: nk, grid, skipHighBoundary });
+      newActiveChunks.add(nk);
     }
 
     // Capture which old preview chunks to clear — any previously active chunk
     // that is NOT in the new batch needs its preview reverted. Computed AFTER
     // Pass 2b so boundary neighbors aren't incorrectly marked for removal.
-    // Allocated fresh since it's captured by the async callback closure
     const chunksToRemove: string[] = [];
     for (const key of this.activePreviewChunks) {
       if (!newActiveChunks.has(key)) {
@@ -236,23 +309,18 @@ export class BuildPreview {
     }
 
     if (batchItems.length === 0) {
-      // No chunks to mesh — clear stale previews now
+      // No chunks to mesh — clear stale previews now, end the cycle, catch up on any pending op.
       for (const key of chunksToRemove) {
         this.clearChunkPreview(key);
         this.activePreviewChunks.delete(key);
       }
+      this.batchInFlight = false;
+      this.processPending();
       return;
     }
 
-    // Mark in flight
-    this.batchInFlight = true;
-
-    // Capture refs for async callback
-    const world = this.world;
-    const scene = this.scene;
-
     // Dispatch priority batch — callback fires only when ALL chunks complete
-    this.cancelBatch = this.meshPool.dispatchBatch(batchItems, (results: MeshResult[]) => {
+    this.cancelBatch = meshPool.dispatchBatch(batchItems, (results: MeshResult[]) => {
       this.cancelBatch = null;
       this.batchInFlight = false;
 
@@ -269,35 +337,104 @@ export class BuildPreview {
       const allImmediate = this.suppressGroupsForActivePreview();
 
       if (allImmediate) {
-        // All groups are already merged — safe to show preview now
+        // Show the geometry immediately. Mesh always wins: if the cursor has already moved on,
+        // dispatch the next mesh NOW and skip lighting — the mesh tracks the cursor at full worker
+        // cadence. Lighting runs only once the cursor settles (no pending op), in a single atomic
+        // pass, so it's never in front of the next mesh and never lands a partial update.
         this.applyPreviewResults(results, chunksToRemove, world, scene);
-        this.processPending();
+        this.applyPreviewLighting(drawnKeys, marginKeys);
       } else {
         // Some groups need to be merged first — defer preview visibility.
         // Store results; finalizeDeferredPreview() picks them up once
         // rebuild() finalizes the pending suppressions.
+        //
+        // If a previous cycle was still deferred (fast movement into unmerged terrain), fold its
+        // pending stale-chunk clears into this batch so they aren't lost — otherwise those far
+        // preview meshes never get disposed (Bug 1b).
+        if (this.deferredChunksToRemove) {
+          for (const k of this.deferredChunksToRemove) chunksToRemove.push(k);
+        }
         this.deferredPreviewResults = results;
         this.deferredChunksToRemove = chunksToRemove;
+        this.deferredDrawnKeys = drawnKeys;
+        this.deferredMarginKeys = marginKeys;
       }
     });
+  }
+
+  /**
+   * PHASE 2 — all preview lighting, run once the geometry is on screen (off the cursor frame).
+   *  1. Relight the re-mesh set (drawn + margin) on temp.
+   *  2. Relight the spill neighbours (light-affected but not re-meshed) + refresh their committed
+   *     geometry's light.
+   *  3. Resample the drawn + margin PREVIEW meshes now that every neighbour is relit — so their
+   *     boundary vertices sample the neighbours' updated light (fixes the dark border at edits).
+   */
+  private runDeferredLighting(drawnKeys: string[], marginKeys: string[]): void {
+    const world = this.world;
+    if (!world) return;
+
+    world.relightPreviewMeshSet(marginKeys.length ? [...drawnKeys, ...marginKeys] : drawnKeys);
+
+    const meshed = new Set(drawnKeys);
+    for (const k of marginKeys) meshed.add(k);
+    const spill = new Set(world.relightPreviewSpill(drawnKeys, meshed));
+    for (const key of this.previewSpillKeys) {
+      if (!spill.has(key)) world.restorePreviewChunkLight(key);
+    }
+    this.previewSpillKeys = spill;
+
+    for (const key of drawnKeys) this.resamplePreviewMeshLight(key);
+    for (const key of marginKeys) this.resamplePreviewMeshLight(key);
+  }
+
+  /**
+   * Decide what lighting runs once a preview batch's geometry is on screen, per the debug mode:
+   *  - 'off'      — no lighting; just catch up to any pending cursor move.
+   *  - 'full'     — run the full relight (drawn+margin+spill + boundary resample) on EVERY batch,
+   *                 then catch up — real-time spill, paid every frame.
+   *  - 'deferred' — mesh wins: if the cursor already moved, dispatch the next mesh and skip lighting;
+   *                 only when nothing new is pending (cursor settled) run the relight once.
+   */
+  private applyPreviewLighting(drawnKeys: string[], marginKeys: string[]): void {
+    const mode = useGameStore.getState().buildPreviewLighting;
+    if (mode === 'off') { this.processPending(); return; }
+    if (mode === 'full') { this.runDeferredLighting(drawnKeys, marginKeys); this.processPending(); return; }
+    if (!this.processPending()) this.runDeferredLighting(drawnKeys, marginKeys);
+  }
+
+  /** Resample one preview mesh's light from its chunk's relit temp grid (light-only, no re-mesh). */
+  private resamplePreviewMeshLight(key: string): void {
+    const meshes = this.previewMeshes.get(key);
+    const cells = this.previewCellIndices.get(key);
+    if (meshes && cells && this.world) {
+      this.world.resamplePreviewMeshLight(key, meshes, cells);
+    }
   }
 
   /**
    * After a batch completes, check if there's a pending operation.
    * If so, dispatch it immediately for a seamless catch-up.
    */
-  private processPending(): void {
-    if (!this.pendingOperation) return;
+  /**
+   * If a newer cursor position is pending, dispatch it. Returns true iff it actually dispatched a
+   * new mesh batch — false when there's nothing pending or the pending op equals what's already on
+   * screen (i.e. the cursor has settled). Callers use the return value to decide whether to run the
+   * deferred lighting: only when nothing new was meshed.
+   */
+  private processPending(): boolean {
+    if (!this.pendingOperation) return false;
 
     const { center, rotation, parts } = this.pendingOperation;
     this.pendingOperation = null;
 
-    // Skip if the pending operation matches what we just rendered
-    if (this.isSameOperation(center, rotation, parts)) return;
+    // Pending matches what we just rendered — the cursor has settled, nothing new to mesh.
+    if (this.isSameOperation(center, rotation, parts)) return false;
 
     const operation = this.createOperation(center, rotation, parts);
     this.storeOperation(center, rotation, parts);
     this.dispatchPreviewBatch(operation);
+    return true;
   }
 
   /**
@@ -312,6 +449,8 @@ export class BuildPreview {
     this.pendingOperation = null;
     this.deferredPreviewResults = null;
     this.deferredChunksToRemove = null;
+    this.deferredDrawnKeys = null;
+    this.deferredMarginKeys = null;
   }
 
   /**
@@ -333,6 +472,11 @@ export class BuildPreview {
       this.pendingCommitChunks.add(key);
     }
 
+    // Revert the light-only override on spill neighbours (their committed geometry). On a commit the
+    // subsequent region relight repaints them with the new committed light; on a cancel this is the
+    // full revert.
+    this.restoreSpillLight();
+
     this.activePreviewChunks.clear();
     this.clearLastOperation();
   }
@@ -348,6 +492,9 @@ export class BuildPreview {
     // Restore suppressed groups before clearing preview chunks
     this.restoreAllSuppressedGroups();
 
+    // Revert the light-only override on spill neighbours.
+    this.restoreSpillLight();
+
     for (const key of this.activePreviewChunks) {
       this.clearChunkPreview(key);
     }
@@ -361,6 +508,15 @@ export class BuildPreview {
 
     this.activePreviewChunks.clear();
     this.clearLastOperation();
+  }
+
+  /** Revert the light-only preview override on all tracked spill neighbours (restore committed light). */
+  private restoreSpillLight(): void {
+    if (this.previewSpillKeys.size === 0 || !this.world) return;
+    for (const key of this.previewSpillKeys) {
+      this.world.restorePreviewChunkLight(key);
+    }
+    this.previewSpillKeys.clear();
   }
 
   /**
@@ -528,8 +684,11 @@ export class BuildPreview {
       const data = [result.solid, result.transparent, result.liquid];
       const existing = this.previewMeshes.get(result.chunkKey);
       const meshes: (THREE.Mesh | null)[] = existing ?? [null, null, null];
+      // Keep each layer's per-vertex cell indices so Phase 2 can light-resample this preview mesh.
+      const cells: (Uint16Array | null)[] = [null, null, null];
 
       for (let i = 0; i < LAYER_COUNT; i++) {
+        cells[i] = data[i]?.cellIndices ?? null;
         const oldMesh = meshes[i];
 
         if (!data[i]) {
@@ -562,6 +721,7 @@ export class BuildPreview {
       }
 
       this.previewMeshes.set(result.chunkKey, meshes);
+      this.previewCellIndices.set(result.chunkKey, cells);
       world.previewChunks.add(result.chunkKey);
       world.markVisibilityDirty();
     }
@@ -582,13 +742,46 @@ export class BuildPreview {
     // All groups are now merged and suppressed — safe to show preview
     const results = this.deferredPreviewResults;
     const chunksToRemove = this.deferredChunksToRemove ?? [];
+    const drawnKeys = this.deferredDrawnKeys ?? [];
+    const marginKeys = this.deferredMarginKeys ?? [];
     this.deferredPreviewResults = null;
     this.deferredChunksToRemove = null;
+    this.deferredDrawnKeys = null;
+    this.deferredMarginKeys = null;
 
     this.applyPreviewResults(results, chunksToRemove, this.world, this.scene);
+    this.applyPreviewLighting(drawnKeys, marginKeys);
+  }
 
-    // Process any pending operation that arrived while we were waiting
-    this.processPending();
+  /**
+   * The negative-direction neighbours whose high-side margin reads a drawn chunk's changed low
+   * boundary — the chunks whose mesh geometry depends on the edit and must be re-meshed. Covers all
+   * 7 margin consumers (3 faces + 3 edges + corner), matching the commit path (NEGATIVE_MARGIN_-
+   * OFFSETS_7) so preview and commit re-mesh the SAME set: a diagonal neighbour that consumes a
+   * touched chunk corner is re-meshed too, so it can't keep a stale (dark) corner/edge boundary. Each
+   * neighbour is added only if the specific sub-region it reads actually changed.
+   */
+  private collectMarginNeighbours(drawnKeys: string[]): string[] {
+    const world = this.world;
+    if (!world) return [];
+    const out: string[] = [];
+    const seen = new Set<string>(drawnKeys);
+    for (const key of drawnKeys) {
+      const chunk = world.chunks.get(key);
+      if (!chunk || !chunk.tempData) continue;
+      const data = chunk.data;
+      const temp = chunk.tempData;
+      for (const [dx, dy, dz] of NEGATIVE_MARGIN_OFFSETS_7) {
+        // A neighbour reads THIS chunk's low margin only on the axes where its offset is negative;
+        // re-mesh it only if that sub-region changed (a face slab, edge bar, or corner cube).
+        if (!BuildPreview.hasLowMarginChange(data, temp, dx !== 0, dy !== 0, dz !== 0)) continue;
+        const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
+        if (seen.has(nk) || !world.chunks.has(nk)) continue;
+        seen.add(nk);
+        out.push(nk);
+      }
+    }
+    return out;
   }
 
   /**
@@ -616,6 +809,7 @@ export class BuildPreview {
       }
     }
     this.previewMeshes.delete(key);
+    this.previewCellIndices.delete(key);
   }
 
   /** Dispose all preview meshes for all chunks. */
@@ -624,32 +818,34 @@ export class BuildPreview {
       this.disposePreviewMeshesForChunk(key);
     }
     this.previewMeshes.clear();
+    this.previewCellIndices.clear();
   }
 
   // ============== Boundary Change Detection ==============
 
   /**
-   * Check if the first MESH_MARGIN voxel layers on the low side of an axis differ
-   * between original data and tempData. The mesh grid's high-side margin means
-   * only the negative-direction neighbor reads from these layers.
-   *
-   * @param axis 0=X, 1=Y, 2=Z
-   * Returns true as soon as any difference is found (early-exit).
+   * Whether any voxel in a drawn chunk's LOW margin sub-region changed between committed data and
+   * tempData. The region is the intersection of the low MESH_MARGIN slabs on each flagged axis: a
+   * full low slab for one axis (a face neighbour reads it), a bar for two (an edge neighbour), a
+   * small cube for three (the corner neighbour). This is exactly the sub-region a negative-direction
+   * margin consumer reads as its high-side margin, so a change here means that neighbour's boundary
+   * geometry is stale and it must re-mesh. Early-exits on the first difference.
    */
-  private static hasBoundaryChanges(
+  private static hasLowMarginChange(
     data: Uint32Array,
     temp: Uint32Array,
-    axis: number,
+    lowX: boolean,
+    lowY: boolean,
+    lowZ: boolean,
   ): boolean {
     const CS = CHUNK_SIZE;
-    const coords = [0, 0, 0];
-    for (let layer = 0; layer < MESH_MARGIN; layer++) {
-      for (let a = 0; a < CS; a++) {
-        for (let b = 0; b < CS; b++) {
-          coords[axis] = layer;
-          coords[(axis + 1) % 3] = a;
-          coords[(axis + 2) % 3] = b;
-          const idx = voxelIndex(coords[0], coords[1], coords[2]);
+    const mx = lowX ? MESH_MARGIN : CS;
+    const my = lowY ? MESH_MARGIN : CS;
+    const mz = lowZ ? MESH_MARGIN : CS;
+    for (let x = 0; x < mx; x++) {
+      for (let y = 0; y < my; y++) {
+        for (let z = 0; z < mz; z++) {
+          const idx = voxelIndex(x, y, z);
           if (data[idx] !== temp[idx]) return true;
         }
       }

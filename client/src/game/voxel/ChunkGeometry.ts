@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { Chunk } from './Chunk.js';
 import { SurfaceNetOutput } from './SurfaceNet.js';
 import type { SplitSurfaceNetOutput } from './SurfaceNet.js';
-import { expandGeometry, createGeometryFromSurfaceNet, createBufferGeometry, type ExpandedMeshData } from './MeshGeometry.js';
+import { expandGeometry, createGeometryFromSurfaceNet, createBufferGeometry, resampleLightAttributes, type ExpandedMeshData } from './MeshGeometry.js';
 import { createLayerMesh, LAYER_SOLID, LAYER_TRANSPARENT, LAYER_LIQUID, LAYER_COUNT } from './LayerConfig.js';
 
 // Re-export for external consumers
@@ -30,6 +30,13 @@ export class ChunkGeometry {
 
   /** Per-layer boundary (seam) vertex lists, for normal reconciliation. */
   private boundaries: (ExpandedMeshData['boundary'] | null)[] = [null, null, null];
+
+  /**
+   * Per-layer per-expanded-vertex grid cell index (SurfaceNets baseIdx into the 34³ grid).
+   * Kept so light can be re-sampled without re-meshing (resampleLightFromGrid). Parallel to
+   * each layer's vertex buffer; null when the layer is empty.
+   */
+  private cellIndices: (Uint16Array | null)[] = [null, null, null];
 
   /** Cached geometry array returned by getGeometries() — avoids allocation per call */
   private cachedGeoArray: (THREE.BufferGeometry | null)[] = [null, null, null];
@@ -137,6 +144,7 @@ export class ChunkGeometry {
         this.mainMeshes[i] = null;
       }
       this.boundaries[i] = null;
+      this.cellIndices[i] = null;
     }
     this.disposed = true;
   }
@@ -150,7 +158,34 @@ export class ChunkGeometry {
     for (let i = 0; i < LAYER_COUNT; i++) {
       this.mainMeshes[i] = this.updateSlot(this.mainMeshes[i], data[i], i, worldPos);
       this.boundaries[i] = data[i]?.boundary ?? null;
+      this.cellIndices[i] = data[i]?.cellIndices ?? null;
     }
+  }
+
+  // ============== Light-only re-sample (no re-mesh) ==============
+
+  /**
+   * Re-read this chunk's per-vertex light from an expanded 34³ grid and rewrite ONLY the
+   * `lightLevel` + `blockLight` attributes in place — no SurfaceNets, no geometry realloc, no
+   * collision BVH rebuild. Valid only when the chunk's voxels are unchanged (so the mesh, and
+   * thus the stored `cellIndices`, still describe the geometry); the caller guarantees this by
+   * routing voxel-changed chunks through a full remesh instead.
+   *
+   * The grid MUST be expanded exactly as the mesh consumed it (expandChunkToGrid), so each stored
+   * cell index still points at the same 8 corners. Uses the shared sampleCellLight() so the result
+   * is bit-identical to what a full remesh would bake.
+   *
+   * @returns true if any layer's light attributes were rewritten.
+   */
+  resampleLightFromGrid(grid: Uint32Array): boolean {
+    let changed = false;
+    for (let layer = 0; layer < LAYER_COUNT; layer++) {
+      const cells = this.cellIndices[layer];
+      const geo = this.mainMeshes[layer]?.geometry;
+      if (!cells || !geo) continue;
+      if (resampleLightAttributes(geo, cells, grid)) changed = true;
+    }
+    return changed;
   }
 
   // ============== Seam-normal reconciliation accessors ==============

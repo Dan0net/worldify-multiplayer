@@ -66,6 +66,12 @@ export interface SurfaceNetOutput {
   /** Block light level per vertex (0.0-1.0, max of non-solid corners in 2x2x2 cell) */
   blockLights: Float32Array;
   /**
+   * Per-vertex grid cell index (baseIdx = z*GRID² + y*GRID + x of the cell's origin corner in the
+   * 34³ grid). Lets light be RE-SAMPLED from updated voxel light without re-running SurfaceNets —
+   * the light-only relight path re-reads this cell's 8 corners. Fits Uint16 (34³ = 39304 < 65536).
+   */
+  cellIndices: Uint16Array;
+  /**
    * Per-vertex 6-bit boundary flag: which chunk-cell planes the vertex sits on.
    * bit 0 = -X (cell x=0), 1 = +X (cell x=32), 2 = -Y, 3 = +Y, 4 = -Z, 5 = +Z.
    * Used by seam-normal reconciliation to find vertices coincident with a neighbor
@@ -153,6 +159,7 @@ const EMPTY_OUTPUT: SurfaceNetOutput = Object.freeze({
   indices: new Uint32Array(0),
   materials: new Uint8Array(0),
   lights: new Float32Array(0),
+  cellIndices: new Uint16Array(0),
   boundaryFlags: new Uint8Array(0),
   vertexCount: 0,
   triangleCount: 0,
@@ -178,6 +185,7 @@ interface MeshPool {
   lights: Float32Array;      // 1 float per vertex (sky light, 0.0-1.0)
   blockLights: Float32Array; // 1 float per vertex (block light, 0.0-1.0)
   boundaryFlags: Uint8Array; // 1 byte per vertex (6-bit boundary-plane mask)
+  cellIndices: Uint16Array;  // 1 uint16 per vertex (grid cell baseIdx for light re-sampling)
   indices: Uint32Array;      // 3 uints per triangle
   vertCapacity: number;
   triCapacity: number;
@@ -192,6 +200,7 @@ for (let i = 0; i < MESH_COUNT; ++i) {
     lights: new Float32Array(INITIAL_VERT_CAPACITY),
     blockLights: new Float32Array(INITIAL_VERT_CAPACITY),
     boundaryFlags: new Uint8Array(INITIAL_VERT_CAPACITY),
+    cellIndices: new Uint16Array(INITIAL_VERT_CAPACITY),
     indices: new Uint32Array(INITIAL_TRI_CAPACITY * 3),
     vertCapacity: INITIAL_VERT_CAPACITY,
     triCapacity: INITIAL_TRI_CAPACITY,
@@ -232,6 +241,9 @@ function ensureVertCapacity(pool: MeshPool, needed: number): void {
   const newBoundary = new Uint8Array(cap);
   newBoundary.set(pool.boundaryFlags);
   pool.boundaryFlags = newBoundary;
+  const newCellIndices = new Uint16Array(cap);
+  newCellIndices.set(pool.cellIndices);
+  pool.cellIndices = newCellIndices;
   pool.vertCapacity = cap;
 }
 
@@ -473,6 +485,8 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
               (x[1] === highBoundary[1] ? 8 : 0) |
               (x[2] === 0 ? 16 : 0) |
               (x[2] === highBoundary[2] ? 32 : 0);
+            // Cell origin index for light re-sampling (same baseIdx the corner loop sampled).
+            pool.cellIndices[vertIdx] = baseIdx;
             vertCounts[mt] = vertIdx + 1;
             
             // Generate faces
@@ -629,6 +643,7 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
       materials: pool.materials.subarray(0, vc),
       lights: pool.lights.subarray(0, vc),
       blockLights: pool.blockLights.subarray(0, vc),
+      cellIndices: pool.cellIndices.subarray(0, vc),
       boundaryFlags: pool.boundaryFlags.subarray(0, vc),
       vertexCount: vc,
       triangleCount: tc,
@@ -647,4 +662,46 @@ export function meshVoxelsSplit(input: SurfaceNetInput): SplitSurfaceNetOutput {
  */
 export function isEmptyMesh(output: SurfaceNetOutput): boolean {
   return output.vertexCount === 0 || output.triangleCount === 0;
+}
+
+/**
+ * Sample a cell's vertex light from an expanded 34³ grid, returning both channels packed
+ * into one int: `maxSky | (maxBlock << 5)` (each 0..31). This is the LIGHT-ONLY companion
+ * to the meshing hot loop above — it MUST stay bit-identical to the light computation at
+ * `meshVoxelsSplit` (the `maxLight`/`maxBlock` corner loop + the `pool.lights` write), so a
+ * re-sample of an unchanged mesh reproduces exactly the light the worker would have baked.
+ *
+ * Used by the light-only relight path (ChunkGeometry.resampleLightFromGrid): when a chunk's
+ * voxels are unchanged but neighbour light changed, we rebuild its 34³ grid and re-read each
+ * stored cell instead of re-running SurfaceNets + rebuilding its collision BVH.
+ *
+ * @param grid     Expanded 34³ voxel grid (same layout meshVoxelsSplit consumes).
+ * @param baseIdx  Cell origin index (the `cellIndices` value stored per expanded vertex).
+ */
+export function sampleCellLight(grid: Uint32Array, baseIdx: number): number {
+  let maxLight = 0;
+  let maxBlock = 0;
+  for (let g = 0; g < 8; ++g) {
+    const voxel = grid[baseIdx + cornerOffsets[g]];
+    const weight = ((voxel >> WEIGHT_SHIFT) & WEIGHT_MASK) * INV_WEIGHT_MAX_PACKED + WEIGHT_MIN;
+    const material = (voxel >> MATERIAL_SHIFT) & MATERIAL_MASK;
+    // Same non-opaque test as the mesh loop: air OR non-solid (liquid/transparent) corners.
+    if (weight < 0 || MATERIAL_TYPE_LUT[material] !== MAT_TYPE_SOLID) {
+      const light = voxel & LIGHT_MASK;
+      if (light > maxLight) maxLight = light;
+      const blockLight = (voxel >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK;
+      if (blockLight > maxBlock) maxBlock = blockLight;
+    }
+  }
+  return maxLight | (maxBlock << 5);
+}
+
+/** Normalized sky-light channel from a packed sampleCellLight() result (0.0–1.0). */
+export function unpackSkyLight(packed: number): number {
+  return (packed & 0x1f) / LIGHT_MAX;
+}
+
+/** Normalized block-light channel from a packed sampleCellLight() result (0.0–1.0). */
+export function unpackBlockLight(packed: number): number {
+  return ((packed >>> 5) & 0x1f) / BLOCK_LIGHT_MAX;
 }

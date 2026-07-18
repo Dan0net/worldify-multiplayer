@@ -89,6 +89,15 @@ export class MeshWorkerPool {
   }
 
   /**
+   * Return a grid buffer to the pool. Use this for grids taken via takeGrid() that are consumed
+   * synchronously on the main thread (e.g. the light-only resample path) rather than transferred
+   * to a worker (workers return their grid automatically via the response).
+   */
+  returnGrid(grid: Uint32Array): void {
+    this.gridPool.push(grid);
+  }
+
+  /**
    * Check if a chunk key is currently being meshed by a worker.
    */
   isInFlight(chunkKey: string): boolean {

@@ -15,10 +15,11 @@ import {
 } from './buildTypes.js';
 import { Vec3, applyQuatToVec3, invertQuat } from '../util/math.js';
 import { sdfFromConfig, sdfToWeight } from './shapes.js';
-import { 
-  packVoxel, 
-  unpackVoxel, 
-  voxelIndex, 
+import {
+  unpackVoxel,
+  setWeight,
+  setMaterial,
+  voxelIndex,
   chunkKey,
 } from './voxelData.js';
 import { ChunkData } from './ChunkData.js';
@@ -26,6 +27,18 @@ import { isTransparent } from '../materials/Materials.js';
 
 // ============== Apply Functions ==============
 // These modify a single voxel based on the build mode
+
+/**
+ * Rewrite a voxel's weight + material while preserving BOTH light channels (sky AND block). Edits
+ * change geometry, not light — the lighting pass owns light. packVoxel() would zero the block-light
+ * field, which is harmless for a commit (a relight follows and recomputes it) but wrong for an
+ * un-relit preview: in the 'off' preview mode nothing relights until commit, so dropping block light
+ * would darken any torch-lit voxel the brush touched. Bit-preserving setWeight/setMaterial keep the
+ * existing light untouched.
+ */
+function repackKeepLight(existingPacked: number, weight: number, material: number): number {
+  return setMaterial(setWeight(existingPacked, weight), material);
+}
 
 /**
  * Apply ADD mode to a voxel.
@@ -52,7 +65,7 @@ export function applyAdd(
   const finalMaterial = (newWeight >= existing.weight || (existingIsTransparent && newIsSolid && newWeight > 0))
     ? newMaterial : existing.material;
   
-  const newPacked = packVoxel(combinedWeight, finalMaterial, existing.light);
+  const newPacked = repackKeepLight(existingPacked, combinedWeight, finalMaterial);
   return { packed: newPacked, changed: newPacked !== existingPacked };
 }
 
@@ -69,7 +82,7 @@ export function applySubtract(
   
   // SUBTRACT: take minimum (newWeight is negative when inside the shape)
   if (newWeight < existing.weight) {
-    const newPacked = packVoxel(newWeight, existing.material, existing.light);
+    const newPacked = repackKeepLight(existingPacked, newWeight, existing.material);
     return { packed: newPacked, changed: true };
   }
   
@@ -107,7 +120,7 @@ export function applyPunch(
   if (carved >= existing.weight) {
     return { packed: existingPacked, changed: false };
   }
-  return { packed: packVoxel(carved, existing.material, existing.light), changed: true };
+  return { packed: repackKeepLight(existingPacked, carved, existing.material), changed: true };
 }
 
 /**
@@ -123,7 +136,7 @@ export function applyPaint(
   
   // PAINT: only paint where existing is solid AND new weight would make it solid
   if (newWeight > 0 && existing.weight > 0) {
-    const newPacked = packVoxel(existing.weight, newMaterial, existing.light);
+    const newPacked = repackKeepLight(existingPacked, existing.weight, newMaterial);
     return { packed: newPacked, changed: existing.material !== newMaterial };
   }
   
@@ -148,7 +161,7 @@ export function applyFill(
   
   if (newWeight > 0 && (existing.weight <= 0 || (existingIsTransparent && newIsSolid))) {
     const finalWeight = Math.max(newWeight, existing.weight);
-    const newPacked = packVoxel(finalWeight, newMaterial, existing.light);
+    const newPacked = repackKeepLight(existingPacked, finalWeight, newMaterial);
     return { packed: newPacked, changed: newPacked !== existingPacked };
   }
   

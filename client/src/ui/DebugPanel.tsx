@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import {
   useGameStore, TERRAIN_DEBUG_MODE_NAMES, TERRAIN_DEBUG_MODE_ORDER, type TerrainDebugMode,
+  BUILD_PREVIEW_LIGHTING_ORDER, BUILD_PREVIEW_LIGHTING_LABELS, type BuildPreviewLighting,
   type EnvironmentSettings, type DayNightKeyframe, type DayNightConfig,
 } from '../state/store';
 import { textureCache } from '../game/material/TextureCache';
@@ -279,6 +280,8 @@ export function DebugPanel() {
     terrainDebugMode,
     cycleTerrainDebugMode,
     setTerrainDebugMode,
+    buildPreviewLighting,
+    setBuildPreviewLighting,
     forceRegenerateChunks,
     environment,
     setEnvironment,
@@ -618,7 +621,7 @@ export function DebugPanel() {
               ))}
             </select>
           </div>
-          <label 
+          <label
             className="flex items-center gap-2 cursor-pointer hover:text-yellow-300"
             onClick={handleCycleQuality}
           >
@@ -626,7 +629,28 @@ export function DebugPanel() {
             <span>F8 Quality: {QUALITY_LABELS[qualityLevel]}</span>
           </label>
         </div>
-        
+
+        <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
+          <div className="mb-1 text-green-500 text-xs">Build Preview:</div>
+          <div className="flex items-center gap-2">
+            <span className={`w-4 h-4 flex items-center justify-center ${buildPreviewLighting === 'off' ? 'text-yellow-300/30' : 'text-yellow-300'}`}>
+              <Lightbulb size={14} />
+            </span>
+            <select
+              value={buildPreviewLighting}
+              onChange={(e) => setBuildPreviewLighting(e.target.value as BuildPreviewLighting)}
+              className="flex-1 bg-black/60 border border-green-500/40 rounded px-1 py-0.5 text-yellow-300 text-xs cursor-pointer"
+              title="Preview lighting: Off (light only after commit), Deferred (spill lights at settle), Full (real-time spill every frame)"
+            >
+              {BUILD_PREVIEW_LIGHTING_ORDER.map((m) => (
+                <option key={m} value={m} className="bg-black text-yellow-300">
+                  {BUILD_PREVIEW_LIGHTING_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="mt-2 pt-2 border-t border-green-500/30 text-yellow-400">
           <div className="mb-1 text-green-500 text-xs">Cache:</div>
           <label 
