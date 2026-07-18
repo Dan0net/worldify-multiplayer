@@ -222,7 +222,7 @@ function expandChunkData(
 /**
  * Compute skipHighBoundary flags for a chunk.
  */
-function getSkipHighBoundary(
+export function getSkipHighBoundary(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
 ): [boolean, boolean, boolean] {

@@ -19,7 +19,7 @@ import {
 import { Chunk } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
-import { meshChunk, expandChunkToGrid } from './ChunkMesher.js';
+import { meshChunk, expandChunkToGrid, getSkipHighBoundary } from './ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
 
 // ---- Types ----
@@ -46,6 +46,14 @@ export class RemeshPipeline {
 
   /** Cumulative count of mesh-worker dispatches — a churn gauge for streaming (surfaced in perf). */
   meshDispatches = 0;
+
+  /**
+   * Chunks whose most-recently-applied mesh SKIPPED a high boundary (a + margin neighbour was absent
+   * when it meshed), so its geometry has a hole on that face. Such a mesh must not be rendered — it
+   * self-heals when the neighbour streams in and the chunk re-meshes (see the chunk dependency
+   * contract). Membership is updated when a mesh result is applied and cleared on re-mesh / forget.
+   */
+  private readonly incompleteChunks = new Set<string>();
 
   // ---- Dependencies (injected) ----
   private readonly chunks: Map<string, Chunk>;
@@ -138,8 +146,10 @@ export class RemeshPipeline {
 
       const grid = this.meshPool.takeGrid();
       const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
+      const complete = !(skipHighBoundary[0] || skipHighBoundary[1] || skipHighBoundary[2]);
 
       this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {
+        this.setComplete(key, complete);
         this.applyResult(result);
       });
       this.meshDispatches++;
@@ -161,6 +171,8 @@ export class RemeshPipeline {
       this.geometries.set(key, geo);
     }
 
+    const skip = getSkipHighBoundary(chunk, this.chunks);
+    this.setComplete(key, !(skip[0] || skip[1] || skip[2]));
     const output = meshChunk(chunk, this.chunks);
     geo.updateFromSurfaceNet(output);
     this.registerWithGrouper(key, chunk, geo);
@@ -200,13 +212,40 @@ export class RemeshPipeline {
     if (batchItems.length === 0) return;
 
     this.meshPool.dispatchBatch(batchItems, (results) => {
-      for (const result of results) this.applyResult(result);
+      for (const result of results) {
+        const item = batchItems.find((b) => b.chunkKey === result.chunkKey);
+        if (item) {
+          const s = item.skipHighBoundary;
+          this.setComplete(result.chunkKey, !(s[0] || s[1] || s[2]));
+        }
+        this.applyResult(result);
+      }
     });
   }
 
   /** Check if a chunk key is busy (in queue or in-flight on worker). */
   isBusy(key: string): boolean {
     return this.queue.has(key) || this.meshPool.isInFlight(key);
+  }
+
+  /**
+   * True unless this chunk's applied mesh skipped a high boundary (absent + margin neighbour). A
+   * never-meshed chunk reports complete — it has no geometry, so the render pass skips it anyway; the
+   * flag only matters once a mesh exists. Consumed by the render gate to keep holed meshes off screen.
+   */
+  isMeshComplete(key: string): boolean {
+    return !this.incompleteChunks.has(key);
+  }
+
+  /** Forget a chunk's completeness state (call on unload) so the set can't leak stale keys. */
+  forget(key: string): void {
+    this.incompleteChunks.delete(key);
+  }
+
+  /** Record whether a chunk's just-applied mesh built all its high faces. */
+  private setComplete(key: string, complete: boolean): void {
+    if (complete) this.incompleteChunks.delete(key);
+    else this.incompleteChunks.add(key);
   }
 
   // ---- Private ----
