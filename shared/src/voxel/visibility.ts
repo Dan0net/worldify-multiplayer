@@ -22,7 +22,7 @@ import {
   VISIBILITY_ALL,
   VISIBILITY_NONE,
   VOXEL_STATIC_MASK,
-  WEIGHT_MAX_PACKED,
+  SURFACE_PACKED_THRESHOLD,
 } from './constants.js';
 import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
 
@@ -31,11 +31,19 @@ import { MATERIAL_TYPE_LUT, MAT_TYPE_SOLID } from '../materials/Materials.js';
 /**
  * Pre-computed opaqueness LUT for visibility flood-fill.
  * Indexed by `(voxel & VOXEL_STATIC_MASK) >> LIGHT_BITS` (the 11 weight+material bits).
- * Entry is 1 if the voxel blocks visibility (fully-solid opaque), 0 otherwise.
+ * Entry is 1 if the voxel blocks visibility (solid, opaque), 0 otherwise.
  *
- * Uses a RELAXED threshold: only fully-solid weight (WEIGHT_MAX_PACKED) with
- * a solid material blocks the flood fill. Transparent/liquid materials and
- * any voxel with weight < max allow visibility through.
+ * Threshold matches RENDERED-SOLID: a voxel blocks visibility when its weight is above the mesh
+ * surface crossing (`weight > SURFACE_PACKED_THRESHOLD`, the exact test isVoxelSolid() uses) AND its
+ * material is solid. Anything the mesher draws as solid rock therefore also occludes sight — so the
+ * flood fill only travels through actual air (weight <= threshold) or transparent/liquid materials,
+ * and a thin partial-weight wall between two caves is opaque instead of see-through.
+ *
+ * Previously this required fully-max weight (WEIGHT_MAX_PACKED), which left the entire partial-weight
+ * shell around every cave and hill (weights 8..14 — rendered solid but not max) transparent to the
+ * graph. That leaked visibility through solid rock and connected nearly the whole underground into
+ * one component, so the BFS over-selected massively. Reusing SURFACE_PACKED_THRESHOLD keeps this in
+ * lockstep with isVoxelSolid() so the two definitions can't drift.
  *
  * 2048 entries — fits in L1 cache for fast BFS inner-loop access.
  */
@@ -45,8 +53,8 @@ const VOXEL_OPAQUE_VIS = new Uint8Array(1 << (16 - LIGHT_BITS));
   for (let wm = 0; wm < VOXEL_OPAQUE_VIS.length; wm++) {
     const weight = wm >> MATERIAL_BITS;
     const material = wm & MATERIAL_MASK;
-    // Only fully-solid weight with solid material blocks visibility
-    if (weight === WEIGHT_MAX_PACKED && MATERIAL_TYPE_LUT[material] === MAT_TYPE_SOLID) {
+    // Solid (rendered) weight with a solid material blocks visibility — matches isVoxelSolid().
+    if (weight > SURFACE_PACKED_THRESHOLD && MATERIAL_TYPE_LUT[material] === MAT_TYPE_SOLID) {
       VOXEL_OPAQUE_VIS[wm] = 1;
     }
   }

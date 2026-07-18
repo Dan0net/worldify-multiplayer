@@ -9,7 +9,6 @@ import {
   CHUNK_SIZE,
   FACE_OFFSETS_6,
   NEGATIVE_MARGIN_OFFSETS_7,
-  MESH_MARGIN,
   REQUEST_TIMEOUT_MS,
   MSG_VOXEL_CHUNK_REQUEST,
   MSG_MAP_TILE_REQUEST,
@@ -29,8 +28,6 @@ import {
   MapTileResponse,
   computeVisibility,
   getChunkRangeFromHeights,
-  isVoxelSolid,
-  voxelIndex,
   getSunlitAbove,
   computeAndPropagateLight,
   relightRegion,
@@ -341,6 +338,17 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * ChunkProvider interface — true ONLY for genuine open sky (above the column's content top), where
+   * no voxel data exists and none will ever load. Lets the visibility BFS traverse through empty sky
+   * to reach terrain beyond it, while unloaded terrain (cy <= maxCy) and unknown columns (no tile
+   * yet) return false so they must load before being traversed — we never see through unloaded rock.
+   */
+  isEmptyAir(cx: number, cy: number, cz: number): boolean {
+    const info = this.columnInfo.get(`${cx},${cz}`);
+    return info ? cy > info.maxCy : false;
+  }
+
+  /**
    * Update the world based on player position.
    * Uses visibility BFS for loading and rendering.
    * @param playerPos Player world position
@@ -390,18 +398,23 @@ export class VoxelWorld implements ChunkProvider {
       return;
     }
 
-    // Check if player moved to a new chunk (hysteresis)
+    // Check if player moved to a new chunk.
     const chunkChanged = !this.lastBFSChunk ||
       playerChunk.cx !== this.lastBFSChunk.cx ||
       playerChunk.cy !== this.lastBFSChunk.cy ||
       playerChunk.cz !== this.lastBFSChunk.cz;
 
-    if (chunkChanged) {
+    // Recompute the visibility BFS when the player crosses a chunk OR the frontier changes (a chunk
+    // was meshed / removed, flagged via visibilityDirty). The BFS only traverses through LOADED
+    // chunks, so each newly-streamed chunk extends the reachable set by a ring — re-running on
+    // frontier change (not only on chunk-cross) is what lets a chunk become visible the moment it
+    // loads, instead of waiting for the next cross. Cheap: a zero-alloc typed-array BFS over the
+    // radius, and only on frames where the player moved or geometry actually changed.
+    if (chunkChanged || this.visibilityDirty) {
+      if (chunkChanged) this.lastBFSChunk = { ...playerChunk };
+
       const frustum = getFrustumFromCamera(this.camera);
       const cameraDir = getCameraDirection(this.camera);
-      // Recompute BFS from new chunk
-      this.lastBFSChunk = { ...playerChunk };
-      
       const { reachable, toRequest } = getVisibleChunks(
         playerChunk,
         cameraDir,
@@ -410,17 +423,9 @@ export class VoxelWorld implements ChunkProvider {
         this._visibilityRadius,
         playerPos
       );
-
-      // Update cached reachable set
       this.cachedReachable = reachable;
-
-      // Request missing chunks that are in frustum
       this.requestVisibleChunks(toRequest);
-    }
 
-    // Only rescan visibility when inputs actually changed:
-    // chunkChanged → new BFS reachable set; visibilityDirty → geometry added/removed
-    if (chunkChanged || this.visibilityDirty) {
       this.updateMeshVisibility(this.cachedReachable);
       this.visibilityDirty = false;
     }
@@ -464,101 +469,20 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Compute a 6-bit bitmask indicating which faces of a chunk have non-solid
-   * (air/empty) voxels in their margin strip. Bit i set ⇒ face i needs neighbor
-   * data for correct stitching. Called once when chunk data arrives.
-   *
-   * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
-   */
-  static computeFaceSurfaceMask(data: Uint32Array): number {
-    const CS = CHUNK_SIZE;
-    let mask = 0;
-    for (let face = 0; face < 6; face++) {
-      const axis = face >> 1;              // 0,1→0  2,3→1  4,5→2
-      const isPositive = (face & 1) === 0;
-      const lo = isPositive ? CS - MESH_MARGIN : 0;
-      const hi = isPositive ? CS : MESH_MARGIN;
-
-      let found = false;
-      const coords = [0, 0, 0];
-      for (let a = 0; a < CS && !found; a++) {
-        for (let b = 0; b < CS && !found; b++) {
-          for (let c = lo; c < hi; c++) {
-            coords[axis] = c;
-            coords[(axis + 1) % 3] = a;
-            coords[(axis + 2) % 3] = b;
-            if (!isVoxelSolid(data[voxelIndex(coords[0], coords[1], coords[2])])) {
-              found = true;
-              break;
-            }
-          }
-        }
-      }
-      if (found) mask |= (1 << face);
-    }
-    return mask;
-  }
-
-  /**
-   * Find face-neighbor chunks needed for stitching that BFS may have missed.
-   * Uses the cached faceSurfaceMask bitmask on each chunk to avoid scanning
-   * voxel data every frame.
-   */
-  private getMarginNeighborRequests(bfsRequested: Set<string>): Set<string> {
-    const extra = new Set<string>();
-
-    // Don't request margin neighbors that would be immediately unloaded.
-    // Without this guard, edge-of-world chunks cycle: request → load → unload → request...
-    const pcx = this.lastPlayerChunk?.cx ?? 0;
-    const pcy = this.lastPlayerChunk?.cy ?? 0;
-    const pcz = this.lastPlayerChunk?.cz ?? 0;
-    const maxDist = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
-
-    for (const [, chunk] of this.chunks) {
-      // Skip fully-solid chunks (no surface on any face)
-      if (chunk.faceSurfaceMask === 0) continue;
-
-      for (let face = 0; face < 6; face++) {
-        // Check cached bitmask before allocating the key string
-        if (!(chunk.faceSurfaceMask & (1 << face))) continue;
-
-        const [dx, dy, dz] = FACE_OFFSETS_6[face];
-        const nx = chunk.cx + dx;
-        const ny = chunk.cy + dy;
-        const nz = chunk.cz + dz;
-
-        // Skip neighbors that fall outside the unload radius (they'd be unloaded immediately)
-        if (Math.abs(nx - pcx) > maxDist || Math.abs(ny - pcy) > maxDist || Math.abs(nz - pcz) > maxDist) continue;
-
-        const nKey = chunkKey(nx, ny, nz);
-        
-        // Skip if already loaded, pending, or queued by BFS
-        if (this.chunks.has(nKey) || this.pendingChunks.has(nKey) || bfsRequested.has(nKey)) continue;
-        
-        extra.add(nKey);
-      }
-    }
-    return extra;
-  }
-
-  /**
-   * Request visible chunks using two-phase approach:
+   * Request visible chunks (two-phase):
    * Phase 1: Request tiles for columns we don't know about yet
    * Phase 2: Request individual chunks for columns where we have tile data
-   * Phase 3: Request margin neighbors needed for stitching that BFS missed
-   * 
-   * Chunks above the tile's maxCy are skipped (air).
+   *
+   * `toRequest` is the visibility BFS's own frontier — every unloaded chunk it reached. Loading is
+   * driven ENTIRELY by this set (single source of truth: reachable = render set, toRequest = load
+   * set, both from getVisibleChunks). The BFS steps to the immediate occluder walls one chunk past
+   * visible air, so their voxels arrive as mesh margins without a separate stitch-loader. Chunks
+   * above a column's maxCy are skipped (open sky, nothing to load).
    */
   private requestVisibleChunks(toRequest: Set<string>): void {
     // Limit concurrent requests
     const MAX_PENDING_TILES = 4;
     const MAX_PENDING_CHUNKS = 4;
-
-    // Phase 0: Add margin neighbor requests for stitching
-    const marginNeighbors = this.getMarginNeighborRequests(toRequest);
-    for (const key of marginNeighbors) {
-      toRequest.add(key);
-    }
 
     // Phase 1: Identify columns that need tiles
     const columnsNeedingTiles = new Set<string>();
@@ -602,50 +526,24 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Update mesh visibility based on reachable chunks and distance.
-   * Uses hysteresis: show if reachable OR (loaded AND within extended radius).
-   * This prevents popping when player crosses chunk boundaries.
-   * 
-   * Also applies shadow distance culling: chunks beyond the shadow radius
-   * have castShadow disabled so they don't contribute to the shadow pass.
-   * 
-   * NOTE: We intentionally do NOT frustum-cull here. Three.js's built-in per-mesh
-   * frustum culling tests each mesh against the active camera independently (main
-   * camera for the scene pass, light camera for shadow maps). Manual culling against
-   * the main camera would hide chunks that still need to cast shadows into view.
+   * Occlusion-cull rendered chunks against the visibility BFS: a chunk's merged group is shown ONLY
+   * if the BFS reached it from the player (through connected openings, on a non-reversing path).
+   * Everything else stays RESIDENT — loaded within the cube (see unloadDistantChunks) — but hidden,
+   * so geometry behind solid rock, or around a corner the player can't see, doesn't draw. This is the
+   * step that actually applies the visibility graph to what's on screen; loading uses the coarse cube,
+   * rendering uses the reachable set.
+   *
+   * NOTE: We intentionally do NOT frustum-cull here. Three.js's built-in per-mesh frustum culling
+   * tests each mesh against the active camera independently (main camera for the scene pass, light
+   * camera for shadow maps). Manual culling against the main camera would hide chunks that still need
+   * to cast shadows into view.
    */
   private updateMeshVisibility(reachable: Set<string>): void {
-    if (!this.lastPlayerChunk) return;
-    
-    const { cx: pcx, cy: pcy, cz: pcz } = this.lastPlayerChunk;
-    const visibilityRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
-
     for (const [key] of this.geometries) {
-      const chunk = this.chunks.get(key);
-      if (!chunk) {
-        this.chunkGrouper.setVisible(key, false);
-        continue;
-      }
-
-      // Hysteresis: show if reachable OR within extended radius
-      const inReachable = reachable.has(key);
-      const dx = Math.abs(chunk.cx - pcx);
-      const dy = Math.abs(chunk.cy - pcy);
-      const dz = Math.abs(chunk.cz - pcz);
-      const inExtendedRadius = dx <= visibilityRadius && dy <= visibilityRadius && dz <= visibilityRadius;
-
-      if (!inReachable && !inExtendedRadius) {
-        this.chunkGrouper.setVisible(key, false);
-        continue;
-      }
-
-      // Skip preview chunks — their groups are suppressed, don't touch visibility
-      if (this.previewChunks.has(key)) {
-        continue;
-      }
-
-      this.chunkGrouper.setVisible(key, true);
-      // Shadow culling is handled per-group in ChunkGrouper.rebuild()
+      // Preview chunks: their groups are suppressed and preview meshes render instead — never touch
+      // their visibility here.
+      if (this.previewChunks.has(key)) continue;
+      this.chunkGrouper.setVisible(key, reachable.has(key));
     }
   }
 
@@ -852,9 +750,6 @@ export class VoxelWorld implements ChunkProvider {
     // Compute visibility graph for this chunk
     chunk.visibilityBits = computeVisibility(chunk.data);
 
-    // Cache face-surface bitmask (avoids per-frame voxel scanning in getMarginNeighborRequests)
-    chunk.faceSurfaceMask = VoxelWorld.computeFaceSurfaceMask(chunk.data);
-    
     // Queue for remeshing
     this.remeshPipeline.add(key);
     

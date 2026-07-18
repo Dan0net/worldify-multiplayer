@@ -5,7 +5,9 @@
  * - Start from camera chunk
  * - BFS through chunks, checking visibility graph at each step
  * - Only traverse to neighbors if visibility allows
- * - Apply frustum culling and distance limits
+ * - Monotonic-direction rule: a path never reverses on an axis, so chunks reachable only by doubling
+ *   back around an occluder (unseeable from the camera) are culled
+ * - Apply distance limits (frustum culling is available but currently disabled here)
  * 
  * OPTIMIZED: Zero allocations during traversal.
  * - Pre-allocated typed array queues
@@ -39,6 +41,14 @@ export interface ChunkProvider {
   getChunkByKey(key: string): Chunk | undefined;
   /** Check if a chunk is pending load */
   isPending(key: string): boolean;
+  /**
+   * True ONLY when this chunk position is genuine open sky — above the column's content top, so no
+   * voxel data exists there and none ever will. The BFS traverses through such chunks as transparent
+   * (you can see the terrain beyond them). Returns false for unloaded TERRAIN (data exists but hasn't
+   * streamed) and for unknown columns (no tile yet) — those must load before they can be traversed,
+   * so we never see through not-yet-loaded rock.
+   */
+  isEmptyAir(cx: number, cy: number, cz: number): boolean;
 }
 
 // ============== Pre-allocated Buffers ==============
@@ -54,6 +64,13 @@ const bfsQueue = new Int32Array(GRID_SIZE);
 
 /** Entry face for each queued item (-1 for start chunk = camera) */
 const bfsEntryFace = new Int8Array(GRID_SIZE);
+
+/**
+ * Directions travelled to reach each queued item — a 6-bit mask of `1 << ChunkFace` exit directions
+ * accumulated along the path from the camera. Used by the monotonic-direction rule (see BFS loop).
+ * Written per queue slot before enqueue and read at dequeue, so it needs no generation reset.
+ */
+const bfsDirMask = new Uint8Array(GRID_SIZE);
 
 /** Visited markers */
 const bfsVisited = new Uint8Array(GRID_SIZE);
@@ -176,12 +193,14 @@ export function getVisibleChunks(
   const startIdx = gridToIndex(centerOffset, centerOffset, centerOffset);
   bfsQueue[queueTail] = startIdx;
   bfsEntryFace[queueTail] = -1; // Camera chunk: no entry face
+  bfsDirMask[queueTail] = 0;    // Camera chunk: no directions travelled yet (all 6 may be seeded)
   queueTail++;
   bfsVisited[startIdx] = gen;
   
   while (queueHead < queueTail) {
     const idx = bfsQueue[queueHead];
     const entryFace = bfsEntryFace[queueHead];
+    const dirMask = bfsDirMask[queueHead];
     queueHead++;
     
     // Convert grid index back to grid coords
@@ -197,23 +216,31 @@ export function getVisibleChunks(
     // Get chunk data for visibility check
     const key = chunkKey(cx, cy, cz);
     const chunk = chunkProvider.getChunkByKey(key);
-    
+
     // Add to visible list (BFS reached it, so it's potentially visible)
     visibleIndices[visibleCount++] = idx;
-    
-    // Check if chunk needs to be requested
-    if (!chunk && !chunkProvider.isPending(key)) {
-      toRequestIndices[toRequestCount++] = idx;
+
+    // Determine how to traverse this cell.
+    let effectiveVisBits: number;
+    if (chunk) {
+      // Loaded: use its real visibility graph (-1 = not computed yet → treat as all visible).
+      const visBits = chunk.visibilityBits;
+      effectiveVisBits = visBits === -1 ? VISIBILITY_ALL : visBits;
+    } else if (chunkProvider.isEmptyAir(cx, cy, cz)) {
+      // Genuine open sky above the terrain — no chunk will ever load here. Traverse through it as
+      // transparent so the BFS can reach the terrain beyond (e.g. when high above the surface).
+      // Nothing to request.
+      effectiveVisBits = VISIBILITY_ALL;
+    } else {
+      // Unloaded TERRAIN (data exists but hasn't streamed) or an unknown column. Request it, but do
+      // NOT traverse through it — assuming it's transparent could reveal chunks behind not-yet-loaded
+      // rock. It streams in, and the next BFS (re-run on frontier change) traverses it for real.
+      if (!chunkProvider.isPending(key)) {
+        toRequestIndices[toRequestCount++] = idx;
+      }
+      continue;
     }
-    
-    // IMPORTANT: Don't traverse through unloaded chunks
-    // We request them, but can't know their visibility until loaded
-    if (!chunk) continue;
-    
-    // Get visibility bits (-1 means "not computed yet", treat as all visible)
-    const visBits = chunk.visibilityBits;
-    const effectiveVisBits = visBits === -1 ? VISIBILITY_ALL : visBits;
-    
+
     // Explore neighbors
     for (let exitFace = 0; exitFace < 6; exitFace++) {
       const offsetBase = exitFace * 3;
@@ -232,20 +259,30 @@ export function getVisibleChunks(
       // Distance check (offset by player's fractional position within their chunk)
       const newDist = Math.abs(ngx - centerOffset - fracX) + Math.abs(ngy - centerOffset - fracY) + Math.abs(ngz - centerOffset - fracZ);
       if (newDist > maxRadius) continue;
-      
+
+      // Monotonic-direction rule (Minecraft ACCA): never step in a direction whose OPPOSITE has
+      // already been travelled on this path (exit faces pair as f^1: +X/-X, +Y/-Y, +Z/-Z). This is
+      // what stops the visibility search from leaking AROUND an occluder — a chunk reachable only via
+      // a path that doubles back on an axis is culled, because you couldn't have seen it in a
+      // straight line from the camera. The camera chunk starts with an empty mask and seeds all 6
+      // faces, so every axis-direction still expands outward; it just can't reverse. Camera-facing
+      // independent (no cameraDir) and computed inline, so no extra cost or per-frame recompute.
+      if (dirMask & (1 << (exitFace ^ 1))) continue;
+
       // Visibility check: can we see through from entry face to this exit face?
       // Camera chunk (entryFace = -1) can see all directions
       if (entryFace !== -1 && !canSeeThrough(effectiveVisBits, entryFace as ChunkFace, exitFace as ChunkFace)) {
         continue;
       }
-      
+
       // Calculate entry face for neighbor (opposite of exit face)
       const neighborEntryFace = getOppositeFace(exitFace as ChunkFace);
-      
+
       // Mark visited and queue
       bfsVisited[neighborIdx] = gen;
       bfsQueue[queueTail] = neighborIdx;
       bfsEntryFace[queueTail] = neighborEntryFace;
+      bfsDirMask[queueTail] = dirMask | (1 << exitFace);
       queueTail++;
     }
   }

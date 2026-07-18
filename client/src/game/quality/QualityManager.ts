@@ -17,6 +17,7 @@ import {
   QualityLevel,
   QualitySettings,
   QUALITY_PRESETS,
+  snapViewDistance,
   saveQualityLevel,
   saveVisibilityRadius,
 } from './QualityPresets.js';
@@ -83,7 +84,10 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   const preset = QUALITY_PRESETS[level];
   const settings: QualitySettings = {
     ...preset,
-    visibilityRadius: customVisibility ?? preset.visibilityRadius,
+    // Snap a persisted custom radius (possibly from an older 2/4/6/8 build) into the current set.
+    visibilityRadius: customVisibility !== undefined
+      ? snapViewDistance(customVisibility)
+      : preset.visibilityRadius,
   };
 
   // Single source of truth — this also drives the effects.ts / SkyDome
@@ -174,7 +178,7 @@ export function applyQualityPatch(patch: Partial<QualitySettings>): void {
 
 /** Apply just the visibility radius (thin wrapper — home screen View control). */
 export function applyVisibilityRadius(radius: number): void {
-  applyQualityPatch({ visibilityRadius: radius });
+  applyQualityPatch({ visibilityRadius: snapViewDistance(radius) });
 }
 
 /** Current shadow radius in chunks. Used by VoxelWorld for castShadow culling. */

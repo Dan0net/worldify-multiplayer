@@ -118,8 +118,14 @@ export const COLLISION_CHUNK_RADIUS = 1;
 export const COLLIDER_CHUNK_RADIUS = 2;
 
 // ============== Visibility Culling ==============
-/** Maximum BFS traversal distance in chunks */
-export const VISIBILITY_RADIUS = 8;
+/**
+ * Maximum supported view distance, in chunks, and the radius the visibility BFS pre-allocates its
+ * grid buffers for (GRID_DIAMETER = 2*R+1). This MUST be >= the largest selectable view distance
+ * (see QualityPresets' visibilityRadius options) — the BFS clips traversal at the grid edge, so a
+ * view distance beyond this would silently fail to reach. Also the initial/fallback radius before
+ * quality settings apply.
+ */
+export const VISIBILITY_RADIUS = 11;
 
 /** Buffer distance beyond visible before unloading */
 export const VISIBILITY_UNLOAD_BUFFER = 1;
