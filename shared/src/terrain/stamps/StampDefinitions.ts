@@ -883,10 +883,9 @@ interface TowerParams {
   numFloors: number;
   floorHeight: number;
   interiorR: number;
-  newelR: number;
+  innerEdge: number;
   rampThickness: number;
   platThickness: number;
-  stairOpenHalfAngle: number;
   windowHalfHeight: number;
   windowHalfAngle: number;
   wallMaterial: number;
@@ -899,8 +898,10 @@ interface TowerParams {
  * Generate a tall round tower using SDF sampling with rotation.
  *
  * Built like the round hut (round hollow-cylinder walls, carved doorway + entrance
- * steps, conical roof) but multiple floors tall, with an internal spiral ramp the
- * player climbs and a solid floor platform at each level (with a stairwell opening).
+ * steps, conical roof) but multiple floors tall. Inside, a spiral ramp hugs the wall
+ * (an outer band) and each level has a central floor landing that sits INSIDE that band.
+ * Keeping the ramp and the floors in separate radial zones is what gives the ramp real
+ * headroom: nothing overhangs it, so clearance above the ramp is floorHeight - rampThickness.
  * The ramp is a smooth helicoid rather than blocky steps, because the player collides
  * against the smooth SurfaceNet isosurface as a capsule.
  */
@@ -914,11 +915,13 @@ function generateTowerSDF(variant: number, rotation: number, seed: number = 0): 
   const rng = makeRng(seed);
   const numFloors = 2 + Math.floor(rng() * 3); // 2, 3, or 4
 
-  const radius = 9 + (variant % 2);            // 9-10 voxels (~2.25-2.5m)
+  const radius = 12 + (variant % 2);           // 12-13 voxels (~3-3.25m); wide enough for a spiral band + a central landing
   const wallThickness = 2;
-  const floorHeight = 11;                      // voxels per floor (~2.75m); headroom = floorHeight - rampThickness
+  const floorHeight = 12;                       // voxels per floor (~3m)
   const wallHeight = numFloors * floorHeight;
   const roofHeight = radius + 4;
+  const interiorR = radius - wallThickness;
+  const stairWidth = 5;                         // width of the wall-hugging spiral band (voxels)
 
   // Stone / brick theme (visually distinct from the wooden hut).
   const wallMaterials = [mat('stone'), mat('brick2')];
@@ -932,11 +935,10 @@ function generateTowerSDF(variant: number, rotation: number, seed: number = 0): 
     doorHeight: 8,
     numFloors,
     floorHeight,
-    interiorR: radius - wallThickness,
-    newelR: 1.5,
-    rampThickness: 3,
+    interiorR,
+    innerEdge: interiorR - stairWidth, // ramp occupies [innerEdge, interiorR]; landings fill r <= innerEdge
+    rampThickness: 2.5,
     platThickness: 2,
-    stairOpenHalfAngle: 0.7,   // ~40deg pie-slice stairwell opening in each platform
     windowHalfHeight: 3,
     windowHalfAngle: 0.2,      // narrow arrow-slit windows
     wallMaterial: wallMaterials[variant % wallMaterials.length],
@@ -985,16 +987,16 @@ function generateTowerSDF(variant: number, rotation: number, seed: number = 0): 
 
 /**
  * Evaluate the tower at a point in local (unrotated) space.
- * Branch order matters: solid interior features (floor, newel, ramp, platforms) are
- * tested before the interior air carve so they survive; the air carve hollows the rest.
+ * Branch order matters: solid interior features (ground floor, central landings, ramp)
+ * are tested before the interior air carve so they survive; the air carve hollows the rest.
  */
 function evaluateTowerSDF(
   x: number, y: number, z: number, p: TowerParams
 ): { material: number; weight: number } | null {
   const {
     radius, wallHeight, roofHeight, wallThickness, doorHalfWidth, doorHeight,
-    numFloors, floorHeight, interiorR, newelR, rampThickness, platThickness,
-    stairOpenHalfAngle, windowHalfHeight, windowHalfAngle,
+    numFloors, floorHeight, interiorR, innerEdge, rampThickness, platThickness,
+    windowHalfHeight, windowHalfAngle,
     wallMaterial, foundationMaterial, floorMaterial, roofMaterial,
   } = p;
 
@@ -1034,41 +1036,31 @@ function evaluateTowerSDF(
   }
 
   // Interior features share polar coords. rampAng is offset so the spiral's base seam
-  // (and the stairwell openings stacked above it) sit over the door (-Z).
+  // (where each flight starts) sits over the door (-Z) - you climb straight from the entrance.
   const r = Math.sqrt(x * x + z * z);
   let physAng = Math.atan2(z, x);
   if (physAng < 0) physAng += TWO_PI;
   let rampAng = physAng + Math.PI / 2; // door at -Z (physAng 3PI/2) -> rampAng 0
   if (rampAng >= TWO_PI) rampAng -= TWO_PI;
 
-  const topFloorY = 1 + (numFloors - 1) * floorHeight;
-
-  // Central newel column the spiral wraps
-  if (y >= 1 && y <= topFloorY && r < newelR) {
-    return { material: floorMaterial, weight: 0.45 };
+  // Central floor landing at each upper level. It fills only the CENTRE (inside the spiral
+  // band, r <= innerEdge), so it never overhangs the ramp - that is what keeps the ramp
+  // climbable. Headroom in a landing room is floorHeight - platThickness.
+  for (let f = 1; f < numFloors; f++) {
+    const surfaceY = 1 + f * floorHeight;
+    if (y >= surfaceY - platThickness && y < surfaceY && r <= innerEdge) {
+      return { material: floorMaterial, weight: 0.45 };
+    }
   }
 
-  // Spiral ramp (helicoid): one full turn per floor, from the ground up to the top floor.
-  if (y >= 1 && r >= newelR - 0.5 && r <= interiorR) {
+  // Spiral ramp (helicoid): a wall-hugging band (r in [innerEdge, interiorR]) making one
+  // full turn per floor, climbing from the ground to the top floor. The central landings sit
+  // inside innerEdge and never cap it, so clearance above the ramp is floorHeight - rampThickness.
+  if (y >= 1 && r >= innerEdge && r <= interiorR) {
     for (let k = 0; k < numFloors - 1; k++) {
       const hk = 1 + (rampAng / TWO_PI) * floorHeight + k * floorHeight;
       if (y <= hk && y > hk - rampThickness) {
         return { material: floorMaterial, weight: 0.45 };
-      }
-    }
-  }
-
-  // Solid floor platform at each upper level, minus a pie-slice stairwell opening at the seam
-  for (let f = 1; f < numFloors; f++) {
-    const surfaceY = 1 + f * floorHeight;
-    if (y >= surfaceY - platThickness && y < surfaceY) {
-      const platDist = sdfCylinder({ x, y: 0, z }, interiorR, 1);
-      if (platDist < SDF_THRESHOLD) {
-        const angFromSeam = Math.min(rampAng, TWO_PI - rampAng);
-        const inOpening = angFromSeam < stairOpenHalfAngle && r > newelR - 0.5;
-        if (!inOpening) {
-          return { material: floorMaterial, weight: 0.45 };
-        }
       }
     }
   }

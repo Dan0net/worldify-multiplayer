@@ -50,12 +50,13 @@ describe('BUILDING_TOWER placement across vertical chunks', () => {
     const terrainH = Math.floor(genOn.sampleHeight(tower!.worldX, tower!.worldZ));
 
     // ---- diff stamps-on vs stamps-off within the tower's footprint over the full column ----
-    // Nothing else is placed within the tower's 25 m exclusion radius, so a ±15-voxel window
+    // Nothing else is placed within the tower's 25 m exclusion radius, so a ±20-voxel window
     // around the origin isolates the tower cleanly from other stamps.
+    const FOOTPRINT = 20;
     const ocx = Math.floor(originVX / CHUNK_SIZE);
     const ocz = Math.floor(originVZ / CHUNK_SIZE);
     const cyLo = Math.floor((terrainH - 4) / CHUNK_SIZE);
-    const cyHi = Math.floor((terrainH + 64) / CHUNK_SIZE); // covers a max-height (~4-floor) tower
+    const cyHi = Math.floor((terrainH + 84) / CHUNK_SIZE); // covers a max-height (~4-floor) tower
 
     const addedCys = new Set<number>();
     let addedMinY = Infinity;
@@ -70,10 +71,10 @@ describe('BUILDING_TOWER placement across vertical chunks', () => {
           const off = genOff.generateChunk(cX, cy, cZ);
           for (let lz = 0; lz < CHUNK_SIZE; lz++) {
             const gz = cZ * CHUNK_SIZE + lz;
-            if (Math.abs(gz - originVZ) > 15) continue;
+            if (Math.abs(gz - originVZ) > FOOTPRINT) continue;
             for (let lx = 0; lx < CHUNK_SIZE; lx++) {
               const gx = cX * CHUNK_SIZE + lx;
-              if (Math.abs(gx - originVX) > 15) continue;
+              if (Math.abs(gx - originVX) > FOOTPRINT) continue;
               for (let ly = 0; ly < CHUNK_SIZE; ly++) {
                 const idx = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
                 const onSolid = isSolid(on[idx]);
