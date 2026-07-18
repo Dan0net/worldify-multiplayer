@@ -41,7 +41,7 @@ import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
-import { expandChunkToGrid } from './ChunkMesher.js';
+import { expandChunkToGrid, setEmptyAirPredicate } from './ChunkMesher.js';
 import { resampleLightAttributes } from './MeshGeometry.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
@@ -197,6 +197,9 @@ export class VoxelWorld implements ChunkProvider {
       this.pendingChunks,
       (cx, cy, cz) => this.isMarginSourceExpected(cx, cy, cz),
     );
+    // Let the mesher distinguish open sky from not-yet-loaded, so terrain tops that meet a chunk
+    // boundary against sky mesh against air (capped) instead of being skipped/extrapolated → no gap.
+    setEmptyAirPredicate((cx, cy, cz) => this.isEmptyAir(cx, cy, cz));
     this.seamStitcher = new SeamStitcher(this.geometries, (ck) => {
       const gk = this.chunkGrouper.getGroupKey(ck);
       if (gk) this.chunkGrouper.markGroupDirty(gk);
@@ -527,9 +530,25 @@ export class VoxelWorld implements ChunkProvider {
     const MAX_PENDING_TILES = 4;
     const MAX_PENDING_CHUNKS = 4;
 
-    // Phase 1: Identify columns that need tiles
+    // Request NEAREST-FIRST. Only a few requests fit per call (throttle), so ordering decides what
+    // loads now — and the margin-source loader appends occluded neighbours, which would otherwise sit
+    // behind the whole frontier. Sorting by distance to the player means a near chunk AND its near
+    // margins load together, so terrain around the player meshes immediately instead of after the
+    // entire queue drains (the "delay before anything renders").
+    const p = this.lastPlayerChunk;
+    const sorted = [...toRequest];
+    if (p) {
+      const dist = new Map<string, number>();
+      for (const key of sorted) {
+        const { cx, cy, cz } = parseChunkKey(key);
+        dist.set(key, (cx - p.cx) ** 2 + (cy - p.cy) ** 2 + (cz - p.cz) ** 2);
+      }
+      sorted.sort((a, b) => dist.get(a)! - dist.get(b)!);
+    }
+
+    // Phase 1: Identify columns that need tiles (nearest-first)
     const columnsNeedingTiles = new Set<string>();
-    for (const key of toRequest) {
+    for (const key of sorted) {
       const [cx, , cz] = key.split(',').map(Number);
       const columnKey = `${cx},${cz}`;
       if (!this.columnInfo.has(columnKey) && !this.pendingTiles.has(columnKey) && !this.pendingColumns.has(columnKey)) {
@@ -544,9 +563,9 @@ export class VoxelWorld implements ChunkProvider {
       this.requestTileFromServer(tx, tz);
     }
 
-    // Phase 2: Request chunks only for columns we have tile info for
+    // Phase 2: Request chunks only for columns we have tile info for (nearest-first)
     let chunkRequests = 0;
-    for (const key of toRequest) {
+    for (const key of sorted) {
       if (this.pendingChunks.size >= MAX_PENDING_CHUNKS) break;
       if (chunkRequests >= MAX_PENDING_CHUNKS) break;
       if (this.pendingChunks.has(key)) continue;

@@ -12,14 +12,33 @@
  * - meshChunk(): Sync fallback — expand + SurfaceNet in one call (used by remeshAllDirty, etc.)
  */
 
-import { 
+import {
   CHUNK_SIZE,
   GRID_SIZE,
+  VOXELS_PER_CHUNK,
+  LIGHT_MAX,
   chunkKey,
   voxelIndex,
+  packVoxel,
 } from '@worldify/shared';
 import { Chunk } from './Chunk.js';
 import { meshVoxelsSplit, SurfaceNetInput, SplitSurfaceNetOutput } from './SurfaceNet.js';
+
+/**
+ * Predicate: is (cx,cy,cz) genuine open sky (above the column's content top) — a chunk that will
+ * never load? Registered by VoxelWorld. When a high-side neighbour is absent, we distinguish "not
+ * loaded yet" (extrapolate the edge, and skip the boundary face to avoid inventing geometry) from
+ * "open sky" (fill the margin with AIR and MESH the face, so a terrain top that meets a chunk
+ * boundary against sky isn't left as a gap). Main-thread only (expansion runs on the main thread).
+ */
+let isEmptyAirFn: ((cx: number, cy: number, cz: number) => boolean) | null = null;
+export function setEmptyAirPredicate(fn: (cx: number, cy: number, cz: number) => boolean): void {
+  isEmptyAirFn = fn;
+}
+
+/** A virtual all-air chunk (weight below the surface, full sky light) used as the margin for an
+ *  open-sky neighbour, so surfaces at that boundary mesh against air instead of extrapolated solid. */
+const AIR_CHUNK = new Uint32Array(VOXELS_PER_CHUNK).fill(packVoxel(-0.5, 0, LIGHT_MAX));
 
 // Re-export types for convenience
 export type { SplitSurfaceNetOutput as ChunkMeshOutput };
@@ -71,8 +90,10 @@ function expandChunkData(
   const cx = chunk.cx, cy = chunk.cy, cz = chunk.cz;
   const getNeighborData = (ncx: number, ncy: number, ncz: number): Uint32Array | null => {
     const n = neighbors.get(chunkKey(ncx, ncy, ncz));
-    if (!n) return null;
-    return (useTemp && n.tempData) ? n.tempData : n.data;
+    if (n) return (useTemp && n.tempData) ? n.tempData : n.data;
+    // Not loaded: if it's genuine open sky, mesh against AIR (so a terrain top at this boundary caps
+    // correctly); otherwise return null → the caller extrapolates the edge (avoids inventing surface).
+    return isEmptyAirFn?.(ncx, ncy, ncz) ? AIR_CHUNK : null;
   };
 
   // Face neighbors
@@ -205,11 +226,20 @@ function getSkipHighBoundary(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
 ): [boolean, boolean, boolean] {
+  // Skip a high face only when its neighbour is truly absent (not loaded yet) — NOT when it's open
+  // sky. Open sky is meshed against air (see getNeighborData), so skipping it would re-open the gap.
   return [
-    !neighbors.has(chunkKey(chunk.cx + 1, chunk.cy, chunk.cz)),     // +X
-    !neighbors.has(chunkKey(chunk.cx, chunk.cy + 1, chunk.cz)),     // +Y  
-    !neighbors.has(chunkKey(chunk.cx, chunk.cy, chunk.cz + 1)),     // +Z
+    highFaceAbsent(chunk.cx + 1, chunk.cy, chunk.cz, neighbors),
+    highFaceAbsent(chunk.cx, chunk.cy + 1, chunk.cz, neighbors),
+    highFaceAbsent(chunk.cx, chunk.cy, chunk.cz + 1, neighbors),
   ];
+}
+
+/** A high-side neighbour is "absent" for boundary-skipping if it's neither loaded nor open sky. */
+function highFaceAbsent(cx: number, cy: number, cz: number, neighbors: Map<string, Chunk>): boolean {
+  if (neighbors.has(chunkKey(cx, cy, cz))) return false;   // loaded
+  if (isEmptyAirFn?.(cx, cy, cz)) return false;            // open sky → meshed against air, not skipped
+  return true;                                             // genuinely not loaded yet
 }
 
 /**
