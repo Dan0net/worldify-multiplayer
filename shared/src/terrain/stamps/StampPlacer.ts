@@ -5,7 +5,7 @@
 
 import { CHUNK_SIZE, VOXEL_SCALE } from '../../voxel/constants.js';
 import { packVoxel, getWeight, voxelIndex } from '../../voxel/voxelData.js';
-import { getStamp, StampType, StampVoxel, hashInt2 } from './StampDefinitions.js';
+import { getStamp, StampVoxel, hashInt2, isBuildingStamp } from './StampDefinitions.js';
 import { StampPlacement } from './StampPointGenerator.js';
 
 // ============== Types ==============
@@ -83,8 +83,8 @@ export class StampPlacer {
     // Sort placements so buildings are applied last
     // This ensures their interior carving voxels remove any overlapping trees/rocks
     const sortedPlacements = [...placements].sort((a, b) => {
-      const aIsBuilding = a.type === StampType.BUILDING_SMALL || a.type === StampType.BUILDING_HUT;
-      const bIsBuilding = b.type === StampType.BUILDING_SMALL || b.type === StampType.BUILDING_HUT;
+      const aIsBuilding = isBuildingStamp(a.type);
+      const bIsBuilding = isBuildingStamp(b.type);
       if (aIsBuilding && !bIsBuilding) return 1;  // a after b
       if (!aIsBuilding && bIsBuilding) return -1; // a before b
       return 0;

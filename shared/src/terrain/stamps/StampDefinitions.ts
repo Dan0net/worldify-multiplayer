@@ -11,6 +11,9 @@ import { mat } from '../../materials/index.js';
 // SDF threshold for voxel inclusion - sqrt(2)/2 handles 45° rotations
 const SDF_THRESHOLD = 0.71;
 
+// Full turn in radians (spiral-stair / window angle math)
+const TWO_PI = Math.PI * 2;
+
 // ============== Types ==============
 
 export interface StampVoxel {
@@ -47,6 +50,7 @@ export enum StampType {
   ROCK_LARGE = 'rock_large',
   BUILDING_SMALL = 'building_small',
   BUILDING_HUT = 'building_hut',
+  BUILDING_TOWER = 'building_tower',
   TORCH = 'torch',
 }
 
@@ -868,15 +872,333 @@ function evaluateHutSDF(
   return null;
 }
 
+/** Tunable geometry for a single tower instance (built once in generateTowerSDF). */
+interface TowerParams {
+  radius: number;
+  wallHeight: number;      // top of the solid wall ring (roofed: full height; battlement: terrace level)
+  roofHeight: number;
+  wallThickness: number;
+  doorHalfWidth: number;
+  doorHeight: number;
+  numFloors: number;
+  floorHeight: number;
+  interiorR: number;
+  innerEdge: number;       // ramp band is [innerEdge, interiorR]; landings/deck centre fill r <= innerEdge
+  rampThickness: number;
+  platThickness: number;
+  windowHalfHeight: number;
+  windowHalfAngle: number;
+  topFloorY: number;       // walking height of the top floor / roof deck
+  stairArc: number;        // angular span the final flight climbs (also the top-deck stairwell opening)
+  battlement: boolean;     // true: no roof; crenellated parapet + open terrace instead of top windows
+  parapetH: number;        // battlement parapet height above the terrace
+  merlonSectors: number;   // battlement crenellation sectors (alternating merlon / crenel)
+  wallMaterial: number;
+  foundationMaterial: number;
+  floorMaterial: number;
+  roofMaterial: number;
+}
+
+/**
+ * Generate a tall round tower using SDF sampling with rotation.
+ *
+ * Built like the round hut (round hollow-cylinder walls, carved doorway + entrance steps)
+ * but multiple floors tall. Inside, a spiral ramp hugs the wall (an outer band) and each
+ * level has a central floor landing inside that band - keeping the ramp and floors in
+ * separate radial zones gives the ramp real headroom (nothing overhangs it). The top floor
+ * is a full deck: the final flight is confined to a limited arc (the stairwell) so the deck
+ * can be solid everywhere else without capping the climb.
+ *
+ * Two styles by variant: variants 0-1 get a conical roof and windows on every floor;
+ * variants 2-3 are battlements - no roof, an open terrace with a crenellated parapet on top,
+ * and no windows on that top floor.
+ */
+function generateTowerSDF(variant: number, rotation: number, seed: number = 0): StampDefinition {
+  const voxels: StampVoxel[] = [];
+
+  // Per-building RNG: number of floors is the random 2-4 the tower height varies over.
+  // (Deriving floors from `seed` is safe even though bounds are computed with seed=0 in
+  // stampAffectsChunk: that culling is X/Z only, and the X/Z footprint depends on `radius`
+  // which is variant-derived, so the horizontal bounds are identical regardless of floors.)
+  const rng = makeRng(seed);
+  const numFloors = 2 + Math.floor(rng() * 3); // 2, 3, or 4
+  const battlement = variant >= 2;              // variants 2-3: crenellated top instead of a roof
+
+  const radius = 12 + (variant % 2);            // 12-13 voxels (~3-3.25m); wide enough for a spiral band + a central landing
+  const wallThickness = 2;
+  const floorHeight = 12;                        // voxels per floor (~3m)
+  const interiorR = radius - wallThickness;
+  const stairWidth = 5;                          // width of the wall-hugging spiral band (voxels)
+  const topFloorY = 1 + (numFloors - 1) * floorHeight;
+  const roofHeight = radius + 4;
+  const parapetH = 5;
+  // Roofed towers keep a top room + ceiling above the top floor; battlements stop at the terrace.
+  const wallHeight = battlement ? topFloorY : numFloors * floorHeight;
+
+  // Stone / brick theme (visually distinct from the wooden hut).
+  const wallMaterials = [mat('stone'), mat('brick2')];
+  const roofMaterials = [mat('roof'), mat('roof2')];
+  const params: TowerParams = {
+    radius,
+    wallHeight,
+    roofHeight,
+    wallThickness,
+    doorHalfWidth: 3,
+    doorHeight: 8,
+    numFloors,
+    floorHeight,
+    interiorR,
+    innerEdge: interiorR - stairWidth, // ramp occupies [innerEdge, interiorR]; landings fill r <= innerEdge
+    rampThickness: 2.5,
+    platThickness: 2,
+    windowHalfHeight: 3,
+    windowHalfAngle: 0.2,      // narrow arrow-slit windows
+    topFloorY,
+    stairArc: Math.PI,         // final flight climbs over 180deg; the top deck fills the rest of the ring
+    battlement,
+    parapetH,
+    merlonSectors: 16,         // 8 merlons / 8 crenels around the parapet
+    wallMaterial: wallMaterials[variant % wallMaterials.length],
+    foundationMaterial: mat('stone2'),
+    floorMaterial: mat('cobble2'),
+    roofMaterial: roofMaterials[variant % roofMaterials.length],
+  };
+
+  // Pre-compute rotation
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+
+  // Bounding box with margin for rotation
+  const maxDim = radius + 5;
+  const maxHeight = (battlement ? topFloorY + parapetH : wallHeight + roofHeight) + 2;
+
+  // Sample SDF over the entire bounding volume
+  for (let y = -2; y <= maxHeight; y++) {
+    for (let x = -maxDim; x <= maxDim; x++) {
+      for (let z = -maxDim; z <= maxDim; z++) {
+        // Rotate query point to local building space (inverse rotation)
+        const { rx, rz } = rotateXZ(x, z, cos, -sin);
+
+        const voxelData = evaluateTowerSDF(rx, y, rz, params);
+        if (voxelData) {
+          voxels.push({ x, y, z, material: voxelData.material, weight: voxelData.weight });
+        }
+      }
+    }
+  }
+
+  // --- Decorations (deterministic per building) ---
+  // Exterior torches flanking the door (front = -Z) on 40% of towers.
+  if (rng() < 0.4) {
+    pushTorchAt(voxels, -(params.doorHalfWidth + 1), -radius, params.doorHeight, cos, sin);
+    pushTorchAt(voxels, params.doorHalfWidth + 1, -radius, params.doorHeight, cos, sin);
+  }
+
+  return {
+    type: StampType.BUILDING_TOWER,
+    variant,
+    voxels,
+    bounds: calculateBounds(voxels),
+  };
+}
+
+/**
+ * Evaluate the tower at a point in local (unrotated) space.
+ * Branch order matters: solid interior features (ground floor, central landings, top deck,
+ * ramp) are tested before the interior air carve so they survive; the air carve hollows the
+ * rest. Roofed vs battlement differ only at the top (ceiling + cone vs parapet + crenels).
+ */
+function evaluateTowerSDF(
+  x: number, y: number, z: number, p: TowerParams
+): { material: number; weight: number } | null {
+  const {
+    radius, wallHeight, roofHeight, wallThickness, doorHalfWidth, doorHeight,
+    numFloors, floorHeight, interiorR, innerEdge, rampThickness, platThickness,
+    windowHalfHeight, windowHalfAngle, topFloorY, stairArc, battlement, parapetH, merlonSectors,
+    wallMaterial, foundationMaterial, floorMaterial, roofMaterial,
+  } = p;
+
+  // Foundation SDF (-2 to 0) + exterior entrance stairs (front, -Z)
+  if (y >= -2 && y < 0) {
+    const foundationDist = sdfCylinder({ x, y: y + 1, z }, radius + 1, 1);
+    if (foundationDist < SDF_THRESHOLD) {
+      return { material: foundationMaterial, weight: 0.45 };
+    }
+    const stairStep = -y - 1;
+    if (stairStep >= 0 && stairStep < 4) {
+      const stairZ = -radius - 1.5 - stairStep;
+      const stairDist = sdfBox({ x, y: 0, z: z - stairZ }, { x: doorHalfWidth, y: 0.5, z: 0.5 });
+      if (stairDist < SDF_THRESHOLD) {
+        return { material: foundationMaterial, weight: 0.45 };
+      }
+    }
+  }
+
+  // Doorway carve - through the wall and slightly in front to clear terrain
+  if (y >= 0 && y < doorHeight) {
+    const doorwayDist = sdfBox(
+      { x, y: y - doorHeight / 2, z: z + radius + 1 },
+      { x: doorHalfWidth + 0.5, y: doorHeight / 2, z: wallThickness + 2 }
+    );
+    if (doorwayDist < SDF_THRESHOLD) {
+      return { material: 0, weight: -0.5 };
+    }
+  }
+
+  // Ground floor (solid disc, y = 0)
+  if (y >= 0 && y < 1) {
+    const floorDist = sdfCylinder({ x, y: y - 0.5, z }, radius, 0.5);
+    if (floorDist < SDF_THRESHOLD) {
+      return { material: floorMaterial, weight: 0.45 };
+    }
+  }
+
+  // Interior features share polar coords. rampAng is offset so the spiral's base seam
+  // (where each flight starts) sits over the door (-Z) - you climb straight from the entrance.
+  const r = Math.sqrt(x * x + z * z);
+  let physAng = Math.atan2(z, x);
+  if (physAng < 0) physAng += TWO_PI;
+  let rampAng = physAng + Math.PI / 2; // door at -Z (physAng 3PI/2) -> rampAng 0
+  if (rampAng >= TWO_PI) rampAng -= TWO_PI;
+
+  // Central floor landings for the LOWER floors: a disc filling only the centre (r <= innerEdge),
+  // so nothing overhangs the ramp band. The top floor is a full deck (handled next).
+  for (let f = 1; f < numFloors - 1; f++) {
+    const surfaceY = 1 + f * floorHeight;
+    if (y >= surfaceY - platThickness && y < surfaceY && r <= innerEdge) {
+      return { material: floorMaterial, weight: 0.45 };
+    }
+  }
+
+  // Top floor deck: a full disc, minus a stairwell opening in the outer ring where the final
+  // flight climbs (rampAng <= stairArc). Because that flight is confined to the arc, the deck is
+  // solid everywhere else without capping the climb - the top floor is a complete floor / terrace.
+  if (y >= topFloorY - platThickness && y < topFloorY && r <= interiorR) {
+    const inStairwell = r >= innerEdge && rampAng <= stairArc;
+    if (!inStairwell) {
+      return { material: floorMaterial, weight: 0.45 };
+    }
+  }
+
+  // Spiral ramp (helicoid): a wall-hugging band (r in [innerEdge, interiorR]). Lower flights make
+  // one full turn per floor; the FINAL flight is confined to stairArc (a little steeper) so the top
+  // deck can close over the rest of the ring. Clearance above a tread is floorHeight - rampThickness.
+  if (y >= 1 && r >= innerEdge && r <= interiorR) {
+    for (let k = 0; k < numFloors - 1; k++) {
+      let hk: number;
+      if (k === numFloors - 2) {                 // final flight -> confined to the stairwell arc
+        if (rampAng > stairArc) continue;
+        hk = 1 + k * floorHeight + (rampAng / stairArc) * floorHeight;
+      } else {
+        hk = 1 + k * floorHeight + (rampAng / TWO_PI) * floorHeight;
+      }
+      if (y <= hk && y > hk - rampThickness) {
+        return { material: floorMaterial, weight: 0.45 };
+      }
+    }
+  }
+
+  // Interior air - hollow out everything else inside the shell (up to the ceiling / top deck)
+  if (y >= 1 && y < wallHeight - 1) {
+    const interiorDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, interiorR, wallHeight / 2);
+    if (interiorDist < -SDF_THRESHOLD) {
+      return { material: 0, weight: -0.5 };
+    }
+  }
+
+  // Ceiling under the roof (roofed variants only; battlements are open to the terrace)
+  if (!battlement && y >= wallHeight - 2 && y < wallHeight) {
+    const ceilingDist = sdfCylinder({ x, y: y - wallHeight + 1, z }, interiorR, 1);
+    if (ceilingDist < SDF_THRESHOLD) {
+      return { material: mat('concrete'), weight: 0.45 };
+    }
+  }
+
+  // Walls (hollow cylinder) with a door opening and windows on every floor
+  if (y >= 1 && y < wallHeight) {
+    const outerDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, radius, wallHeight / 2);
+    const innerDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, radius - wallThickness, wallHeight / 2 + 1);
+
+    if (outerDist < SDF_THRESHOLD && innerDist > -SDF_THRESHOLD) {
+      // Door opening (front, -Z)
+      if (z < -radius + wallThickness + SDF_THRESHOLD && y < doorHeight) {
+        const doorDist = sdfBox(
+          { x, y: y - doorHeight / 2, z: z + radius },
+          { x: doorHalfWidth, y: doorHeight / 2, z: wallThickness + 1 }
+        );
+        if (doorDist < SDF_THRESHOLD) {
+          return null;
+        }
+      }
+
+      // Windows: 4 arrow-slits per floor at 45/135/225/315deg (clear of the door at -Z). A
+      // battlement's open terrace (its top floor) gets none.
+      const windowFloors = battlement ? numFloors - 1 : numFloors;
+      for (let f = 0; f < windowFloors; f++) {
+        const yC = 1 + f * floorHeight + floorHeight / 2;
+        if (Math.abs(y - yC) <= windowHalfHeight) {
+          for (let w = 0; w < 4; w++) {
+            const aC = Math.PI / 4 + w * (Math.PI / 2);
+            let dA = Math.abs(physAng - aC);
+            if (dA > Math.PI) dA = TWO_PI - dA;
+            if (dA < windowHalfAngle) {
+              return { material: 0, weight: -0.5 };
+            }
+          }
+        }
+      }
+
+      return { material: wallMaterial, weight: 0.45 };
+    }
+  }
+
+  // Conical roof (roofed variants)
+  if (!battlement && y >= wallHeight && y < wallHeight + roofHeight) {
+    const roofY = y - wallHeight;
+    const roofRadius = radius + 1 - (roofY * (radius + 1) / roofHeight);
+    const roofDist = sdfCylinder({ x, y: 0, z }, roofRadius, 0.5);
+    if (roofDist < SDF_THRESHOLD) {
+      return { material: roofMaterial, weight: 0.45 };
+    }
+  }
+
+  // Crenellated parapet (battlement variants): a wall ring rising above the terrace. Solid all
+  // round at the base, then only alternating merlon sectors above, with crenel gaps between them.
+  // Test the ring with r directly (a short sdfCylinder's vertical term would swamp the radial one).
+  if (battlement && y >= topFloorY && y < topFloorY + parapetH &&
+      r >= interiorR - SDF_THRESHOLD && r <= radius + SDF_THRESHOLD) {
+    if (y < topFloorY + 2) {
+      return { material: wallMaterial, weight: 0.45 }; // solid parapet base
+    }
+    const sector = Math.floor((physAng / TWO_PI) * merlonSectors);
+    if (sector % 2 === 0) {
+      return { material: wallMaterial, weight: 0.45 }; // merlon (crenels are the gaps)
+    }
+  }
+
+  return null;
+}
+
 // ============== Stamp Registry ==============
 
 const VARIANTS_PER_TYPE = 4;
 
 /**
+ * Whether a stamp type is a building. Buildings share behaviour across the pipeline:
+ * they are generated fresh with rotation (see getStamp), applied last so their interior
+ * carves win (StampPlacer), and respond to the building-spacing control (TerrainGenerator).
+ */
+export function isBuildingStamp(type: StampType): boolean {
+  return type === StampType.BUILDING_SMALL ||
+         type === StampType.BUILDING_HUT ||
+         type === StampType.BUILDING_TOWER;
+}
+
+/**
  * Check if a stamp type is a building that supports rotation
  */
 export function isRotatableStamp(type: StampType): boolean {
-  return type === StampType.BUILDING_SMALL || type === StampType.BUILDING_HUT;
+  return isBuildingStamp(type);
 }
 
 /**
@@ -926,6 +1248,8 @@ function createStamp(type: StampType, variant: number, rotation: number = 0, see
       return generateSmallBuildingSDF(variant, rotation, seed);
     case StampType.BUILDING_HUT:
       return generateHutSDF(variant, rotation, seed);
+    case StampType.BUILDING_TOWER:
+      return generateTowerSDF(variant, rotation, seed);
     case StampType.TORCH:
       return { type: StampType.TORCH, variant: 0, voxels: TORCH_STAMP_VOXELS, bounds: calculateBounds(TORCH_STAMP_VOXELS) };
     default:
