@@ -41,6 +41,14 @@ export interface ChunkProvider {
   getChunkByKey(key: string): Chunk | undefined;
   /** Check if a chunk is pending load */
   isPending(key: string): boolean;
+  /**
+   * True ONLY when this chunk position is genuine open sky — above the column's content top, so no
+   * voxel data exists there and none ever will. The BFS traverses through such chunks as transparent
+   * (you can see the terrain beyond them). Returns false for unloaded TERRAIN (data exists but hasn't
+   * streamed) and for unknown columns (no tile yet) — those must load before they can be traversed,
+   * so we never see through not-yet-loaded rock.
+   */
+  isEmptyAir(cx: number, cy: number, cz: number): boolean;
 }
 
 // ============== Pre-allocated Buffers ==============
@@ -208,23 +216,31 @@ export function getVisibleChunks(
     // Get chunk data for visibility check
     const key = chunkKey(cx, cy, cz);
     const chunk = chunkProvider.getChunkByKey(key);
-    
+
     // Add to visible list (BFS reached it, so it's potentially visible)
     visibleIndices[visibleCount++] = idx;
-    
-    // Check if chunk needs to be requested
-    if (!chunk && !chunkProvider.isPending(key)) {
-      toRequestIndices[toRequestCount++] = idx;
+
+    // Determine how to traverse this cell.
+    let effectiveVisBits: number;
+    if (chunk) {
+      // Loaded: use its real visibility graph (-1 = not computed yet → treat as all visible).
+      const visBits = chunk.visibilityBits;
+      effectiveVisBits = visBits === -1 ? VISIBILITY_ALL : visBits;
+    } else if (chunkProvider.isEmptyAir(cx, cy, cz)) {
+      // Genuine open sky above the terrain — no chunk will ever load here. Traverse through it as
+      // transparent so the BFS can reach the terrain beyond (e.g. when high above the surface).
+      // Nothing to request.
+      effectiveVisBits = VISIBILITY_ALL;
+    } else {
+      // Unloaded TERRAIN (data exists but hasn't streamed) or an unknown column. Request it, but do
+      // NOT traverse through it — assuming it's transparent could reveal chunks behind not-yet-loaded
+      // rock. It streams in, and the next BFS (re-run on frontier change) traverses it for real.
+      if (!chunkProvider.isPending(key)) {
+        toRequestIndices[toRequestCount++] = idx;
+      }
+      continue;
     }
-    
-    // IMPORTANT: Don't traverse through unloaded chunks
-    // We request them, but can't know their visibility until loaded
-    if (!chunk) continue;
-    
-    // Get visibility bits (-1 means "not computed yet", treat as all visible)
-    const visBits = chunk.visibilityBits;
-    const effectiveVisBits = visBits === -1 ? VISIBILITY_ALL : visBits;
-    
+
     // Explore neighbors
     for (let exitFace = 0; exitFace < 6; exitFace++) {
       const offsetBase = exitFace * 3;

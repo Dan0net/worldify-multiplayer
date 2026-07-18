@@ -13,11 +13,16 @@ import * as THREE from 'three';
 import { VISIBILITY_ALL, VISIBILITY_NONE, chunkKey } from '@worldify/shared';
 import { getVisibleChunks, type ChunkProvider } from './VisibilityBFS.js';
 
-/** Minimal chunk stand-in — the BFS only reads visibilityBits. */
-function makeProvider(vis: Map<string, number>): ChunkProvider {
+/**
+ * Minimal chunk stand-in — the BFS only reads visibilityBits.
+ * `emptyAir` marks positions that are genuine open sky (traversable void); everything else missing
+ * from `vis` is treated as unloaded terrain (requested, not traversed).
+ */
+function makeProvider(vis: Map<string, number>, emptyAir?: (cx: number, cy: number, cz: number) => boolean): ChunkProvider {
   return {
     getChunkByKey: (key: string) => (vis.has(key) ? ({ visibilityBits: vis.get(key)! } as any) : undefined),
     isPending: () => false,
+    isEmptyAir: (cx, cy, cz) => emptyAir?.(cx, cy, cz) ?? false,
   };
 }
 
@@ -80,5 +85,49 @@ describe('visibility BFS monotonic-direction rule', () => {
     ] as const) {
       expect(reachable.has(chunkKey(x, y, z))).toBe(true);
     }
+  });
+});
+
+describe('visibility BFS empty-air vs unloaded-terrain traversal', () => {
+  it('traverses through genuine open sky to reach the terrain beyond (spawned high above)', () => {
+    // Player is high in the air at the origin. The only loaded chunk is the ground 3 below. The
+    // chunks between are open sky (isEmptyAir). The BFS must fall through the sky and reach the
+    // ground — the fix for "jump into an empty chunk → everything vanishes".
+    const vis = new Map<string, number>();
+    vis.set(chunkKey(0, -3, 0), VISIBILITY_ALL); // the ground, loaded
+    const isEmptyAir = (_cx: number, cy: number) => cy > -3; // everything above the ground is sky
+
+    const { reachable } = getVisibleChunks(
+      { cx: 0, cy: 0, cz: 0 },
+      new THREE.Vector3(0, -1, 0),
+      new THREE.Frustum(),
+      makeProvider(vis, isEmptyAir),
+      6,
+    );
+
+    expect(reachable.has(chunkKey(0, -3, 0))).toBe(true);   // reached the ground through the void
+    // Terrain BELOW the ground is unloaded (not sky) and behind the loaded chunk — not traversed.
+    expect(reachable.has(chunkKey(0, -5, 0))).toBe(false);
+  });
+
+  it('does NOT traverse through unloaded terrain — waits for it to load', () => {
+    // Camera in loaded air; the +X neighbour is unloaded TERRAIN (missing, not sky). The BFS must
+    // request it but stop there — it can't see through not-yet-loaded rock — so the loaded chunk
+    // behind it is not selected until the unknown one streams in.
+    const vis = new Map<string, number>();
+    vis.set(chunkKey(0, 0, 0), VISIBILITY_ALL); // camera, loaded
+    vis.set(chunkKey(2, 0, 0), VISIBILITY_ALL); // loaded, but behind the unloaded (1,0,0)
+    // (1,0,0) is absent from vis and isEmptyAir is false everywhere → unloaded terrain.
+
+    const { reachable } = getVisibleChunks(
+      { cx: 0, cy: 0, cz: 0 },
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Frustum(),
+      makeProvider(vis),
+      6,
+    );
+
+    expect(reachable.has(chunkKey(1, 0, 0))).toBe(true);   // reached (and requested), a dead end
+    expect(reachable.has(chunkKey(2, 0, 0))).toBe(false);  // NOT seen through the unloaded chunk
   });
 });

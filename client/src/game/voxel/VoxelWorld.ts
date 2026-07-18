@@ -9,7 +9,6 @@ import {
   CHUNK_SIZE,
   FACE_OFFSETS_6,
   NEGATIVE_MARGIN_OFFSETS_7,
-  MESH_MARGIN,
   REQUEST_TIMEOUT_MS,
   MSG_VOXEL_CHUNK_REQUEST,
   MSG_MAP_TILE_REQUEST,
@@ -29,8 +28,6 @@ import {
   MapTileResponse,
   computeVisibility,
   getChunkRangeFromHeights,
-  isVoxelSolid,
-  voxelIndex,
   getSunlitAbove,
   computeAndPropagateLight,
   relightRegion,
@@ -341,6 +338,17 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * ChunkProvider interface — true ONLY for genuine open sky (above the column's content top), where
+   * no voxel data exists and none will ever load. Lets the visibility BFS traverse through empty sky
+   * to reach terrain beyond it, while unloaded terrain (cy <= maxCy) and unknown columns (no tile
+   * yet) return false so they must load before being traversed — we never see through unloaded rock.
+   */
+  isEmptyAir(cx: number, cy: number, cz: number): boolean {
+    const info = this.columnInfo.get(`${cx},${cz}`);
+    return info ? cy > info.maxCy : false;
+  }
+
+  /**
    * Update the world based on player position.
    * Uses visibility BFS for loading and rendering.
    * @param playerPos Player world position
@@ -461,101 +469,20 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Compute a 6-bit bitmask indicating which faces of a chunk have non-solid
-   * (air/empty) voxels in their margin strip. Bit i set ⇒ face i needs neighbor
-   * data for correct stitching. Called once when chunk data arrives.
-   *
-   * Face indices follow FACE_OFFSETS_6: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
-   */
-  static computeFaceSurfaceMask(data: Uint32Array): number {
-    const CS = CHUNK_SIZE;
-    let mask = 0;
-    for (let face = 0; face < 6; face++) {
-      const axis = face >> 1;              // 0,1→0  2,3→1  4,5→2
-      const isPositive = (face & 1) === 0;
-      const lo = isPositive ? CS - MESH_MARGIN : 0;
-      const hi = isPositive ? CS : MESH_MARGIN;
-
-      let found = false;
-      const coords = [0, 0, 0];
-      for (let a = 0; a < CS && !found; a++) {
-        for (let b = 0; b < CS && !found; b++) {
-          for (let c = lo; c < hi; c++) {
-            coords[axis] = c;
-            coords[(axis + 1) % 3] = a;
-            coords[(axis + 2) % 3] = b;
-            if (!isVoxelSolid(data[voxelIndex(coords[0], coords[1], coords[2])])) {
-              found = true;
-              break;
-            }
-          }
-        }
-      }
-      if (found) mask |= (1 << face);
-    }
-    return mask;
-  }
-
-  /**
-   * Find face-neighbor chunks needed for stitching that BFS may have missed.
-   * Uses the cached faceSurfaceMask bitmask on each chunk to avoid scanning
-   * voxel data every frame.
-   */
-  private getMarginNeighborRequests(bfsRequested: Set<string>): Set<string> {
-    const extra = new Set<string>();
-
-    // Don't request margin neighbors that would be immediately unloaded.
-    // Without this guard, edge-of-world chunks cycle: request → load → unload → request...
-    const pcx = this.lastPlayerChunk?.cx ?? 0;
-    const pcy = this.lastPlayerChunk?.cy ?? 0;
-    const pcz = this.lastPlayerChunk?.cz ?? 0;
-    const maxDist = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
-
-    for (const [, chunk] of this.chunks) {
-      // Skip fully-solid chunks (no surface on any face)
-      if (chunk.faceSurfaceMask === 0) continue;
-
-      for (let face = 0; face < 6; face++) {
-        // Check cached bitmask before allocating the key string
-        if (!(chunk.faceSurfaceMask & (1 << face))) continue;
-
-        const [dx, dy, dz] = FACE_OFFSETS_6[face];
-        const nx = chunk.cx + dx;
-        const ny = chunk.cy + dy;
-        const nz = chunk.cz + dz;
-
-        // Skip neighbors that fall outside the unload radius (they'd be unloaded immediately)
-        if (Math.abs(nx - pcx) > maxDist || Math.abs(ny - pcy) > maxDist || Math.abs(nz - pcz) > maxDist) continue;
-
-        const nKey = chunkKey(nx, ny, nz);
-        
-        // Skip if already loaded, pending, or queued by BFS
-        if (this.chunks.has(nKey) || this.pendingChunks.has(nKey) || bfsRequested.has(nKey)) continue;
-        
-        extra.add(nKey);
-      }
-    }
-    return extra;
-  }
-
-  /**
-   * Request visible chunks using two-phase approach:
+   * Request visible chunks (two-phase):
    * Phase 1: Request tiles for columns we don't know about yet
    * Phase 2: Request individual chunks for columns where we have tile data
-   * Phase 3: Request margin neighbors needed for stitching that BFS missed
-   * 
-   * Chunks above the tile's maxCy are skipped (air).
+   *
+   * `toRequest` is the visibility BFS's own frontier — every unloaded chunk it reached. Loading is
+   * driven ENTIRELY by this set (single source of truth: reachable = render set, toRequest = load
+   * set, both from getVisibleChunks). The BFS steps to the immediate occluder walls one chunk past
+   * visible air, so their voxels arrive as mesh margins without a separate stitch-loader. Chunks
+   * above a column's maxCy are skipped (open sky, nothing to load).
    */
   private requestVisibleChunks(toRequest: Set<string>): void {
     // Limit concurrent requests
     const MAX_PENDING_TILES = 4;
     const MAX_PENDING_CHUNKS = 4;
-
-    // Phase 0: Add margin neighbor requests for stitching
-    const marginNeighbors = this.getMarginNeighborRequests(toRequest);
-    for (const key of marginNeighbors) {
-      toRequest.add(key);
-    }
 
     // Phase 1: Identify columns that need tiles
     const columnsNeedingTiles = new Set<string>();
@@ -823,9 +750,6 @@ export class VoxelWorld implements ChunkProvider {
     // Compute visibility graph for this chunk
     chunk.visibilityBits = computeVisibility(chunk.data);
 
-    // Cache face-surface bitmask (avoids per-frame voxel scanning in getMarginNeighborRequests)
-    chunk.faceSurfaceMask = VoxelWorld.computeFaceSurfaceMask(chunk.data);
-    
     // Queue for remeshing
     this.remeshPipeline.add(key);
     

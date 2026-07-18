@@ -54,6 +54,21 @@ export interface QualitySettings {
   waterHighQuality: boolean;
 }
 
+/** Selectable view distances, in chunks (also the View Distance slider segments). */
+export const VIEW_DISTANCES = [5, 7, 9, 11] as const;
+
+/**
+ * Snap an arbitrary view distance to the nearest selectable value. Used to migrate a persisted radius
+ * from an older build (e.g. 2/4/6/8) into the current set, so the slider highlights and the value
+ * never exceeds VISIBILITY_RADIUS (the BFS grid size). Ties snap to the lower option.
+ */
+export function snapViewDistance(v: number): number {
+  return VIEW_DISTANCES.reduce(
+    (best, d) => (Math.abs(d - v) < Math.abs(best - v) ? d : best),
+    VIEW_DISTANCES[0] as number,
+  );
+}
+
 export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
   ultra: {
     ssaoEnabled: true,
@@ -63,7 +78,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 4096,
     shadowsEnabled: true,
     shadowRadius: 8,
-    visibilityRadius: 8,
+    visibilityRadius: 11,
     anisotropy: 16,
     shaderNormalMaps: true,
     shaderAoMaps: true,
@@ -78,7 +93,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 2048,
     shadowsEnabled: true,
     shadowRadius: 6,
-    visibilityRadius: 6,
+    visibilityRadius: 9,
     anisotropy: 4,
     shaderNormalMaps: true,
     shaderAoMaps: true,
@@ -93,7 +108,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 1024,
     shadowsEnabled: true,
     shadowRadius: 4,
-    visibilityRadius: 4,
+    visibilityRadius: 7,
     anisotropy: 2,
     shaderNormalMaps: true,    // Normal maps on from medium
     shaderAoMaps: false,
@@ -108,7 +123,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 1024,
     shadowsEnabled: false,
     shadowRadius: 2,
-    visibilityRadius: 2,
+    visibilityRadius: 5,
     anisotropy: 1,
     shaderNormalMaps: false,   // no detail maps on low
     shaderAoMaps: false,
@@ -189,8 +204,8 @@ export const QUALITY_ROWS: QualityRow[] = [
   {
     key: 'viewDistance',
     label: 'View Distance',
-    segments: [2, 4, 6, 8].map((n) => ({ label: String(n), patch: { visibilityRadius: n } })),
-    match: (q) => [2, 4, 6, 8].indexOf(q.visibilityRadius),
+    segments: [5, 7, 9, 11].map((n) => ({ label: String(n), patch: { visibilityRadius: n } })),
+    match: (q) => [5, 7, 9, 11].indexOf(q.visibilityRadius),
   },
   {
     key: 'anisotropy',
