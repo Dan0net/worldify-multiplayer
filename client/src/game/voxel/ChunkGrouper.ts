@@ -746,7 +746,10 @@ export class ChunkGrouper {
         existing.visible = slot.visible;
       } else {
         const mesh = createLayerMesh(geo, layer);
-        mesh.frustumCulled = true;
+        // Terrain is already culled by the visibility BFS (reachable set) + distance + group merging,
+        // so per-object frustum culling buys little here and has repeatedly clipped boundary geometry
+        // (chunks vanishing / "see through the world" while orbiting). Disable it for terrain meshes.
+        mesh.frustumCulled = false;
         mesh.position.set(slot.wx, slot.wy, slot.wz);
         mesh.visible = slot.visible;
         this.scene.add(mesh);
@@ -963,7 +966,9 @@ export class ChunkGrouper {
           existing.visible = true;
         } else {
           const mesh = createLayerMesh(merged, layer);
-          mesh.frustumCulled = true;
+          // See showStandalone: terrain is culled by BFS + distance, so per-object frustum culling is
+          // disabled to avoid clipping boundary geometry when orbiting.
+          mesh.frustumCulled = false;
           mesh.position.set(0, 0, 0);
           this.scene.add(mesh);
           group.meshes[layer] = mesh;
