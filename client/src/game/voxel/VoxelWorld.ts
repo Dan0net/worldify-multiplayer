@@ -78,12 +78,6 @@ function columnChunkRange(heights: ArrayLike<number>): { minCy: number; maxCy: n
  *  loaded, so caves aren't lit as open sky). Never mutated — the sunlight pass only reads it. */
 const DARK_ABOVE = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
 
-/** The 6 axis-aligned face-neighbour offsets, for one-ring dilation of the reachable render set. */
-const FACE_NEIGHBOR_OFFSETS_6: ReadonlyArray<readonly [number, number, number]> = [
-  [1, 0, 0], [-1, 0, 0],
-  [0, 1, 0], [0, -1, 0],
-  [0, 0, 1], [0, 0, -1],
-];
 
 /** Fast typed-array equality check (same length assumed). */
 function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
@@ -509,15 +503,20 @@ export class VoxelWorld implements ChunkProvider {
    * cascade — we only ring reachable chunks, never the ring itself, so it can't flood-fill.
    */
   private addMarginSourceRequests(reachable: Set<string>, toRequest: Set<string>): void {
+    const request = (nx: number, ny: number, nz: number) => {
+      const nKey = chunkKey(nx, ny, nz);
+      if (this.chunks.has(nKey) || this.pendingChunks.has(nKey)) return; // already have / coming
+      if (this.isEmptyAir(nx, ny, nz)) return;                          // open sky, won't load
+      toRequest.add(nKey);
+    };
     for (const key of reachable) {
       const { cx, cy, cz } = parseChunkKey(key);
-      for (const [dx, dy, dz] of POSITIVE_MARGIN_OFFSETS_7) {
-        const nx = cx + dx, ny = cy + dy, nz = cz + dz;
-        const nKey = chunkKey(nx, ny, nz);
-        if (this.chunks.has(nKey) || this.pendingChunks.has(nKey)) continue; // already have / coming
-        if (this.isEmptyAir(nx, ny, nz)) continue;                            // open sky, won't load
-        toRequest.add(nKey);
-      }
+      // + margin sources: needed so a rendered chunk can mesh its OWN high faces (READ dependency).
+      for (const [dx, dy, dz] of POSITIVE_MARGIN_OFFSETS_7) request(cx + dx, cy + dy, cz + dz);
+      // − face neighbours: they OWN the surface on this chunk's low faces (boundary ownership — see the
+      // chunk dependency contract), so they must load + render too or the render frontier's low sides
+      // show a seam. Loading the full face ring keeps the load set one ring ahead of the render set.
+      for (const [dx, dy, dz] of FACE_OFFSETS_6) request(cx + dx, cy + dy, cz + dz);
     }
   }
 
@@ -617,20 +616,28 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * A chunk renders if the BFS reached it OR it shares a face with a reached chunk (one-ring dilation
-   * of the reachable set). The per-chunk visibility graph is too coarse to hide chunks by exactly:
-   * a surface chunk's air region often doesn't connect its solid-side faces, and the BFS only seeds
-   * ALL six faces from the camera chunk itself — so a chunk whose visible surface sits on the boundary
-   * with a reachable neighbour (e.g. the terrain directly below where you stand) gets reached only
-   * when you're in the chunk right beside it, and pops out the moment you cross away. Rendering the
-   * face-ring around `reachable` keeps that boundary geometry on screen from every adjacent position,
-   * while occlusion still hides anything two-or-more chunks deep behind a wall (the perf win). Loading
-   * stays driven by the un-dilated BFS — these neighbours are already resident as margin sources.
+   * Decide whether a chunk's mesh should be drawn this frame. Two gates:
+   *
+   * 1. COMPLETENESS — never draw a mesh that skipped a high boundary (a + margin neighbour was absent
+   *    when it meshed), because that geometry has a hole on that face. It stays hidden until the
+   *    neighbour streams in and it re-meshes complete. This is what keeps render ⊆ load − 1 ring: the
+   *    outermost loaded (margin-shell) chunks are incomplete and hidden, so the visible frontier sits
+   *    one ring inside the loaded region and never shows a "see through the world" seam.
+   *
+   * 2. VISIBILITY (one-ring dilation of `reachable`) — draw a chunk the BFS reached OR one sharing a
+   *    face with a reached chunk. The per-chunk visibility graph is too coarse to gate by exactly: a
+   *    surface chunk's air region often doesn't connect its solid-side faces, and the BFS only seeds
+   *    all six faces from the camera chunk itself — so a chunk whose visible surface sits on a boundary
+   *    with a reachable neighbour (e.g. the terrain directly below where you stand) is reached only
+   *    when you're in the chunk beside it, and pops out the moment you cross away. Drawing the face-ring
+   *    around `reachable` keeps that boundary geometry on screen from every adjacent position, while
+   *    occlusion still hides anything two-or-more chunks deep behind a wall (the perf win).
    */
   private isRenderable(key: string, reachable: Set<string>): boolean {
+    if (!this.remeshPipeline.isMeshComplete(key)) return false;
     if (reachable.has(key)) return true;
     const { cx, cy, cz } = parseChunkKey(key);
-    for (const [dx, dy, dz] of FACE_NEIGHBOR_OFFSETS_6) {
+    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
       if (reachable.has(chunkKey(cx + dx, cy + dy, cz + dz))) return true;
     }
     return false;
@@ -1253,8 +1260,9 @@ export class VoxelWorld implements ChunkProvider {
       this.meshCountDirty = true;
     }
 
-    // Remove from remesh queue
+    // Remove from remesh queue and forget its mesh-completeness state
     this.remeshPipeline.delete(key);
+    this.remeshPipeline.forget(key);
 
     // Remove from pending if it was still pending
     this.pendingChunks.delete(key);

@@ -230,3 +230,29 @@ export const POSITIVE_MARGIN_OFFSETS_7: readonly (readonly [number, number, numb
   [1, 1, 0], [1, 0, 1], [0, 1, 1],
   [1, 1, 1],
 ] as const;
+
+/**
+ * ================= CHUNK DEPENDENCY CONTRACT (read before touching streaming/meshing) =================
+ *
+ * A chunk's surface mesh is NOT a function of its own voxels alone — it is a function of the chunk AND
+ * a fixed set of neighbours. Every subsystem that loads, meshes, invalidates, or renders chunks must
+ * agree on that neighbour set, or the derived representations drift apart and holes/pops appear. These
+ * offset tables are the single source of truth; the four consumers below MUST all derive from them:
+ *
+ *   1. READ  (mesh input)     — expandChunkData reads POSITIVE_MARGIN_OFFSETS_7 as the high-side margin.
+ *   2. WAIT  (mesh readiness) — a chunk defers meshing until its POSITIVE_MARGIN_OFFSETS_7 are resolved.
+ *   3. INVALIDATE (re-mesh)   — when a chunk changes, its NEGATIVE_MARGIN_OFFSETS_7 consumers re-mesh.
+ *   4. LOAD/RENDER (coverage) — a chunk may only be rendered once its margin sources exist, so loading
+ *                               must stay one ring AHEAD of rendering (render ⊆ load − 1 ring). The
+ *                               render/load one-ring dilation uses FACE_OFFSETS_6.
+ *
+ * BOUNDARY OWNERSHIP: the shared face between chunk A and its +axis neighbour B is meshed ONLY by A
+ * (A's high face, built from B's voxels); B skips its low face. So a boundary's surface belongs to the
+ * LOWER-coordinate chunk. Consequences:
+ *   - A rendered chunk needs its +margin neighbours LOADED (to build its own high faces) and its lower
+ *     neighbours RENDERED (they own the surface on its low faces). Hence the load set must dilate the
+ *     render set on all sides, and rendering must be gated on mesh completeness (no skipped high faces).
+ *   - Meshing a chunk with an absent +neighbour SKIPS that high face (skipHighBoundary) → a hole that
+ *     only heals when the neighbour streams in and the chunk re-meshes. Never render such a mesh.
+ * =====================================================================================================
+ */
