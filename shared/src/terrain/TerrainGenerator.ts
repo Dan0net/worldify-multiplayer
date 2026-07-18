@@ -429,9 +429,10 @@ export class TerrainGenerator implements HeightSampler {
   private chunkCavernFeatsFor = '';
 
   // Per-(cx,cz)-tile set of columns (lx + lz*CHUNK_SIZE) where a cave breaches the surface — used to
-  // suppress surface features (stamps + pathways) over cave openings. Cached per tile.
-  private breachCols: Set<number> | null = null;
-  private breachColsFor = '';
+  // suppress surface features (stamps + pathways) over cave openings. Cached per tile in a bounded
+  // map (not a single entry) so a chunk's stamp filter can consult neighbouring tiles — a stamp whose
+  // origin sits in an adjacent tile must be suppressed by that tile's breaches — without cache thrash.
+  private breachColsCache = new Map<string, Set<number>>();
 
   /** Test-only: extra worm-gather cells added on every side. Proves the gather radius is sufficient
    *  (regenerating with a larger radius must be byte-identical). Leave 0 in production. */
@@ -609,8 +610,7 @@ export class TerrainGenerator implements HeightSampler {
     this.chunkWormPtsFor = '';
     this.cavernCellCache.clear();
     this.chunkCavernFeatsFor = '';
-    this.breachColsFor = '';
-    this.breachCols = null;
+    this.breachColsCache.clear();
   }
 
   /**
@@ -1058,7 +1058,8 @@ export class TerrainGenerator implements HeightSampler {
    */
   private breachedColumns(cx: number, cz: number): Set<number> {
     const key = cx + ',' + cz;
-    if (this.breachColsFor === key && this.breachCols) return this.breachCols;
+    const cached = this.breachColsCache.get(key);
+    if (cached) return cached;
 
     const cave = this.config.caveConfig;
     const set = new Set<number>();
@@ -1093,18 +1094,26 @@ export class TerrainGenerator implements HeightSampler {
       }
     }
 
-    this.breachCols = set;
-    this.breachColsFor = key;
+    if (this.breachColsCache.size > 1024) this.breachColsCache.clear();  // simple bounded cache
+    this.breachColsCache.set(key, set);
     return set;
   }
 
-  /** True if the column containing (worldX, worldZ) — within the given tile's breach set — is a cave
-   *  breach. Columns outside the tile return false (their breach is that tile's concern). */
-  private isBreachColumn(worldX: number, worldZ: number, breach: Set<number> | null, cx: number, cz: number): boolean {
-    if (!breach || breach.size === 0) return false;
-    const lx = Math.floor(worldX / VOXEL_SCALE) - cx * CHUNK_SIZE;
-    const lz = Math.floor(worldZ / VOXEL_SCALE) - cz * CHUNK_SIZE;
-    if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE) return false;
+  /** True if the column containing (worldX, worldZ) is a cave breach. Resolves the tile that OWNS that
+   *  column and consults ITS breach set, so the answer is a pure function of world position — identical
+   *  from whichever chunk renders the stamp. A stamp anchored in one tile but overlapping into its
+   *  neighbours is therefore suppressed (or kept) as a whole, not half-drawn across the boundary. */
+  private isBreachColumn(worldX: number, worldZ: number): boolean {
+    const cave = this.config.caveConfig;
+    if (!cave.wormsEnabled && !cave.cavernsEnabled) return false;
+    const vx = Math.floor(worldX / VOXEL_SCALE);
+    const vz = Math.floor(worldZ / VOXEL_SCALE);
+    const tcx = Math.floor(vx / CHUNK_SIZE);
+    const tcz = Math.floor(vz / CHUNK_SIZE);
+    const breach = this.breachedColumns(tcx, tcz);
+    if (breach.size === 0) return false;
+    const lx = vx - tcx * CHUNK_SIZE;
+    const lz = vz - tcz * CHUNK_SIZE;
     return breach.has(lx + lz * CHUNK_SIZE);
   }
 
@@ -1656,7 +1665,7 @@ export class TerrainGenerator implements HeightSampler {
       // Drop stamps (trees / rocks / buildings) on pathways, and over cave breaches so nothing is left
       // floating above an open cave mouth.
       const placements = allPlacements.filter(p =>
-        !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ, breach, cx, cz));
+        !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ));
       this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 
