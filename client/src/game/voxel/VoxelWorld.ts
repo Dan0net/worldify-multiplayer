@@ -9,6 +9,7 @@ import {
   CHUNK_SIZE,
   FACE_OFFSETS_6,
   NEGATIVE_MARGIN_OFFSETS_7,
+  POSITIVE_MARGIN_OFFSETS_7,
   REQUEST_TIMEOUT_MS,
   MSG_VOXEL_CHUNK_REQUEST,
   MSG_MAP_TILE_REQUEST,
@@ -443,6 +444,7 @@ export class VoxelWorld implements ChunkProvider {
         playerPos
       );
       this.cachedReachable = reachable;
+      this.addMarginSourceRequests(reachable, toRequest);
       this.requestVisibleChunks(toRequest);
 
       this.updateMeshVisibility(this.cachedReachable);
@@ -485,6 +487,28 @@ export class VoxelWorld implements ChunkProvider {
     const request = encodeSurfaceColumnRequest({ tx, tz });
     sendBinary(request);
     console.log(`[VoxelWorld] Requested initial surface column (${tx}, ${tz})`);
+  }
+
+  /**
+   * Request the 7 positive margin-source neighbours (+X/+Y/+Z faces, edges, corner) of every
+   * reachable chunk. A rendered chunk's mesh reads those neighbours' voxels to place its high-side
+   * border verts; the visibility BFS culls the ones behind opaque faces (occlusion is for SIGHT), but
+   * their voxels are still needed to mesh the shared boundary — the source of the terrain gaps.
+   * Loading them alongside the reachable frontier fixes the gaps AND shrinks the mesh-readiness wait
+   * (a chunk's margins arrive with it, not a ring later). Bounded: one +ring around reachable, NO
+   * cascade — we only ring reachable chunks, never the ring itself, so it can't flood-fill.
+   */
+  private addMarginSourceRequests(reachable: Set<string>, toRequest: Set<string>): void {
+    for (const key of reachable) {
+      const { cx, cy, cz } = parseChunkKey(key);
+      for (const [dx, dy, dz] of POSITIVE_MARGIN_OFFSETS_7) {
+        const nx = cx + dx, ny = cy + dy, nz = cz + dz;
+        const nKey = chunkKey(nx, ny, nz);
+        if (this.chunks.has(nKey) || this.pendingChunks.has(nKey)) continue; // already have / coming
+        if (this.isEmptyAir(nx, ny, nz)) continue;                            // open sky, won't load
+        toRequest.add(nKey);
+      }
+    }
   }
 
   /**
