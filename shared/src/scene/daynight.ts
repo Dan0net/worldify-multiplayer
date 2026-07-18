@@ -58,6 +58,7 @@ export interface DayNightConfig {
   sunriseStart: number; sunriseEnd: number;   // dawn transition window (0..1)
   sunsetStart: number; sunsetEnd: number;      // dusk transition window (0..1)
   twilightAngle: number;                       // ± elevation band (deg) for the light fade / hand-off overlap
+  shadowFadeAngle: number;                     // elevation band (deg) ABOVE the horizon over which the shadow fades in/out
   keyframes: DayNightKeyframe[];               // [Night, Sunrise, Day, Sunset]
 }
 
@@ -65,6 +66,11 @@ export interface DayNightConfig {
 // horizon so a body grazing it still lights the scene (civil twilight) — at elevation 0 each gives
 // ~50%, so the antipodal sun↔moon hand-off overlaps instead of going dark. Larger angle = longer,
 // softer twilight. Well below the band intensity is still 0 (no "sun lights from under the ground").
+//
+// `cfg.shadowFadeAngle` is the one-sided sibling of this for SHADOWS: it spans [0°, shadowFadeAngle]
+// ABOVE the horizon, so the active caster's shadow is 0 exactly at the crossover (where the caster
+// swaps) — the hand-off is seamless by construction — and returns to full over the angle (smaller =
+// snappier). Consumed by `updateShadowCaster` in the client's Lighting.ts.
 
 /**
  * Clamp the window times into [0, 1) and enforce sunriseStart < sunriseEnd < sunsetStart < sunsetEnd
@@ -162,6 +168,7 @@ export interface DerivedLighting extends SampledKeyframe {
   sunDistance: number; moonDistance: number;
   time: number;        // normalized 0..1 (for star rotation)
   moonHeight: number;  // for the star-field celestial tilt
+  shadowFadeAngle: number; // elevation band (deg) for the shadow-caster fade/swap (clamped ≥ 0.5)
 }
 
 /** Derive the complete lighting state for `time`. */
@@ -181,5 +188,6 @@ export function deriveLighting(cfg: DayNightConfig, time: number): DerivedLighti
     sunSize: cfg.sunSize, moonSize: cfg.moonSize,
     sunDistance: cfg.sunDistance, moonDistance: cfg.moonDistance,
     time: T, moonHeight: cfg.moonHeight,
+    shadowFadeAngle: Math.max(0.5, cfg.shadowFadeAngle),
   };
 }

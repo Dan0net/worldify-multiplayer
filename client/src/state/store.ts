@@ -174,6 +174,7 @@ export const DEFAULT_DAY_NIGHT_CONFIG: DayNightConfig = {
   // Long day: dawn ~04:34–06:58, dusk ~19:55–22:05 (sunset centre ≈ 21:00).
   sunriseStart: 0.19, sunriseEnd: 0.29, sunsetStart: 0.83, sunsetEnd: 0.92,
   twilightAngle: 6,  // ± elevation band for the twilight fade / hand-off overlap
+  shadowFadeAngle: 4, // ° above the horizon for the shadow fade/swap (snappy but seamless: 0 at the crossover)
   keyframes: [
     {
       name: 'Night',

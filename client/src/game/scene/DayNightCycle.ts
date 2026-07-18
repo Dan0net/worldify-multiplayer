@@ -52,7 +52,7 @@ export function updateDayNightCycle(deltaMs: number): void {
   // Shadow ownership + the pop-free fade run EVERY frame (before the static-clock early
   // return) so a manual time-drag while paused still fades correctly. Driven purely by the
   // derived elevations, so the swap and the fade can't disagree.
-  updateShadowCaster(derived.sunElevation, derived.moonElevation);
+  updateShadowCaster(derived.sunElevation, derived.moonElevation, derived.shadowFadeAngle);
 
   // Nothing changed since last frame — skip the palette recompute + apply.
   if (time === lastAppliedTime) return;

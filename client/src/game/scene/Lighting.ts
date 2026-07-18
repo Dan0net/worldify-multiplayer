@@ -43,9 +43,6 @@ let moonShadowsAllowed = false;
 const _sunDir = new THREE.Vector3(0, 1, 0);
 const _moonDir = new THREE.Vector3(0, -1, 0);
 
-/** Elevation band (degrees) over which the shadow fades out near the horizon. */
-const SHADOW_FADE_LO = 2;
-const SHADOW_FADE_HI = 12;
 /** Fade level below which a queued caster swap is executed (swap is invisible at ~0). */
 const SWAP_EPS = 0.03;
 
@@ -304,7 +301,7 @@ export function isMoonShadowsAllowed(): boolean {
  * until that intensity is ~0 — so the hard castShadow flip (which disposes/reallocates the
  * shadow map) is invisible. A hysteresis deadband avoids thrash at the crossover.
  */
-export function updateShadowCaster(sunElevation: number, moonElevation: number): void {
+export function updateShadowCaster(sunElevation: number, moonElevation: number, shadowFadeAngle: number): void {
   if (!sunLight || !moonLight) return;
 
   // Desired caster by ELEVATION: whichever body is higher and above the horizon. Sun & moon cross
@@ -319,9 +316,12 @@ export function updateShadowCaster(sunElevation: number, moonElevation: number):
   const active = getActiveShadowLight();
   if (!active) return;
 
-  // Fade level = smoothstep of the active body's elevation over the near-horizon band.
+  // Fade level = smoothstep of the active body's elevation over [horizon, shadowFadeAngle].
+  // The band is anchored at the horizon (0°): the shadow reaches 0 exactly where the sun/moon
+  // cross — i.e. where the caster swaps — so the hand-off is seamless, while `shadowFadeAngle`
+  // alone controls how quickly the shadow returns to full above the horizon (smaller = snappier).
   const activeElev = activeShadowCaster === 'sun' ? sunElevation : moonElevation;
-  const f = Math.min(1, Math.max(0, (activeElev - SHADOW_FADE_LO) / (SHADOW_FADE_HI - SHADOW_FADE_LO)));
+  const f = Math.min(1, Math.max(0, activeElev / shadowFadeAngle));
   active.shadow.intensity = f * f * (3 - 2 * f);
 
   if (desired !== activeShadowCaster && active.shadow.intensity <= SWAP_EPS) {

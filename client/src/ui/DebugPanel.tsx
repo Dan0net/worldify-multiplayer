@@ -1082,6 +1082,7 @@ export function DebugPanel() {
           <Slider label="Sunset Start" value={dayNightConfig.sunsetStart} min={0} max={0.999} step={0.001} onChange={(v) => editGlobal({ sunsetStart: v })} formatValue={(v) => formatTimeOfDay(v)} />
           <Slider label="Sunset End" value={dayNightConfig.sunsetEnd} min={0} max={0.999} step={0.001} onChange={(v) => editGlobal({ sunsetEnd: v })} formatValue={(v) => formatTimeOfDay(v)} />
           <Slider label="Twilight" value={dayNightConfig.twilightAngle} min={1} max={20} step={0.5} onChange={(v) => editGlobal({ twilightAngle: v })} formatValue={(v) => `${(v ?? 0).toFixed(1)}°`} />
+          <Slider label="Shadow Fade" value={dayNightConfig.shadowFadeAngle} min={1} max={15} step={0.5} onChange={(v) => editGlobal({ shadowFadeAngle: v })} formatValue={(v) => `${(v ?? 0).toFixed(1)}°`} />
         </div>
 
         {/* Voxel light fill curves + block light */}
