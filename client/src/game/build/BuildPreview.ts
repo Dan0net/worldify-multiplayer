@@ -26,6 +26,7 @@ import {
   CHUNK_SIZE,
   MESH_MARGIN,
   NEGATIVE_MARGIN_OFFSETS_7,
+  POSITIVE_FACE_OFFSETS_3,
   voxelIndex,
 } from '@worldify/shared';
 import { VoxelWorld } from '../voxel/VoxelWorld.js';
@@ -229,20 +230,35 @@ export class BuildPreview {
       // Drop any overrides left from a previous mode so no tinted bands linger.
       this.restoreSpillLight();
     } else {
-      this.world.relightPreviewMeshSet(meshKeys);
+      const remeshSet = new Set(meshKeys);
+
+      // A drawn chunk owns (meshes) its own +X/+Y/+Z boundary and reads its + face neighbours' voxels
+      // for that boundary's light. In 'deferred' mode the spill relight that would light those
+      // neighbours is deferred, so without this their temp carries stale/dark light and the drawn
+      // chunk's + boundary bakes a 1-frame BLACK BORDER where the surface meets it. Relight the + face
+      // neighbours' TEMP now (sky) — cheap: ≤3 per drawn chunk, temp only, no display refresh — so the
+      // mesh samples correct + margin light this frame. Track them so their temp is reverted on stop.
+      const posNeighbours = this.collectPositiveFaceNeighbours(drawnKeys, remeshSet);
+      for (const nk of posNeighbours) {
+        const n = this.world.chunks.get(nk);
+        if (n && !n.tempData) n.copyToTemp();
+      }
+      this.world.relightPreviewMeshSet(posNeighbours.length ? [...meshKeys, ...posNeighbours] : meshKeys);
+      for (const nk of posNeighbours) this.previewSpillKeys.add(nk);
 
       // Reconcile spill overrides for the NEW cursor position: restore any previously-overridden spill
       // neighbour no longer adjacent to the draw, so stale light bands don't linger on far chunks while
       // dragging (the moving-neighbour flicker). Keys only — cheap; in 'deferred' the spill RELIGHT
-      // stays deferred to settle. A neighbour that just BECAME drawn/margin keeps its temp (it'll be
-      // re-meshed) — we only drop it from tracking so the deferred pass doesn't later revert it.
+      // stays deferred to settle. A neighbour that just BECAME drawn/margin still needs its committed
+      // display override reverted (else it leaks past the preview — the "stop doesn't clear preview
+      // light" bug), but its temp must survive for the pending re-mesh.
       if (this.previewSpillKeys.size > 0) {
-        const remeshSet = new Set(meshKeys);
         const spillNow = this.world.collectSpillKeys(drawnKeys, remeshSet);
         for (const key of [...this.previewSpillKeys]) {
           if (spillNow.has(key)) continue;
           this.previewSpillKeys.delete(key);
-          if (!remeshSet.has(key)) this.world.restorePreviewChunkLight(key);
+          if (remeshSet.has(key)) this.world.revertPreviewChunkDisplayLight(key); // keep temp, revert display
+          else this.world.restorePreviewChunkLight(key);                          // no longer involved
         }
       }
     }
@@ -380,7 +396,11 @@ export class BuildPreview {
     for (const k of marginKeys) meshed.add(k);
     const spill = new Set(world.relightPreviewSpill(drawnKeys, meshed));
     for (const key of this.previewSpillKeys) {
-      if (!spill.has(key)) world.restorePreviewChunkLight(key);
+      if (spill.has(key)) continue;
+      // A former spill neighbour that became drawn/margin still needs its committed override reverted
+      // (else it leaks past the preview) but must keep its temp for the re-mesh; others fully restore.
+      if (meshed.has(key)) world.revertPreviewChunkDisplayLight(key);
+      else world.restorePreviewChunkLight(key);
     }
     this.previewSpillKeys = spill;
 
@@ -502,6 +522,11 @@ export class BuildPreview {
     // Dispose any remaining preview meshes
     this.disposeAllPreviewMeshes();
 
+    // Held (post-commit) previews waiting on a server remesh: on a full clear (tool switch / out of
+    // range) their meshes are disposed above and their groups restored, so drop the tracking set too —
+    // otherwise a remesh that never arrives for an unmodified neighbour leaves the preview lingering.
+    this.pendingCommitChunks.clear();
+
     // Clear preview tracking on world
     this.world.previewChunks.clear();
     this.world.markVisibilityDirty();
@@ -573,6 +598,11 @@ export class BuildPreview {
    */
   hasActivePreview(): boolean {
     return this.activePreviewChunks.size > 0;
+  }
+
+  /** True if any preview mesh is on screen (active OR held-post-commit) — i.e. something to clear. */
+  hasVisiblePreview(): boolean {
+    return this.previewMeshes.size > 0;
   }
 
   /**
@@ -775,6 +805,29 @@ export class BuildPreview {
         // A neighbour reads THIS chunk's low margin only on the axes where its offset is negative;
         // re-mesh it only if that sub-region changed (a face slab, edge bar, or corner cube).
         if (!BuildPreview.hasLowMarginChange(data, temp, dx !== 0, dy !== 0, dz !== 0)) continue;
+        const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
+        if (seen.has(nk) || !world.chunks.has(nk)) continue;
+        seen.add(nk);
+        out.push(nk);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The loaded + face neighbours (+X/+Y/+Z) a drawn chunk reads for its HIGH-boundary light, excluding
+   * chunks already being re-meshed. Used to relight those neighbours' temp synchronously so the drawn
+   * chunk's + boundary doesn't bake a 1-frame black border in deferred mode (see dispatchPreviewBatch).
+   */
+  private collectPositiveFaceNeighbours(drawnKeys: string[], exclude: Set<string>): string[] {
+    const world = this.world;
+    if (!world) return [];
+    const out: string[] = [];
+    const seen = new Set(exclude);
+    for (const key of drawnKeys) {
+      const chunk = world.chunks.get(key);
+      if (!chunk) continue;
+      for (const [dx, dy, dz] of POSITIVE_FACE_OFFSETS_3) {
         const nk = chunkKey(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz);
         if (seen.has(nk) || !world.chunks.has(nk)) continue;
         seen.add(nk);
