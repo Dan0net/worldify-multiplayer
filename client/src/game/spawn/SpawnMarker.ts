@@ -1,22 +1,19 @@
 /**
  * SpawnMarker — the explore-mode spawn gizmo.
  *
- * A flat ring on the terrain surface + a long vertical line, showing where the player
- * will spawn. In explore mode the user taps the ground to place/move it and a React
- * Play button (anchored to the top of the line) starts 1st-person play there.
+ * A flat ring on the terrain surface showing where the player will spawn. In explore
+ * mode the spawn stays pinned to screen center (or the user taps/drags to move it) and a
+ * React Play button — connected to the ring by a fixed-height UI line, not a 3D one —
+ * starts 1st-person play there.
  *
  * Module singleton (one marker, one scene), mirroring the `controls` singleton so both
  * the game loop and React UI can drive it without prop threading.
  */
 
 import * as THREE from 'three';
-import { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { PLAYER_HEIGHT, SPAWN_HEIGHT_OFFSET, SPAWN_RAYCAST_HEIGHT } from '@worldify/shared';
 import type { TerrainRaycaster } from './TerrainRaycaster';
 
-const LINE_HEIGHT = 7;       // world units the vertical line rises above the surface
 const RING_INNER = 0.7;
 const RING_OUTER = 1.05;
 const MARKER_COLOR = 0x38e8ff;
@@ -24,18 +21,11 @@ const MARKER_COLOR = 0x38e8ff;
 let scene: THREE.Scene | null = null;
 let terrain: TerrainRaycaster | null = null;
 let group: THREE.Group | null = null;
-let lineMaterial: LineMaterial | null = null;
-
-/** Keep the fat-line's screen-space width correct across viewport resizes. */
-function updateLineResolution(): void {
-  lineMaterial?.resolution.set(window.innerWidth, window.innerHeight);
-}
 
 let placed = false;
 let armed = false;                        // Play requested → next Playing entry uses the marker
 const spawnPos = new THREE.Vector3();     // player spawn (surface + player height)
-const basePoint = new THREE.Vector3();    // ring position (on surface)
-const topPoint = new THREE.Vector3();     // top of the vertical line (Play-button anchor)
+const basePoint = new THREE.Vector3();    // ring position (on surface); Play-button anchor
 
 const raycaster = new THREE.Raycaster();
 const _ndc = new THREE.Vector2();
@@ -60,20 +50,6 @@ export function initSpawnMarker(s: THREE.Scene, t: TerrainRaycaster): void {
   ring.frustumCulled = false;
   group.add(ring);
 
-  // Fat line so the vertical marker has real thickness (2px, matching the Play-button
-  // outline) — plain THREE.Line ignores linewidth in WebGL and always renders 1px.
-  lineMaterial = new LineMaterial({
-    color: MARKER_COLOR, linewidth: 2, transparent: true, opacity: 0.85, depthTest: false,
-  });
-  lineMaterial.resolution.set(window.innerWidth, window.innerHeight);
-  const lineGeo = new LineGeometry();
-  lineGeo.setPositions([0, 0, 0, 0, LINE_HEIGHT, 0]);
-  const line = new Line2(lineGeo, lineMaterial);
-  line.renderOrder = 999;
-  line.frustumCulled = false;
-  group.add(line);
-
-  window.addEventListener('resize', updateLineResolution);
   scene.add(group);
 }
 
@@ -100,7 +76,6 @@ function raycastColumn(x: number, z: number): THREE.Vector3 | null {
 export function placeMarkerAt(hit: THREE.Vector3): void {
   if (!group) return;
   basePoint.copy(hit);
-  topPoint.set(hit.x, hit.y + LINE_HEIGHT, hit.z);
   spawnPos.set(hit.x, hit.y + PLAYER_HEIGHT + SPAWN_HEIGHT_OFFSET, hit.z);
   group.position.copy(hit);
   group.visible = true;
@@ -125,7 +100,6 @@ export function placeMarkerAtColumn(x: number, z: number): boolean {
 
 export function isMarkerPlaced(): boolean { return placed; }
 export function getSpawnPosition(): THREE.Vector3 { return spawnPos; }
-export function getMarkerTop(): THREE.Vector3 { return topPoint; }
 export function getMarkerBase(): THREE.Vector3 { return basePoint; }
 
 export function setMarkerVisible(v: boolean): void {

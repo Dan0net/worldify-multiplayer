@@ -30,12 +30,57 @@ const PINCH_ZOOM = 0.006;     // per pixel of pinch distance change
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _fwd = new THREE.Vector3();
 
+// Recenter glide: eases `target` (ease-in-out) from where it was to a new spawn point, so
+// tapping/dragging the spawn marker pans smoothly to re-center on it.
+const GLIDE_DURATION_MS = 350;
+const glideFrom = new THREE.Vector3();
+const glideTo = new THREE.Vector3();
+let glideMs = 0;
+let gliding = false;
+
+// True while the user is grabbing/dragging the spawn marker; the center-follow that pins
+// the spawn to screen center is suspended so the drag isn't immediately overridden.
+let markerInteracting = false;
+
 /** Seed the explore camera at a world center (e.g. saved player position). */
 export function initExploreCamera(center: THREE.Vector3): void {
   target.copy(center);
   yaw = 0;
   pitch = -Math.PI / 4;
   distance = 32;
+  gliding = false;
+  markerInteracting = false;
+}
+
+/** Mark whether the user is actively manipulating the spawn marker (suspends center-follow). */
+export function setExploreMarkerInteracting(v: boolean): void {
+  markerInteracting = v;
+}
+export function isExploreMarkerInteracting(): boolean {
+  return markerInteracting;
+}
+
+/** Start a smooth glide of the orbit target to `dest` (recenter on a moved spawn). */
+export function beginExploreTargetGlide(dest: THREE.Vector3): void {
+  glideFrom.copy(target);
+  glideTo.copy(dest);
+  glideMs = GLIDE_DURATION_MS;
+  gliding = true;
+}
+
+/** True while a recenter glide is in progress (center-follow stays suspended meanwhile). */
+export function isExploreGliding(): boolean {
+  return gliding;
+}
+
+/** Advance an in-progress recenter glide. Call each frame with the frame delta (ms). */
+export function advanceExploreTargetGlide(deltaMs: number): void {
+  if (!gliding) return;
+  glideMs = Math.max(0, glideMs - deltaMs);
+  const t = 1 - glideMs / GLIDE_DURATION_MS;
+  const eased = t * t * (3 - 2 * t);   // smoothstep
+  target.copy(glideFrom).lerp(glideTo, eased);
+  if (glideMs === 0) gliding = false;
 }
 
 /** The current orbit target — also used as the world stream/shadow center. */

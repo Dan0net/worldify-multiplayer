@@ -17,10 +17,13 @@ import * as THREE from 'three';
 import { createScene, getScene } from './scene/scene';
 import { createCamera, getCamera, updateCameraFromPlayer, updateSpectatorCamera } from './scene/camera';
 import { initFirstPersonArm, updateFirstPersonArm, startFirstPersonArmExit, tickFirstPersonArmExit, renderFirstPersonArm } from './scene/FirstPersonArm';
-import { initExploreCamera, updateExploreCamera, getExploreTarget } from './scene/ExploreCamera';
+import {
+  initExploreCamera, updateExploreCamera, getExploreTarget,
+  advanceExploreTargetGlide, isExploreGliding, isExploreMarkerInteracting,
+} from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
-  consumeMarkerSpawn, resetMarker,
+  getMarkerBase, consumeMarkerSpawn, resetMarker,
 } from './spawn/SpawnMarker';
 import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
@@ -83,6 +86,11 @@ export class GameCore {
   
   // Center point for spectator camera orbit (updated when leaving Playing mode)
   private spectatorCenter = new THREE.Vector3(0, 0, 0);
+
+  // Last (x,z) the explore center-follow placed the spawn marker at, so it only re-raycasts
+  // when the camera target actually moved (NaN = force placement on the next frame).
+  private lastFollowX = NaN;
+  private lastFollowZ = NaN;
 
   // Throttle accumulator for periodic player-position saves while Playing (ms).
   private posSaveAccumMs = 0;
@@ -354,6 +362,14 @@ export class GameCore {
       ? new THREE.Vector3(savedPose.x, savedPose.y, savedPose.z)
       : new THREE.Vector3(0, 0, 0);
     this.spectatorCenter.copy(streamCenter);
+    // Reset the explore orbit camera onto the new world's center. Without this the module-
+    // level target keeps the PREVIOUS world's location/Y (switchLocalWorld runs while in
+    // explore, which never re-seeds it), so a fresh world would open framed underground.
+    // The per-frame center-follow then lifts the target onto this world's surface once it
+    // streams in.
+    initExploreCamera(streamCenter);
+    this.lastFollowX = NaN;
+    this.lastFollowZ = NaN;
     // Restore the new world's persisted time-of-day (WorldManager.activate loaded it).
     const savedTod = loadTimeOfDay();
     if (savedTod !== null) useGameStore.getState().setTimeOfDay(savedTod);
@@ -443,6 +459,9 @@ export class GameCore {
   private introTmpPos = new THREE.Vector3();
   private introTmpQuat = new THREE.Quaternion();
   private static readonly CAMERA_INTRO_DURATION_MS = 1350;
+  // Time constant (ms) for easing the explore orbit height onto the surface, so the camera
+  // doesn't judder as terrain height steps between columns / streams in during a pan.
+  private static readonly EXPLORE_Y_SMOOTH_MS = 140;
 
   /**
    * Fold a bounded batch of freshly-streamed chunks into the minimap each frame.
@@ -787,6 +806,31 @@ export class GameCore {
    * Update for Explore mode — user-driven free 3rd-person camera over the world.
    */
   private updateExploreMode(camera: THREE.PerspectiveCamera | null, deltaMs: number): void {
+    // Advance any in-progress recenter glide (eases the orbit target toward a moved spawn),
+    // then run "center-follow": pin the spawn marker to the surface directly under screen
+    // center (the orbit target) and sit the target on that surface, so the spawn stays
+    // centered as the user pans. Suspended while the user grabs the marker or a glide is
+    // animating (so those interactions aren't overridden). Retries each frame until the
+    // center column's terrain has streamed — which also lifts a fresh world onto its surface.
+    advanceExploreTargetGlide(deltaMs);
+    setMarkerVisible(true);
+    const target = getExploreTarget();
+    if (!isExploreMarkerInteracting() && !isExploreGliding()) {
+      const moved = target.x !== this.lastFollowX || target.z !== this.lastFollowZ;
+      if ((moved || !isMarkerPlaced()) && placeMarkerAtColumn(target.x, target.z)) {
+        this.lastFollowX = target.x;
+        this.lastFollowZ = target.z;
+      }
+      // Ease the orbit height onto the marker's surface instead of snapping, so the camera
+      // doesn't judder as the surface height changes across a pan (or as chunks stream in).
+      // Runs every frame (not gated on x/z movement) so it keeps settling after a pan stops
+      // and gives a smooth one-time rise onto the surface when a world opens.
+      if (isMarkerPlaced()) {
+        const k = 1 - Math.exp(-deltaMs / GameCore.EXPLORE_Y_SMOOTH_MS);
+        target.y += (getMarkerBase().y - target.y) * k;
+      }
+    }
+
     if (camera) updateExploreCamera(camera);
 
     // Brief first-person→explore glide on exiting play: blend from the captured FP pose
@@ -803,22 +847,15 @@ export class GameCore {
       if (this.cameraOutroMs === 0) useGameStore.getState().setExploreReady(true);
     }
 
-    // The explore target is the world stream/shadow center; keep spectatorCenter in
-    // sync so streaming, shadows, and the map follow where the user pans.
-    this.spectatorCenter.copy(getExploreTarget());
+    // The explore target is the world stream/shadow center; keep spectatorCenter in sync
+    // (with the surface-corrected Y from center-follow above) so streaming, shadows, the
+    // map, and the visibility BFS follow where the user pans/spawns.
+    this.spectatorCenter.copy(target);
 
     if (this.voxelIntegration) {
       perfStats.begin('voxelUpdate');
       this.voxelIntegration.update(this.spectatorCenter);
       perfStats.end('voxelUpdate');
-    }
-
-    // Auto-place the spawn marker at the current center (last/saved position) once its
-    // terrain is streamed, so a Play button is available immediately. The user can then
-    // tap elsewhere to relocate it. Retry each frame until it lands.
-    setMarkerVisible(true);
-    if (!isMarkerPlaced()) {
-      placeMarkerAtColumn(this.spectatorCenter.x, this.spectatorCenter.z);
     }
   }
 

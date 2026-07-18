@@ -20,31 +20,37 @@ import { isTouch } from '../game/deviceMode';
 import { controls } from '../game/player/controls';
 import { requestFullscreen } from './fullscreen';
 import { NewWorldDialog } from './NewWorldDialog';
-import { isMarkerPlaced, getMarkerTop, armMarkerSpawn } from '../game/spawn/SpawnMarker';
+import { isMarkerPlaced, getMarkerBase, armMarkerSpawn } from '../game/spawn/SpawnMarker';
 import {
   listWorlds, getActiveWorld, setActiveWorld, createAndActivateWorld, deleteWorld,
   subscribeWorldsChanged, type WorldMeta,
 } from '../game/world/WorldManager';
 
-/** Play button that tracks the top of the spawn marker in screen space. */
+/** Fixed on-screen height (px) of the line connecting the ground marker to the Play button. */
+const MARKER_LINE_PX = 88;
+
+/**
+ * Play button anchored to the spawn marker in screen space. The button + the vertical line
+ * beneath it are pure fixed-pixel UI: we project only the marker's ground point and draw a
+ * constant-height line up to the button, so the gap never changes with camera zoom (the old
+ * 3D line grew/shrank with zoom). The button rides the top of that line.
+ */
 function MarkerPlayButton() {
   const ref = useRef<HTMLDivElement>(null);
   const touch = isTouch();
 
   useEffect(() => {
     let raf = 0;
-    const v = { x: 0, y: 0, z: 0 } as { x: number; y: number; z: number };
     const tick = () => {
       const el = ref.current;
       const cam = getCamera();
       if (el && cam && isMarkerPlaced()) {
-        const p = getMarkerTop().clone().project(cam);
-        v.x = p.x; v.y = p.y; v.z = p.z;
-        const onScreen = v.z < 1 && v.x >= -1 && v.x <= 1 && v.y >= -1 && v.y <= 1;
+        const p = getMarkerBase().clone().project(cam);
+        const onScreen = p.z < 1 && p.x >= -1 && p.x <= 1 && p.y >= -1 && p.y <= 1;
         if (onScreen) {
           el.style.display = '';
-          el.style.left = `${(v.x * 0.5 + 0.5) * window.innerWidth}px`;
-          el.style.top = `${(-v.y * 0.5 + 0.5) * window.innerHeight}px`;
+          el.style.left = `${(p.x * 0.5 + 0.5) * window.innerWidth}px`;
+          el.style.top = `${(-p.y * 0.5 + 0.5) * window.innerHeight}px`;
         } else {
           el.style.display = 'none';
         }
@@ -72,29 +78,35 @@ function MarkerPlayButton() {
     useGameStore.getState().setGameMode(GameMode.Playing);
   };
 
+  // Anchored by its bottom-center to the projected ground point; the line's foot sits on the
+  // marker and the button floats a fixed MARKER_LINE_PX above it.
   return (
     <div
       ref={ref}
       style={{ position: 'fixed', transform: 'translate(-50%,-100%)', display: 'none' }}
-      className="pointer-events-auto flex items-stretch rounded-full overflow-hidden shadow-xl border-2 border-[#38e8ff] bg-indigo-600"
+      className="pointer-events-none flex flex-col items-center"
     >
-      <button
-        onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(false); }}
-        className="px-8 py-4 md:px-10 md:py-5 text-2xl md:text-3xl font-bold text-white hover:bg-indigo-500 active:bg-indigo-400 flex items-center gap-2 whitespace-nowrap cursor-pointer"
-        aria-label="Play from here"
-      >
-        <Play size={touch ? 22 : 26} fill="currentColor" /> <span className="leading-none">Play</span>
-      </button>
-      {!touch && (
+      <div className="pointer-events-auto flex items-stretch rounded-full overflow-hidden shadow-xl border-2 border-[#38e8ff] bg-indigo-600">
         <button
-          onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(true); }}
-          className="px-4 border-l border-[#38e8ff]/50 text-white bg-indigo-700 hover:bg-indigo-600 flex items-center cursor-pointer"
-          aria-label="Play fullscreen"
-          title="Play in fullscreen"
+          onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(false); }}
+          className="px-8 py-4 md:px-10 md:py-5 text-2xl md:text-3xl font-bold text-white hover:bg-indigo-500 active:bg-indigo-400 flex items-center gap-2 whitespace-nowrap cursor-pointer"
+          aria-label="Play from here"
         >
-          <Maximize size={22} />
+          <Play size={touch ? 22 : 26} fill="currentColor" /> <span className="leading-none">Play</span>
         </button>
-      )}
+        {!touch && (
+          <button
+            onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); play(true); }}
+            className="px-4 border-l border-[#38e8ff]/50 text-white bg-indigo-700 hover:bg-indigo-600 flex items-center cursor-pointer"
+            aria-label="Play fullscreen"
+            title="Play in fullscreen"
+          >
+            <Maximize size={22} />
+          </button>
+        )}
+      </div>
+      {/* Fixed-height connector line down to the ground marker (constant px at any zoom). */}
+      <div style={{ width: 2, height: MARKER_LINE_PX, backgroundColor: '#38e8ff', opacity: 0.85 }} />
     </div>
   );
 }

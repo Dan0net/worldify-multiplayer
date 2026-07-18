@@ -17,6 +17,8 @@ import {
   exploreCameraRotate,
   exploreCameraZoom,
   exploreCameraPinch,
+  setExploreMarkerInteracting,
+  beginExploreTargetGlide,
 } from '../game/scene/ExploreCamera';
 import {
   isMarkerPlaced, getMarkerBase, placeMarkerFromNDC, placeMarkerAt, raycastMarkerNDC,
@@ -60,8 +62,12 @@ export function ExploreControls() {
       moved.current = 0;
       mode.current = (e.pointerType !== 'mouse' || e.button === 0) && nearMarker(e.clientX, e.clientY)
         ? 'marker' : 'camera';
+      // Grabbing the marker suspends center-follow so the drag isn't overridden.
+      setExploreMarkerInteracting(mode.current === 'marker');
     } else {
-      pinch.current = null; // two fingers → camera rotate/zoom
+      pinch.current = null;   // two fingers → camera rotate/zoom
+      mode.current = 'camera';
+      setExploreMarkerInteracting(false);
     }
   };
 
@@ -100,14 +106,20 @@ export function ExploreControls() {
 
   const onPointerUp = (e: React.PointerEvent) => {
     const wasSingle = pointers.current.size === 1;
+    const wasMarker = mode.current === 'marker';
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
-    if (pointers.current.size === 0) setDragging(false);
+    if (pointers.current.size === 0) { setDragging(false); setExploreMarkerInteracting(false); }
 
-    // A tap on empty ground (camera mode, no drag) places/moves the marker there.
-    if (wasSingle && mode.current === 'camera' && moved.current < TAP_PX) {
+    if (wasSingle && wasMarker) {
+      // Finished moving the marker → glide the camera so the spawn returns to screen center.
+      beginExploreTargetGlide(getMarkerBase());
+    } else if (wasSingle && mode.current === 'camera' && moved.current < TAP_PX) {
+      // A tap on empty ground places/moves the marker there, then recenters the camera on it.
       const camera = getCamera();
-      if (camera) placeMarkerFromNDC(toNDC(e.clientX, e.clientY), camera);
+      if (camera && placeMarkerFromNDC(toNDC(e.clientX, e.clientY), camera)) {
+        beginExploreTargetGlide(getMarkerBase());
+      }
     }
   };
 
