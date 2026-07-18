@@ -635,6 +635,8 @@ export class TerrainGenerator implements HeightSampler {
         return { ...d, gridSize: t.buildingSpacing, exclusionRadius: t.buildingSpacing * 0.4 };
       if (d.type === StampType.BUILDING_HUT)
         return { ...d, gridSize: t.buildingSpacing * 0.6, exclusionRadius: t.buildingSpacing * 0.3 };
+      if (d.type === StampType.BUILDING_TOWER)
+        return { ...d, gridSize: t.buildingSpacing * 1.4, exclusionRadius: t.buildingSpacing * 0.5 };
       return d;
     });
     this.config.stampConfig = { ...this.config.stampConfig, distributions };

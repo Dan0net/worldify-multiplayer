@@ -11,6 +11,9 @@ import { mat } from '../../materials/index.js';
 // SDF threshold for voxel inclusion - sqrt(2)/2 handles 45° rotations
 const SDF_THRESHOLD = 0.71;
 
+// Full turn in radians (spiral-stair / window angle math)
+const TWO_PI = Math.PI * 2;
+
 // ============== Types ==============
 
 export interface StampVoxel {
@@ -47,6 +50,7 @@ export enum StampType {
   ROCK_LARGE = 'rock_large',
   BUILDING_SMALL = 'building_small',
   BUILDING_HUT = 'building_hut',
+  BUILDING_TOWER = 'building_tower',
   TORCH = 'torch',
 }
 
@@ -868,15 +872,292 @@ function evaluateHutSDF(
   return null;
 }
 
+/** Tunable geometry for a single tower instance (built once in generateTowerSDF). */
+interface TowerParams {
+  radius: number;
+  wallHeight: number;
+  roofHeight: number;
+  wallThickness: number;
+  doorHalfWidth: number;
+  doorHeight: number;
+  numFloors: number;
+  floorHeight: number;
+  interiorR: number;
+  newelR: number;
+  rampThickness: number;
+  platThickness: number;
+  stairOpenHalfAngle: number;
+  windowHalfHeight: number;
+  windowHalfAngle: number;
+  wallMaterial: number;
+  foundationMaterial: number;
+  floorMaterial: number;
+  roofMaterial: number;
+}
+
+/**
+ * Generate a tall round tower using SDF sampling with rotation.
+ *
+ * Built like the round hut (round hollow-cylinder walls, carved doorway + entrance
+ * steps, conical roof) but multiple floors tall, with an internal spiral ramp the
+ * player climbs and a solid floor platform at each level (with a stairwell opening).
+ * The ramp is a smooth helicoid rather than blocky steps, because the player collides
+ * against the smooth SurfaceNet isosurface as a capsule.
+ */
+function generateTowerSDF(variant: number, rotation: number, seed: number = 0): StampDefinition {
+  const voxels: StampVoxel[] = [];
+
+  // Per-building RNG: number of floors is the random 2-4 the tower height varies over.
+  // (Deriving floors from `seed` is safe even though bounds are computed with seed=0 in
+  // stampAffectsChunk: that culling is X/Z only, and the X/Z footprint depends on `radius`
+  // which is variant-derived, so the horizontal bounds are identical regardless of floors.)
+  const rng = makeRng(seed);
+  const numFloors = 2 + Math.floor(rng() * 3); // 2, 3, or 4
+
+  const radius = 9 + (variant % 2);            // 9-10 voxels (~2.25-2.5m)
+  const wallThickness = 2;
+  const floorHeight = 11;                      // voxels per floor (~2.75m); headroom = floorHeight - rampThickness
+  const wallHeight = numFloors * floorHeight;
+  const roofHeight = radius + 4;
+
+  // Stone / brick theme (visually distinct from the wooden hut).
+  const wallMaterials = [mat('stone'), mat('brick2')];
+  const roofMaterials = [mat('roof'), mat('roof2')];
+  const params: TowerParams = {
+    radius,
+    wallHeight,
+    roofHeight,
+    wallThickness,
+    doorHalfWidth: 3,
+    doorHeight: 8,
+    numFloors,
+    floorHeight,
+    interiorR: radius - wallThickness,
+    newelR: 1.5,
+    rampThickness: 3,
+    platThickness: 2,
+    stairOpenHalfAngle: 0.7,   // ~40deg pie-slice stairwell opening in each platform
+    windowHalfHeight: 3,
+    windowHalfAngle: 0.2,      // narrow arrow-slit windows
+    wallMaterial: wallMaterials[variant % wallMaterials.length],
+    foundationMaterial: mat('stone2'),
+    floorMaterial: mat('cobble2'),
+    roofMaterial: roofMaterials[variant % roofMaterials.length],
+  };
+
+  // Pre-compute rotation
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+
+  // Bounding box with margin for rotation
+  const maxDim = radius + 5;
+  const maxHeight = wallHeight + roofHeight + 2;
+
+  // Sample SDF over the entire bounding volume
+  for (let y = -2; y <= maxHeight; y++) {
+    for (let x = -maxDim; x <= maxDim; x++) {
+      for (let z = -maxDim; z <= maxDim; z++) {
+        // Rotate query point to local building space (inverse rotation)
+        const { rx, rz } = rotateXZ(x, z, cos, -sin);
+
+        const voxelData = evaluateTowerSDF(rx, y, rz, params);
+        if (voxelData) {
+          voxels.push({ x, y, z, material: voxelData.material, weight: voxelData.weight });
+        }
+      }
+    }
+  }
+
+  // --- Decorations (deterministic per building) ---
+  // Exterior torches flanking the door (front = -Z) on 40% of towers.
+  if (rng() < 0.4) {
+    pushTorchAt(voxels, -(params.doorHalfWidth + 1), -radius, params.doorHeight, cos, sin);
+    pushTorchAt(voxels, params.doorHalfWidth + 1, -radius, params.doorHeight, cos, sin);
+  }
+
+  return {
+    type: StampType.BUILDING_TOWER,
+    variant,
+    voxels,
+    bounds: calculateBounds(voxels),
+  };
+}
+
+/**
+ * Evaluate the tower at a point in local (unrotated) space.
+ * Branch order matters: solid interior features (floor, newel, ramp, platforms) are
+ * tested before the interior air carve so they survive; the air carve hollows the rest.
+ */
+function evaluateTowerSDF(
+  x: number, y: number, z: number, p: TowerParams
+): { material: number; weight: number } | null {
+  const {
+    radius, wallHeight, roofHeight, wallThickness, doorHalfWidth, doorHeight,
+    numFloors, floorHeight, interiorR, newelR, rampThickness, platThickness,
+    stairOpenHalfAngle, windowHalfHeight, windowHalfAngle,
+    wallMaterial, foundationMaterial, floorMaterial, roofMaterial,
+  } = p;
+
+  // Foundation SDF (-2 to 0) + exterior entrance stairs (front, -Z)
+  if (y >= -2 && y < 0) {
+    const foundationDist = sdfCylinder({ x, y: y + 1, z }, radius + 1, 1);
+    if (foundationDist < SDF_THRESHOLD) {
+      return { material: foundationMaterial, weight: 0.45 };
+    }
+    const stairStep = -y - 1;
+    if (stairStep >= 0 && stairStep < 4) {
+      const stairZ = -radius - 1.5 - stairStep;
+      const stairDist = sdfBox({ x, y: 0, z: z - stairZ }, { x: doorHalfWidth, y: 0.5, z: 0.5 });
+      if (stairDist < SDF_THRESHOLD) {
+        return { material: foundationMaterial, weight: 0.45 };
+      }
+    }
+  }
+
+  // Doorway carve - through the wall and slightly in front to clear terrain
+  if (y >= 0 && y < doorHeight) {
+    const doorwayDist = sdfBox(
+      { x, y: y - doorHeight / 2, z: z + radius + 1 },
+      { x: doorHalfWidth + 0.5, y: doorHeight / 2, z: wallThickness + 2 }
+    );
+    if (doorwayDist < SDF_THRESHOLD) {
+      return { material: 0, weight: -0.5 };
+    }
+  }
+
+  // Ground floor (solid disc, y = 0)
+  if (y >= 0 && y < 1) {
+    const floorDist = sdfCylinder({ x, y: y - 0.5, z }, radius, 0.5);
+    if (floorDist < SDF_THRESHOLD) {
+      return { material: floorMaterial, weight: 0.45 };
+    }
+  }
+
+  // Interior features share polar coords. rampAng is offset so the spiral's base seam
+  // (and the stairwell openings stacked above it) sit over the door (-Z).
+  const r = Math.sqrt(x * x + z * z);
+  let physAng = Math.atan2(z, x);
+  if (physAng < 0) physAng += TWO_PI;
+  let rampAng = physAng + Math.PI / 2; // door at -Z (physAng 3PI/2) -> rampAng 0
+  if (rampAng >= TWO_PI) rampAng -= TWO_PI;
+
+  const topFloorY = 1 + (numFloors - 1) * floorHeight;
+
+  // Central newel column the spiral wraps
+  if (y >= 1 && y <= topFloorY && r < newelR) {
+    return { material: floorMaterial, weight: 0.45 };
+  }
+
+  // Spiral ramp (helicoid): one full turn per floor, from the ground up to the top floor.
+  if (y >= 1 && r >= newelR - 0.5 && r <= interiorR) {
+    for (let k = 0; k < numFloors - 1; k++) {
+      const hk = 1 + (rampAng / TWO_PI) * floorHeight + k * floorHeight;
+      if (y <= hk && y > hk - rampThickness) {
+        return { material: floorMaterial, weight: 0.45 };
+      }
+    }
+  }
+
+  // Solid floor platform at each upper level, minus a pie-slice stairwell opening at the seam
+  for (let f = 1; f < numFloors; f++) {
+    const surfaceY = 1 + f * floorHeight;
+    if (y >= surfaceY - platThickness && y < surfaceY) {
+      const platDist = sdfCylinder({ x, y: 0, z }, interiorR, 1);
+      if (platDist < SDF_THRESHOLD) {
+        const angFromSeam = Math.min(rampAng, TWO_PI - rampAng);
+        const inOpening = angFromSeam < stairOpenHalfAngle && r > newelR - 0.5;
+        if (!inOpening) {
+          return { material: floorMaterial, weight: 0.45 };
+        }
+      }
+    }
+  }
+
+  // Interior air - hollow out everything else inside the shell
+  if (y >= 1 && y < wallHeight - 1) {
+    const interiorDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, interiorR, wallHeight / 2);
+    if (interiorDist < -SDF_THRESHOLD) {
+      return { material: 0, weight: -0.5 };
+    }
+  }
+
+  // Ceiling under the roof
+  if (y >= wallHeight - 2 && y < wallHeight) {
+    const ceilingDist = sdfCylinder({ x, y: y - wallHeight + 1, z }, interiorR, 1);
+    if (ceilingDist < SDF_THRESHOLD) {
+      return { material: mat('concrete'), weight: 0.45 };
+    }
+  }
+
+  // Walls (hollow cylinder) with a door opening and per-floor spiralling windows
+  if (y >= 1 && y < wallHeight) {
+    const outerDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, radius, wallHeight / 2);
+    const innerDist = sdfCylinder({ x, y: y - wallHeight / 2, z }, radius - wallThickness, wallHeight / 2 + 1);
+
+    if (outerDist < SDF_THRESHOLD && innerDist > -SDF_THRESHOLD) {
+      // Door opening (front, -Z)
+      if (z < -radius + wallThickness + SDF_THRESHOLD && y < doorHeight) {
+        const doorDist = sdfBox(
+          { x, y: y - doorHeight / 2, z: z + radius },
+          { x: doorHalfWidth, y: doorHeight / 2, z: wallThickness + 1 }
+        );
+        if (doorDist < SDF_THRESHOLD) {
+          return null;
+        }
+      }
+
+      // Windows: one arrow-slit per floor, azimuth rotates 120deg per floor so they wind up.
+      for (let f = 0; f < numFloors; f++) {
+        const yC = 1 + f * floorHeight + floorHeight / 2;
+        if (Math.abs(y - yC) <= windowHalfHeight) {
+          // Start opposite the door (-Z), then rotate each floor.
+          let aC = Math.PI / 2 + f * (TWO_PI / 3);
+          aC = ((aC % TWO_PI) + TWO_PI) % TWO_PI;
+          let dA = Math.abs(physAng - aC);
+          if (dA > Math.PI) dA = TWO_PI - dA;
+          if (dA < windowHalfAngle) {
+            return { material: 0, weight: -0.5 };
+          }
+        }
+      }
+
+      return { material: wallMaterial, weight: 0.45 };
+    }
+  }
+
+  // Conical roof
+  if (y >= wallHeight && y < wallHeight + roofHeight) {
+    const roofY = y - wallHeight;
+    const roofRadius = radius + 1 - (roofY * (radius + 1) / roofHeight);
+    const roofDist = sdfCylinder({ x, y: 0, z }, roofRadius, 0.5);
+    if (roofDist < SDF_THRESHOLD) {
+      return { material: roofMaterial, weight: 0.45 };
+    }
+  }
+
+  return null;
+}
+
 // ============== Stamp Registry ==============
 
 const VARIANTS_PER_TYPE = 4;
 
 /**
+ * Whether a stamp type is a building. Buildings share behaviour across the pipeline:
+ * they are generated fresh with rotation (see getStamp), applied last so their interior
+ * carves win (StampPlacer), and respond to the building-spacing control (TerrainGenerator).
+ */
+export function isBuildingStamp(type: StampType): boolean {
+  return type === StampType.BUILDING_SMALL ||
+         type === StampType.BUILDING_HUT ||
+         type === StampType.BUILDING_TOWER;
+}
+
+/**
  * Check if a stamp type is a building that supports rotation
  */
 export function isRotatableStamp(type: StampType): boolean {
-  return type === StampType.BUILDING_SMALL || type === StampType.BUILDING_HUT;
+  return isBuildingStamp(type);
 }
 
 /**
@@ -926,6 +1207,8 @@ function createStamp(type: StampType, variant: number, rotation: number = 0, see
       return generateSmallBuildingSDF(variant, rotation, seed);
     case StampType.BUILDING_HUT:
       return generateHutSDF(variant, rotation, seed);
+    case StampType.BUILDING_TOWER:
+      return generateTowerSDF(variant, rotation, seed);
     case StampType.TORCH:
       return { type: StampType.TORCH, variant: 0, voxels: TORCH_STAMP_VOXELS, bounds: calculateBounds(TORCH_STAMP_VOXELS) };
     default:

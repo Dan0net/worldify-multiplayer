@@ -69,6 +69,13 @@ export const DEFAULT_STAMP_DISTRIBUTION: StampDistributionConfig = {
       jitter: 0.4,
       exclusionRadius: 15,    // 15m exclusion - huts need clearance too
     },
+    {
+      type: StampType.BUILDING_TOWER,
+      priority: -12,          // Generated first - tall landmark claims the most space
+      gridSize: 70,           // Very sparse - rare landmark
+      jitter: 0.35,
+      exclusionRadius: 25,    // 25m exclusion - big clearance around towers
+    },
     // Rocks generated after buildings (priority 0-2) - they claim space
     {
       type: StampType.ROCK_LARGE,

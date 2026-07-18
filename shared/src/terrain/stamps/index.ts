@@ -10,6 +10,7 @@ export {
   getVariantCount,
   getAllStampTypes,
   isRotatableStamp,
+  isBuildingStamp,
   hashInt2,
   makeRng,
 } from './StampDefinitions.js';
