@@ -296,9 +296,7 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   // Worms (traced tunnels). Seeded on a 3D grid so they fill the whole depth from just above the
   // surface downward.
   wormCellSize: 40,         // 40 m spawn cells (3D grid)
-  wormsPerCell: 1.4,        // worms per 3D cell (density; kept full length — the trace of every worm in a
-                            // cell within reach is ~2/3 of cold gen, so fewer-but-full-length worms is the
-                            // main speed lever without shortening tunnels)
+  wormsPerCell: 2.0,        // worms per 3D cell
   wormSegments: 150,        // long worms (150 × 1.2 m ≈ 180 m)
   wormStep: 1.2,            // 1.2 m per step (dense spheres → smooth, connected tunnels)
   wormRadius: 2.0,          // ~4 m diameter tunnels

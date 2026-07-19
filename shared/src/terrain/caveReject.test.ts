@@ -34,7 +34,7 @@ function generateChecksum(): number {
 }
 
 // Baseline captured from the generator BEFORE the cave proximity-reject change.
-const BASELINE = 69486343; // re-baselined: worm density 1.4 + smooth-interp trace (stride 16) + cavern breach warp-once
+const BASELINE = 614669095; // re-baselined: worm smooth-interp trace (stride 16) + cavern breach warp-once
 
 describe('cave proximity-reject preserves generated terrain', () => {
   it('generates byte-identical voxel data for the fixed chunk spread', () => {
