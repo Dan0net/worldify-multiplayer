@@ -851,7 +851,10 @@ export class TerrainGenerator implements HeightSampler {
     // Per-worm steering offset; smaller with higher convergence → worms share a flow-field and braid.
     const phaseScale = WORM_PHASE_SCALE * (1 - cave.wormConvergence);
 
-    const pts: number[] = [];
+    // Trace straight into a right-sized Float64Array: each of the n worms emits exactly wormSegments+1
+    // points × 4 floats. Avoids the ~900k-push/grow/GC churn a number[] incurs across a cold column.
+    const pts = new Float64Array(n * (cave.wormSegments + 1) * 4);
+    let p = 0;
     for (let w = 0; w < n; w++) {
       // Start: jittered anywhere inside the 3D cell (no surface reference).
       const hx0 = (ci + rng()) * cs;
@@ -894,7 +897,7 @@ export class TerrainGenerator implements HeightSampler {
             tdx = Math.cos(targetYaw) * cp; tdy = Math.sin(targetPitch); tdz = Math.sin(targetYaw) * cp;
           }
           const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
-          pts.push(hx, hy, hz, radius);
+          pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
 
           // Ease from segment-start heading toward the sampled target across the window, then advance.
           const f = (local + 1) / K;
@@ -914,7 +917,7 @@ export class TerrainGenerator implements HeightSampler {
             pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
           }
           const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
-          pts.push(hx, hy, hz, radius);
+          pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
 
           const targetYaw = yawN * Math.PI;
           let dYaw = targetYaw - yaw;
@@ -934,10 +937,9 @@ export class TerrainGenerator implements HeightSampler {
       }
     }
 
-    const arr = new Float64Array(pts);
     if (this.wormCellCache.size > 4096) this.wormCellCache.clear();  // simple bounded cache
-    this.wormCellCache.set(cacheKey, arr);
-    return arr;
+    this.wormCellCache.set(cacheKey, pts);
+    return pts;
   }
 
   /**
