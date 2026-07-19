@@ -7,6 +7,7 @@ import {
   VISIBILITY_RADIUS,
   VISIBILITY_UNLOAD_BUFFER,
   CHUNK_SIZE,
+  CHUNK_WORLD_SIZE,
   FACE_OFFSETS_6,
   NEGATIVE_MARGIN_OFFSETS_7,
   POSITIVE_MARGIN_OFFSETS_7,
@@ -449,7 +450,7 @@ export class VoxelWorld implements ChunkProvider {
       );
       this.cachedReachable = reachable;
       this.addMarginSourceRequests(reachable, toRequest);
-      this.requestVisibleChunks(toRequest);
+      this.requestVisibleChunks(toRequest, playerPos);
 
       this.updateMeshVisibility(this.cachedReachable);
       this.visibilityDirty = false;
@@ -531,23 +532,25 @@ export class VoxelWorld implements ChunkProvider {
    * visible air, so their voxels arrive as mesh margins without a separate stitch-loader. Chunks
    * above a column's maxCy are skipped (open sky, nothing to load).
    */
-  private requestVisibleChunks(toRequest: Set<string>): void {
+  private requestVisibleChunks(toRequest: Set<string>, playerPos?: THREE.Vector3): void {
     // Limit concurrent requests
     const MAX_PENDING_TILES = 4;
     const MAX_PENDING_CHUNKS = 4;
 
     // Request NEAREST-FIRST. Only a few requests fit per call (throttle), so ordering decides what
     // loads now — and the margin-source loader appends occluded neighbours, which would otherwise sit
-    // behind the whole frontier. Sorting by distance to the player means a near chunk AND its near
-    // margins load together, so terrain around the player meshes immediately instead of after the
-    // entire queue drains (the "delay before anything renders").
-    const p = this.lastPlayerChunk;
+    // behind the whole frontier. Sort by distance to the player's FRACTIONAL chunk position (not just
+    // the integer chunk), so the ordering tracks sub-chunk movement — otherwise it only refreshes on a
+    // whole-chunk cross and a near chunk can wait behind a farther one for up to a chunk of travel.
+    const pcx = playerPos ? playerPos.x / CHUNK_WORLD_SIZE : this.lastPlayerChunk?.cx;
+    const pcy = playerPos ? playerPos.y / CHUNK_WORLD_SIZE : this.lastPlayerChunk?.cy;
+    const pcz = playerPos ? playerPos.z / CHUNK_WORLD_SIZE : this.lastPlayerChunk?.cz;
     const sorted = [...toRequest];
-    if (p) {
+    if (pcx !== undefined && pcy !== undefined && pcz !== undefined) {
       const dist = new Map<string, number>();
       for (const key of sorted) {
         const { cx, cy, cz } = parseChunkKey(key);
-        dist.set(key, (cx - p.cx) ** 2 + (cy - p.cy) ** 2 + (cz - p.cz) ** 2);
+        dist.set(key, (cx - pcx) ** 2 + (cy - pcy) ** 2 + (cz - pcz) ** 2);
       }
       sorted.sort((a, b) => dist.get(a)! - dist.get(b)!);
     }
