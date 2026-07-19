@@ -1,6 +1,16 @@
 # Off-thread lighting plan + worker-offload inventory
 
-Status: **planned, not implemented.** Captured for a future pass.
+Status: **worker not yet implemented.** A first, cheaper win landed separately:
+
+- **Redundant relight cut (done).** `ingestChunkData` now skips relighting a horizontal / above
+  neighbour when the arriving chunk donates no light across the shared face (`faceDonatesLight`).
+  Border injection ignores source voxels with light ≤ 1, so a fully-dark shared face — the common
+  rock↔rock underground case during column-load bursts — cannot change the neighbour's lit state,
+  making the skip output-preserving (locked in by `shared/src/voxel/faceDonatesLight.test.ts`). The
+  chunk *below* an arrival is exempt: a solid arrival changes its `lightFromAbove` (open-sky →
+  capped) even while donating no border light, so it always relights. This trims the per-arrival
+  relight fan-out on the main thread without moving anything off it; the worker below is still the
+  path to removing the remaining sustained cost.
 
 ## Why
 
