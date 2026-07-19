@@ -53,7 +53,7 @@ import {
   getCameraDirection,
   type ChunkProvider,
 } from './VisibilityBFS.js';
-import { TerrainWorkerPool } from './TerrainWorkerPool.js';
+import { TerrainWorkerPool, terrainWorkerCount } from './TerrainWorkerPool.js';
 import { SeamStitcher } from './SeamStitcher.js';
 import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConfig, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
@@ -567,9 +567,13 @@ export class VoxelWorld implements ChunkProvider {
    * above a column's maxCy are skipped (open sky, nothing to load).
    */
   private requestVisibleChunks(toRequest: Set<string>, playerPos?: THREE.Vector3): void {
-    // Limit concurrent requests
-    const MAX_PENDING_TILES = 4;
-    const MAX_PENDING_CHUNKS = 4;
+    // In-flight request window, sized to the generation pool so every worker always has queued work
+    // (a worker is only useful if the request layer keeps it fed). The old fixed 4 was the tightest
+    // streaming throttle — with a core-scaled pool it left most workers idle and let a fast player
+    // outrun loading. ~3× keeps a couple of jobs queued per worker; tiles are cheaper and fewer.
+    const genCount = terrainWorkerCount();
+    const MAX_PENDING_TILES = Math.max(4, genCount * 2);
+    const MAX_PENDING_CHUNKS = genCount * 3;
 
     // Request NEAREST-FIRST. Only a few requests fit per call (throttle), so ordering decides what
     // loads now — and the margin-source loader appends occluded neighbours, which would otherwise sit
