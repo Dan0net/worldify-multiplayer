@@ -232,13 +232,15 @@ export class BuildPreview {
     } else {
       const remeshSet = new Set(meshKeys);
 
-      // A drawn chunk owns (meshes) its own +X/+Y/+Z boundary and reads its + face neighbours' voxels
-      // for that boundary's light. In 'deferred' mode the spill relight that would light those
-      // neighbours is deferred, so without this their temp carries stale/dark light and the drawn
-      // chunk's + boundary bakes a 1-frame BLACK BORDER where the surface meets it. Relight the + face
-      // neighbours' TEMP now (sky) — cheap: ≤3 per drawn chunk, temp only, no display refresh — so the
-      // mesh samples correct + margin light this frame. Track them so their temp is reverted on stop.
-      const posNeighbours = this.collectPositiveFaceNeighbours(drawnKeys, remeshSet);
+      // Every re-meshed chunk (drawn AND its margin-consumer neighbours) owns (meshes) its own
+      // +X/+Y/+Z boundary and reads its + face neighbours' voxels for that boundary's light. In
+      // 'deferred' mode the spill relight that would light those neighbours is deferred, so without this
+      // their temp carries stale/dark light and the re-meshed chunk's + boundary bakes a 1-frame BLACK
+      // BORDER where the surface meets it. Relight the + face neighbours of the WHOLE re-mesh set
+      // (meshKeys, not just drawn) on temp (sky) — cheap: ≤3 per re-meshed chunk, temp only, no display
+      // refresh — so every re-meshed chunk samples correct + margin light this frame. Track them so
+      // their temp is reverted on stop.
+      const posNeighbours = this.collectPositiveFaceNeighbours(meshKeys, remeshSet);
       for (const nk of posNeighbours) {
         const n = this.world.chunks.get(nk);
         if (n && !n.tempData) n.copyToTemp();
