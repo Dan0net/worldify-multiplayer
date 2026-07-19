@@ -434,6 +434,18 @@ export class TerrainGenerator implements HeightSampler {
   // origin sits in an adjacent tile must be suppressed by that tile's breaches — without cache thrash.
   private breachColsCache = new Map<string, Set<number>>();
 
+  // Per-column 2D surface height, memoized so a vertical stack of chunks (same cx,cz, different cy)
+  // doesn't recompute the ~9-noise height field per cy. Keyed by EXACT world (x,z): grid queries across
+  // cy use identical floats so they hit; off-grid callers (spawn/collision) miss and recompute exactly,
+  // so results are unchanged. Cleared on any config/seed change (invalidateCaveCaches).
+  private heightCache = new Map<number, Map<number, number>>();
+  private heightCacheEntries = 0;
+
+  // Per-(cx,cz) FILTERED stamp placements, memoized so the 25-neighbour scatter + O(n²) collision +
+  // pathway/breach filter isn't recomputed for every cy in a column (the result is XZ-only). Bounded;
+  // cleared on config/seed change.
+  private placementCache = new Map<string, StampPlacement[]>();
+
   /** Test-only: extra worm-gather cells added on every side. Proves the gather radius is sufficient
    *  (regenerating with a larger radius must be byte-identical). Leave 0 in production. */
   wormGatherExtraCells = 0;
@@ -611,6 +623,10 @@ export class TerrainGenerator implements HeightSampler {
     this.cavernCellCache.clear();
     this.chunkCavernFeatsFor = '';
     this.breachColsCache.clear();
+    // Per-column memos also depend on config/seed (height layers, warp, stamp/pathway/breach config).
+    this.heightCache.clear();
+    this.heightCacheEntries = 0;
+    this.placementCache.clear();
   }
 
   /**
@@ -720,19 +736,29 @@ export class TerrainGenerator implements HeightSampler {
    */
   private isInsideWormCave(x: number, y: number, z: number, pts: Float64Array = this.chunkWormPts): boolean {
     if (pts.length === 0) return false;
-    // Signed wall displacement at this voxel → bumpy, organic walls (added to every tube's radius).
     const cave = this.config.caveConfig;
-    const wall = cave.wormWallAmp > 0 ? this.caveWormWall.GetNoise(x, y, z) * cave.wormWallAmp : 0;
+    // Max effective radius: the stored radius plus the largest the (signed) wall displacement can be.
+    // A voxel farther than this from a tube centre can't be inside it whatever the wall value, so we
+    // can skip the expensive wall noise unless the voxel is within reach of SOME tube. This is a pure
+    // cost optimisation — the accept test below is unchanged, so output is byte-identical.
+    const wallAmp = cave.wormWallAmp > 0 ? cave.wormWallAmp : 0;
+    let wall = 0;
+    let wallComputed = wallAmp === 0; // no wall noise to compute when amp is 0
     for (let i = 0; i < pts.length; i += 4) {
       const dx = x - pts[i];
       const dy = y - pts[i + 1];
       const dz = z - pts[i + 2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      const rMax = pts[i + 3] + wallAmp;
+      if (d2 >= rMax * rMax) continue; // provably outside this tube's widest possible wall
+      // Within reach — compute the real signed wall displacement once, lazily.
+      if (!wallComputed) { wall = this.caveWormWall.GetNoise(x, y, z) * cave.wormWallAmp; wallComputed = true; }
       // Floor the effective radius so negative wall-roughness can't pinch a tube below the sphere
       // spacing and disconnect it. The floor ≤ WORM_MIN_RADIUS ≤ stored radius, so it never reaches
       // past the gather cull → still seamless.
       let reff = pts[i + 3] + wall;
       if (reff < WORM_CARVE_MIN) reff = WORM_CARVE_MIN;
-      if (dx * dx + dy * dy + dz * dz < reff * reff) return true;
+      if (d2 < reff * reff) return true;
     }
     return false;
   }
@@ -977,6 +1003,26 @@ export class TerrainGenerator implements HeightSampler {
       const surfaceFactor = 1 - taperAmt * (1 - CAVERN_TAPER_MIN_FRAC);
       const t = Math.max(0, Math.min(1, (surfaceMeters - y) / CAVERN_TAPER_BAND));
       taper = surfaceFactor + (1 - surfaceFactor) * t;
+    }
+
+    // Cheap proximity pre-reject: skip the 3 winding-warp + 1 wall noise evals when this voxel is
+    // provably outside EVERY cavern. The warp displaces the sample by at most `cavernWinding` per world
+    // axis and the wall by `cavernWallAmp` along the radius, so inflate each feature's boundary by that
+    // max and test the UN-warped point; if it's outside all inflated boundaries it's outside all real
+    // ones too (triangle inequality). Byte-identical output — a pure cost cut for the common far voxel.
+    const windAmp = cave.cavernWinding > 0 ? cave.cavernWinding : 0;
+    const wallAmpAbs = cave.cavernWallAmp > 0 ? cave.cavernWallAmp : 0;
+    {
+      let near = false;
+      for (let i = 0; i < feats.length; i += 4) {
+        const fcx = feats[i], fcy = feats[i + 1], fcz = feats[i + 2], rx = feats[i + 3];
+        const ry = rx * (1 + vert), rz = rx;
+        const ndx = (x - fcx) / rx, ndy = (y - fcy) / ry, ndz = (z - fcz) / rz;
+        const nd = Math.sqrt(ndx * ndx + ndy * ndy + ndz * ndz);
+        const warpNd = windAmp > 0 ? windAmp * Math.sqrt(1 / (rx * rx) + 1 / (ry * ry) + 1 / (rz * rz)) : 0;
+        if (nd < taper * (1 + wallAmpAbs / rx) + warpNd) { near = true; break; }
+      }
+      if (!near) return 0;
     }
 
     // Domain warp (winding) — displace the sample point; clean ellipsoid when winding = 0.
@@ -1402,14 +1448,28 @@ export class TerrainGenerator implements HeightSampler {
    * @returns Height in voxels
    */
   sampleHeight(worldX: number, worldZ: number): number {
+    // Memo: a vertical stack of chunks re-queries the same (worldX,worldZ) grid per cy. Exact-float
+    // key, so off-grid callers just miss (recompute exactly) — output unchanged.
+    let inner = this.heightCache.get(worldX);
+    if (inner) {
+      const cached = inner.get(worldZ);
+      if (cached !== undefined) return cached;
+    }
+
     // Apply domain warping for organic shapes
     const [warpedX, warpedZ] = this.applyDomainWarp(worldX, worldZ);
-    
+
     let height = this.config.baseHeight;
 
     for (const layer of this.config.heightLayers) {
       height += this.sampleNoiseLayer(warpedX, warpedZ, layer);
     }
+
+    // Bounded: clear wholesale past a generous cap (covers the active view's columns) rather than LRU.
+    if (this.heightCacheEntries > 262144) { this.heightCache.clear(); this.heightCacheEntries = 0; inner = undefined; }
+    if (!inner) { inner = new Map(); this.heightCache.set(worldX, inner); }
+    inner.set(worldZ, height);
+    this.heightCacheEntries++;
 
     return height;
   }
@@ -1663,11 +1723,20 @@ export class TerrainGenerator implements HeightSampler {
 
     // Apply stamps (trees, rocks) if enabled
     if (this.stampPointGenerator && this.stampPlacer) {
-      const allPlacements = this.stampPointGenerator.generateForChunk(cx, cz);
-      // Drop stamps (trees / rocks / buildings) on pathways, and over cave breaches so nothing is left
-      // floating above an open cave mouth.
-      const placements = allPlacements.filter(p =>
-        !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ));
+      // The scatter + pathway/breach filter is XZ-only, so memoize it per (cx,cz) — every cy in the
+      // column reuses the same filtered list instead of redoing the 25-neighbour scatter + O(n²)
+      // collision + per-placement pathway/breach noise. applyStamps treats the list read-only.
+      const pkey = cx + ',' + cz;
+      let placements = this.placementCache.get(pkey);
+      if (!placements) {
+        const allPlacements = this.stampPointGenerator.generateForChunk(cx, cz);
+        // Drop stamps (trees / rocks / buildings) on pathways, and over cave breaches so nothing is left
+        // floating above an open cave mouth.
+        placements = allPlacements.filter(p =>
+          !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ));
+        if (this.placementCache.size > 4096) this.placementCache.clear();
+        this.placementCache.set(pkey, placements);
+      }
       this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 

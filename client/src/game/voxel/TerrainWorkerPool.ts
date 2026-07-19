@@ -6,27 +6,45 @@
  * responses feed VoxelWorld's existing receive* methods, exactly like the
  * network path.
  *
- * Dispatch is by COLUMN AFFINITY rather than round-robin: every request that
- * touches a 2D column (cx,cz) — its tile/column bundle and each of its vertical
- * chunks — is routed to the same worker via a stable spatial hash. Each worker
- * keeps its own unshared `rawChunk` cache (LocalTerrainSource), so a tile
- * request's full-column generation populates that cache and the follow-up
+ * The pool is scaled to the machine (terrainWorkerCount) — generation is the
+ * streaming bottleneck, so give it most cores while leaving headroom for the
+ * main thread + the separate mesh workers.
+ *
+ * Dispatch is by COLUMN AFFINITY rather than round-robin / least-busy: every
+ * request that touches a 2D column (cx,cz) — its tile/column bundle and each of
+ * its vertical chunks — is routed to the same worker via a stable spatial hash.
+ * Each worker keeps its own unshared `rawChunk` cache (LocalTerrainSource), so a
+ * tile request's full-column generation populates that cache and the follow-up
  * per-chunk requests hit it instead of regenerating the whole stamp-inclusive
- * column on a different worker. This removes the column double-generation that
- * round-robin caused (tile generated a column on worker A, its chunks then
- * regenerated on workers B/C/… with cold caves + stamps).
+ * column on a different worker. Affinity is deliberately kept over least-busy
+ * balancing: scattering a column's chunks across workers would reintroduce the
+ * column double-generation (cold caves + stamps re-run per chunk). With the
+ * core-scaled pool, distinct columns still spread across workers for parallelism.
  */
 
 import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse, CaveConfig, TerrainLayerConfig } from '@worldify/shared';
 import type { TerrainWorkerResponse } from './terrainWorker.js';
+
+/**
+ * Number of terrain-generation workers, scaled to the machine. Generation is the streaming bottleneck,
+ * so give it most cores while leaving headroom for the main thread + the (separate) mesh workers. Also
+ * used to size VoxelWorld's in-flight request window so the two stay in sync (a worker is only useful if
+ * the request layer keeps it fed). Capped so a many-core box doesn't spawn a worker per core — each owns
+ * a TerrainGenerator + cave caches (memory), with diminishing returns past ~6.
+ */
+export function terrainWorkerCount(): number {
+  const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+  return Math.max(3, Math.min(6, cores - 2));
+}
 
 export class TerrainWorkerPool {
   private readonly workers: Worker[] = [];
   private readonly callbacks = new Map<number, (data: unknown) => void>();
   private nextId = 0;
 
-  constructor(seed: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig, poolSize = 3) {
-    for (let i = 0; i < poolSize; i++) {
+  constructor(seed: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig, poolSize?: number) {
+    const size = poolSize ?? terrainWorkerCount();
+    for (let i = 0; i < size; i++) {
       const worker = new Worker(new URL('./terrainWorker.ts', import.meta.url), { type: 'module' });
       worker.postMessage({ type: 'init', seed, caveConfig, terrainConfig });
       worker.onmessage = (e: MessageEvent<TerrainWorkerResponse>) => {
