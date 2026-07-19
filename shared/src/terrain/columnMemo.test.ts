@@ -32,7 +32,7 @@ function generateChecksum(): number {
 }
 
 // Baseline captured from the generator BEFORE the per-column memoisation.
-const BASELINE = 627255623; // re-baselined: + cavern wall lattice (warp+wall coarse noise)
+const BASELINE = 1542389063; // warp lattice + full-detail per-voxel wall (shell-deferred)
 
 describe('per-column memoisation preserves generated terrain', () => {
   it('generates byte-identical voxel data for the fixed chunk spread', () => {
