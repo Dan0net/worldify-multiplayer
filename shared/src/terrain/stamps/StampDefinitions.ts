@@ -1249,6 +1249,25 @@ const footprintRadiusCache = new Map<string, number>();
  * every instance. Conservative (never smaller than any rotated footprint) → the cull never drops an
  * overlapping stamp, so placement output is unchanged. Generated once per type:variant, then cached.
  */
+/**
+ * Voxels of a cached stamp sorted ascending by local Y (built once, memoised on the stamp). Lets a
+ * caller iterate only the Y-slice of a tall stamp that intersects a given chunk instead of scanning
+ * every voxel once per chunk it spans. Two stamp voxels can only land on the same chunk cell when they
+ * share the same local (x,y,z) — hence the same Y — and the sort is stable (original index tiebreak),
+ * so voxels that collide keep their original blend order: the written output is byte-identical.
+ */
+export function getStampVoxelsByY(stamp: StampDefinition): StampVoxel[] {
+  const holder = stamp as unknown as { _byY?: StampVoxel[] };
+  let s = holder._byY;
+  if (!s) {
+    const idx = stamp.voxels.map((_, i) => i);
+    idx.sort((a, b) => (stamp.voxels[a].y - stamp.voxels[b].y) || (a - b));
+    s = idx.map((i) => stamp.voxels[i]);
+    holder._byY = s;
+  }
+  return s;
+}
+
 export function getStampFootprintRadius(type: StampType, variant: number): number {
   const key = `${type}:${variant % VARIANTS_PER_TYPE}`;
   let r = footprintRadiusCache.get(key);

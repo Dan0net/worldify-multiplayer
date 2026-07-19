@@ -5,7 +5,7 @@
 
 import { CHUNK_SIZE, VOXEL_SCALE } from '../../voxel/constants.js';
 import { packVoxel, getWeight, voxelIndex } from '../../voxel/voxelData.js';
-import { getStamp, StampVoxel, hashInt2, isBuildingStamp } from './StampDefinitions.js';
+import { getStamp, getStampVoxelsByY, StampVoxel, hashInt2, isBuildingStamp } from './StampDefinitions.js';
 import { StampPlacement } from './StampPointGenerator.js';
 
 // ============== Types ==============
@@ -129,28 +129,30 @@ export class StampPlacer {
     const stampOriginY = Math.floor(terrainHeight) + (placement.yOffset ?? 0);
     const stampOriginZ = Math.floor(placement.worldZ / VOXEL_SCALE);
 
-    for (const voxel of stamp.voxels) {
-      // Global voxel position
-      const globalX = stampOriginX + voxel.x;
-      const globalY = stampOriginY + voxel.y;
-      const globalZ = stampOriginZ + voxel.z;
-      
-      // Convert to local chunk coordinates
-      const localX = globalX - chunkVoxelX;
-      const localY = globalY - chunkVoxelY;
-      const localZ = globalZ - chunkVoxelZ;
-      
-      // Skip if outside this chunk
+    // Only this chunk's Y-slice of the stamp can write here — a tall stamp spans several chunks, so
+    // iterating its full voxel list per chunk re-scans the ~(spanned chunks − 1)/spanned that miss.
+    // Voxels are Y-sorted (cached on the stamp); binary-search the [loY, hiY) window and iterate just it.
+    const byY = getStampVoxelsByY(stamp);
+    const loY = chunkVoxelY - stampOriginY;          // inclusive local-Y of this chunk's bottom
+    let a = 0, b = byY.length;
+    while (a < b) { const m = (a + b) >> 1; if (byY[m].y < loY) a = m + 1; else b = m; }
+
+    for (let i = a; i < byY.length; i++) {
+      const voxel = byY[i];
+      const localY = voxel.y - loY;                   // = stampOriginY + voxel.y - chunkVoxelY
+      if (localY >= CHUNK_SIZE) break;                // past this chunk's Y-window (sorted → done)
+
+      const localX = stampOriginX + voxel.x - chunkVoxelX;
+      const localZ = stampOriginZ + voxel.z - chunkVoxelZ;
       if (localX < 0 || localX >= CHUNK_SIZE ||
-          localY < 0 || localY >= CHUNK_SIZE ||
           localZ < 0 || localZ >= CHUNK_SIZE) {
         continue;
       }
-      
+
       // Get existing voxel
       const index = voxelIndex(localX, localY, localZ);
       const existing = data[index];
-      
+
       // Blend based on mode
       const newVoxel = this.blendVoxel(existing, voxel);
       if (newVoxel !== null) {
