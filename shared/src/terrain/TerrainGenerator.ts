@@ -847,9 +847,18 @@ export class TerrainGenerator implements HeightSampler {
 
       // Sample-and-hold the three low-frequency steering/radius noises every WORM_TRACE_SUBSAMPLE
       // steps — the bulk of the worm cold-start. Held across ~3.6 m, well within their ~20 m period.
+      // At the default turnRate = 1 the heading snaps to the (held) target immediately, so between
+      // sample points yaw/pitch — and thus the per-step advance vector — are constant: recompute the
+      // steering + its trig (cos/sin, the trace's other hot cost) only when the noise is re-sampled.
+      // Byte-identical: on the skipped steps the original computes dYaw = wrap(0) = 0 → no change. When
+      // turnRate ≠ 1 the heading eases in, so fall back to the exact per-step update.
+      const fastSteer = cave.wormTurnRate === 1;
+      const step = cave.wormStep;
       let radiusN = 0, yawN = 0, pitchN = 0;
+      let ax = 0, ay = 0, az = 0;   // per-step advance vector (dir * step), refreshed on steering change
       for (let s = 0; s <= cave.wormSegments; s++) {
-        if (s % WORM_TRACE_SUBSAMPLE === 0) {
+        const resample = s % WORM_TRACE_SUBSAMPLE === 0;
+        if (resample) {
           radiusN = this.caveWormRadius.GetNoise(hx, hy, hz);
           yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
           pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
@@ -862,25 +871,30 @@ export class TerrainGenerator implements HeightSampler {
         );
         pts.push(hx, hy, hz, radius);
 
-        // Steer toward a SHARED flow field (pure function of position): worms passing through the
-        // same region seek the same heading → they align, converge, and split where the field
-        // diverges — coherent horizontal spiralling instead of a knotting random walk.
-        const targetYaw = yawN * Math.PI;
-        let dYaw = targetYaw - yaw;
-        dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));   // wrap to [-π, π]
-        yaw += dYaw * cave.wormTurnRate;
+        if (resample || !fastSteer) {
+          // Steer toward a SHARED flow field (pure function of position): worms passing through the
+          // same region seek the same heading → they align, converge, and split where the field
+          // diverges — coherent horizontal spiralling instead of a knotting random walk.
+          const targetYaw = yawN * Math.PI;
+          let dYaw = targetYaw - yaw;
+          dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));   // wrap to [-π, π]
+          yaw += dYaw * cave.wormTurnRate;
 
-        // Pitch stays gentle: a small vertical wander around a (near-zero) drift, hard-clamped so
-        // worms never plunge — they curve left/right and hold their depth band.
-        let targetPitch = pitchN * cave.wormPitchRange - cave.wormDownwardDrift;
-        if (targetPitch > cave.wormMaxPitch) targetPitch = cave.wormMaxPitch;
-        else if (targetPitch < -cave.wormMaxPitch) targetPitch = -cave.wormMaxPitch;
-        pitch += (targetPitch - pitch) * cave.wormTurnRate;
+          // Pitch stays gentle: a small vertical wander around a (near-zero) drift, hard-clamped so
+          // worms never plunge — they curve left/right and hold their depth band.
+          let targetPitch = pitchN * cave.wormPitchRange - cave.wormDownwardDrift;
+          if (targetPitch > cave.wormMaxPitch) targetPitch = cave.wormMaxPitch;
+          else if (targetPitch < -cave.wormMaxPitch) targetPitch = -cave.wormMaxPitch;
+          pitch += (targetPitch - pitch) * cave.wormTurnRate;
 
-        const cp = Math.cos(pitch);
-        hx += Math.cos(yaw) * cp * cave.wormStep;
-        hy += Math.sin(pitch) * cave.wormStep;
-        hz += Math.sin(yaw) * cp * cave.wormStep;
+          const cp = Math.cos(pitch);
+          ax = Math.cos(yaw) * cp * step;
+          ay = Math.sin(pitch) * step;
+          az = Math.sin(yaw) * cp * step;
+        }
+        hx += ax;
+        hy += ay;
+        hz += az;
       }
     }
 
