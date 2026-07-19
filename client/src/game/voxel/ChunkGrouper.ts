@@ -353,10 +353,20 @@ export class ChunkGrouper {
         if (busy) continue;
       }
 
-      const dx = Math.abs(group.centerCx - playerCx);
-      const dy = Math.abs(group.centerCy - playerCy);
-      const dz = Math.abs(group.centerCz - playerCz);
-      eligible.push({ gk, group, dist: Math.max(dx, dy, dz) });
+      // Sort by the group's NEAREST VISIBLE MEMBER chunk, not its geometric center. A 4³ group spans
+      // up to ~3 chunks from center, so center-distance would merge a far chunk in a near-centered
+      // group before a near chunk in a far-centered group — the "closest chunk doesn't render first"
+      // inversion. Nearest-member (squared Euclidean, matching the request/dispatch metric) drains the
+      // groups the player is actually next to first.
+      let dist = Infinity;
+      for (const ck of group.chunkKeys) {
+        const slot = this.slots.get(ck);
+        if (!slot || !slot.visible) continue;
+        const ddx = slot.cx - playerCx, ddy = slot.cy - playerCy, ddz = slot.cz - playerCz;
+        const d = ddx * ddx + ddy * ddy + ddz * ddz;
+        if (d < dist) dist = d;
+      }
+      eligible.push({ gk, group, dist });
     }
 
     // Nearest-first, then drain to a wall-clock budget (with a hard ceiling) rather
