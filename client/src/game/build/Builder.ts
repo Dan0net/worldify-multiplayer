@@ -332,8 +332,10 @@ export class Builder {
    * Update the voxel preview based on current build state.
    */
   private updateVoxelPreview(): void {
-    // Skip if preview disabled or not initialized
+    // Skip if preview disabled or not initialized. If a preview is still on screen (e.g. previewEnabled
+    // just toggled off, or a held post-commit preview), clear it so stale preview meshes don't linger.
     if (!this.previewEnabled || !this.voxelWorld || !this.scene) {
+      if (this.voxelWorld && this.scene && this.preview.hasVisiblePreview()) this.preview.clearPreview();
       return;
     }
 

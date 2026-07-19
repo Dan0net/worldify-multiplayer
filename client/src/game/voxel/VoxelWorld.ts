@@ -1130,6 +1130,19 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Revert a chunk's committed-geometry light override back to committed data WITHOUT discarding its
+   * temp buffer. Used when a spill neighbour (whose committed display was overridden by an earlier
+   * spill relight) becomes a re-meshed preview chunk: its committed override must be undone so it can't
+   * leak past the preview, but its temp must survive for the pending re-mesh. The owning group is
+   * marked dirty so a later restore re-merges the corrected light instead of showing the stale override
+   * still sitting in the merged buffer (which restoreGroup's clean-merge fast path would otherwise keep).
+   */
+  revertPreviewChunkDisplayLight(key: string): void {
+    this.resamplePreviewChunkLight(key, false);
+    this.chunkGrouper.markChunkDirty(key);
+  }
+
+  /**
    * Light-only resample of a build-preview mesh (owned by BuildPreview, not a ChunkGeometry) from
    * the chunk's relit temp grid. Rewrites just the mesh's two light attributes — no re-mesh. Called
    * in the deferred lighting phase, AFTER the whole region (incl. this chunk's neighbours) is relit,
