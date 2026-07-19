@@ -1237,6 +1237,31 @@ export function getStamp(type: StampType, variant: number, rotation: number = 0,
 const stampCache = new Map<string, StampDefinition>();
 const STAMP_CACHE_MAX = 512;
 
+/** Per-(type:variant) rotation-invariant horizontal footprint radius (voxels), for cheap cull. */
+const footprintRadiusCache = new Map<string, number>();
+
+/**
+ * Rotation-invariant horizontal footprint radius (voxels) for a stamp type+variant: the max distance
+ * from the stamp origin to any voxel in X/Z. Used by stampAffectsChunk to cull WITHOUT generating a
+ * building's ~95k-sample rotated SDF per candidate (the dominant cost of exploring into new columns).
+ * A building's SDF is a pure function of (variant,rotation,seed) but its X/Z footprint is a disc whose
+ * circumscribed radius is rotation-invariant, so one generation (rotation 0) yields a radius reused for
+ * every instance. Conservative (never smaller than any rotated footprint) → the cull never drops an
+ * overlapping stamp, so placement output is unchanged. Generated once per type:variant, then cached.
+ */
+export function getStampFootprintRadius(type: StampType, variant: number): number {
+  const key = `${type}:${variant % VARIANTS_PER_TYPE}`;
+  let r = footprintRadiusCache.get(key);
+  if (r === undefined) {
+    const b = getStamp(type, variant, 0, 0).bounds;
+    const hx = Math.max(Math.abs(b.minX), Math.abs(b.maxX));
+    const hz = Math.max(Math.abs(b.minZ), Math.abs(b.maxZ));
+    r = Math.sqrt(hx * hx + hz * hz);   // circumscribed radius — bounds the footprint at any rotation
+    footprintRadiusCache.set(key, r);
+  }
+  return r;
+}
+
 /**
  * Create a new stamp definition
  */
