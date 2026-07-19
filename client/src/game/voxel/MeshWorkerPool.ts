@@ -18,6 +18,20 @@ import { GRID_SIZE } from '@worldify/shared';
 // Grid total voxel count: GRID_SIZE³
 const GRID_LENGTH = GRID_SIZE * GRID_SIZE * GRID_SIZE;
 
+/**
+ * Number of mesh-worker threads, scaled to the machine (was a hardcoded 2). Meshing — not
+ * generation — is the streaming display bottleneck: a cave-riddled chunk's SurfaceNet costs ~30× a
+ * solid-rock chunk, and every loaded chunk meshes, so with caves on there is far more mesh work than
+ * gen work, and two workers serialised it. Scaled with the same shape as the terrain pool; the two
+ * pools peak at different phases of a chunk's life (gen → mesh), so the nominal thread count can
+ * exceed cores without a matching steady-state oversubscription. Capped at 6 (diminishing returns +
+ * each worker holds a grid-buffer pool).
+ */
+export function meshWorkerCount(): number {
+  const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+  return Math.max(3, Math.min(6, cores - 2));
+}
+
 interface Task {
   id: number;
   chunkKey: string;
@@ -62,7 +76,7 @@ export class MeshWorkerPool {
   /** Chunk keys currently owned by a preview batch (regular remesh should skip) */
   private _previewChunks = new Set<string>();
 
-  constructor(poolSize: number = 2) {
+  constructor(poolSize: number = meshWorkerCount()) {
     for (let i = 0; i < poolSize; i++) {
       const worker = new Worker(
         new URL('./meshWorker.ts', import.meta.url),
