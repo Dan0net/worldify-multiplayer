@@ -5,7 +5,7 @@
 
 import { CHUNK_SIZE, VOXEL_SCALE } from '../../voxel/constants.js';
 import { packVoxel, getWeight, voxelIndex } from '../../voxel/voxelData.js';
-import { getStamp, getStampVoxelsByY, StampVoxel, hashInt2, isBuildingStamp } from './StampDefinitions.js';
+import { getStamp, getStampVoxelsByY, hashInt2, isBuildingStamp } from './StampDefinitions.js';
 import { StampPlacement } from './StampPointGenerator.js';
 
 // ============== Types ==============
@@ -132,29 +132,27 @@ export class StampPlacer {
     // Only this chunk's Y-slice of the stamp can write here — a tall stamp spans several chunks, so
     // iterating its full voxel list per chunk re-scans the ~(spanned chunks − 1)/spanned that miss.
     // Voxels are Y-sorted (cached on the stamp); binary-search the [loY, hiY) window and iterate just it.
-    const byY = getStampVoxelsByY(stamp);
+    const f = getStampVoxelsByY(stamp);
+    const ys = f.ys, xs = f.xs, zs = f.zs, mats = f.mats, weights = f.weights;
     const loY = chunkVoxelY - stampOriginY;          // inclusive local-Y of this chunk's bottom
-    let a = 0, b = byY.length;
-    while (a < b) { const m = (a + b) >> 1; if (byY[m].y < loY) a = m + 1; else b = m; }
+    let a = 0, b = f.n;
+    while (a < b) { const m = (a + b) >> 1; if (ys[m] < loY) a = m + 1; else b = m; }
 
-    for (let i = a; i < byY.length; i++) {
-      const voxel = byY[i];
-      const localY = voxel.y - loY;                   // = stampOriginY + voxel.y - chunkVoxelY
+    // Flat typed-array loop — contiguous reads instead of a pointer + 5 property loads per voxel.
+    const baseX = stampOriginX - chunkVoxelX, baseZ = stampOriginZ - chunkVoxelZ;
+    for (let i = a; i < f.n; i++) {
+      const localY = ys[i] - loY;                     // = stampOriginY + voxel.y - chunkVoxelY
       if (localY >= CHUNK_SIZE) break;                // past this chunk's Y-window (sorted → done)
 
-      const localX = stampOriginX + voxel.x - chunkVoxelX;
-      const localZ = stampOriginZ + voxel.z - chunkVoxelZ;
+      const localX = baseX + xs[i];
+      const localZ = baseZ + zs[i];
       if (localX < 0 || localX >= CHUNK_SIZE ||
           localZ < 0 || localZ >= CHUNK_SIZE) {
         continue;
       }
 
-      // Get existing voxel
       const index = voxelIndex(localX, localY, localZ);
-      const existing = data[index];
-
-      // Blend based on mode
-      const newVoxel = this.blendVoxel(existing, voxel);
+      const newVoxel = this.blendVoxel(data[index], mats[i], weights[i]);
       if (newVoxel !== null) {
         data[index] = newVoxel;
       }
@@ -165,43 +163,43 @@ export class StampPlacer {
    * Blend a stamp voxel with existing chunk voxel
    * @returns New packed voxel value, or null if no change
    */
-  private blendVoxel(existing: number, stamp: StampVoxel): number | null {
+  private blendVoxel(existing: number, material: number, weight: number): number | null {
     const existingWeight = getWeight(existing);
-    
+
     // Air voxels (negative weight, material 0) always carve out space
     // This is used by buildings to create hollow interiors
-    if (stamp.material === 0 && stamp.weight < 0) {
+    if (material === 0 && weight < 0) {
       // Only carve if existing is solid
-      if (existingWeight > stamp.weight) {
-        return packVoxel(stamp.weight, 0, 0);
+      if (existingWeight > weight) {
+        return packVoxel(weight, 0, 0);
       }
       return null;
     }
-    
+
     switch (this.config.blendMode) {
       case BlendMode.MAX_WEIGHT:
         // Only apply if stamp voxel is more solid
-        if (stamp.weight > existingWeight) {
-          return packVoxel(stamp.weight, stamp.material, 0);
+        if (weight > existingWeight) {
+          return packVoxel(weight, material, 0);
         }
         return null;
-        
+
       case BlendMode.REPLACE_SOLID:
         // Replace if stamp voxel is solid (weight > 0)
-        if (stamp.weight > 0) {
-          return packVoxel(stamp.weight, stamp.material, 0);
+        if (weight > 0) {
+          return packVoxel(weight, material, 0);
         }
         return null;
-        
+
       case BlendMode.ADDITIVE:
         // Add weights together, clamped
-        const combinedWeight = Math.min(0.5, existingWeight + stamp.weight);
+        const combinedWeight = Math.min(0.5, existingWeight + weight);
         // Use stamp material if it's making things more solid
-        if (stamp.weight > 0) {
-          return packVoxel(combinedWeight, stamp.material, 0);
+        if (weight > 0) {
+          return packVoxel(combinedWeight, material, 0);
         }
         return null;
-        
+
       default:
         return null;
     }
