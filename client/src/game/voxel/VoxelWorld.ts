@@ -32,6 +32,7 @@ import {
   getChunkRangeFromHeights,
   getSunlitAbove,
   computeAndPropagateLight,
+  faceDonatesLight,
   relightRegion,
   type RelightTarget,
   chunkHasEmitter,
@@ -894,6 +895,16 @@ export class VoxelWorld implements ChunkProvider {
     // Relight and re-queue face-adjacent neighbors so their border light and
     // margin data are up to date. Runs for both new and updated chunks —
     // updated chunks may carry build modifications that change boundary voxels.
+    //
+    // The relight of a neighbour is skipped when THIS chunk donates no light across the shared face
+    // (faceDonatesLight): border injection ignores source voxels with light <= 1, so a fully-dark
+    // shared face (the common rock↔rock underground case) cannot change the neighbour's lit state —
+    // the skip is output-preserving. This is the dominant saving during column-load bursts, where
+    // most internal faces are solid rock. Faces here: +Y (above) is face 2, the horizontals below.
+    //
+    // The chunk BELOW is exempt: a solid arrival changes its `lightFromAbove` (open-sky → capped)
+    // even while donating no border light, so it always relights. The remesh is still queued
+    // unconditionally on every branch — geometry seams are handled independently of the light skip.
     const belowKey = chunkKey(cx, cy - 1, cz);
     const belowChunk = this.chunks.get(belowKey);
     if (belowChunk) {
@@ -905,7 +916,9 @@ export class VoxelWorld implements ChunkProvider {
     const aboveKey = chunkKey(cx, cy + 1, cz);
     const aboveChunk = this.chunks.get(aboveKey);
     if (aboveChunk) {
-      this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
+      if (faceDonatesLight(chunk.data, 2 /* +Y */)) {
+        this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
+      }
       aboveChunk.dirty = true;
       this.remeshPipeline.add(aboveKey);
     }
@@ -915,7 +928,11 @@ export class VoxelWorld implements ChunkProvider {
       const nKey = chunkKey(cx + dx, cy + dy, cz + dz);
       const nChunk = this.chunks.get(nKey);
       if (!nChunk) continue;
-      this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+      // dx/dz map to FACE_OFFSETS_6 indices: +X=0,-X=1,+Z=4,-Z=5.
+      const face = dx === 1 ? 0 : dx === -1 ? 1 : dz === 1 ? 4 : 5;
+      if (faceDonatesLight(chunk.data, face)) {
+        this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+      }
       nChunk.dirty = true;
       this.remeshPipeline.add(nKey);
     }

@@ -128,6 +128,35 @@ export function injectBorderLight(
 }
 
 /**
+ * True if this chunk's boundary layer on `face` could raise light in the neighbour on that side —
+ * i.e. any boundary voxel carries sky OR block light > 1. Border injection (injectBorderLight /
+ * injectBorderBlockLight) skips a source voxel whose light is <= 1, so a face that donates nothing
+ * cannot change the neighbour's lit state at all.
+ *
+ * Used to skip the neighbour relight after a chunk arrives when that chunk contributes no border
+ * light across the shared face — the common underground case (rock↔rock faces are fully dark). The
+ * skip is output-preserving because a present-but-non-donating face is indistinguishable from an
+ * absent one to the neighbour's injection pass. Face order matches FACE_DESC / FACE_OFFSETS_6:
+ * 0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z.
+ *
+ * NOTE: this only covers the horizontal-BFS / block donation direction. It must NOT be used to skip
+ * relighting the chunk BELOW an arrival: a solid arrival changes the below chunk's `lightFromAbove`
+ * (open-sky → capped) even while donating no light, so the below relight is always required.
+ */
+export function faceDonatesLight(data: Uint32Array, face: number): boolean {
+  const [ourBase, , s1, s2] = FACE_DESC[face];
+  for (let a = 0; a < CHUNK_SIZE; a++) {
+    const aOff = a * s1;
+    for (let b = 0; b < CHUNK_SIZE; b++) {
+      const v = data[ourBase + aOff + b * s2];
+      if ((v & LIGHT_MASK) > 1) return true;
+      if (((v >>> BLOCK_LIGHT_SHIFT) & BLOCK_LIGHT_MASK) > 1) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Propagate sunlight columns through a chunk's voxel data (in-place).
  *
  * For each (lx, lz) column, determines the incoming light level from above,
