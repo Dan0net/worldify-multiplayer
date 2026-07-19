@@ -34,7 +34,7 @@ function generateChecksum(): number {
 }
 
 // Baseline captured from the generator BEFORE the cave proximity-reject change.
-const BASELINE = 1542389063; // warp lattice + full-detail per-voxel wall (shell-deferred)
+const BASELINE = 3332662951; // re-baselined: worm steer stride 8 + cavern warp lattice N2
 
 describe('cave proximity-reject preserves generated terrain', () => {
   it('generates byte-identical voxel data for the fixed chunk spread', () => {

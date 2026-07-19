@@ -265,7 +265,7 @@ const WORM_CARVE_MIN = 0.9;
  * Sampling once per this many steps (~3.6 m) and holding the value cuts the trace's noise calls ~3×.
  * The trace is a chaotic integrator, so this DOES change worm layout (new seed-worlds get different —
  * but equally valid — tunnels); saved worlds keep their persisted chunks. 1 = original (no hold). */
-const WORM_TRACE_SUBSAMPLE = 3;
+const WORM_TRACE_SUBSAMPLE = 8;
 
 /** Caverns only seed at or below this world Y (meters) — like WORM_SEED_TOP_Y — so chambers form
  *  under the terrain, not floating in the sky. */
@@ -278,7 +278,7 @@ const CAVERN_SPIKE_MAX_H = 7;
 const CAVERN_SPIKE_MAX_R = 1.3;
 /** Cavern domain-warp lattice corners per axis over the chunk cube (CHUNK_SIZE·VOXEL_SCALE = 8 m).
  *  9 corners → 1 m spacing; the warp's ~33 m period makes this far finer than the field varies. */
-const CAVERN_WARP_LATTICE_N = 3;
+const CAVERN_WARP_LATTICE_N = 2;
 
 /** Meters below the surface over which a surface-tapered cavern widens back to full radius. */
 const CAVERN_TAPER_BAND = 24;
@@ -756,8 +756,7 @@ export class TerrainGenerator implements HeightSampler {
    * (the boundary + warp + wall slop is all included), so the whole Y-column skips the cavern scan —
    * byte-identical, since it only skips columns the per-voxel proximity reject would reject at every y.
    */
-  private columnHasCavern(worldX: number, worldZ: number): boolean {
-    const feats = this.chunkCavernFeats;
+  private columnHasCavern(worldX: number, worldZ: number, feats: Float64Array = this.chunkCavernFeats): boolean {
     if (feats.length === 0) return false;
     const cave = this.config.caveConfig;
     const vert = cave.cavernVerticality;
@@ -1267,6 +1266,17 @@ export class TerrainGenerator implements HeightSampler {
         const cyS = Math.floor(sh / CHUNK_SIZE);
         const surfaceMeters = sh * VOXEL_SCALE;
 
+        // Per-column cavern early-out: only the tiny fraction of columns whose XZ sits under a cavern
+        // can breach via a cavern, so gather the surface feats once and skip the (noise-heavy) cavern
+        // surface test for every other column — the dominant remaining cavern noise cost.
+        let cavFeats: Float64Array | null = null;
+        let cavPossible = false;
+        if (cave.cavernsEnabled) {
+          cavFeats = cavByCy.get(cyS) ?? null;
+          if (!cavFeats) { cavFeats = this.gatherCavernFeats(cx, cyS, cz); cavByCy.set(cyS, cavFeats); }
+          cavPossible = this.columnHasCavern(worldX, worldZ, cavFeats);
+        }
+
         let breached = false;
         // Test the top few voxels of the terrain — where a cave that reaches the surface carves air.
         for (let dy = 1; dy >= -3 && !breached; dy--) {
@@ -1276,10 +1286,8 @@ export class TerrainGenerator implements HeightSampler {
             if (!pts) { pts = this.gatherWormPts(cx, cyS, cz); wormByCy.set(cyS, pts); }
             if (this.isInsideWormCave(worldX, y, worldZ, pts)) breached = true;
           }
-          if (!breached && cave.cavernsEnabled) {
-            let feats = cavByCy.get(cyS);
-            if (!feats) { feats = this.gatherCavernFeats(cx, cyS, cz); cavByCy.set(cyS, feats); }
-            if (this.sampleCavern(worldX, y, worldZ, surfaceMeters, feats) === 1) breached = true;
+          if (!breached && cavPossible && cavFeats) {
+            if (this.sampleCavern(worldX, y, worldZ, surfaceMeters, cavFeats) === 1) breached = true;
           }
         }
         if (breached) set.add(lx + lz * CHUNK_SIZE);
