@@ -123,20 +123,36 @@ geometry and grows outward with a clean edge as data streams in.
   require symmetric double-margin meshing (each chunk meshes both its high and low boundaries, accepting
   coincident boundary geometry) — a larger change, tracked as future work.
 
-Guardrails from the analysis not yet implemented (recommended next):
+### Guardrail #4 — dev-mode invariant assertions ✅ (shipped)
+
+`VoxelWorld.assertChunkInvariants()` runs after each visibility update, gated on `import.meta.env.DEV`
+(the whole body is stripped from production). It asserts the cross-projection invariants directly and
+`console.error`s (loud, non-fatal) on a violation: no meshed geometry without a loaded chunk, no
+preview chunk without loaded data, and each `pending*` set in lockstep with its stale-expiry time map.
+This turns the *next* drift bug into a logged assertion in the frame it occurs instead of a visual
+artifact found weeks later. Extend it with more invariants as new ones are identified.
+
+### Guardrail #5 — explicit per-chunk mesh lifecycle ✅ (incremental step shipped)
+
+`Chunk.phase: ChunkPhase` (`Loaded → MeshedComplete | MeshedIncomplete`) is now the **single source of
+truth** for mesh completeness, set by `RemeshPipeline` when a mesh applies. This replaced the separate
+`incompleteChunks` Set that lived in `RemeshPipeline` with its hand-maintained *forget-on-unload*
+contract — the phase now dies with the `Chunk`, so it can't leak (drift point #2 closed). `isMeshComplete`
+/ `isRenderable` read the phase.
+
+Remaining consolidation (future work): fold the `dirty`↔`queue` pair and the `pending`/`loaded` keysets
+into the same lifecycle field so `requested → loaded → meshable → meshed → renderable` is fully explicit
+rather than inferred from scattered `Map`/`Set` membership. Deferred as higher-risk (touches the pending/
+queue/dirty machinery); the phase field + assertions are the safe first step.
+
+### Not drift (reclassified)
+
+`columnInfo` is keyed per **column** (`tx,tz`), not per chunk, and holds immutable height metadata — a
+chunk unloading while its column persists is correct caching, not divergent-lifetime drift. Left as-is.
+
+### Still open
 
 3. **Derive projections, don't co-maintain them.** One function `worldState → { loadSet, renderSet }`
    that encodes the invariants (`render ⊆ meshed-complete ⊆ loaded-with-margins ⊆ loaded`), instead of
    three subsystems each independently deciding. (P3 proved this works by collapsing preview+commit
    lighting into one job.)
-4. **Cheap invariant assertions in dev builds.** After each visibility update, assert directly:
-   every rendered chunk has its margin neighbours loaded; every `reachable` chunk is loaded; the
-   re-mesh trigger set equals the margin dependency set. These would have caught all four bugs in the
-   frame they occurred. A few lines, gated to dev.
-5. **Explicit per-chunk lifecycle.** `requested → loaded → meshable(neighbours ready) →
-   meshed(complete) → renderable`, each transition's precondition in one place, so "meshed-but-
-   incomplete" is a distinct, non-renderable state rather than something inferred from scattered
-   `Map`/`Set` membership.
-
-The highest-leverage remaining item is **#4** — it's the cheap insurance that turns the *next* drift
-bug into a failed assertion instead of a visual artifact found weeks later.
