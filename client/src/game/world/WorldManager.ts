@@ -39,11 +39,12 @@ export interface PlayerPose { x: number; y: number; z: number; yaw: number; pitc
 const DB_NAME = 'worldify-worlds';
 // v3: voxel word widened 16-bit → 32-bit. Old Uint16Array chunk records are
 // migrated lazily on load (see loadChunk) — no onupgradeneeded rewrite needed.
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_WORLDS = 'worlds';   // keyPath 'id' → WorldMeta
 const STORE_CHUNKS = 'chunks';   // key `${worldId}:${chunkKey}` → Uint32Array
 const STORE_SNAPS = 'snaps';     // key worldId → {x,y,z}[]
 const STORE_UNDO = 'undo';       // key worldId → UndoEntry[]
+const STORE_COLUMNS = 'columns'; // key `${worldId}:${tx},${tz}` → SavedColumn (stamp-corrected heights)
 
 const ACTIVE_WORLD_KEY = 'worldify-active-world';
 const DEFAULT_SEED = 12345;
@@ -62,6 +63,7 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_CHUNKS)) db.createObjectStore(STORE_CHUNKS);
       if (!db.objectStoreNames.contains(STORE_SNAPS)) db.createObjectStore(STORE_SNAPS);
       if (!db.objectStoreNames.contains(STORE_UNDO)) db.createObjectStore(STORE_UNDO);
+      if (!db.objectStoreNames.contains(STORE_COLUMNS)) db.createObjectStore(STORE_COLUMNS);
     };
   });
   return dbPromise;
@@ -154,6 +156,7 @@ export async function initWorlds(): Promise<WorldMeta> {
     console.warn('[WorldManager] persistence unavailable, using in-memory world', e);
     activeWorld = { id: 'default', name: 'World 1', seed: DEFAULT_SEED, createdAt: Date.now(), lastPlayedAt: Date.now() };
     persistedKeys = new Set();
+    persistedColumnKeys = new Set();
     return activeWorld;
   }
 }
@@ -241,17 +244,19 @@ export async function deleteWorld(id: string): Promise<void> {
   const db = await openDB();
   // Remove meta + snaps + all chunk rows for this world.
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([STORE_WORLDS, STORE_SNAPS, STORE_CHUNKS, STORE_UNDO], 'readwrite');
+    const tx = db.transaction([STORE_WORLDS, STORE_SNAPS, STORE_CHUNKS, STORE_UNDO, STORE_COLUMNS], 'readwrite');
     tx.objectStore(STORE_WORLDS).delete(id);
     tx.objectStore(STORE_SNAPS).delete(id);
     tx.objectStore(STORE_UNDO).delete(id);
-    const chunkStore = tx.objectStore(STORE_CHUNKS);
     const range = IDBKeyRange.bound(`${id}:`, `${id}:￿`);
-    const cur = chunkStore.openKeyCursor(range);
-    cur.onsuccess = () => {
-      const c = cur.result;
-      if (c) { chunkStore.delete(c.primaryKey); c.continue(); }
-    };
+    for (const storeName of [STORE_CHUNKS, STORE_COLUMNS]) {
+      const store = tx.objectStore(storeName);
+      const cur = store.openKeyCursor(range);
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (c) { store.delete(c.primaryKey); c.continue(); }
+      };
+    }
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -270,6 +275,7 @@ async function activate(world: WorldMeta): Promise<void> {
   try { localStorage.setItem(ACTIVE_WORLD_KEY, world.id); } catch { /* ignore */ }
   await idbPut(STORE_WORLDS, world);
   await preloadChunkKeys(world.id);
+  await preloadColumnKeys(world.id);
   undoStack = (await idbGet<UndoEntry[]>(STORE_UNDO, world.id)) ?? [];
   notifyWorldsChanged();
 }
@@ -310,6 +316,52 @@ export function saveChunk(key: string, data: Uint32Array): void {
   if (!activeWorld) return;
   persistedKeys.add(key);
   idbPut(STORE_CHUNKS, new Uint32Array(data), `${activeWorld.id}:${key}`).catch(() => { /* non-critical */ });
+}
+
+// ============== Column-heights persistence (active world) ==============
+//
+// The stamp-corrected surface heights/materials for a tile column. Persisted the first time a column
+// is generated so revisiting an explored world reads its heights from IDB (~instant) instead of
+// re-running the full worker generateColumn/generateTile (which re-carves caves just to measure the
+// surface) on every column. Keyed `${worldId}:${tx},${tz}`.
+
+export interface SavedColumn { heights: Int16Array; materials: Uint8Array; }
+
+let persistedColumnKeys = new Set<string>();
+
+async function preloadColumnKeys(worldId: string): Promise<void> {
+  persistedColumnKeys = new Set();
+  const db = await openDB();
+  const range = IDBKeyRange.bound(`${worldId}:`, `${worldId}:￿`);
+  await new Promise<void>((resolve, reject) => {
+    const req = db.transaction(STORE_COLUMNS, 'readonly').objectStore(STORE_COLUMNS).getAllKeys(range);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const prefix = `${worldId}:`;
+      for (const k of req.result as string[]) persistedColumnKeys.add(k.slice(prefix.length));
+      resolve();
+    };
+  });
+}
+
+/** Sync: are this column's heights already persisted for the active world? */
+export function hasColumn(tx: number, tz: number): boolean {
+  return persistedColumnKeys.has(`${tx},${tz}`);
+}
+
+export async function loadColumn(tx: number, tz: number): Promise<SavedColumn | null> {
+  if (!activeWorld) return null;
+  const rec = await idbGet<SavedColumn>(STORE_COLUMNS, `${activeWorld.id}:${tx},${tz}`);
+  return rec ?? null;
+}
+
+/** Fire-and-forget save of a column's stamp-corrected heights/materials. */
+export function saveColumn(tx: number, tz: number, heights: Int16Array, materials: Uint8Array): void {
+  if (!activeWorld) return;
+  const ck = `${tx},${tz}`;
+  persistedColumnKeys.add(ck);
+  idbPut(STORE_COLUMNS, { heights: new Int16Array(heights), materials: new Uint8Array(materials) } as SavedColumn,
+    `${activeWorld.id}:${ck}`).catch(() => { /* non-critical */ });
 }
 
 // ============== Snap-point persistence (active world) ==============

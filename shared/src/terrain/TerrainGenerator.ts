@@ -1079,16 +1079,24 @@ export class TerrainGenerator implements HeightSampler {
     const cell = CAVERN_SPIKE_CELL;
     const scx = Math.floor(x / cell), scz = Math.floor(z / cell);
     const seed = (this.config.seed + 70000) >>> 0;
-    const rng = makeRng((hashInt2(hashInt2(scx, scz), seed)) >>> 0);
-    if (rng() > amount) return false;                 // this cell has no spike
-    const fx = (scx + rng()) * cell, fz = (scz + rng()) * cell;
+    // Inline the makeRng LCG (byte-identical to makeRng) with no closure allocation — this is a hot
+    // per-voxel path in cavern chambers. Each `st = ...; d = ...` pair is one makeRng() draw.
+    let st = (hashInt2(hashInt2(scx, scz), seed)) >>> 0; if (st === 0) st = 1;
+    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dGate = (st & 0x7fffffff) / 0x7fffffff;
+    if (dGate > amount) return false;                 // this cell has no spike
+    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dFx = (st & 0x7fffffff) / 0x7fffffff;
+    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dFz = (st & 0x7fffffff) / 0x7fffffff;
+    const fx = (scx + dFx) * cell, fz = (scz + dFz) * cell;
     const ddx = x - fx, ddz = z - fz;
     const distXZ = Math.sqrt(ddx * ddx + ddz * ddz);
-    const baseR = CAVERN_SPIKE_MAX_R * (0.5 + 0.5 * rng());
+    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dBaseR = (st & 0x7fffffff) / 0x7fffffff;
+    const baseR = CAVERN_SPIKE_MAX_R * (0.5 + 0.5 * dBaseR);
     if (distXZ >= baseR) return false;
-    const peakH = CAVERN_SPIKE_MAX_H * amount * (0.4 + 0.6 * rng());
+    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dPeakH = (st & 0x7fffffff) / 0x7fffffff;
+    const peakH = CAVERN_SPIKE_MAX_H * amount * (0.4 + 0.6 * dPeakH);
     const coneH = peakH * (1 - distXZ / baseR);
-    const stalactite = rng() < 0.5;
+    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dStal = (st & 0x7fffffff) / 0x7fffffff;
+    const stalactite = dStal < 0.5;
     return stalactite
       ? (ceilY - y) >= 0 && ceilY - y < coneH
       : (y - floorY) >= 0 && y - floorY < coneH;
