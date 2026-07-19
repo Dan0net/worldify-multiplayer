@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, ReactNode } from 'react';
 import { hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '@worldify/shared';
 import {
   ChevronDown, ChevronRight, Zap, Wrench, Search, Sliders, Palette, Droplet, Waves,
-  Sparkles, Wind, Sun, Moon, Clock, Grid3x3, Lightbulb, Sunrise, Trash2,
+  Sparkles, Wind, Sun, Moon, Clock, Grid3x3, Lightbulb, Sunrise, Trash2, Timer,
 } from 'lucide-react';
+import { chunkProfiler } from '../game/debug/ChunkProfiler';
 import {
   useGameStore, TERRAIN_DEBUG_MODE_NAMES, TERRAIN_DEBUG_MODE_ORDER, type TerrainDebugMode,
   BUILD_PREVIEW_LIGHTING_ORDER, BUILD_PREVIEW_LIGHTING_LABELS, type BuildPreviewLighting,
@@ -264,6 +265,110 @@ function SegmentedRow({ label, segments, active, onSelect }: SegmentedRowProps) 
         ))}
       </div>
     </div>
+  );
+}
+
+// ============== Load Timing Section ==============
+
+/**
+ * Live readout of the ChunkProfiler — the "request → display" pipeline breakdown. Self-contained
+ * (polls the profiler singleton every 500ms, keeps its own open state) so it needs no store wiring.
+ * Mobile-first: the headline is "time to Nth chunk visible"; "Copy" puts the full text report on the
+ * clipboard to paste into a comparison. Reset before the run you want to measure.
+ */
+function LoadTimingSection() {
+  const [open, setOpen] = useState(true);
+  const [snap, setSnap] = useState(() => chunkProfiler.snapshot());
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const id = setInterval(() => setSnap(chunkProfiler.snapshot()), 500);
+    return () => clearInterval(id);
+  }, []);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(chunkProfiler.reportText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Clipboard blocked — fall back to a console dump the user can copy from devtools.
+      chunkProfiler.report();
+    }
+  };
+
+  const Row = ({ k, v, warn }: { k: string; v: string; warn?: boolean }) => (
+    <><div>{k}</div><div className={warn ? 'text-yellow-400' : ''}>{v}</div></>
+  );
+
+  return (
+    <Section
+      title="Load Timing"
+      icon={<Timer size={13} />}
+      isOpen={open}
+      onToggle={() => setOpen((o) => !o)}
+      color="cyan"
+    >
+      <div className="text-cyan-400">
+        <div className="grid grid-cols-2 gap-x-3">
+          <Row k="Visible:" v={`${snap.visibleCount}`} />
+          <Row k="elapsed:" v={`${snap.startedMs} ms`} />
+        </div>
+
+        <div className="mt-2 pt-2 border-t border-cyan-500/30">
+          <div className="mb-1 text-cyan-300 text-xs">Time to visible (ms):</div>
+          <div className="grid grid-cols-2 gap-x-3">
+            <Row k="1st:" v={`${snap.firstVisibleMs}`} />
+            <Row k="10th:" v={`${snap.to10Ms}`} />
+            <Row k="25th:" v={`${snap.to25Ms}`} />
+            <Row k="50th:" v={`${snap.to50Ms}`} />
+            <Row k="100th:" v={`${snap.to100Ms}`} />
+          </div>
+        </div>
+
+        <div className="mt-2 pt-2 border-t border-cyan-500/30">
+          <div className="mb-1 text-cyan-300 text-xs">Gen worker p50/p95 (ms):</div>
+          <div className="grid grid-cols-2 gap-x-3">
+            <Row k={`column ×${snap.genCounts.column}:`} v={`${snap.genP50.column}/${snap.genP95.column}`} warn={snap.genP50.column > 60} />
+            <Row k={`tile ×${snap.genCounts.tile}:`} v={`${snap.genP50.tile}/${snap.genP95.tile}`} warn={snap.genP50.tile > 60} />
+            <Row k={`chunk ×${snap.genCounts.chunk}:`} v={`${snap.genP50.chunk}/${snap.genP95.chunk}`} warn={snap.genP50.chunk > 60} />
+            <Row k="poolWait col:" v={`${snap.waitP50.column}`} warn={snap.waitP50.column > 100} />
+            <Row k="poolWait chunk:" v={`${snap.waitP50.chunk}`} warn={snap.waitP50.chunk > 100} />
+          </div>
+        </div>
+
+        <div className="mt-2 pt-2 border-t border-cyan-500/30">
+          <div className="mb-1 text-cyan-300 text-xs">Pipeline p50/p95 (ms):</div>
+          <div className="grid grid-cols-2 gap-x-3">
+            <Row k="ingest:" v={`${snap.ingestP50}/${snap.ingestP95}`} warn={snap.ingestP50 > 4} />
+            <Row k="mesh wait:" v={`${snap.meshWaitP50}/${snap.meshWaitP95}`} warn={snap.meshWaitP50 > 100} />
+            <Row k="mesh:" v={`${snap.meshP50}/${snap.meshP95}`} />
+            <Row k="recv→vis:" v={`${snap.ingestToVisibleP50}/${snap.ingestToVisibleP95}`} />
+          </div>
+        </div>
+
+        <div className="mt-2 pt-2 border-t border-cyan-500/30 flex gap-1">
+          <button
+            onClick={() => chunkProfiler.reset()}
+            className="flex-1 py-1 px-2 bg-cyan-900/50 hover:bg-cyan-800/50 text-cyan-300 rounded text-xs"
+          >
+            Reset
+          </button>
+          <button
+            onClick={() => chunkProfiler.report()}
+            className="flex-1 py-1 px-2 bg-cyan-900/50 hover:bg-cyan-800/50 text-cyan-300 rounded text-xs"
+          >
+            Log
+          </button>
+          <button
+            onClick={copy}
+            className="flex-1 py-1 px-2 bg-cyan-900/50 hover:bg-cyan-800/50 text-cyan-300 rounded text-xs"
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -537,6 +642,9 @@ export function DebugPanel() {
           </div>
         </div>
       </Section>
+
+      {/* ============== LOAD TIMING SECTION (chunk display pipeline) ============== */}
+      <LoadTimingSection />
 
       {/* ============== DEBUG SECTION ============== */}
       <Section

@@ -38,6 +38,7 @@ import {
   chunkHasEmitter,
   chunkHasBlockLight,
 } from '@worldify/shared';
+import { chunkProfiler } from '../debug/ChunkProfiler.js';
 import { Chunk } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
@@ -649,7 +650,10 @@ export class VoxelWorld implements ChunkProvider {
       // Preview chunks: their groups are suppressed and preview meshes render instead — never touch
       // their visibility here.
       if (this.previewChunks.has(key)) continue;
-      this.chunkGrouper.setVisible(key, this.isRenderable(key, reachable));
+      const renderable = this.isRenderable(key, reachable);
+      this.chunkGrouper.setVisible(key, renderable);
+      // Profiler: stamp the first frame the render gate actually draws this chunk.
+      if (renderable) chunkProfiler.onVisible(key);
     }
   }
 
@@ -877,15 +881,19 @@ export class VoxelWorld implements ChunkProvider {
     chunk.data.set(voxelData);
     chunk.dirty = true;
     chunk.lastBuildSeq = lastBuildSeq;
-    
+
+    // Profiler: this chunk's data has arrived — start the ingest→visible stopwatch.
+    chunkProfiler.onIngestStart(key);
+
     // Sunlight column propagation (before visibility + remesh)
     this.computeChunkSunlight(cx, cy, cz, chunk.data);
-    
+
     // Compute visibility graph for this chunk
     chunk.visibilityBits = computeVisibility(chunk.data);
 
     // Queue for remeshing
     this.remeshPipeline.add(key);
+    chunkProfiler.onQueued(key);
     
     // Invalidate BFS cache when new chunks load (they may open visibility paths)
     if (isNewChunk) {
@@ -953,6 +961,7 @@ export class VoxelWorld implements ChunkProvider {
     // Notify the minimap so it can capture this chunk's stamps (trees/rocks/etc.).
     this.onChunkIngested?.(key);
 
+    chunkProfiler.onIngestEnd(key);
     return chunk;
   }
 

@@ -19,10 +19,13 @@
 
 import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse, CaveConfig, TerrainLayerConfig } from '@worldify/shared';
 import type { TerrainWorkerResponse } from './terrainWorker.js';
+import { chunkProfiler } from '../debug/ChunkProfiler.js';
 
 export class TerrainWorkerPool {
   private readonly workers: Worker[] = [];
   private readonly callbacks = new Map<number, (data: unknown) => void>();
+  /** Post time per in-flight request id — for the profiler's request→receive latency. */
+  private readonly postedAt = new Map<number, number>();
   private nextId = 0;
 
   constructor(seed: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig, poolSize = 3) {
@@ -30,6 +33,11 @@ export class TerrainWorkerPool {
       const worker = new Worker(new URL('./terrainWorker.ts', import.meta.url), { type: 'module' });
       worker.postMessage({ type: 'init', seed, caveConfig, terrainConfig });
       worker.onmessage = (e: MessageEvent<TerrainWorkerResponse>) => {
+        const posted = this.postedAt.get(e.data.id);
+        this.postedAt.delete(e.data.id);
+        if (posted !== undefined && e.data.genMs !== undefined) {
+          chunkProfiler.onGen(e.data.kind, performance.now() - posted, e.data.genMs);
+        }
         const cb = this.callbacks.get(e.data.id);
         if (cb) {
           this.callbacks.delete(e.data.id);
@@ -53,10 +61,12 @@ export class TerrainWorkerPool {
   private post(worker: Worker, msg: Record<string, unknown>, cb: (data: unknown) => void): void {
     const id = this.nextId++;
     this.callbacks.set(id, cb);
+    this.postedAt.set(id, performance.now());
     worker.postMessage({ ...msg, id });
   }
 
   requestChunk(cx: number, cy: number, cz: number, cb: (data: VoxelChunkData) => void): void {
+    chunkProfiler.onChunkRequested(`${cx},${cy},${cz}`);
     const worker = this.workers[this.workerForColumn(cx, cz)];
     this.post(worker, { type: 'chunk', cx, cy, cz }, cb as (data: unknown) => void);
   }

@@ -21,6 +21,7 @@ import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { meshChunk, expandChunkToGrid, getSkipHighBoundary } from './ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
+import { chunkProfiler } from '../debug/ChunkProfiler.js';
 
 // ---- Types ----
 
@@ -141,9 +142,11 @@ export class RemeshPipeline {
       const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
       const complete = !(skipHighBoundary[0] || skipHighBoundary[1] || skipHighBoundary[2]);
 
+      chunkProfiler.onMeshDispatch(key);
       this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {
         this.setComplete(key, complete);
         this.applyResult(result);
+        chunkProfiler.onMeshApplied(key);
       });
       this.meshDispatches++;
 
