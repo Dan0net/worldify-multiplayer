@@ -407,6 +407,15 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
 
 // ============== Terrain Generator ==============
 
+/** Lazily-filled per-column memo of the pathway predicates (each computed on first demand). */
+interface PathwayColumnInfo {
+  onPath?: boolean;
+  onWall?: boolean;
+  onBorder?: boolean;
+  depth?: number;
+  material?: number;
+}
+
 export class TerrainGenerator implements HeightSampler {
   private config: TerrainConfig;
   private heightNoise: FastNoiseLite;
@@ -460,6 +469,14 @@ export class TerrainGenerator implements HeightSampler {
   // so results are unchanged. Cleared on any config/seed change (invalidateCaveCaches).
   private heightCache = new Map<number, Map<number, number>>();
   private heightCacheEntries = 0;
+
+  // Per-(worldX,worldZ)-column memo of the pathway (road) queries. Pathways are XZ-only but were
+  // re-evaluated per query type AND per cy chunk in a column — each doing domain warp + several
+  // cellular samples — making them the single biggest noise-call source (≈77% of warm cave gen).
+  // Caching the 5 predicates per column (computed lazily, reused across cy and across callers) is
+  // byte-identical and collapses that cost. Bounded like heightCache.
+  private pathwayCache = new Map<number, Map<number, PathwayColumnInfo>>();
+  private pathwayCacheEntries = 0;
 
   // Per-(cx,cz) FILTERED stamp placements, memoized so the 25-neighbour scatter + O(n²) collision +
   // pathway/breach filter isn't recomputed for every cy in a column (the result is XZ-only). Bounded;
@@ -647,6 +664,8 @@ export class TerrainGenerator implements HeightSampler {
     // Per-column memos also depend on config/seed (height layers, warp, stamp/pathway/breach config).
     this.heightCache.clear();
     this.heightCacheEntries = 0;
+    this.pathwayCache.clear();
+    this.pathwayCacheEntries = 0;
     this.placementCache.clear();
   }
 
@@ -1323,7 +1342,7 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - World Z coordinate in meters
    * @returns Material ID for the pathway at this position
    */
-  getPathwayMaterial(worldX: number, worldZ: number): number {
+  private computeGetPathwayMaterial(worldX: number, worldZ: number): number {
     const materials = this.config.pathwayConfig.materials;
     if (materials.length === 0) {
       return mat('pebbles'); // Fallback
@@ -1343,6 +1362,47 @@ export class TerrainGenerator implements HeightSampler {
    * Apply domain warping for pathway coordinates
    * @returns Warped [x, z] coordinates
    */
+  /** Get/create the per-column pathway memo entry (nested-map by exact world X,Z, bounded like heightCache). */
+  private pathEntry(worldX: number, worldZ: number): PathwayColumnInfo {
+    let inner = this.pathwayCache.get(worldX);
+    if (!inner) {
+      if (this.pathwayCacheEntries > 262144) { this.pathwayCache.clear(); this.pathwayCacheEntries = 0; }
+      inner = new Map();
+      this.pathwayCache.set(worldX, inner);
+    }
+    let e = inner.get(worldZ);
+    if (!e) { e = {}; inner.set(worldZ, e); this.pathwayCacheEntries++; }
+    return e;
+  }
+
+  // Memoizing public wrappers — pathway predicates are XZ-only, so compute each once per column and
+  // reuse across every cy chunk and every caller (byte-identical; internal cross-calls hit the cache).
+  isOnPathway(worldX: number, worldZ: number): boolean {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.onPath === undefined) e.onPath = this.computeIsOnPathway(worldX, worldZ);
+    return e.onPath;
+  }
+  isOnPathwayWall(worldX: number, worldZ: number): boolean {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.onWall === undefined) e.onWall = this.computeIsOnPathwayWall(worldX, worldZ);
+    return e.onWall;
+  }
+  isOnPathwayBorder(worldX: number, worldZ: number): boolean {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.onBorder === undefined) e.onBorder = this.computeIsOnPathwayBorder(worldX, worldZ);
+    return e.onBorder;
+  }
+  getPathwayDepthFactor(worldX: number, worldZ: number): number {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.depth === undefined) e.depth = this.computeGetPathwayDepthFactor(worldX, worldZ);
+    return e.depth;
+  }
+  getPathwayMaterial(worldX: number, worldZ: number): number {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.material === undefined) e.material = this.computeGetPathwayMaterial(worldX, worldZ);
+    return e.material;
+  }
+
   private applyPathwayWarp(worldX: number, worldZ: number): [number, number] {
     const path = this.config.pathwayConfig;
     const warpX = this.pathwayWarpX.GetNoise(worldX, worldZ) * path.warpAmplitude;
@@ -1358,7 +1418,7 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - World Z coordinate in meters
    * @returns true if position is on a pathway
    */
-  isOnPathway(worldX: number, worldZ: number): boolean {
+  private computeIsOnPathway(worldX: number, worldZ: number): boolean {
     if (!this.config.pathwayConfig.enabled) {
       return false;
     }
@@ -1402,7 +1462,7 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - World Z coordinate in meters
    * @returns 0-1 depth factor, or 0 if not on path
    */
-  getPathwayDepthFactor(worldX: number, worldZ: number): number {
+  private computeGetPathwayDepthFactor(worldX: number, worldZ: number): number {
     if (!this.config.pathwayConfig.enabled) {
       return 0;
     }
@@ -1448,7 +1508,7 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - World Z coordinate in meters
    * @returns true if position should have a wall
    */
-  isOnPathwayWall(worldX: number, worldZ: number): boolean {
+  private computeIsOnPathwayWall(worldX: number, worldZ: number): boolean {
     if (!this.config.pathwayConfig.enabled || this.config.pathwayConfig.wallHeight <= 0) {
       return false;
     }
@@ -1522,7 +1582,7 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - World Z coordinate in meters
    * @returns true if position should have border material
    */
-  isOnPathwayBorder(worldX: number, worldZ: number): boolean {
+  private computeIsOnPathwayBorder(worldX: number, worldZ: number): boolean {
     if (!this.config.pathwayConfig.enabled || this.config.pathwayConfig.borderWidth <= 0) {
       return false;
     }
