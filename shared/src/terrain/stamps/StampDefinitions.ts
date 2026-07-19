@@ -1213,23 +1213,29 @@ export function isRotatableStamp(type: StampType): boolean {
 export function getStamp(type: StampType, variant: number, rotation: number = 0, seed: number = 0): StampDefinition {
   const normalizedVariant = variant % VARIANTS_PER_TYPE;
 
-  // Buildings are generated fresh with rotation + per-building seed - no caching
-  if (isRotatableStamp(type)) {
-    return createStamp(type, normalizedVariant, rotation, seed);
-  }
+  // Rotation + seed only affect buildings (rotatable, ~95k-sample SDF); include them in the key so
+  // building instances are cached too. Previously buildings were regenerated on EVERY call — and
+  // stampAffectsChunk regenerates one just to read its bounds — so a nearby tower was rebuilt ~2× per
+  // chunk, per cy in the column, per neighbour in the scatter scan. The result is a pure function of
+  // (type,variant,rotation,seed), so caching is byte-identical (callers treat the stamp read-only).
+  const rot = isRotatableStamp(type) ? rotation : 0;
+  const sd = isRotatableStamp(type) ? seed : 0;
+  const key = `${type}:${normalizedVariant}:${rot}:${sd}`;
 
-  // Non-buildings are cached (trees, rocks, torch — no rotation/seed needed)
-  const key = `${type}:${normalizedVariant}`;
-  let stamp = stampCacheNonBuildings.get(key);
+  let stamp = stampCache.get(key);
   if (!stamp) {
-    stamp = createStamp(type, normalizedVariant, 0, 0);
-    stampCacheNonBuildings.set(key, stamp);
+    // Bounded to keep distinct building instances (unique rotation/seed) from growing unboundedly over
+    // a long session; a clear just re-generates on next demand. Trees/rocks/torch reuse a stable key.
+    if (stampCache.size > STAMP_CACHE_MAX) stampCache.clear();
+    stamp = createStamp(type, normalizedVariant, rot, sd);
+    stampCache.set(key, stamp);
   }
   return stamp;
 }
 
-/** Cache for non-building stamps only (trees, rocks) */
-const stampCacheNonBuildings = new Map<string, StampDefinition>();
+/** Cache for all stamps (trees/rocks/torch by type:variant; buildings also by rotation:seed). */
+const stampCache = new Map<string, StampDefinition>();
+const STAMP_CACHE_MAX = 512;
 
 /**
  * Create a new stamp definition
