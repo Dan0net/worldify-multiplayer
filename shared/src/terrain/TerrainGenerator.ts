@@ -569,15 +569,15 @@ export class TerrainGenerator implements HeightSampler {
     // Cave noise — fixed seed block (config.seed + 30000+) so the seed++ chain above is untouched.
     // All generators are built up-front (cheap); only the enabled types are sampled per voxel.
     let caveSeed = this.config.seed + 30000;
-    // Worms: two 3D FBM fields steer each worm's heading (yaw + pitch) as it's traced.
+    // Worms: two 3D fields steer each worm's heading (yaw + pitch) as it's traced. Single-octave
+    // OpenSimplex2 (not 2-octave FBm): these are low-frequency flow fields sampled only every K steps and
+    // then interpolated, so the 2nd octave's fine wobble is smoothed away regardless — but on device it
+    // doubled the steering-noise cost (the trace's dominant expense). One octave = same gross flow,
+    // roughly half the noise work. Worm layout shifts slightly (equally valid); saved worlds unaffected.
     this.caveWormSteerYaw = new FastNoiseLite(caveSeed++);
     this.caveWormSteerYaw.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.caveWormSteerYaw.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.caveWormSteerYaw.SetFractalOctaves(2);
     this.caveWormSteerPitch = new FastNoiseLite(caveSeed++);
     this.caveWormSteerPitch.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.caveWormSteerPitch.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.caveWormSteerPitch.SetFractalOctaves(2);
     // Worms: along-worm radius variation (low freq) + per-voxel wall roughness (higher freq).
     this.caveWormRadius = new FastNoiseLite(caveSeed++);
     this.caveWormRadius.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
