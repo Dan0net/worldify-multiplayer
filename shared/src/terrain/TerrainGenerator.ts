@@ -739,15 +739,39 @@ export class TerrainGenerator implements HeightSampler {
    * `surfaceMeters` is the terrain top at this column (meters) — used only by the cavern surface
    * taper. Pure function of world position (given the per-chunk prepared sets) → seamless.
    */
-  caveFillAt(worldX: number, worldYmeters: number, worldZ: number, surfaceMeters: number): 0 | 1 | 2 {
+  caveFillAt(worldX: number, worldYmeters: number, worldZ: number, surfaceMeters: number, cavernPossible = true): 0 | 1 | 2 {
     const cave = this.config.caveConfig;
     if (cave.floorY !== undefined && worldYmeters < cave.floorY) return 0;
     if (cave.wormsEnabled && this.isInsideWormCave(worldX, worldYmeters, worldZ)) return 1;
-    if (cave.cavernsEnabled) {
+    if (cave.cavernsEnabled && cavernPossible) {
       const c = this.sampleCavern(worldX, worldYmeters, worldZ, surfaceMeters);
       if (c !== 0) return c;
     }
     return 0;
+  }
+
+  /**
+   * Per-column early-out for cavern sampling (Change #3): true if ANY prepared cavern's inflated
+   * horizontal reach covers this column. When false, no voxel in the column can be inside a cavern
+   * (the boundary + warp + wall slop is all included), so the whole Y-column skips the cavern scan —
+   * byte-identical, since it only skips columns the per-voxel proximity reject would reject at every y.
+   */
+  private columnHasCavern(worldX: number, worldZ: number): boolean {
+    const feats = this.chunkCavernFeats;
+    if (feats.length === 0) return false;
+    const cave = this.config.caveConfig;
+    const vert = cave.cavernVerticality;
+    const windAmp = cave.cavernWinding > 0 ? cave.cavernWinding : 0;
+    const wallAmpAbs = cave.cavernWallAmp > 0 ? cave.cavernWallAmp : 0;
+    for (let i = 0; i < feats.length; i += 4) {
+      const fcx = feats[i], fcz = feats[i + 2], rx = feats[i + 3];
+      const ry = rx * (1 + vert), rz = rx;
+      const warpNd = windAmp > 0 ? windAmp * Math.sqrt(1 / (rx * rx) + 1 / (ry * ry) + 1 / (rz * rz)) : 0;
+      const reach = rx + wallAmpAbs + rx * warpNd;   // matches the per-voxel reject at taper = 1
+      const dx = worldX - fcx, dz = worldZ - fcz;
+      if (dx * dx + dz * dz < reach * reach) return true;
+    }
+    return false;
   }
 
   /**
@@ -970,15 +994,18 @@ export class TerrainGenerator implements HeightSampler {
     this.chunkCavernFeats = this.gatherCavernFeats(cx, cy, cz);
     this.chunkCavernFeatsFor = key;
 
-    // Precompute the domain-warp lattice for this chunk (only when winding is on and caverns are near).
+    // Precompute the cavern noise lattice for this chunk: 4 components per corner — the 3 winding
+    // warp offsets + the wall-roughness noise. Caverns are large, low-frequency shapes, so a coarse
+    // lattice + trilerp reproduces them for a fraction of the per-voxel GetNoise cost. Built whenever
+    // either the warp or the wall is active and caverns are near.
     const cave = this.config.caveConfig;
-    if (cave.cavernWinding > 0 && this.chunkCavernFeats.length > 0) {
+    if ((cave.cavernWinding > 0 || cave.cavernWallAmp > 0) && this.chunkCavernFeats.length > 0) {
       const N = CAVERN_WARP_LATTICE_N;
       const chunkMeters = CHUNK_SIZE * VOXEL_SCALE;      // 8 m
       const step = chunkMeters / (N - 1);
       const ox = cx * chunkMeters, oy = cy * chunkMeters, oz = cz * chunkMeters;
       let lat = this.cavernWarpLat;
-      if (!lat || lat.length !== N * N * N * 3) lat = new Float64Array(N * N * N * 3);
+      if (!lat || lat.length !== N * N * N * 4) lat = new Float64Array(N * N * N * 4);
       let p = 0;
       for (let k = 0; k < N; k++) {
         const wz = oz + k * step;
@@ -989,6 +1016,7 @@ export class TerrainGenerator implements HeightSampler {
             lat[p++] = this.caveCavernWarpX.GetNoise(wx, wy, wz);
             lat[p++] = this.caveCavernWarpY.GetNoise(wx, wy, wz);
             lat[p++] = this.caveCavernWarpZ.GetNoise(wx, wy, wz);
+            lat[p++] = this.caveCavernWall.GetNoise(wx, wy, wz);
           }
         }
       }
@@ -1083,40 +1111,39 @@ export class TerrainGenerator implements HeightSampler {
       if (!near) return 0;
     }
 
-    // Domain warp (winding) — displace the sample point; clean ellipsoid when winding = 0.
-    let wx = x, wy = y, wz = z;
-    if (cave.cavernWinding > 0) {
-      const a = cave.cavernWinding;
+    // Domain warp (winding) displaces the sample point, and wall roughness perturbs the boundary
+    // radius. Both are large, low-frequency cavern noises → read them from the coarse per-chunk
+    // lattice (warp = comps 0-2, wall = comp 3) with one trilerp, instead of 4 GetNoise per voxel.
+    let wx = x, wy = y, wz = z, wallMeters = 0;
+    const warpOn = cave.cavernWinding > 0, wallOn = cave.cavernWallAmp > 0;
+    if (warpOn || wallOn) {
       const lat = this.cavernWarpLat;
       const N = CAVERN_WARP_LATTICE_N;
       const step = (CHUNK_SIZE * VOXEL_SCALE) / (N - 1);
       const lx = (x - this.cavernWarpOx) / step, ly = (y - this.cavernWarpOy) / step, lz = (z - this.cavernWarpOz) / step;
       if (lat !== null && lx >= 0 && lx <= N - 1 && ly >= 0 && ly <= N - 1 && lz >= 0 && lz <= N - 1) {
-        // Fast path (the per-voxel carve): trilerp the precomputed warp. Far below the warp frequency,
-        // so interpolation error is sub-voxel.
+        // Fast path (the per-voxel carve): trilerp the precomputed 4-component lattice.
         const i0 = Math.min(N - 2, lx | 0), j0 = Math.min(N - 2, ly | 0), k0 = Math.min(N - 2, lz | 0);
         const fx = lx - i0, fy = ly - j0, fz = lz - k0, NN = N * N;
-        const b = (i0 + j0 * N + k0 * NN) * 3;
-        const sX = 3, sY = N * 3, sZ = NN * 3;
-        for (let c = 0; c < 3; c++) {
+        const b = (i0 + j0 * N + k0 * NN) * 4;
+        const sX = 4, sY = N * 4, sZ = NN * 4;
+        const lerpComp = (c: number): number => {
           const o = b + c;
           const c00 = lat[o] + (lat[o + sX] - lat[o]) * fx;
           const c10 = lat[o + sY] + (lat[o + sY + sX] - lat[o + sY]) * fx;
           const c01 = lat[o + sZ] + (lat[o + sZ + sX] - lat[o + sZ]) * fx;
           const c11 = lat[o + sZ + sY] + (lat[o + sZ + sY + sX] - lat[o + sZ + sY]) * fx;
           const c0 = c00 + (c10 - c00) * fy, c1 = c01 + (c11 - c01) * fy;
-          const v = (c0 + (c1 - c0) * fz) * a;
-          if (c === 0) wx += v; else if (c === 1) wy += v; else wz += v;
-        }
+          return c0 + (c1 - c0) * fz;
+        };
+        if (warpOn) { const a = cave.cavernWinding; wx += lerpComp(0) * a; wy += lerpComp(1) * a; wz += lerpComp(2) * a; }
+        if (wallOn) wallMeters = lerpComp(3) * cave.cavernWallAmp;
       } else {
         // Out-of-cube caller (e.g. breach scan) — direct noise, unchanged.
-        wx += this.caveCavernWarpX.GetNoise(x, y, z) * a;
-        wy += this.caveCavernWarpY.GetNoise(x, y, z) * a;
-        wz += this.caveCavernWarpZ.GetNoise(x, y, z) * a;
+        if (warpOn) { const a = cave.cavernWinding; wx += this.caveCavernWarpX.GetNoise(x, y, z) * a; wy += this.caveCavernWarpY.GetNoise(x, y, z) * a; wz += this.caveCavernWarpZ.GetNoise(x, y, z) * a; }
+        if (wallOn) wallMeters = this.caveCavernWall.GetNoise(x, y, z) * cave.cavernWallAmp;
       }
     }
-    // Wall roughness (meters) — a signed radius bump; 0 when wall amp = 0.
-    const wallMeters = cave.cavernWallAmp > 0 ? this.caveCavernWall.GetNoise(x, y, z) * cave.cavernWallAmp : 0;
 
     let best = -1; // priority: 2 = air, 1 = water, 0 = solid; -1 = not inside any cavern
     for (let i = 0; i < feats.length; i += 4) {
@@ -1714,6 +1741,18 @@ export class TerrainGenerator implements HeightSampler {
           ? originalTerrainHeight - waterConfig.waterDepth
           : -Infinity;
 
+        // Air-column skip (Change #2): a voxel is fully air (weight -0.5 → packVoxel = 0 = the array
+        // default) only when voxelY ≥ terrainHeight + 1. If this column's entire content top — terrain,
+        // pathway wall, and any dip water — sits below the chunk's lowest voxel, every voxel here is air,
+        // so skip the whole Y loop and leave the zeroed slice. Byte-identical; stamps are applied later.
+        let colTop = terrainHeight;
+        if (isPathColumn) colTop += this.config.pathwayConfig.wallHeight;
+        if (waterLevel > colTop) colTop = waterLevel;
+        if (colTop <= chunkWorldY - 1) continue;
+
+        // Column-level cavern early-out (Change #3): compute once, reused for every voxel below.
+        const columnCavern = cave.cavernsEnabled && this.columnHasCavern(worldX, worldZ);
+
         for (let ly = 0; ly < CHUNK_SIZE; ly++) {
           // Calculate voxel's Y position in world voxel space
           const voxelY = chunkWorldY + ly;
@@ -1792,7 +1831,7 @@ export class TerrainGenerator implements HeightSampler {
               && finalWeight > -0.5
               && material !== waterConfig.waterMaterial
               && material !== this.config.pathwayConfig.wallMaterial) {
-            const fill = this.caveFillAt(worldX, voxelY * VOXEL_SCALE, worldZ, terrainHeight * VOXEL_SCALE);
+            const fill = this.caveFillAt(worldX, voxelY * VOXEL_SCALE, worldZ, terrainHeight * VOXEL_SCALE, columnCavern);
             if (fill === 1) {
               finalWeight = -0.5;
               material = 0; // air
