@@ -2,9 +2,24 @@
  * TerrainWorkerPool - dispatches local terrain generation to a pool of workers.
  *
  * Mirrors the mesh-worker pattern: requests are keyed by id and resolved via a
- * callback map. Work is distributed LEAST-BUSY across a core-scaled pool (not naive
- * round-robin), so an uneven column can't head-of-line-block one worker while others
- * idle. Async responses feed VoxelWorld's existing receive* methods, like the network path.
+ * callback map so generation runs in parallel off the main thread. Async
+ * responses feed VoxelWorld's existing receive* methods, exactly like the
+ * network path.
+ *
+ * The pool is scaled to the machine (terrainWorkerCount) — generation is the
+ * streaming bottleneck, so give it most cores while leaving headroom for the
+ * main thread + the separate mesh workers.
+ *
+ * Dispatch is by COLUMN AFFINITY rather than round-robin / least-busy: every
+ * request that touches a 2D column (cx,cz) — its tile/column bundle and each of
+ * its vertical chunks — is routed to the same worker via a stable spatial hash.
+ * Each worker keeps its own unshared `rawChunk` cache (LocalTerrainSource), so a
+ * tile request's full-column generation populates that cache and the follow-up
+ * per-chunk requests hit it instead of regenerating the whole stamp-inclusive
+ * column on a different worker. Affinity is deliberately kept over least-busy
+ * balancing: scattering a column's chunks across workers would reintroduce the
+ * column double-generation (cold caves + stamps re-run per chunk). With the
+ * core-scaled pool, distinct columns still spread across workers for parallelism.
  */
 
 import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse, CaveConfig, TerrainLayerConfig } from '@worldify/shared';
@@ -24,11 +39,7 @@ export function terrainWorkerCount(): number {
 
 export class TerrainWorkerPool {
   private readonly workers: Worker[] = [];
-  /** Outstanding requests per worker, for least-busy selection. */
-  private readonly inFlight: number[] = [];
   private readonly callbacks = new Map<number, (data: unknown) => void>();
-  /** Which worker each in-flight id went to, so we can decrement its inFlight on response. */
-  private readonly reqWorker = new Map<number, number>();
   private nextId = 0;
 
   constructor(seed: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig, poolSize?: number) {
@@ -37,52 +48,50 @@ export class TerrainWorkerPool {
       const worker = new Worker(new URL('./terrainWorker.ts', import.meta.url), { type: 'module' });
       worker.postMessage({ type: 'init', seed, caveConfig, terrainConfig });
       worker.onmessage = (e: MessageEvent<TerrainWorkerResponse>) => {
-        const id = e.data.id;
-        const wi = this.reqWorker.get(id);
-        if (wi !== undefined) { this.inFlight[wi]--; this.reqWorker.delete(id); }
-        const cb = this.callbacks.get(id);
+        const cb = this.callbacks.get(e.data.id);
         if (cb) {
-          this.callbacks.delete(id);
+          this.callbacks.delete(e.data.id);
           cb(e.data.data);
         }
       };
       this.workers.push(worker);
-      this.inFlight.push(0);
     }
   }
 
-  private post(msg: Record<string, unknown>, cb: (data: unknown) => void): void {
+  /**
+   * Stable worker index for a 2D column (a,b). Same hash the terrain/cave caches
+   * use elsewhere (Math.imul with the two large primes), reduced modulo the pool
+   * size, so a column always maps to one worker for the lifetime of the pool.
+   */
+  private workerForColumn(a: number, b: number): number {
+    const h = (Math.imul(a | 0, 73856093) ^ Math.imul(b | 0, 19349663)) >>> 0;
+    return h % this.workers.length;
+  }
+
+  private post(worker: Worker, msg: Record<string, unknown>, cb: (data: unknown) => void): void {
     const id = this.nextId++;
     this.callbacks.set(id, cb);
-
-    // Least-busy: dispatch to the worker with the fewest outstanding requests. Workers process messages
-    // serially, so this keeps queue depth even instead of piling onto one worker as round-robin could.
-    let wi = 0;
-    for (let i = 1; i < this.workers.length; i++) {
-      if (this.inFlight[i] < this.inFlight[wi]) wi = i;
-    }
-    this.inFlight[wi]++;
-    this.reqWorker.set(id, wi);
-    this.workers[wi].postMessage({ ...msg, id });
+    worker.postMessage({ ...msg, id });
   }
 
   requestChunk(cx: number, cy: number, cz: number, cb: (data: VoxelChunkData) => void): void {
-    this.post({ type: 'chunk', cx, cy, cz }, cb as (data: unknown) => void);
+    const worker = this.workers[this.workerForColumn(cx, cz)];
+    this.post(worker, { type: 'chunk', cx, cy, cz }, cb as (data: unknown) => void);
   }
 
   requestTile(tx: number, tz: number, cb: (data: MapTileResponse) => void): void {
-    this.post({ type: 'tile', tx, tz }, cb as (data: unknown) => void);
+    const worker = this.workers[this.workerForColumn(tx, tz)];
+    this.post(worker, { type: 'tile', tx, tz }, cb as (data: unknown) => void);
   }
 
   requestColumn(tx: number, tz: number, cb: (data: SurfaceColumnResponse) => void): void {
-    this.post({ type: 'column', tx, tz }, cb as (data: unknown) => void);
+    const worker = this.workers[this.workerForColumn(tx, tz)];
+    this.post(worker, { type: 'column', tx, tz }, cb as (data: unknown) => void);
   }
 
   dispose(): void {
     for (const worker of this.workers) worker.terminate();
     this.workers.length = 0;
-    this.inFlight.length = 0;
     this.callbacks.clear();
-    this.reqWorker.clear();
   }
 }
