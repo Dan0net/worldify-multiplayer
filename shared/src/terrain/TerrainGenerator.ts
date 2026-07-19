@@ -441,11 +441,12 @@ export class TerrainGenerator implements HeightSampler {
 
   // Worm state: traced worms cached per spawn cell, and the sphere centers (flat
   // [x,y,z,r,...] in world meters) relevant to the chunk currently being generated.
-  private wormCellCache = new Map<string, Float64Array>();
-  // Per-cell sphere-cloud AABB [minX,minY,minZ,maxX,maxY,maxZ] (already inflated by radius+wallSlop),
-  // parallel to wormCellCache. Lets gatherWormPts skip a cell's whole sphere list with one box test
-  // when the cell's worms can't reach the chunk — the cull loop was its dominant cost.
-  private wormCellBBox = new Map<string, Float64Array>();
+  // Keyed by a packed INTEGER cell id (see cellKey) — string keys made the per-cell Map.get + key
+  // concatenation the hottest lines in the worm gather. Each entry holds the sphere list AND its
+  // sphere-cloud AABB [minX,minY,minZ,maxX,maxY,maxZ] (inflated per sphere by radius+wallSlop), so the
+  // gather does ONE lookup per cell and skips the whole list with a single box test when it can't reach
+  // the chunk — the cull loop was its dominant cost.
+  private wormCellCache = new Map<number, { pts: Float64Array; bbox: Float64Array }>();
   private chunkWormPts: Float64Array = new Float64Array(0);
   private chunkWormPtsFor = '';
 
@@ -661,7 +662,6 @@ export class TerrainGenerator implements HeightSampler {
   /** Drop all per-cell + per-chunk cave caches (after a config or seed change). */
   private invalidateCaveCaches(): void {
     this.wormCellCache.clear();
-    this.wormCellBBox.clear();
     this.chunkWormPtsFor = '';
     this.cavernCellCache.clear();
     this.chunkCavernFeatsFor = '';
@@ -839,8 +839,15 @@ export class TerrainGenerator implements HeightSampler {
    * are seeded on a 3D grid, so they fill the whole sub-surface volume from the top of the terrain
    * downward with no surface-margin / depth-range parameters.
    */
-  private traceWormCell(ci: number, cj: number, ck: number): Float64Array {
-    const cacheKey = ci + ',' + cj + ',' + ck;
+  /** Pack 3 signed cell indices into one safe-integer Map key (no string build). Assumes each index
+   *  fits in ±2^16 cells (± ~2,600 km at 40 m cells) — vastly beyond any real world; the packed value
+   *  stays < 2^53. Avoids the per-cell string concatenation that dominated the worm gather. */
+  private static cellKey(ci: number, cj: number, ck: number): number {
+    return ((ci + 0x10000) * 0x20000 + (cj + 0x10000)) * 0x20000 + (ck + 0x10000);
+  }
+
+  private traceWormCell(ci: number, cj: number, ck: number): { pts: Float64Array; bbox: Float64Array } {
+    const cacheKey = TerrainGenerator.cellKey(ci, cj, ck);
     const cached = this.wormCellCache.get(cacheKey);
     if (cached) return cached;
 
@@ -860,6 +867,10 @@ export class TerrainGenerator implements HeightSampler {
     // points × 4 floats. Avoids the ~900k-push/grow/GC churn a number[] incurs across a cold column.
     const pts = new Float64Array(n * (cave.wormSegments + 1) * 4);
     let p = 0;
+    // Accumulate the sphere-cloud AABB inline as points are emitted (inflated per sphere by
+    // radius+wallSlop) instead of a second pass over pts — gatherWormPts uses it to skip whole cells.
+    const wallSlop = cave.wormWallAmp > 0 ? cave.wormWallAmp : 0;
+    let bminX = Infinity, bminY = Infinity, bminZ = Infinity, bmaxX = -Infinity, bmaxY = -Infinity, bmaxZ = -Infinity;
     for (let w = 0; w < n; w++) {
       // Start: jittered anywhere inside the 3D cell (no surface reference).
       const hx0 = (ci + rng()) * cs;
@@ -903,6 +914,10 @@ export class TerrainGenerator implements HeightSampler {
           }
           const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
           pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
+          const rr = radius + wallSlop;
+          if (hx - rr < bminX) bminX = hx - rr; if (hx + rr > bmaxX) bmaxX = hx + rr;
+          if (hy - rr < bminY) bminY = hy - rr; if (hy + rr > bmaxY) bmaxY = hy + rr;
+          if (hz - rr < bminZ) bminZ = hz - rr; if (hz + rr > bmaxZ) bmaxZ = hz + rr;
 
           // Ease from segment-start heading toward the sampled target across the window, then advance.
           const f = (local + 1) / K;
@@ -923,6 +938,10 @@ export class TerrainGenerator implements HeightSampler {
           }
           const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
           pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
+          const rr = radius + wallSlop;
+          if (hx - rr < bminX) bminX = hx - rr; if (hx + rr > bmaxX) bmaxX = hx + rr;
+          if (hy - rr < bminY) bminY = hy - rr; if (hy + rr > bmaxY) bmaxY = hy + rr;
+          if (hz - rr < bminZ) bminZ = hz - rr; if (hz + rr > bmaxZ) bmaxZ = hz + rr;
 
           const targetYaw = yawN * Math.PI;
           let dYaw = targetYaw - yaw;
@@ -942,30 +961,15 @@ export class TerrainGenerator implements HeightSampler {
       }
     }
 
-    // Sphere-cloud AABB, inflated per sphere by (radius + wallSlop) so it conservatively bounds every
-    // point the per-sphere overlap test in gatherWormPts could accept — used there to skip the whole
-    // cell in one test. wallSlop matches gatherWormPts' inflation.
-    const wallSlop = cave.wormWallAmp > 0 ? cave.wormWallAmp : 0;
+    // Sphere-cloud AABB accumulated during the trace above (Inf/-Inf when the cell has no worms → the
+    // gather's box test always skips it, which is correct). gatherWormPts uses it to skip whole cells.
     const bbox = new Float64Array(6);
-    if (pts.length === 0) {
-      bbox[0] = bbox[1] = bbox[2] = Infinity; bbox[3] = bbox[4] = bbox[5] = -Infinity;
-    } else {
-      bbox[0] = bbox[1] = bbox[2] = Infinity; bbox[3] = bbox[4] = bbox[5] = -Infinity;
-      for (let i = 0; i < pts.length; i += 4) {
-        const r = pts[i + 3] + wallSlop;
-        if (pts[i] - r < bbox[0]) bbox[0] = pts[i] - r;
-        if (pts[i + 1] - r < bbox[1]) bbox[1] = pts[i + 1] - r;
-        if (pts[i + 2] - r < bbox[2]) bbox[2] = pts[i + 2] - r;
-        if (pts[i] + r > bbox[3]) bbox[3] = pts[i] + r;
-        if (pts[i + 1] + r > bbox[4]) bbox[4] = pts[i + 1] + r;
-        if (pts[i + 2] + r > bbox[5]) bbox[5] = pts[i + 2] + r;
-      }
-    }
+    bbox[0] = bminX; bbox[1] = bminY; bbox[2] = bminZ; bbox[3] = bmaxX; bbox[4] = bmaxY; bbox[5] = bmaxZ;
 
-    if (this.wormCellCache.size > 4096) { this.wormCellCache.clear(); this.wormCellBBox.clear(); }  // bounded
-    this.wormCellCache.set(cacheKey, pts);
-    this.wormCellBBox.set(cacheKey, bbox);
-    return pts;
+    if (this.wormCellCache.size > 4096) this.wormCellCache.clear();  // simple bounded cache
+    const entry = { pts, bbox };
+    this.wormCellCache.set(cacheKey, entry);
+    return entry;
   }
 
   /**
@@ -1008,12 +1012,13 @@ export class TerrainGenerator implements HeightSampler {
     for (let ck = ckMin; ck <= ckMax; ck++) {
       for (let cj = cjMin; cj <= cjMax; cj++) {
         for (let ci = ciMin; ci <= ciMax; ci++) {
-          const pts = this.traceWormCell(ci, cj, ck);
+          const cell = this.traceWormCell(ci, cj, ck);
           // Cheap broad-phase: skip the whole cell's sphere list if its (radius+wallSlop-inflated)
           // AABB can't reach this chunk. Most gathered cells' worms wander away from a given chunk, so
           // this replaces ~one-per-sphere tests with one-per-cell. Conservative → byte-identical.
-          const bb = this.wormCellBBox.get(ci + ',' + cj + ',' + ck);
-          if (bb && (bb[3] < x0 || bb[0] > x1 || bb[4] < y0 || bb[1] > y1 || bb[5] < z0 || bb[2] > z1)) continue;
+          const bb = cell.bbox;
+          if (bb[3] < x0 || bb[0] > x1 || bb[4] < y0 || bb[1] > y1 || bb[5] < z0 || bb[2] > z1) continue;
+          const pts = cell.pts;
           for (let i = 0; i < pts.length; i += 4) {
             const px = pts[i], py = pts[i + 1], pz = pts[i + 2];
             const pr = pts[i + 3] + wallSlop;   // include wall bulge in the overlap test
