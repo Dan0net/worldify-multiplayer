@@ -720,19 +720,29 @@ export class TerrainGenerator implements HeightSampler {
    */
   private isInsideWormCave(x: number, y: number, z: number, pts: Float64Array = this.chunkWormPts): boolean {
     if (pts.length === 0) return false;
-    // Signed wall displacement at this voxel → bumpy, organic walls (added to every tube's radius).
     const cave = this.config.caveConfig;
-    const wall = cave.wormWallAmp > 0 ? this.caveWormWall.GetNoise(x, y, z) * cave.wormWallAmp : 0;
+    // Max effective radius: the stored radius plus the largest the (signed) wall displacement can be.
+    // A voxel farther than this from a tube centre can't be inside it whatever the wall value, so we
+    // can skip the expensive wall noise unless the voxel is within reach of SOME tube. This is a pure
+    // cost optimisation — the accept test below is unchanged, so output is byte-identical.
+    const wallAmp = cave.wormWallAmp > 0 ? cave.wormWallAmp : 0;
+    let wall = 0;
+    let wallComputed = wallAmp === 0; // no wall noise to compute when amp is 0
     for (let i = 0; i < pts.length; i += 4) {
       const dx = x - pts[i];
       const dy = y - pts[i + 1];
       const dz = z - pts[i + 2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      const rMax = pts[i + 3] + wallAmp;
+      if (d2 >= rMax * rMax) continue; // provably outside this tube's widest possible wall
+      // Within reach — compute the real signed wall displacement once, lazily.
+      if (!wallComputed) { wall = this.caveWormWall.GetNoise(x, y, z) * cave.wormWallAmp; wallComputed = true; }
       // Floor the effective radius so negative wall-roughness can't pinch a tube below the sphere
       // spacing and disconnect it. The floor ≤ WORM_MIN_RADIUS ≤ stored radius, so it never reaches
       // past the gather cull → still seamless.
       let reff = pts[i + 3] + wall;
       if (reff < WORM_CARVE_MIN) reff = WORM_CARVE_MIN;
-      if (dx * dx + dy * dy + dz * dz < reff * reff) return true;
+      if (d2 < reff * reff) return true;
     }
     return false;
   }
@@ -977,6 +987,26 @@ export class TerrainGenerator implements HeightSampler {
       const surfaceFactor = 1 - taperAmt * (1 - CAVERN_TAPER_MIN_FRAC);
       const t = Math.max(0, Math.min(1, (surfaceMeters - y) / CAVERN_TAPER_BAND));
       taper = surfaceFactor + (1 - surfaceFactor) * t;
+    }
+
+    // Cheap proximity pre-reject: skip the 3 winding-warp + 1 wall noise evals when this voxel is
+    // provably outside EVERY cavern. The warp displaces the sample by at most `cavernWinding` per world
+    // axis and the wall by `cavernWallAmp` along the radius, so inflate each feature's boundary by that
+    // max and test the UN-warped point; if it's outside all inflated boundaries it's outside all real
+    // ones too (triangle inequality). Byte-identical output — a pure cost cut for the common far voxel.
+    const windAmp = cave.cavernWinding > 0 ? cave.cavernWinding : 0;
+    const wallAmpAbs = cave.cavernWallAmp > 0 ? cave.cavernWallAmp : 0;
+    {
+      let near = false;
+      for (let i = 0; i < feats.length; i += 4) {
+        const fcx = feats[i], fcy = feats[i + 1], fcz = feats[i + 2], rx = feats[i + 3];
+        const ry = rx * (1 + vert), rz = rx;
+        const ndx = (x - fcx) / rx, ndy = (y - fcy) / ry, ndz = (z - fcz) / rz;
+        const nd = Math.sqrt(ndx * ndx + ndy * ndy + ndz * ndz);
+        const warpNd = windAmp > 0 ? windAmp * Math.sqrt(1 / (rx * rx) + 1 / (ry * ry) + 1 / (rz * rz)) : 0;
+        if (nd < taper * (1 + wallAmpAbs / rx) + warpNd) { near = true; break; }
+      }
+      if (!near) return 0;
     }
 
     // Domain warp (winding) — displace the sample point; clean ellipsoid when winding = 0.
