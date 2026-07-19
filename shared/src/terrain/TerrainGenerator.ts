@@ -258,6 +258,15 @@ const WORM_MIN_RADIUS = 1.0;
  *  WORM_MIN_RADIUS so it never reaches past the per-sphere gather cull. */
 const WORM_CARVE_MIN = 0.9;
 
+/**
+ * Sample-and-hold stride for the per-step worm steering + radius noises. The trace advances ~1.2 m per
+ * step while the steering fields are low frequency (steerFrequency 0.05 → ~20 m period), so evaluating
+ * all three GetNoise every step is heavy oversampling and dominates the one-time worm cold-start.
+ * Sampling once per this many steps (~3.6 m) and holding the value cuts the trace's noise calls ~3×.
+ * The trace is a chaotic integrator, so this DOES change worm layout (new seed-worlds get different —
+ * but equally valid — tunnels); saved worlds keep their persisted chunks. 1 = original (no hold). */
+const WORM_TRACE_SUBSAMPLE = 3;
+
 /** Caverns only seed at or below this world Y (meters) — like WORM_SEED_TOP_Y — so chambers form
  *  under the terrain, not floating in the sky. */
 const CAVERN_SEED_TOP_Y = 8;
@@ -800,26 +809,34 @@ export class TerrainGenerator implements HeightSampler {
       const baseR = cave.wormRadius * (1 + (rng() * 2 - 1) * cave.wormRadiusJitter);
       const phase = rng() * phaseScale;
 
+      // Sample-and-hold the three low-frequency steering/radius noises every WORM_TRACE_SUBSAMPLE
+      // steps — the bulk of the worm cold-start. Held across ~3.6 m, well within their ~20 m period.
+      let radiusN = 0, yawN = 0, pitchN = 0;
       for (let s = 0; s <= cave.wormSegments; s++) {
+        if (s % WORM_TRACE_SUBSAMPLE === 0) {
+          radiusN = this.caveWormRadius.GetNoise(hx, hy, hz);
+          yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
+          pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
+        }
         // Radius bulges/pinches along the worm (low-freq noise → chambers and squeezes), floored so
         // a pinch never becomes impassable.
         const radius = Math.max(
           WORM_MIN_RADIUS,
-          baseR * (1 + cave.wormRadiusAlongVar * this.caveWormRadius.GetNoise(hx, hy, hz)),
+          baseR * (1 + cave.wormRadiusAlongVar * radiusN),
         );
         pts.push(hx, hy, hz, radius);
 
         // Steer toward a SHARED flow field (pure function of position): worms passing through the
         // same region seek the same heading → they align, converge, and split where the field
         // diverges — coherent horizontal spiralling instead of a knotting random walk.
-        const targetYaw = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase) * Math.PI;
+        const targetYaw = yawN * Math.PI;
         let dYaw = targetYaw - yaw;
         dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));   // wrap to [-π, π]
         yaw += dYaw * cave.wormTurnRate;
 
         // Pitch stays gentle: a small vertical wander around a (near-zero) drift, hard-clamped so
         // worms never plunge — they curve left/right and hold their depth band.
-        let targetPitch = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase) * cave.wormPitchRange - cave.wormDownwardDrift;
+        let targetPitch = pitchN * cave.wormPitchRange - cave.wormDownwardDrift;
         if (targetPitch > cave.wormMaxPitch) targetPitch = cave.wormMaxPitch;
         else if (targetPitch < -cave.wormMaxPitch) targetPitch = -cave.wormMaxPitch;
         pitch += (targetPitch - pitch) * cave.wormTurnRate;
