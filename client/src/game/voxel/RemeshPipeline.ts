@@ -16,7 +16,7 @@ import {
   POSITIVE_MARGIN_OFFSETS_7,
   chunkKey,
 } from '@worldify/shared';
-import { Chunk } from './Chunk.js';
+import { Chunk, ChunkPhase } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { meshChunk, expandChunkToGrid, getSkipHighBoundary } from './ChunkMesher.js';
@@ -47,13 +47,6 @@ export class RemeshPipeline {
   /** Cumulative count of mesh-worker dispatches — a churn gauge for streaming (surfaced in perf). */
   meshDispatches = 0;
 
-  /**
-   * Chunks whose most-recently-applied mesh SKIPPED a high boundary (a + margin neighbour was absent
-   * when it meshed), so its geometry has a hole on that face. Such a mesh must not be rendered — it
-   * self-heals when the neighbour streams in and the chunk re-meshes (see the chunk dependency
-   * contract). Membership is updated when a mesh result is applied and cleared on re-mesh / forget.
-   */
-  private readonly incompleteChunks = new Set<string>();
 
   // ---- Dependencies (injected) ----
   private readonly chunks: Map<string, Chunk>;
@@ -232,20 +225,17 @@ export class RemeshPipeline {
    * True unless this chunk's applied mesh skipped a high boundary (absent + margin neighbour). A
    * never-meshed chunk reports complete — it has no geometry, so the render pass skips it anyway; the
    * flag only matters once a mesh exists. Consumed by the render gate to keep holed meshes off screen.
+   * Source of truth is the chunk's own `phase` (dies with the chunk — no forget-on-unload contract).
    */
   isMeshComplete(key: string): boolean {
-    return !this.incompleteChunks.has(key);
+    const chunk = this.chunks.get(key);
+    return !chunk || chunk.phase !== ChunkPhase.MeshedIncomplete;
   }
 
-  /** Forget a chunk's completeness state (call on unload) so the set can't leak stale keys. */
-  forget(key: string): void {
-    this.incompleteChunks.delete(key);
-  }
-
-  /** Record whether a chunk's just-applied mesh built all its high faces. */
+  /** Record whether a chunk's just-applied mesh built all its high faces, on the chunk's phase. */
   private setComplete(key: string, complete: boolean): void {
-    if (complete) this.incompleteChunks.delete(key);
-    else this.incompleteChunks.add(key);
+    const chunk = this.chunks.get(key);
+    if (chunk) chunk.phase = complete ? ChunkPhase.MeshedComplete : ChunkPhase.MeshedIncomplete;
   }
 
   // ---- Private ----

@@ -19,6 +19,23 @@ import {
 } from '@worldify/shared';
 
 /**
+ * Explicit per-chunk mesh lifecycle phase — the single source of truth for whether a chunk's mesh is
+ * complete enough to render (drift-doc guardrail #5). Consolidates what used to be a separate
+ * `incompleteChunks` Set living in RemeshPipeline (with a hand-maintained forget-on-unload contract):
+ * the phase now dies with the Chunk, so it can't leak.
+ *
+ *   Loaded            — voxel data resident; not yet meshed (or queued for re-mesh). No geometry to draw.
+ *   MeshedComplete    — meshed with all + margin neighbours present → renderable.
+ *   MeshedIncomplete  — meshed while a + margin neighbour was absent (skipHighBoundary): its geometry
+ *                       has a boundary hole, so it must NOT be rendered until it re-meshes complete.
+ */
+export enum ChunkPhase {
+  Loaded = 0,
+  MeshedComplete = 1,
+  MeshedIncomplete = 2,
+}
+
+/**
  * Client-side chunk with temp data and multi-chunk support.
  * Extends the shared ChunkData class.
  */
@@ -28,6 +45,9 @@ export class Chunk extends ChunkData {
 
   /** Whether the chunk needs to be remeshed */
   dirty: boolean = true;
+
+  /** Explicit mesh lifecycle phase (see ChunkPhase). Set by the remesh pipeline when a mesh applies. */
+  phase: ChunkPhase = ChunkPhase.Loaded;
 
   /**
    * Cached: does this chunk currently hold any block light (emitter or propagated)?

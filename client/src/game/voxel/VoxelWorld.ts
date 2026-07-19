@@ -470,6 +470,40 @@ export class VoxelWorld implements ChunkProvider {
 
     // Unload chunks far outside reachable set (with +2 hysteresis buffer)
     this.unloadDistantChunks(this.cachedReachable);
+
+    this.assertChunkInvariants();
+  }
+
+  /**
+   * DEV-only cross-projection invariant checks (drift-doc guardrail #4). Run after each visibility
+   * update: a violation means two per-chunk representations have drifted apart — the class of bug this
+   * codebase keeps producing (a rendered chunk with no data, a pending set out of sync with its time
+   * map, geometry left behind after unload). Non-fatal (console.error) so dev keeps running but loud;
+   * `import.meta.env.DEV` strips the whole method body from production builds.
+   */
+  private assertChunkInvariants(): void {
+    if (!import.meta.env.DEV) return;
+    const fail = (msg: string): void => console.error(`[chunk-invariant] ${msg}`);
+
+    // Orphan geometry: every meshed chunk must still be loaded. unloadChunk removes from the grouper
+    // and disposes geometry BEFORE deleting the chunk, so after an update this must hold.
+    for (const key of this.geometries.keys()) {
+      if (!this.chunks.has(key)) fail(`geometry without a loaded chunk: ${key}`);
+    }
+    // A build-preview chunk must have loaded voxel data.
+    for (const key of this.previewChunks) {
+      if (!this.chunks.has(key)) fail(`preview chunk not loaded: ${key}`);
+    }
+    // Each pending* set and its stale-expiry time map are hand-paired at ~6 sites; keep them in lockstep.
+    const pending: Array<[string, Set<string>, Map<string, number>]> = [
+      ['pendingChunks', this.pendingChunks, this.pendingChunkTimes],
+      ['pendingColumns', this.pendingColumns, this.pendingColumnTimes],
+      ['pendingTiles', this.pendingTiles, this.pendingTileTimes],
+    ];
+    for (const [name, set, times] of pending) {
+      if (set.size !== times.size) fail(`${name} size ${set.size} != times size ${times.size}`);
+      for (const k of set) if (!times.has(k)) fail(`${name} key ${k} has no time entry`);
+    }
   }
 
   /**
@@ -1276,15 +1310,15 @@ export class VoxelWorld implements ChunkProvider {
       this.meshCountDirty = true;
     }
 
-    // Remove from remesh queue and forget its mesh-completeness state
+    // Remove from remesh queue (mesh-completeness lives on the chunk's `phase`, which is deleted below —
+    // no separate forget-on-unload contract to maintain).
     this.remeshPipeline.delete(key);
-    this.remeshPipeline.forget(key);
 
     // Remove from pending if it was still pending
     this.pendingChunks.delete(key);
     this.pendingChunkTimes.delete(key);
 
-    // Remove chunk
+    // Remove chunk (its ChunkPhase goes with it)
     this.chunks.delete(key);
   }
 
