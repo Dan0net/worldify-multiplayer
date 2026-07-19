@@ -259,13 +259,14 @@ const WORM_MIN_RADIUS = 1.0;
 const WORM_CARVE_MIN = 0.9;
 
 /**
- * Sample-and-hold stride for the per-step worm steering + radius noises. The trace advances ~1.2 m per
- * step while the steering fields are low frequency (steerFrequency 0.05 → ~20 m period), so evaluating
- * all three GetNoise every step is heavy oversampling and dominates the one-time worm cold-start.
- * Sampling once per this many steps (~3.6 m) and holding the value cuts the trace's noise calls ~3×.
- * The trace is a chaotic integrator, so this DOES change worm layout (new seed-worlds get different —
- * but equally valid — tunnels); saved worlds keep their persisted chunks. 1 = original (no hold). */
-const WORM_TRACE_SUBSAMPLE = 8;
+ * Steering-noise sample stride for the worm trace. The trace advances ~1.2 m per step while the steering
+ * fields are low frequency (steerFrequency 0.05 → ~20 m period), so evaluating all three GetNoise every
+ * step is heavy oversampling and dominates the one-time worm cold-start. We sample once per this many
+ * steps (~19 m at 16) and, on the default turnRate = 1 path, INTERPOLATE the heading between samples so
+ * worms curve smoothly rather than kink — letting the stride be large (few noise reads) without faceted
+ * tunnels. The trace is a chaotic integrator, so this DOES change worm layout (new seed-worlds get
+ * different — but equally valid — tunnels); saved worlds keep their persisted chunks. */
+const WORM_TRACE_SUBSAMPLE = 16;
 
 /** Caverns only seed at or below this world Y (meters) — like WORM_SEED_TOP_Y — so chambers form
  *  under the terrain, not floating in the sky. */
@@ -863,56 +864,73 @@ export class TerrainGenerator implements HeightSampler {
       const baseR = cave.wormRadius * (1 + (rng() * 2 - 1) * cave.wormRadiusJitter);
       const phase = rng() * phaseScale;
 
-      // Sample-and-hold the three low-frequency steering/radius noises every WORM_TRACE_SUBSAMPLE
-      // steps — the bulk of the worm cold-start. Held across ~3.6 m, well within their ~20 m period.
-      // At the default turnRate = 1 the heading snaps to the (held) target immediately, so between
-      // sample points yaw/pitch — and thus the per-step advance vector — are constant: recompute the
-      // steering + its trig (cos/sin, the trace's other hot cost) only when the noise is re-sampled.
-      // Byte-identical: on the skipped steps the original computes dYaw = wrap(0) = 0 → no change. When
-      // turnRate ≠ 1 the heading eases in, so fall back to the exact per-step update.
       const fastSteer = cave.wormTurnRate === 1;
       const step = cave.wormStep;
-      let radiusN = 0, yawN = 0, pitchN = 0;
-      let ax = 0, ay = 0, az = 0;   // per-step advance vector (dir * step), refreshed on steering change
-      for (let s = 0; s <= cave.wormSegments; s++) {
-        const resample = s % WORM_TRACE_SUBSAMPLE === 0;
-        if (resample) {
-          radiusN = this.caveWormRadius.GetNoise(hx, hy, hz);
-          yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
-          pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
-        }
-        // Radius bulges/pinches along the worm (low-freq noise → chambers and squeezes), floored so
-        // a pinch never becomes impassable.
-        const radius = Math.max(
-          WORM_MIN_RADIUS,
-          baseR * (1 + cave.wormRadiusAlongVar * radiusN),
-        );
-        pts.push(hx, hy, hz, radius);
+      const K = WORM_TRACE_SUBSAMPLE;
 
-        if (resample || !fastSteer) {
-          // Steer toward a SHARED flow field (pure function of position): worms passing through the
-          // same region seek the same heading → they align, converge, and split where the field
-          // diverges — coherent horizontal spiralling instead of a knotting random walk.
+      if (fastSteer) {
+        // Fast path (default turnRate = 1): the three low-frequency steering/radius noises are the bulk
+        // of the worm cold-start, so sample them only every K steps and INTERPOLATE the heading between
+        // samples. We ease the advance *direction vector* linearly from the segment-start heading to the
+        // freshly-sampled target across the K-step window — worms curve smoothly instead of kinking, so
+        // K can be large (few noise reads) without the tunnels going faceted. Trig (cos/sin) is computed
+        // only at the sample points; the per-step work is a vector lerp + one normalise.
+        let dx = Math.cos(yaw), dy = 0, dz = Math.sin(yaw);   // current unit heading
+        let sdx = dx, sdy = dy, sdz = dz;                     // segment-start heading
+        let tdx = dx, tdy = dy, tdz = dz;                     // segment-target heading
+        let radiusN = 0;
+        for (let s = 0; s <= cave.wormSegments; s++) {
+          const local = s % K;
+          if (local === 0) {
+            sdx = dx; sdy = dy; sdz = dz;                     // curve begins from the current heading
+            radiusN = this.caveWormRadius.GetNoise(hx, hy, hz);
+            const yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
+            const pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
+            const targetYaw = yawN * Math.PI;
+            let targetPitch = pitchN * cave.wormPitchRange - cave.wormDownwardDrift;
+            if (targetPitch > cave.wormMaxPitch) targetPitch = cave.wormMaxPitch;
+            else if (targetPitch < -cave.wormMaxPitch) targetPitch = -cave.wormMaxPitch;
+            const cp = Math.cos(targetPitch);
+            tdx = Math.cos(targetYaw) * cp; tdy = Math.sin(targetPitch); tdz = Math.sin(targetYaw) * cp;
+          }
+          const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
+          pts.push(hx, hy, hz, radius);
+
+          // Ease from segment-start heading toward the sampled target across the window, then advance.
+          const f = (local + 1) / K;
+          let ix = sdx + (tdx - sdx) * f, iy = sdy + (tdy - sdy) * f, iz = sdz + (tdz - sdz) * f;
+          const h = Math.sqrt(ix * ix + iy * iy + iz * iz) || 1;
+          dx = ix / h; dy = iy / h; dz = iz / h;
+          hx += dx * step; hy += dy * step; hz += dz * step;
+        }
+      } else {
+        // General path (turnRate ≠ 1): exact per-step ease toward the held target. Noise is still
+        // sampled only every K steps (sample-and-hold), but the heading eases in each step.
+        let radiusN = 0, yawN = 0, pitchN = 0;
+        for (let s = 0; s <= cave.wormSegments; s++) {
+          if (s % K === 0) {
+            radiusN = this.caveWormRadius.GetNoise(hx, hy, hz);
+            yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
+            pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
+          }
+          const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
+          pts.push(hx, hy, hz, radius);
+
           const targetYaw = yawN * Math.PI;
           let dYaw = targetYaw - yaw;
           dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));   // wrap to [-π, π]
           yaw += dYaw * cave.wormTurnRate;
 
-          // Pitch stays gentle: a small vertical wander around a (near-zero) drift, hard-clamped so
-          // worms never plunge — they curve left/right and hold their depth band.
           let targetPitch = pitchN * cave.wormPitchRange - cave.wormDownwardDrift;
           if (targetPitch > cave.wormMaxPitch) targetPitch = cave.wormMaxPitch;
           else if (targetPitch < -cave.wormMaxPitch) targetPitch = -cave.wormMaxPitch;
           pitch += (targetPitch - pitch) * cave.wormTurnRate;
 
           const cp = Math.cos(pitch);
-          ax = Math.cos(yaw) * cp * step;
-          ay = Math.sin(pitch) * step;
-          az = Math.sin(yaw) * cp * step;
+          hx += Math.cos(yaw) * cp * step;
+          hy += Math.sin(pitch) * step;
+          hz += Math.sin(yaw) * cp * step;
         }
-        hx += ax;
-        hy += ay;
-        hz += az;
       }
     }
 
@@ -1107,7 +1125,7 @@ export class TerrainGenerator implements HeightSampler {
    * hashed conical spikes rise from the floor / hang from the ceiling. Across overlapping caverns the
    * most-open result wins (air > water > solid). Pure function of position → seamless.
    */
-  private sampleCavern(x: number, y: number, z: number, surfaceMeters: number, feats: Float64Array = this.chunkCavernFeats): 0 | 1 | 2 {
+  private sampleCavern(x: number, y: number, z: number, surfaceMeters: number, feats: Float64Array = this.chunkCavernFeats, warp: Float64Array | null = null): 0 | 1 | 2 {
     if (feats.length === 0) return 0;
     const cave = this.config.caveConfig;
     const vert = cave.cavernVerticality;
@@ -1146,7 +1164,11 @@ export class TerrainGenerator implements HeightSampler {
     // Domain warp (winding) displaces the sample point — a large, low-frequency (~33 m) field, so read
     // it from the coarse per-chunk lattice (or direct GetNoise out-of-cube). Clean ellipsoid at 0.
     let wx = x, wy = y, wz = z;
-    if (cave.cavernWinding > 0) {
+    if (warp !== null) {
+      // Pre-computed additive warp offset (breach scan: computed once per column at surface Y and reused
+      // across the ~1 m dy band — the winding field is ~33 m period, so it barely varies over that span).
+      wx = x + warp[0]; wy = y + warp[1]; wz = z + warp[2];
+    } else if (cave.cavernWinding > 0) {
       const a = cave.cavernWinding;
       const lat = this.cavernWarpLat;
       const N = CAVERN_WARP_LATTICE_N;
@@ -1276,6 +1298,9 @@ export class TerrainGenerator implements HeightSampler {
     // One gathered feature-set per distinct surface chunk cy in this tile (reused across columns).
     const wormByCy = new Map<number, Float64Array>();
     const cavByCy = new Map<number, Float64Array>();
+    // Scratch: cavern domain-warp offset computed once per breached column and reused across dy (see below).
+    const warpAmt = cave.cavernWinding > 0 ? cave.cavernWinding : 0;
+    const warpScratch = warpAmt > 0 ? new Float64Array(3) : null;
 
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -1296,6 +1321,18 @@ export class TerrainGenerator implements HeightSampler {
           cavPossible = this.columnHasCavern(worldX, worldZ, cavFeats);
         }
 
+        // Cavern domain-warp is ~33 m period; over the ~1 m dy band it's effectively constant, so compute
+        // the additive offset ONCE per column (at the surface Y) and reuse it — this is the dominant
+        // remaining cavern noise cost in the breach scan (3 warp evals × 5 dy → 3 per column).
+        let warp: Float64Array | null = null;
+        if (cavPossible && cavFeats && warpScratch) {
+          const ys = sh * VOXEL_SCALE;
+          warpScratch[0] = this.caveCavernWarpX.GetNoise(worldX, ys, worldZ) * warpAmt;
+          warpScratch[1] = this.caveCavernWarpY.GetNoise(worldX, ys, worldZ) * warpAmt;
+          warpScratch[2] = this.caveCavernWarpZ.GetNoise(worldX, ys, worldZ) * warpAmt;
+          warp = warpScratch;
+        }
+
         let breached = false;
         // Test the top few voxels of the terrain — where a cave that reaches the surface carves air.
         for (let dy = 1; dy >= -3 && !breached; dy--) {
@@ -1306,7 +1343,7 @@ export class TerrainGenerator implements HeightSampler {
             if (this.isInsideWormCave(worldX, y, worldZ, pts)) breached = true;
           }
           if (!breached && cavPossible && cavFeats) {
-            if (this.sampleCavern(worldX, y, worldZ, surfaceMeters, cavFeats) === 1) breached = true;
+            if (this.sampleCavern(worldX, y, worldZ, surfaceMeters, cavFeats, warp) === 1) breached = true;
           }
         }
         if (breached) set.add(lx + lz * CHUNK_SIZE);
