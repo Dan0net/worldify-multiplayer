@@ -2421,8 +2421,11 @@ export class TerrainGenerator implements HeightSampler {
           if (rf > 0) riverWaterLevel = originalTerrainHeight - 1;   // surface ~1 voxel below the bank
         }
 
-        // Water level: river channels and/or the sea (landform floods columns below sea level).
-        const seaWaterLevel = terrainHeight < seaLevel ? seaLevel : -Infinity;
+        // Water level: river channels and/or the sea (landform floods columns below sea level). The sea
+        // surface sits 1 voxel ABOVE seaLevel so a full voxel of water covers the beach lip (which ducks
+        // the shoreline terrain to sea-1) — otherwise the top water voxel lands exactly on the surface
+        // boundary and reads as empty. seaLevel itself stays the terrain/material reference.
+        const seaWaterLevel = terrainHeight < seaLevel ? seaLevel + 1 : -Infinity;
         const waterLevel = Math.max(riverWaterLevel, seaWaterLevel);
 
         // Air-column skip (Change #2): a voxel is fully air (weight -0.5 → packVoxel = 0 = the array
