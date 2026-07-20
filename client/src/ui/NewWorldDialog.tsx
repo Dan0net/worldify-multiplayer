@@ -31,10 +31,13 @@ const TERRAIN_FIELDS: Field<TerrainLayerConfig>[] = [
 ];
 
 const LANDFORM_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'landformSeaLevel', label: 'Sea level', min: 0, max: 120, step: 4, desc: 'Water height in voxels — land below this floods.' },
+  { key: 'landformScale', label: 'Feature scale', min: 0.5, max: 8, step: 0.25, desc: 'Bigger = smaller, more compact land/sea features.' },
+  { key: 'landformWarpScale', label: 'Coast warp scale', min: 0.4, max: 4, step: 0.1, desc: 'Warp frequency relative to the land scale (finer coastline wiggle).' },
+  { key: 'landformWarpStrength', label: 'Coast warp amount', min: 0, max: 300, step: 10, desc: 'How far the warp bends coastlines/ranges — bigger = more sweeping.' },
+  { key: 'landformSeaLevel', label: 'Sea level', min: 0, max: 160, step: 4, desc: 'Water height in voxels — land below this floods.' },
+  { key: 'landformSeaDepth', label: 'Sea depth', min: 40, max: 400, step: 10, desc: 'How deep the ocean floor drops below sea level (voxels).' },
   { key: 'landformMountainHeight', label: 'Mountain height', min: 60, max: 500, step: 10, desc: 'Tallest peaks above sea level (voxels).' },
-  { key: 'landformWarpStrength', label: 'Coast warp', min: 0, max: 300, step: 10, desc: 'Large-scale warp — bigger = more sweeping bays/headlands.' },
-  { key: 'landformBeachWidth', label: 'Beach width', min: 0, max: 48, step: 2, desc: 'Height of the sand shelf above the waterline (voxels).' },
+  { key: 'landformBeachWidth', label: 'Beach height', min: 0, max: 48, step: 2, desc: 'How far the flat beach sits above the water (voxels).' },
   { key: 'landformSnowLine', label: 'Snow line', min: 60, max: 400, step: 10, desc: 'Elevation above sea where peaks turn to snow (voxels).' },
 ];
 
@@ -157,7 +160,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const patchCave = (p: Partial<CaveConfig>) => setCave((c) => ({ ...c, ...p }));
   const patchTerrain = (p: Partial<TerrainLayerConfig>) => setTerrain((t) => ({ ...t, ...p }));
 
-  const anyLayer = terrain.enabled || cave.wormsEnabled || cave.cavernsEnabled;
+  const anyLayer = terrain.enabled || terrain.landformEnabled || cave.wormsEnabled || cave.cavernsEnabled;
   const subheading = (text: string) => (
     <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">{text}</span>
   );
@@ -212,13 +215,11 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
           <span className="text-white/60 text-xs">Layers</span>
           <div className="flex gap-1.5 flex-wrap justify-end">
             <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
-              Terrain
+              Buildings
             </button>
-            {terrain.enabled && (
-              <button className={pill(terrain.landformEnabled)} onClick={() => patchTerrain({ landformEnabled: !terrain.landformEnabled })}>
-                Landforms
-              </button>
-            )}
+            <button className={pill(terrain.landformEnabled)} onClick={() => patchTerrain({ landformEnabled: !terrain.landformEnabled })}>
+              Landforms
+            </button>
             <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
             </button>
@@ -232,14 +233,14 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
           <div className="flex flex-col gap-2.5 max-h-[42vh] overflow-y-auto scrollbar-compact pr-1">
             {terrain.enabled && (
               <>
-                {subheading('Terrain')}
+                {subheading('Buildings')}
                 {TERRAIN_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
-                {terrain.landformEnabled && (
-                  <>
-                    {subheading('Landforms (sea / beach / mountains)')}
-                    {LANDFORM_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
-                  </>
-                )}
+              </>
+            )}
+            {terrain.landformEnabled && (
+              <>
+                {subheading('Landforms (sea / beach / mountains)')}
+                {LANDFORM_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
               </>
             )}
             {cave.wormsEnabled && (
