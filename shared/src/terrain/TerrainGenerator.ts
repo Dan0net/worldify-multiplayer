@@ -277,6 +277,10 @@ const CAVERN_SPIKE_CELL = 3;
 const CAVERN_SPIKE_MAX_H = 7;
 /** Max spike base radius in meters at cavernSpikeAmount = 1. */
 const CAVERN_SPIKE_MAX_R = 1.3;
+/** The 4 cardinal step directions for the pathway edge scan — module const so it isn't reallocated
+ *  per pathway-depth query. */
+const PATH_CARDINALS: ReadonlyArray<readonly [number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
 /** Cavern domain-warp lattice corners per axis over the chunk cube (CHUNK_SIZE·VOXEL_SCALE = 8 m).
  *  9 corners → 1 m spacing; the warp's ~33 m period makes this far finer than the field varies. */
 const CAVERN_WARP_LATTICE_N = 2;
@@ -415,6 +419,7 @@ interface PathwayColumnInfo {
   onBorder?: boolean;
   depth?: number;
   material?: number;
+  centerCell?: number;   // warped cellular value AT this column — shared by every pathway predicate
 }
 
 export class TerrainGenerator implements HeightSampler {
@@ -448,13 +453,13 @@ export class TerrainGenerator implements HeightSampler {
   // the chunk — the cull loop was its dominant cost.
   private wormCellCache = new Map<number, { pts: Float64Array; bbox: Float64Array }>();
   private chunkWormPts: Float64Array = new Float64Array(0);
-  private chunkWormPtsFor = '';
+  private chunkWormPtsFor = -1;
 
   // Cavern state: caverns cached per spawn cell, and the descriptors ([cx,cy,cz,rx,…] in world
   // meters) relevant to the chunk currently being generated.
-  private cavernCellCache = new Map<string, Float64Array>();
+  private cavernCellCache = new Map<number, Float64Array>();
   private chunkCavernFeats: Float64Array = new Float64Array(0);
-  private chunkCavernFeatsFor = '';
+  private chunkCavernFeatsFor = -1;
 
   // Per-chunk cavern domain-warp lattice: the winding warp is very low frequency (~33 m period) yet
   // was evaluated per 0.25 m voxel (3 GetNoise) — ~57% of cavern gen. Precompute the 3 warp noises on
@@ -467,7 +472,7 @@ export class TerrainGenerator implements HeightSampler {
   // suppress surface features (stamps + pathways) over cave openings. Cached per tile in a bounded
   // map (not a single entry) so a chunk's stamp filter can consult neighbouring tiles — a stamp whose
   // origin sits in an adjacent tile must be suppressed by that tile's breaches — without cache thrash.
-  private breachColsCache = new Map<string, Set<number>>();
+  private breachColsCache = new Map<number, Set<number>>();
 
   // Per-column 2D surface height, memoized so a vertical stack of chunks (same cx,cz, different cy)
   // doesn't recompute the ~9-noise height field per cy. Keyed by EXACT world (x,z): grid queries across
@@ -487,7 +492,7 @@ export class TerrainGenerator implements HeightSampler {
   // Per-(cx,cz) FILTERED stamp placements, memoized so the 25-neighbour scatter + O(n²) collision +
   // pathway/breach filter isn't recomputed for every cy in a column (the result is XZ-only). Bounded;
   // cleared on config/seed change.
-  private placementCache = new Map<string, StampPlacement[]>();
+  private placementCache = new Map<number, StampPlacement[]>();
 
   /** Test-only: extra worm-gather cells added on every side. Proves the gather radius is sufficient
    *  (regenerating with a larger radius must be byte-identical). Leave 0 in production. */
@@ -662,9 +667,9 @@ export class TerrainGenerator implements HeightSampler {
   /** Drop all per-cell + per-chunk cave caches (after a config or seed change). */
   private invalidateCaveCaches(): void {
     this.wormCellCache.clear();
-    this.chunkWormPtsFor = '';
+    this.chunkWormPtsFor = -1;
     this.cavernCellCache.clear();
-    this.chunkCavernFeatsFor = '';
+    this.chunkCavernFeatsFor = -1;
     this.cavernWarpLat = null;
     this.breachColsCache.clear();
     // Per-column memos also depend on config/seed (height layers, warp, stamp/pathway/breach config).
@@ -845,6 +850,10 @@ export class TerrainGenerator implements HeightSampler {
   private static cellKey(ci: number, cj: number, ck: number): number {
     return ((ci + 0x10000) * 0x20000 + (cj + 0x10000)) * 0x20000 + (ck + 0x10000);
   }
+  /** 2-index packed key (same ±2^16 range assumption as cellKey). */
+  private static cellKey2(a: number, b: number): number {
+    return (a + 0x10000) * 0x20000 + (b + 0x10000);
+  }
 
   private traceWormCell(ci: number, cj: number, ck: number): { pts: Float64Array; bbox: Float64Array } {
     const cacheKey = TerrainGenerator.cellKey(ci, cj, ck);
@@ -979,7 +988,7 @@ export class TerrainGenerator implements HeightSampler {
    * makes carving seamless: adjacent chunks gather overlapping cells and trace the same worms.
    */
   private prepareChunkWorms(cx: number, cy: number, cz: number): void {
-    const key = cx + ',' + cy + ',' + cz;
+    const key = TerrainGenerator.cellKey(cx, cy, cz);
     if (this.chunkWormPtsFor === key) return;
     this.chunkWormPts = this.gatherWormPts(cx, cy, cz);
     this.chunkWormPtsFor = key;
@@ -1043,7 +1052,7 @@ export class TerrainGenerator implements HeightSampler {
    * Cached per cell. (ci→X, cj→Z, ck→Y, matching the worm grid.)
    */
   private traceCavernCell(ci: number, cj: number, ck: number): Float64Array {
-    const cacheKey = ci + ',' + cj + ',' + ck;
+    const cacheKey = TerrainGenerator.cellKey(ci, cj, ck);
     const cached = this.cavernCellCache.get(cacheKey);
     if (cached) return cached;
 
@@ -1077,7 +1086,7 @@ export class TerrainGenerator implements HeightSampler {
    * construction: adjacent chunks gather overlapping cells and see the same caverns.
    */
   private prepareChunkCaverns(cx: number, cy: number, cz: number): void {
-    const key = cx + ',' + cy + ',' + cz;
+    const key = TerrainGenerator.cellKey(cx, cy, cz);
     if (this.chunkCavernFeatsFor === key) return;
     this.chunkCavernFeats = this.gatherCavernFeats(cx, cy, cz);
     this.chunkCavernFeatsFor = key;
@@ -1327,7 +1336,7 @@ export class TerrainGenerator implements HeightSampler {
    * suppression is the same from whichever cy chunk asks, so multi-chunk stamps stay consistent.
    */
   private breachedColumns(cx: number, cz: number): Set<number> {
-    const key = cx + ',' + cz;
+    const key = TerrainGenerator.cellKey2(cx, cz);
     const cached = this.breachColsCache.get(key);
     if (cached) return cached;
 
@@ -1478,11 +1487,26 @@ export class TerrainGenerator implements HeightSampler {
     return e.material;
   }
 
+  // Reused across applyPathwayWarp calls — the result is always destructured immediately by callers, so
+  // one shared 2-tuple avoids allocating ~15 short-lived arrays per column (GC churn on the surface scan).
+  private readonly pathWarpScratch: [number, number] = [0, 0];
   private applyPathwayWarp(worldX: number, worldZ: number): [number, number] {
     const path = this.config.pathwayConfig;
-    const warpX = this.pathwayWarpX.GetNoise(worldX, worldZ) * path.warpAmplitude;
-    const warpZ = this.pathwayWarpZ.GetNoise(worldX, worldZ) * path.warpAmplitude;
-    return [worldX + warpX, worldZ + warpZ];
+    this.pathWarpScratch[0] = worldX + this.pathwayWarpX.GetNoise(worldX, worldZ) * path.warpAmplitude;
+    this.pathWarpScratch[1] = worldZ + this.pathwayWarpZ.GetNoise(worldX, worldZ) * path.warpAmplitude;
+    return this.pathWarpScratch;
+  }
+
+  /** Warped cellular value AT a column — every pathway predicate (path/wall/border/depth) samples this
+   *  same centre before its own offset probes, so memoise it per column (2 warp + 1 cellular saved for
+   *  each predicate after the first). Byte-identical: same warp + GetNoise, just computed once. */
+  private pathwayCenterCell(worldX: number, worldZ: number): number {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.centerCell === undefined) {
+      const [wx, wz] = this.applyPathwayWarp(worldX, worldZ);
+      e.centerCell = this.pathwayCellular.GetNoise(wx, wz);
+    }
+    return e.centerCell;
   }
 
   /**
@@ -1502,10 +1526,9 @@ export class TerrainGenerator implements HeightSampler {
     const halfWidth = path.pathWidth * 0.5;
     
     // Apply domain warping for organic curved cells
-    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
     
     // Get cell value at center
-    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    const centerCell = this.pathwayCenterCell(worldX, worldZ);
     
     // Sample at offsets to detect if we're near a cell edge
     // Check 4 cardinal directions at pathWidth distance
@@ -1546,17 +1569,15 @@ export class TerrainGenerator implements HeightSampler {
     const halfWidth = path.pathWidth * 0.5;
     
     // Apply domain warping
-    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
-    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    const centerCell = this.pathwayCenterCell(worldX, worldZ);
     
     const eps = 0.001;
     let minEdgeDist = halfWidth;
-    
+
     // 4 cardinal directions with coarse step size (~4 samples per direction)
     const step = Math.max(0.3, halfWidth / 4);
-    const directions: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-    
-    for (const [dx, dz] of directions) {
+
+    for (const [dx, dz] of PATH_CARDINALS) {
       for (let dist = step; dist <= halfWidth; dist += step) {
         const [wx, wz] = this.applyPathwayWarp(worldX + dx * dist, worldZ + dz * dist);
         const cell = this.pathwayCellular.GetNoise(wx, wz);
@@ -1593,10 +1614,9 @@ export class TerrainGenerator implements HeightSampler {
     const wallOffset = halfWidth + 0.5; // Just outside the path
     
     // Apply domain warping for organic curved cells
-    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
     
     // Get cell value at center
-    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    const centerCell = this.pathwayCenterCell(worldX, worldZ);
     
     // Sample at offsets to detect if we're near a cell edge
     const [wx1, wz1] = this.applyPathwayWarp(worldX + wallOffset, worldZ);
@@ -1677,10 +1697,9 @@ export class TerrainGenerator implements HeightSampler {
     const borderDist = halfWidth + path.borderWidth;
     
     // Apply domain warping for organic curved cells
-    const [warpedX, warpedZ] = this.applyPathwayWarp(worldX, worldZ);
     
     // Get cell value at center
-    const centerCell = this.pathwayCellular.GetNoise(warpedX, warpedZ);
+    const centerCell = this.pathwayCenterCell(worldX, worldZ);
     
     // Sample at border distance to detect if we're near a cell edge
     const [wx1, wz1] = this.applyPathwayWarp(worldX + borderDist, worldZ);
@@ -2025,7 +2044,7 @@ export class TerrainGenerator implements HeightSampler {
       // The scatter + pathway/breach filter is XZ-only, so memoize it per (cx,cz) — every cy in the
       // column reuses the same filtered list instead of redoing the 25-neighbour scatter + O(n²)
       // collision + per-placement pathway/breach noise. applyStamps treats the list read-only.
-      const pkey = cx + ',' + cz;
+      const pkey = TerrainGenerator.cellKey2(cx, cz);
       let placements = this.placementCache.get(pkey);
       if (!placements) {
         const allPlacements = this.stampPointGenerator.generateForChunk(cx, cz);
