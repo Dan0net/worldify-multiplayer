@@ -64,4 +64,25 @@ describe('landform layer is visible', () => {
     }
     expect(water).toBeGreaterThan(200);   // a real body of sea water, not a stray voxel
   });
+
+  it('keeps material bands proportional at small master scale (not all sand)', () => {
+    // Regression guard: heights are vertically scaled by masterScale, so the sand/snow bands must scale
+    // too — otherwise at a small scale everything compresses near sea level and reads as sand.
+    const gen = new TerrainGenerator({
+      seed: 12345,
+      terrainLayer: { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true, masterScale: 0.2 },
+      caveConfig: { ...DEFAULT_CAVE_CONFIG, wormsEnabled: false, cavernsEnabled: false },
+    }) as unknown as { sampleSurface(x: number, z: number): { height: number; material: number } };
+    let sand = 0, land = 0, cols = 0;
+    for (let x = -300; x <= 300; x += 4) {
+      for (let z = -300; z <= 300; z += 4) {
+        cols++;
+        const m = gen.sampleSurface(x, z).material;
+        if (m === mat('sand')) sand++;
+        if (m === mat('moss2') || m === mat('rock') || m === mat('snow')) land++;
+      }
+    }
+    expect(sand / cols).toBeLessThan(0.5);   // sand is a band, not the whole world
+    expect(land).toBeGreaterThan(50);         // grass/rock/snow land still exists at small scale
+  });
 });

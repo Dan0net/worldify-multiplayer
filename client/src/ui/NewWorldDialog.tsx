@@ -26,8 +26,8 @@ type Field<T> = { key: keyof T; label: string; min: number; max: number; step: n
 // World scale knobs — masterScale affects EVERY layer (land, rivers, paths, caves, buildings);
 // landScale scales only the land + rivers on top of it.
 const WORLD_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'masterScale', label: 'World scale', min: 0.25, max: 6, step: 0.25, desc: 'Overall feature scale — stretches EVERYTHING (land, rivers, paths, caves, buildings). 1 = default.' },
-  { key: 'landScale', label: 'Land scale', min: 0.25, max: 6, step: 0.25, desc: 'Scales the land + rivers only, on top of World scale. 1 = default.' },
+  { key: 'masterScale', label: 'World scale', min: 0.1, max: 1, step: 0.05, desc: 'Overall feature scale — shrinks EVERYTHING uniformly (land, rivers, paths, caves, buildings). 1 = full size.' },
+  { key: 'landScale', label: 'Land scale', min: 0.1, max: 2, step: 0.1, desc: 'Scales the land + rivers only, on top of World scale. 1 = default.' },
 ];
 
 const RIVER_FIELDS: Field<TerrainLayerConfig>[] = [

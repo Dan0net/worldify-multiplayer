@@ -415,12 +415,14 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
  */
 export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
   { x: 0.00, y: -1.00 },   // deepest ocean floor (× seaDepth)
-  { x: 0.30, y: -0.55 },   // ocean basin
-  { x: 0.44, y: -0.06 },   // shelf: seabed rises to just under the waterline
-  { x: 0.50, y: 0.03 },    // soft step onto the beach (a gentle ramp, not a cliff)
-  { x: 0.56, y: 0.05 },    // flat sand shelf just above the water (× beachWidth-ish)
-  { x: 0.70, y: 0.12 },    // low plains (× mountainHeight)
-  { x: 0.88, y: 0.40 },    // hills
+  { x: 0.32, y: -0.50 },   // ocean basin
+  { x: 0.44, y: -0.10 },   // seabed rising toward the shore
+  { x: 0.48, y: -0.02 },   // just under the waterline
+  { x: 0.50, y: 0.00 },    // waterline
+  { x: 0.62, y: 0.03 },    // FLAT low shelf: land barely rises over a wide band → gentle beach/plains
+  { x: 0.74, y: 0.09 },    // gentle low plains (× mountainHeight)
+  { x: 0.86, y: 0.24 },    // rolling hills
+  { x: 0.95, y: 0.55 },    // foothills
   { x: 1.00, y: 1.00 },    // mountain peaks (× mountainHeight)
 ];
 
@@ -1685,7 +1687,7 @@ export class TerrainGenerator implements HeightSampler {
   private isLandformSuppressed(worldX: number, worldZ: number): boolean {
     const t = this.config.terrainLayer;
     if (!t.landformEnabled) return false;
-    return this.sampleHeight(worldX, worldZ) <= t.landformSeaLevel + t.landformBeachWidth;
+    return this.sampleHeight(worldX, worldZ) <= t.landformSeaLevel + t.landformBeachWidth * this.landSizeScale();
   }
 
   private isBreachColumn(worldX: number, worldZ: number): boolean {
@@ -2139,18 +2141,17 @@ export class TerrainGenerator implements HeightSampler {
     const macro = this.sampleLandformMacro(worldX, worldZ);
     // Surface detail: a dedicated noise whose frequency tracks the land feature size (so bumps scale with
     // the world) and whose amplitude is driven by slope — flat ground gets a small floor of texture,
-    // steep faces get jagged ruggedness. Faded out on the beach/shore so coastlines stay clean.
-    const sizeDiv = this.landSizeScale();
-    const baseFreq = LANDFORM_BASE_FREQ * (t.landformScale > 0 ? t.landformScale : 1) / sizeDiv;
+    // steep faces get jagged ruggedness. Applied EVERYWHERE, including steep seabed under the sea (the
+    // slope term is near-zero on flats, so beaches/plains stay gentle). Amplitude scales with the world
+    // so proportions hold at any master/land scale.
+    const vscale = this.landSizeScale();
+    const baseFreq = LANDFORM_BASE_FREQ * (t.landformScale > 0 ? t.landformScale : 1) / vscale;
     const f = baseFreq * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1);
     const slope = this.landformSlope(worldX, worldZ);                 // tan(angle)
     const slope01 = Math.min(1, slope);                              // ~45° saturates the "steep" term
-    const amp = t.landformDetailFlat + t.landformDetailSteep * slope01;
-    const sea = t.landformSeaLevel;
-    const rel = macro - sea;
-    const fade = smoothstep(t.landformBeachWidth, t.landformBeachWidth + 12, rel);  // 0 on/below beach
-    if (amp <= 0 || fade <= 0) return macro;
-    return macro + this.heightNoise.GetNoise(worldX * f, worldZ * f) * amp * fade;
+    const amp = (t.landformDetailFlat + t.landformDetailSteep * slope01) * vscale;
+    if (amp <= 0) return macro;
+    return macro + this.heightNoise.GetNoise(worldX * f, worldZ * f) * amp;
   }
 
   /**
@@ -2279,12 +2280,13 @@ export class TerrainGenerator implements HeightSampler {
    *  macro-gradient angle so detail bumps don't flip flat ground to rock. */
   private landformSurfaceMaterial(heightVoxels: number, worldX: number, worldZ: number): number {
     const t = this.config.terrainLayer;
+    const vscale = this.landSizeScale();             // heights are vertically scaled → scale the bands too
     const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
     if (rel < 0) return mat('gravel');               // sea floor
-    if (rel <= t.landformBeachWidth) return mat('sand');
+    if (rel <= t.landformBeachWidth * vscale) return mat('sand');
     const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 55;
     if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');  // steep → rock cliffs
-    if (rel >= t.landformSnowLine) return mat('snow');
+    if (rel >= t.landformSnowLine * vscale) return mat('snow');
     return this.getMaterialAtDepth(0);               // plains → the normal top material
   }
 
