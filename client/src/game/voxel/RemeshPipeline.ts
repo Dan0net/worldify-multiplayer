@@ -63,6 +63,16 @@ export class RemeshPipeline {
    */
   private readonly isMarginSourceExpected: (cx: number, cy: number, cz: number) => boolean;
 
+  /**
+   * True when a chunk should be meshed NOW — i.e. it is on-screen or one ring inside the render
+   * frontier (reachable ∪ face-ring, the same set the render gate draws). Chunks that are loaded only
+   * to supply neighbour VOXELS as margin sources — the occluder shell, and the underground bulk behind
+   * rock the visibility BFS never reaches — return false: meshing them is pure waste (they never draw).
+   * They stay queued and mesh the moment the player's view reaches them (process runs every frame).
+   * Injected by VoxelWorld (which owns the reachable set); defaults to "mesh everything" when omitted.
+   */
+  private readonly shouldMeshNow: (cx: number, cy: number, cz: number) => boolean;
+
   constructor(
     chunks: Map<string, Chunk>,
     geometries: Map<string, ChunkGeometry>,
@@ -70,6 +80,7 @@ export class RemeshPipeline {
     meshPool: MeshWorkerPool,
     pendingChunks: Set<string>,
     isMarginSourceExpected?: (cx: number, cy: number, cz: number) => boolean,
+    shouldMeshNow?: (cx: number, cy: number, cz: number) => boolean,
   ) {
     this.chunks = chunks;
     this.geometries = geometries;
@@ -78,6 +89,7 @@ export class RemeshPipeline {
     this.pendingChunks = pendingChunks;
     this.isMarginSourceExpected = isMarginSourceExpected
       ?? ((cx, cy, cz) => this.pendingChunks.has(chunkKey(cx, cy, cz)));
+    this.shouldMeshNow = shouldMeshNow ?? (() => true);
   }
 
   // ---- Listeners ----
@@ -135,6 +147,10 @@ export class RemeshPipeline {
 
       if (this.meshPool.isInFlight(key)) continue;
       if (this.meshPool.isPreviewChunk(key)) continue;
+      // Don't spend a mesh-worker slot on a chunk that won't be drawn — the occluder shell / the
+      // underground bulk behind rock. Left in the queue (not deleted): it meshes the frame the
+      // player's view reaches it, since process() runs every frame and re-tests this.
+      if (!this.shouldMeshNow(chunk.cx, chunk.cy, chunk.cz)) continue;
       if (!this.marginSourcesReady(chunk.cx, chunk.cy, chunk.cz)) continue;
 
       const grid = this.meshPool.takeGrid();

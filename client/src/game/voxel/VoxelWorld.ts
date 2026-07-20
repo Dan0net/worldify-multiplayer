@@ -42,7 +42,7 @@ import { Chunk } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
-import { MeshWorkerPool } from './MeshWorkerPool.js';
+import { MeshWorkerPool, meshWorkerCount } from './MeshWorkerPool.js';
 import { expandChunkToGrid, setEmptyAirPredicate } from './ChunkMesher.js';
 import { resampleLightAttributes } from './MeshGeometry.js';
 import { sendBinary } from '../../net/netClient.js';
@@ -176,9 +176,6 @@ export class VoxelWorld implements ChunkProvider {
   /** Worker pool for off-thread mesh generation */
   readonly meshPool: MeshWorkerPool;
 
-  /** Number of mesh worker threads */
-  private static readonly MESH_WORKER_COUNT = 2;
-
   /** Groups chunk geometries into spatial buckets for draw-call reduction */
   readonly chunkGrouper: ChunkGrouper;
 
@@ -190,7 +187,7 @@ export class VoxelWorld implements ChunkProvider {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.meshPool = new MeshWorkerPool(VoxelWorld.MESH_WORKER_COUNT);
+    this.meshPool = new MeshWorkerPool(meshWorkerCount());
     this.chunkGrouper = new ChunkGrouper(scene);
     this.remeshPipeline = new RemeshPipeline(
       this.chunks,
@@ -199,6 +196,7 @@ export class VoxelWorld implements ChunkProvider {
       this.meshPool,
       this.pendingChunks,
       (cx, cy, cz) => this.isMarginSourceExpected(cx, cy, cz),
+      (cx, cy, cz) => this.shouldMeshChunk(cx, cy, cz),
     );
     // Let the mesher distinguish open sky from not-yet-loaded, so terrain tops that meet a chunk
     // boundary against sky mesh against air (capped) instead of being skipped/extrapolated → no gap.
@@ -702,6 +700,26 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
+   * Should this chunk be meshed now? Gates the remesh worker so we don't spend mesh slots on chunks
+   * the render gate will never draw — the occluder shell and the underground bulk behind rock. It's
+   * the render set (reachable ∪ face-ring) WITHOUT the mesh-completeness clause of isRenderable (we're
+   * deciding whether to build the mesh in the first place). Before the first visibility BFS runs
+   * (empty reachable set) it returns true so initial meshing isn't stalled; a skipped chunk stays in
+   * the remesh queue and meshes the frame its view opens up (process runs every frame). Meshing is a
+   * pure function of a chunk's own + neighbour VOXELS, so deferring it never changes the result —
+   * only when it is paid.
+   */
+  private shouldMeshChunk(cx: number, cy: number, cz: number): boolean {
+    const reachable = this.cachedReachable;
+    if (!reachable || reachable.size === 0) return true; // pre-BFS: don't block the initial mesh
+    if (reachable.has(chunkKey(cx, cy, cz))) return true;
+    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
+      if (reachable.has(chunkKey(cx + dx, cy + dy, cz + dz))) return true;
+    }
+    return false;
+  }
+
+  /**
    * Unload chunks that are far outside the reachable set.
    * Uses hysteresis (+2 chunks) to prevent popping at boundaries.
    */
@@ -937,8 +955,16 @@ export class VoxelWorld implements ChunkProvider {
     // most internal faces are solid rock. Faces here: +Y (above) is face 2, the horizontals below.
     //
     // The chunk BELOW is exempt: a solid arrival changes its `lightFromAbove` (open-sky → capped)
-    // even while donating no border light, so it always relights. The remesh is still queued
-    // unconditionally on every branch — geometry seams are handled independently of the light skip.
+    // even while donating no border light, so it always relights + remeshes.
+    //
+    // For the +Y (above) and the 4 horizontal neighbours the relight AND the remesh are now BOTH
+    // gated on faceDonatesLight — a neighbour that got no new light needs no remesh either, because
+    // its GEOMETRY doesn't depend on this chunk: a chunk meshes its high-side border from its OWN
+    // +X/+Y/+Z margin sources, so its −direction neighbour (this chunk) is never a mesh input. The
+    // margin-consumers that DO read this chunk (its −X/−Y/−Z faces/edges/corner) are remeshed
+    // unconditionally by the NEGATIVE_MARGIN_OFFSETS_7 loop below. Result: a fully-dark underground
+    // arrival fans out to just its below relight + the margin loop, instead of re-meshing all 6
+    // faces every time — the dominant remesh churn during a column-load burst.
     const belowKey = chunkKey(cx, cy - 1, cz);
     const belowChunk = this.chunks.get(belowKey);
     if (belowChunk) {
@@ -949,10 +975,8 @@ export class VoxelWorld implements ChunkProvider {
 
     const aboveKey = chunkKey(cx, cy + 1, cz);
     const aboveChunk = this.chunks.get(aboveKey);
-    if (aboveChunk) {
-      if (faceDonatesLight(chunk.data, 2 /* +Y */)) {
-        this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
-      }
+    if (aboveChunk && faceDonatesLight(chunk.data, 2 /* +Y */)) {
+      this.computeChunkSunlight(cx, cy + 1, cz, aboveChunk.data);
       aboveChunk.dirty = true;
       this.remeshPipeline.add(aboveKey);
     }
@@ -966,9 +990,9 @@ export class VoxelWorld implements ChunkProvider {
       const face = dx === 1 ? 0 : dx === -1 ? 1 : dz === 1 ? 4 : 5;
       if (faceDonatesLight(chunk.data, face)) {
         this.computeChunkSunlight(nChunk.cx, nChunk.cy, nChunk.cz, nChunk.data);
+        nChunk.dirty = true;
+        this.remeshPipeline.add(nKey);
       }
-      nChunk.dirty = true;
-      this.remeshPipeline.add(nKey);
     }
 
     // Re-mesh every chunk that consumes THIS chunk as a margin source (its 7 negative-direction
