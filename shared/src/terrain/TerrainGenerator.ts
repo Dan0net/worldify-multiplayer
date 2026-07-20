@@ -542,6 +542,10 @@ interface PathwayColumnInfo {
   depth?: number;
   material?: number;
   centerCell?: number;   // warped cellular value AT this column — shared by every pathway predicate
+  // Rivers reuse the same per-column memo (separate noise + params, same edge-detect mechanism).
+  onRiver?: boolean;
+  riverDepth?: number;   // 0..1 depth factor into the channel
+  riverCenter?: number;  // warped river-cellular value AT this column
 }
 
 export class TerrainGenerator implements HeightSampler {
@@ -1787,6 +1791,67 @@ export class TerrainGenerator implements HeightSampler {
     return e.centerCell;
   }
 
+  // ---- Rivers: natural water channels. Same cellular edge-detection as pathways (a channel runs along
+  // the borders between warped cells), but a SEPARATE noise field + tuning, so rivers and paths are
+  // drawn independently. Memoized through the shared per-column entry. River width/warp scale with the
+  // world+land size like the landform.
+  private readonly riverWarpScratch: [number, number] = [0, 0];
+  private applyRiverWarp(worldX: number, worldZ: number): [number, number] {
+    const amp = this.config.terrainLayer.riverWarpAmplitude * this.landSizeScale();
+    this.riverWarpScratch[0] = worldX + this.riverWarpX.GetNoise(worldX, worldZ) * amp;
+    this.riverWarpScratch[1] = worldZ + this.riverWarpZ.GetNoise(worldX, worldZ) * amp;
+    return this.riverWarpScratch;
+  }
+  private riverCenterCell(worldX: number, worldZ: number): number {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.riverCenter === undefined) {
+      const [wx, wz] = this.applyRiverWarp(worldX, worldZ);
+      e.riverCenter = this.riverCellular.GetNoise(wx, wz);
+    }
+    return e.riverCenter;
+  }
+  isOnRiver(worldX: number, worldZ: number): boolean {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.onRiver === undefined) e.onRiver = this.computeIsOnRiver(worldX, worldZ);
+    return e.onRiver;
+  }
+  getRiverDepthFactor(worldX: number, worldZ: number): number {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.riverDepth === undefined) e.riverDepth = this.computeGetRiverDepthFactor(worldX, worldZ);
+    return e.riverDepth;
+  }
+  private riverHalfWidth(): number {
+    return (this.config.terrainLayer.riverWidth * this.landSizeScale()) * 0.5;
+  }
+  private computeIsOnRiver(worldX: number, worldZ: number): boolean {
+    if (!this.config.terrainLayer.riversEnabled) return false;
+    const halfWidth = this.riverHalfWidth();
+    const c = this.riverCenterCell(worldX, worldZ);
+    const [wx1, wz1] = this.applyRiverWarp(worldX + halfWidth, worldZ); const c1 = this.riverCellular.GetNoise(wx1, wz1);
+    const [wx2, wz2] = this.applyRiverWarp(worldX - halfWidth, worldZ); const c2 = this.riverCellular.GetNoise(wx2, wz2);
+    const [wx3, wz3] = this.applyRiverWarp(worldX, worldZ + halfWidth); const c3 = this.riverCellular.GetNoise(wx3, wz3);
+    const [wx4, wz4] = this.applyRiverWarp(worldX, worldZ - halfWidth); const c4 = this.riverCellular.GetNoise(wx4, wz4);
+    const eps = 0.001;
+    return Math.abs(c - c1) > eps || Math.abs(c - c2) > eps || Math.abs(c - c3) > eps || Math.abs(c - c4) > eps;
+  }
+  private computeGetRiverDepthFactor(worldX: number, worldZ: number): number {
+    if (!this.config.terrainLayer.riversEnabled) return 0;
+    const halfWidth = this.riverHalfWidth();
+    const c = this.riverCenterCell(worldX, worldZ);
+    const eps = 0.001;
+    let minEdgeDist = halfWidth;
+    const step = Math.max(0.3, halfWidth / 4);
+    for (const [dx, dz] of PATH_CARDINALS) {
+      for (let dist = step; dist <= halfWidth; dist += step) {
+        const [wx, wz] = this.applyRiverWarp(worldX + dx * dist, worldZ + dz * dist);
+        const cell = this.riverCellular.GetNoise(wx, wz);
+        if (Math.abs(c - cell) > eps) { minEdgeDist = Math.min(minEdgeDist, dist); break; }
+      }
+    }
+    const tt = 1 - Math.min(1, minEdgeDist / halfWidth);
+    return smoothstep(0, 1, tt);
+  }
+
   /**
    * Check if a world position is on a pathway
    * Uses cellular noise with CellValue, applies domain warping, then detects edges
@@ -2152,31 +2217,32 @@ export class TerrainGenerator implements HeightSampler {
   sampleSurface(worldX: number, worldZ: number): { height: number; material: number } {
     const tlSurf = this.config.terrainLayer;
     const isPath = tlSurf.enabled && this.isOnPathway(worldX, worldZ);
-    // Reported surface height must match generateChunk: landform paths/streams sit on the smooth macro
+    const isRiver = tlSurf.riversEnabled && this.isOnRiver(worldX, worldZ);
+    // Reported surface height must match generateChunk: landform paths/rivers sit on the smooth macro
     // height so the load cap / map track the carved channel, not the (absent) detail bumps.
-    const originalHeight = (tlSurf.landformEnabled && isPath)
+    const originalHeight = (tlSurf.landformEnabled && (isPath || isRiver))
       ? this.sampleLandformMacro(worldX, worldZ)
       : this.sampleHeight(worldX, worldZ);
     let height = originalHeight;
 
-    // Apply pathway dip
-    let pathDipAmount = 0;
+    // Dry pathway dip (no water).
     if (isPath && this.config.pathwayConfig.dipDepth > 0) {
-      const depthFactor = this.getPathwayDepthFactor(worldX, worldZ);
-      pathDipAmount = this.config.pathwayConfig.dipDepth * depthFactor;
-      height -= pathDipAmount;
+      height -= this.config.pathwayConfig.dipDepth * this.getPathwayDepthFactor(worldX, worldZ);
     }
-    
-    // Determine surface material
-    let material: number;
-    
+    // River bed.
+    if (isRiver && tlSurf.riverDepth > 0) {
+      const bed = originalHeight - tlSurf.riverDepth * this.getRiverDepthFactor(worldX, worldZ);
+      if (bed < height) height = bed;
+    }
+
     // Determine surface material.
     // Height stays at the dipped terrain floor — liquid/transparent fills
     // (water) sit above it but shouldn't raise the reported height, otherwise
     // getChunkRangeFromHeights may skip the chunk containing the actual solid surface.
+    let material: number;
     const waterConfig = this.config.pathwayConfig;
-    if (waterConfig.waterEnabled && isPath && pathDipAmount > 0) {
-      material = waterConfig.waterMaterial;
+    if (isRiver) {
+      material = waterConfig.waterMaterial;   // rivers read as water on the 2D map
     } else if (isPath) {
       material = this.getPathwayMaterial(worldX, worldZ);
     } else if (tlSurf.enabled && this.isOnPathwayBorder(worldX, worldZ)) {
@@ -2269,7 +2335,8 @@ export class TerrainGenerator implements HeightSampler {
     // Landforms layer (sea/mountains height) is on. With BOTH off, any enabled cave layer is rendered as
     // SOLID casts in otherwise-empty space (the cave-inspection view); with no caves either, empty air.
     const buildingsOn = tl.enabled;
-    if (!buildingsOn && !tl.landformEnabled) {
+    const riversOn = tl.riversEnabled;
+    if (!buildingsOn && !tl.landformEnabled && !riversOn) {
       return anyCave
         ? this.generateCaveCastChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ)
         : data;
@@ -2292,41 +2359,44 @@ export class TerrainGenerator implements HeightSampler {
         // Pathway membership (roads only exist under the Buildings layer; a cave breach suppresses them).
         const columnBreached = breach !== null && breach.has(lx + lz * CHUNK_SIZE);
         const onPathRaw = buildingsOn && this.isOnPathway(worldX, worldZ) && !columnBreached;
-        // Below the plains→beach edge, suppress dry path FURNITURE (surface / walls / borders / stamps)
-        // so roads and walls stop at the coast; the water CHANNEL is allowed to continue (see streamOn).
+        // Below the plains→beach edge, suppress path furniture so roads/walls stop at the coast.
         const furnitureSuppressed = this.isLandformSuppressed(worldX, worldZ);
         const isPathColumn = onPathRaw && !furnitureSuppressed;
-        const streamOn = onPathRaw && this.config.pathwayConfig.waterEnabled; // stream flows on to the sea
+        // Rivers: independent cellular water channels (own noise), NOT tied to the Buildings layer; a
+        // cave breach still suppresses them. Rivers carry the water — paths are now dry roads.
+        const isRiverColumn = riversOn && this.isOnRiver(worldX, worldZ) && !columnBreached;
         if (isPathColumn) chunkHasPath = true;
 
-        // Landform paths/streams sit on the smooth MACRO height (no detail) so the channel isn't chopped
+        // Paths and rivers sit on the smooth MACRO height (no detail) so their channels aren't chopped
         // up by the surface bumps; everything else uses the full detailed height.
-        let terrainHeight = (tl.landformEnabled && onPathRaw)
+        let terrainHeight = (tl.landformEnabled && (onPathRaw || isRiverColumn))
           ? this.sampleLandformMacro(worldX, worldZ)
           : this.sampleHeight(worldX, worldZ);
 
         let isWallColumn = (columnBreached || furnitureSuppressed) ? 0 : -1; // -1 = unchecked, 0 = no, 1 = yes
         let isBorderColumn = (columnBreached || furnitureSuppressed) ? 0 : -1;
-        
-        // Store original terrain height before dip (for water level calculation)
+
+        // Store original terrain height before any dip (for water-level calculation).
         const originalTerrainHeight = terrainHeight;
-        
-        // Apply the gradual pathway dip. Streams (water-enabled paths) keep dipping past the beach so the
-        // channel carries on into the sea; dry roads only dip where their furniture exists (above beach).
-        let pathDipAmount = 0;
-        if ((isPathColumn || streamOn) && this.config.pathwayConfig.dipDepth > 0) {
-          const depthFactor = this.getPathwayDepthFactor(worldX, worldZ);
-          pathDipAmount = this.config.pathwayConfig.dipDepth * depthFactor;
-          terrainHeight -= pathDipAmount;
+        const waterConfig = this.config.pathwayConfig;
+
+        // Dry pathway dip (a sunken paved road — no water fill anymore; water lives in rivers).
+        if (isPathColumn && waterConfig.dipDepth > 0) {
+          terrainHeight -= waterConfig.dipDepth * this.getPathwayDepthFactor(worldX, worldZ);
+        }
+        // River channel: cut a bed into the terrain and fill it with water to just below the banks so
+        // the channel carries on across the land (and merges with the sea where it reaches it).
+        let riverWaterLevel = -Infinity;
+        if (isRiverColumn && tl.riverDepth > 0) {
+          const rf = this.getRiverDepthFactor(worldX, worldZ);
+          const bed = originalTerrainHeight - tl.riverDepth * rf;
+          if (bed < terrainHeight) terrainHeight = bed;
+          if (rf > 0) riverWaterLevel = originalTerrainHeight - 1;   // surface ~1 voxel below the bank
         }
 
-        // Water level: pathway/stream water and/or the sea (landform floods columns below sea level).
-        const waterConfig = this.config.pathwayConfig;
-        const pathWaterLevel = waterConfig.waterEnabled && (isPathColumn || streamOn) && pathDipAmount > 0
-          ? originalTerrainHeight - waterConfig.waterDepth
-          : -Infinity;
+        // Water level: river channels and/or the sea (landform floods columns below sea level).
         const seaWaterLevel = terrainHeight < seaLevel ? seaLevel : -Infinity;
-        const waterLevel = Math.max(pathWaterLevel, seaWaterLevel);
+        const waterLevel = Math.max(riverWaterLevel, seaWaterLevel);
 
         // Air-column skip (Change #2): a voxel is fully air (weight -0.5 → packVoxel = 0 = the array
         // default) only when voxelY ≥ terrainHeight + 1. If this column's entire content top — terrain,
@@ -2454,11 +2524,14 @@ export class TerrainGenerator implements HeightSampler {
       let placements = this.placementCache.get(pkey);
       if (!placements) {
         const allPlacements = this.stampPointGenerator.generateForChunk(cx, cz);
-        // Drop stamps (trees / rocks / buildings) on pathways, and over cave breaches so nothing is left
-        // floating above an open cave mouth.
+        // Drop stamps (trees / rocks / buildings) on pathways + rivers, over cave breaches (nothing left
+        // floating above an open cave mouth), below the beach line, and on terrain steeper than 60°
+        // (they look fine on 45° slopes but wrong on cliffs). Slope only applies with the landform on.
         placements = allPlacements.filter(p =>
           !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ)
-          && !this.isLandformSuppressed(p.worldX, p.worldZ));
+          && !this.isLandformSuppressed(p.worldX, p.worldZ)
+          && !(riversOn && this.isOnRiver(p.worldX, p.worldZ))
+          && !(tl.landformEnabled && this.landformSlopeDeg(p.worldX, p.worldZ) > 60));
         if (this.placementCache.size > 4096) this.placementCache.clear();
         this.placementCache.set(pkey, placements);
       }
