@@ -182,6 +182,21 @@ export interface TerrainLayerConfig {
   pathWarpFrequency: number;
   /** Building spacing in meters (grid spacing for the largest building type; larger = fewer). */
   buildingSpacing: number;
+
+  // ---- Landform layer (sea / beach / plains / mountains) — a macro elevation model that reshapes the
+  // base terrain height. Its own toggle, but nested here since it only shapes the terrain layer's height.
+  /** Master toggle for the landform elevation model. Off → the flat-ish heightLayers terrain (default). */
+  landformEnabled: boolean;
+  /** Sea level in voxels. Columns whose land is below this flood with water up to it. */
+  landformSeaLevel: number;
+  /** Max mountain peak height in voxels ABOVE sea level (the top of the elevation curve). */
+  landformMountainHeight: number;
+  /** Strong large-scale domain-warp amplitude in meters — bends coastlines/mountain fronts (sweeping). */
+  landformWarpStrength: number;
+  /** Width in voxels of the gentle sand shelf just above sea level (the beach band). */
+  landformBeachWidth: number;
+  /** Elevation in voxels (above sea) beyond which mountain tops turn to snow. */
+  landformSnowLine: number;
 }
 
 export interface TerrainConfig {
@@ -344,6 +359,14 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   pathWarpAmplitude: 30,    // gentle meander
   pathWarpFrequency: 0.006, // broad curves
   buildingSpacing: 50,      // largest building grid
+
+  // Landform layer — OFF by default so existing worlds/the current terrain are byte-identical.
+  landformEnabled: false,
+  landformSeaLevel: 24,        // voxels (~6 m) — a bit above baseHeight 0 so plains sit above the sea
+  landformMountainHeight: 320, // voxels (~80 m) peaks above sea level
+  landformWarpStrength: 120,   // metres of large-scale warp → sweeping coasts/ranges
+  landformBeachWidth: 12,      // voxels (~3 m) of sand shelf above the waterline
+  landformSnowLine: 220,       // voxels above sea → snow caps
 };
 
 /**
@@ -416,6 +439,13 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
 
 // ============== Terrain Generator ==============
 
+/** Depth (voxels) of the landform surface skin that gets sand/snow/gravel; below it, normal rock strata. */
+const LANDFORM_SKIN_DEPTH = 3;
+/** Landform continental field frequency (1/m) — very low → landmasses span hundreds of metres. */
+const LANDFORM_BASE_FREQ = 0.0012;
+/** Landform warp frequency (1/m) — large-scale sweep of coastlines / mountain fronts. */
+const LANDFORM_WARP_FREQ = 0.0025;
+
 /** Lazily-filled per-column memo of the pathway predicates (each computed on first demand). */
 interface PathwayColumnInfo {
   onPath?: boolean;
@@ -431,7 +461,13 @@ export class TerrainGenerator implements HeightSampler {
   private heightNoise: FastNoiseLite;
   private warpNoiseX: FastNoiseLite;
   private warpNoiseZ: FastNoiseLite;
-  
+
+  // Landform system (sea/beach/plains/mountains). Seed block config.seed + 50000 so it never perturbs
+  // the base-terrain seed++ chain — with landformEnabled off, existing output stays byte-identical.
+  private landformWarpX: FastNoiseLite;   // strong large-scale domain warp (sweeping coasts)
+  private landformWarpZ: FastNoiseLite;
+  private landformBase: FastNoiseLite;    // one low-freq continental fBm → the landmass shape
+
   // Pathway system - cellular noise with domain warping
   private pathwayCellular: FastNoiseLite;
   private pathwayWarpX: FastNoiseLite;
@@ -607,6 +643,18 @@ export class TerrainGenerator implements HeightSampler {
 
     this.updateCaveConfig();
 
+    // Landform noise (seed block +50000, kept off the base seed++ chain — see field decls).
+    let landformSeed = this.config.seed + 50000;
+    this.landformWarpX = new FastNoiseLite(landformSeed++);
+    this.landformWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.landformWarpZ = new FastNoiseLite(landformSeed++);
+    this.landformWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.landformBase = new FastNoiseLite(landformSeed++);
+    this.landformBase.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.landformBase.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.landformBase.SetFractalOctaves(3);   // continental shape: a few octaves of large-scale relief
+    this.updateLandformConfig();
+
     // Initialize stamp system if enabled
     if (this.config.enableStamps) {
       this.initializeStampSystem();
@@ -646,6 +694,11 @@ export class TerrainGenerator implements HeightSampler {
       this.updateCaveConfig();
       this.invalidateCaveCaches();   // config change invalidates traced worms/caverns
     }
+    if (config.terrainLayer) {
+      this.config.terrainLayer = { ...this.config.terrainLayer, ...config.terrainLayer };
+      this.applyTerrainLayer();
+      this.invalidateCaveCaches();   // landform reshapes height → drop the per-column height/pathway memos
+    }
 
     if (config.seed !== undefined) {
       let seed = config.seed;
@@ -662,7 +715,12 @@ export class TerrainGenerator implements HeightSampler {
       this.caveCavernWarpY.SetSeed(caveSeed++);
       this.caveCavernWarpZ.SetSeed(caveSeed++);
       this.caveCavernWall.SetSeed(caveSeed++);
-      this.invalidateCaveCaches();   // reseed invalidates traced worms/caverns
+
+      let lfSeed = config.seed + 50000;
+      this.landformWarpX.SetSeed(lfSeed++);
+      this.landformWarpZ.SetSeed(lfSeed++);
+      this.landformBase.SetSeed(lfSeed++);
+      this.invalidateCaveCaches();   // reseed invalidates traced worms/caverns + per-column memos
     }
   }
 
@@ -720,6 +778,14 @@ export class TerrainGenerator implements HeightSampler {
     this.warpNoiseX.SetFractalOctaves(warp.octaves);
     this.warpNoiseZ.SetFrequency(warp.frequency);
     this.warpNoiseZ.SetFractalOctaves(warp.octaves);
+  }
+
+  /** Landform noise frequencies are fixed (large-scale); the amplitude/curve knobs live in config and
+   *  are read per-sample in sampleLandformHeight. */
+  private updateLandformConfig(): void {
+    this.landformWarpX.SetFrequency(LANDFORM_WARP_FREQ);
+    this.landformWarpZ.SetFrequency(LANDFORM_WARP_FREQ);
+    this.landformBase.SetFrequency(LANDFORM_BASE_FREQ);
   }
 
   /**
@@ -1417,6 +1483,14 @@ export class TerrainGenerator implements HeightSampler {
    *  column and consults ITS breach set, so the answer is a pure function of world position — identical
    *  from whichever chunk renders the stamp. A stamp anchored in one tile but overlapping into its
    *  neighbours is therefore suppressed (or kept) as a whole, not half-drawn across the boundary. */
+  /** True where the landform layer should suppress surface features (pathways, trees, rocks): at or
+   *  below the beach line — i.e. underwater or on the bare sand shelf. Cheap (cached sampleHeight). */
+  private isLandformSuppressed(worldX: number, worldZ: number): boolean {
+    const t = this.config.terrainLayer;
+    if (!t.landformEnabled) return false;
+    return this.sampleHeight(worldX, worldZ) <= t.landformSeaLevel + t.landformBeachWidth;
+  }
+
   private isBreachColumn(worldX: number, worldZ: number): boolean {
     const cave = this.config.caveConfig;
     if (!cave.wormsEnabled && !cave.cavernsEnabled) return false;
@@ -1773,13 +1847,16 @@ export class TerrainGenerator implements HeightSampler {
       if (cached !== undefined) return cached;
     }
 
-    // Apply domain warping for organic shapes
-    const [warpedX, warpedZ] = this.applyDomainWarp(worldX, worldZ);
-
-    let height = this.config.baseHeight;
-
-    for (const layer of this.config.heightLayers) {
-      height += this.sampleNoiseLayer(warpedX, warpedZ, layer);
+    let height: number;
+    if (this.config.terrainLayer.landformEnabled) {
+      height = this.sampleLandformHeight(worldX, worldZ);
+    } else {
+      // Apply domain warping for organic shapes
+      const [warpedX, warpedZ] = this.applyDomainWarp(worldX, worldZ);
+      height = this.config.baseHeight;
+      for (const layer of this.config.heightLayers) {
+        height += this.sampleNoiseLayer(warpedX, warpedZ, layer);
+      }
     }
 
     // Bounded: clear wholesale past a generous cap (covers the active view's columns) rather than LRU.
@@ -1789,6 +1866,50 @@ export class TerrainGenerator implements HeightSampler {
     this.heightCacheEntries++;
 
     return height;
+  }
+
+  /**
+   * Landform height model (sea/beach/plains/mountains) — one continental field, strongly warped, run
+   * through an elevation curve, plus elevation-modulated detail. Returns height in voxels. Called only
+   * when landformEnabled; result is memoised by the sampleHeight cache above.
+   */
+  private sampleLandformHeight(worldX: number, worldZ: number): number {
+    const t = this.config.terrainLayer;
+    // Strong, large-scale domain warp → sweeping coastlines / mountain fronts that meet the sea.
+    const wa = t.landformWarpStrength;
+    const wx = worldX + this.landformWarpX.GetNoise(worldX, worldZ) * wa;
+    const wz = worldZ + this.landformWarpZ.GetNoise(worldX, worldZ) * wa;
+    // One continental fBm ∈ [-1,1] → macro elevation via the curve.
+    const n = this.landformBase.GetNoise(wx, wz);
+    const e = this.elevationCurve(n);
+    // Elevation-modulated detail: reuse the finest existing height layer (no new noise). Gentle in the
+    // plains/beach band, ramped up toward the mountains so peaks read as rugged and lowlands as smooth.
+    const layers = this.config.heightLayers;
+    const detailLayer = layers[layers.length - 1];
+    const detail = detailLayer ? this.sampleNoiseLayer(wx, wz, detailLayer) : 0;
+    const plainsTop = t.landformSeaLevel + t.landformBeachWidth + 40;
+    const mtnBand = t.landformSeaLevel + t.landformMountainHeight * 0.35;
+    const rough = 0.5 + 5 * smoothstep(plainsTop, mtnBand, e);
+    return e + detail * rough;
+  }
+
+  /**
+   * Map the continental noise n ∈ [-1,1] to an absolute height in voxels. Below a "shelf" fraction the
+   * value sits under sea level (ocean floor rising to the shore); above it, land rises with a cubic ramp
+   * so most land is low (wide beaches + plains) and only the highest noise makes (rare, tall) mountains.
+   */
+  private elevationCurve(n: number): number {
+    const t = this.config.terrainLayer;
+    const sea = t.landformSeaLevel;
+    const u = (n + 1) * 0.5;             // 0..1
+    const SHELF = 0.42;                  // below this → ocean
+    if (u < SHELF) {
+      const d = u / SHELF;               // 0 deep .. 1 shoreline
+      const floor = sea - 60;            // deepest sea floor (~15 m below)
+      return floor + (sea - floor) * d;
+    }
+    const land = (u - SHELF) / (1 - SHELF);   // 0 shoreline .. 1 highest
+    return sea + Math.pow(land, 3) * t.landformMountainHeight;
   }
 
   /**
@@ -1819,17 +1940,23 @@ export class TerrainGenerator implements HeightSampler {
     // (water) sit above it but shouldn't raise the reported height, otherwise
     // getChunkRangeFromHeights may skip the chunk containing the actual solid surface.
     const waterConfig = this.config.pathwayConfig;
+    const tl = this.config.terrainLayer;
     if (waterConfig.waterEnabled && isPath && pathDipAmount > 0) {
       material = waterConfig.waterMaterial;
     } else if (isPath) {
       material = this.getPathwayMaterial(worldX, worldZ);
     } else if (this.isOnPathwayBorder(worldX, worldZ)) {
       material = this.config.pathwayConfig.borderMaterial;
+    } else if (tl.landformEnabled) {
+      // Elevation-band material; submerged columns read as water on the 2D map. Reported height stays
+      // the true (sea-floor) terrain so the load cap covers the floor — the water body above is
+      // "content" that the surface-column scan picks up (same as stamp tops), raising the visible top.
+      material = originalHeight < tl.landformSeaLevel ? waterConfig.waterMaterial : this.landformSurfaceMaterial(originalHeight);
     } else {
       // Surface material (depth 0)
       material = this.getMaterialAtDepth(0);
     }
-    
+
     return { height: Math.floor(height), material };
   }
 
@@ -1845,6 +1972,17 @@ export class TerrainGenerator implements HeightSampler {
       }
     }
     return this.config.defaultMaterial;
+  }
+
+  /** Surface material for the landform layer, by elevation relative to sea level: gravel seabed → sand
+   *  beach shelf → normal grass/plains → snow above the snow line. (Slope-based rock is a later step.) */
+  private landformSurfaceMaterial(heightVoxels: number): number {
+    const t = this.config.terrainLayer;
+    const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
+    if (rel < 0) return mat('gravel');               // sea floor
+    if (rel <= t.landformBeachWidth) return mat('sand');
+    if (rel >= t.landformSnowLine) return mat('snow');
+    return this.getMaterialAtDepth(0);               // plains → the normal top material
   }
 
   /**
@@ -1884,6 +2022,8 @@ export class TerrainGenerator implements HeightSampler {
     // Gather+trace the caves relevant to this chunk once, before any per-voxel carve test. Both
     // types are independent, so prepare whichever are enabled (they combine in caveFillAt).
     const cave = this.config.caveConfig;
+    const tl = this.config.terrainLayer;
+    const seaLevel = tl.landformEnabled ? tl.landformSeaLevel : -Infinity;
     const anyCave = cave.wormsEnabled || cave.cavernsEnabled;
     if (cave.wormsEnabled) this.prepareChunkWorms(cx, cy, cz);
     if (cave.cavernsEnabled) this.prepareChunkCaverns(cx, cy, cz);
@@ -1917,7 +2057,8 @@ export class TerrainGenerator implements HeightSampler {
         // Cache pathway checks for this column (only depends on X/Z). A cave breach here suppresses
         // the path (and its wall/water below) so roads don't run across an open cave mouth.
         const columnBreached = breach !== null && breach.has(lx + lz * CHUNK_SIZE);
-        const isPathColumn = this.isOnPathway(worldX, worldZ) && !columnBreached;
+        const isPathColumn = this.isOnPathway(worldX, worldZ) && !columnBreached
+          && !this.isLandformSuppressed(worldX, worldZ);
         if (isPathColumn) chunkHasPath = true;
         let isWallColumn = columnBreached ? 0 : -1; // -1 = not checked, 0 = no, 1 = yes
         let isBorderColumn = columnBreached ? 0 : -1; // suppress path borders over a breach too
@@ -1933,12 +2074,14 @@ export class TerrainGenerator implements HeightSampler {
           terrainHeight -= pathDipAmount;
         }
         
-        // Calculate water level for this column (if water is enabled)
-        // Water surface is at original terrain height minus waterDepth
+        // Calculate water level for this column: pathway-dip water (original behaviour) and/or the sea
+        // (landform layer floods any column whose land sits below sea level, up to sea level).
         const waterConfig = this.config.pathwayConfig;
-        const waterLevel = waterConfig.waterEnabled && isPathColumn && pathDipAmount > 0
+        const pathWaterLevel = waterConfig.waterEnabled && isPathColumn && pathDipAmount > 0
           ? originalTerrainHeight - waterConfig.waterDepth
           : -Infinity;
+        const seaWaterLevel = terrainHeight < seaLevel ? seaLevel : -Infinity;
+        const waterLevel = Math.max(pathWaterLevel, seaWaterLevel);
 
         // Air-column skip (Change #2): a voxel is fully air (weight -0.5 → packVoxel = 0 = the array
         // default) only when voxelY ≥ terrainHeight + 1. If this column's entire content top — terrain,
@@ -1972,7 +2115,13 @@ export class TerrainGenerator implements HeightSampler {
             // Only assign material if not fully air
             const depthFromSurface = Math.max(0, distanceFromSurface);
             material = this.getMaterialAtDepth(depthFromSurface);
-            
+
+            // Landform surface skin: sand/snow/gravel by elevation on the top few voxels (rock strata
+            // underneath stay from getMaterialAtDepth). Short-circuits when the layer is off.
+            if (tl.landformEnabled && depthFromSurface <= LANDFORM_SKIN_DEPTH) {
+              material = this.landformSurfaceMaterial(terrainHeight);
+            }
+
             // Check for pathway override on surface voxels (use cached check)
             if (depthFromSurface <= this.config.pathwayConfig.maxDepth && isPathColumn) {
               material = this.getPathwayMaterial(worldX, worldZ);
@@ -2062,7 +2211,8 @@ export class TerrainGenerator implements HeightSampler {
         // Drop stamps (trees / rocks / buildings) on pathways, and over cave breaches so nothing is left
         // floating above an open cave mouth.
         placements = allPlacements.filter(p =>
-          !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ));
+          !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ)
+          && !this.isLandformSuppressed(p.worldX, p.worldZ));
         if (this.placementCache.size > 4096) this.placementCache.clear();
         this.placementCache.set(pkey, placements);
       }

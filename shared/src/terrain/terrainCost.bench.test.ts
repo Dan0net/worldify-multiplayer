@@ -20,6 +20,7 @@ import { CHUNK_SIZE, VOXEL_SCALE } from '../voxel/constants.js';
 // feature introduces a noise source, so its call count stays visible.
 const NOISE_GROUPS: Record<string, string[]> = {
   height: ['heightNoise', 'warpNoiseX', 'warpNoiseZ'],
+  landform: ['landformWarpX', 'landformWarpZ', 'landformBase'],
   pathway: ['pathwayCellular', 'pathwayWarpX', 'pathwayWarpZ', 'pathwayMaterialNoise'],
   worms: ['caveWormSteerYaw', 'caveWormSteerPitch', 'caveWormRadius', 'caveWormWall'],
   caverns: ['caveCavernWarpX', 'caveCavernWarpY', 'caveCavernWarpZ', 'caveCavernWall'],

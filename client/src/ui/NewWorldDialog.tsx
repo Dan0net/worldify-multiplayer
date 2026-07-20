@@ -30,6 +30,14 @@ const TERRAIN_FIELDS: Field<TerrainLayerConfig>[] = [
   { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between buildings — larger means fewer.' },
 ];
 
+const LANDFORM_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'landformSeaLevel', label: 'Sea level', min: 0, max: 120, step: 4, desc: 'Water height in voxels — land below this floods.' },
+  { key: 'landformMountainHeight', label: 'Mountain height', min: 60, max: 500, step: 10, desc: 'Tallest peaks above sea level (voxels).' },
+  { key: 'landformWarpStrength', label: 'Coast warp', min: 0, max: 300, step: 10, desc: 'Large-scale warp — bigger = more sweeping bays/headlands.' },
+  { key: 'landformBeachWidth', label: 'Beach width', min: 0, max: 48, step: 2, desc: 'Height of the sand shelf above the waterline (voxels).' },
+  { key: 'landformSnowLine', label: 'Snow line', min: 60, max: 400, step: 10, desc: 'Elevation above sea where peaks turn to snow (voxels).' },
+];
+
 const WORM_FIELDS: Field<CaveConfig>[] = [
   { key: 'wormsPerCell', label: 'Density', min: 0, max: 20, step: 0.5, desc: 'How many tunnels are generated in each area.' },
   { key: 'wormCellSize', label: 'Spacing', min: 15, max: 100, step: 5, desc: 'Distance between tunnel start points — larger is sparser.' },
@@ -206,6 +214,11 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
             <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
               Terrain
             </button>
+            {terrain.enabled && (
+              <button className={pill(terrain.landformEnabled)} onClick={() => patchTerrain({ landformEnabled: !terrain.landformEnabled })}>
+                Landforms
+              </button>
+            )}
             <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
             </button>
@@ -221,6 +234,12 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
               <>
                 {subheading('Terrain')}
                 {TERRAIN_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+                {terrain.landformEnabled && (
+                  <>
+                    {subheading('Landforms (sea / beach / mountains)')}
+                    {LANDFORM_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+                  </>
+                )}
               </>
             )}
             {cave.wormsEnabled && (
