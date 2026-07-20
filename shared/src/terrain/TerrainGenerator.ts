@@ -419,18 +419,17 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
 // so the seabed is a gradual slope, not a cliff off the beach.
 export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
   { x: 0.00, y: -1.00 },   // deepest ocean floor (× seaDepth)
-  { x: 0.15, y: -1.00 },   // PLATEAU: flat deep sea floor across the bottom of the range
-  { x: 0.28, y: -0.62 },   // gradual rise…
-  { x: 0.39, y: -0.28 },
-  { x: 0.46, y: -0.08 },   // shallows approaching the beach
-  { x: 0.50, y: 0.00 },    // waterline — smooth gentle slope through here (the 1-voxel lip is in code)
-  { x: 0.57, y: 0.03 },    // gentle sand beach
-  { x: 0.64, y: 0.08 },    // grass plains begin
-  { x: 0.73, y: 0.20 },    // plains → low hills (gradual)
-  { x: 0.82, y: 0.42 },    // hills (climbable grade)
-  { x: 0.90, y: 0.72 },    // mountains — snow line sits around here
-  { x: 0.96, y: 0.95 },    // upper slopes
-  { x: 1.00, y: 1.00 },    // short plateau: flat snowy peak tops
+  { x: 0.10, y: -1.00 },   // PLATEAU: flat deep sea floor across the bottom of the range
+  { x: 0.24, y: -0.50 },   // gradual rise…
+  { x: 0.34, y: -0.15 },
+  { x: 0.40, y: 0.00 },    // waterline moved LEFT → ~30% sea (much less), more land
+  { x: 0.45, y: 0.03 },    // gentle sand beach
+  { x: 0.53, y: 0.10 },    // grass plains
+  { x: 0.63, y: 0.24 },    // hills — big mountainous band begins low so mountains are common
+  { x: 0.73, y: 0.46 },    // low mountains (climbable grade, rugged via detail)
+  { x: 0.83, y: 0.72 },    // mountains (snow line ~ here)
+  { x: 0.92, y: 0.93 },    // upper slopes
+  { x: 1.00, y: 1.00 },    // plateau: flat snowy peak tops
 ];
 
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
@@ -452,12 +451,12 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformSeaDepth: 100,       // voxels (~25 m) — shallower ocean with a flat floor
   landformMountainHeight: 180, // voxels (~45 m) peaks above sea level (shorter → climbable slopes)
   landformBeachWidth: 10,      // voxels the flat beach sits above sea
-  landformSnowLine: 120,       // voxels above sea → snow caps (must be < mountainHeight to appear)
+  landformSnowLine: 90,        // voxels above sea → snow caps (well below mountainHeight → more snow)
   landformCurve: DEFAULT_LANDFORM_CURVE,
 
   landformDetailFrequency: 10, // detail ~10× the land base frequency (fine bumps over the macro shape)
   landformDetailFlat: 4,       // voxels of detail on flat ground (visible texture, not glassy)
-  landformDetailSteep: 22,     // extra voxels of detail on the steepest slopes (jagged mountains)
+  landformDetailSteep: 30,     // extra voxels of detail on steep / high mountainous ground (rugged)
   landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
@@ -2168,8 +2167,13 @@ export class TerrainGenerator implements HeightSampler {
     // near-zero on flats, so beaches/plains stay gentle). Amplitude scales with the world.
     const vscale = this.landSizeScale();
     const slope = this.landformSlope(worldX, worldZ);                 // tan(angle)
-    const slope01 = Math.min(1, slope);                              // ~45° saturates the "steep" term
-    const amp = (t.landformDetailFlat + t.landformDetailSteep * slope01) * vscale;
+    const slope01 = Math.min(1, slope);                              // ~45° saturates the slope term
+    // Ruggedness rises with slope OR elevation: mountainous ground is rocky/jagged even where its macro
+    // grade is gentle (climbable but still rugged), and cliffs are rugged at any height. elevation01 is
+    // 0 at sea level → 1 at the peak height.
+    const elev01 = Math.max(0, Math.min(1, (macro - t.landformSeaLevel) / (t.landformMountainHeight * vscale || 1)));
+    const rugged = Math.max(slope01, elev01);
+    const amp = (t.landformDetailFlat + t.landformDetailSteep * rugged) * vscale;
     const h = amp <= 0 ? macro : macro + this.landformDetail.GetNoise(worldX, worldZ) * amp;
     return this.applyBeachLip(h);
   }

@@ -50,17 +50,19 @@ describe('landform layer is visible', () => {
     const waterMat = (gen as unknown as { config: { pathwayConfig: { waterMaterial: number } } }).config.pathwayConfig.waterMaterial;
     // Find a submerged tile, generate its column around sea level, count water voxels.
     let water = 0;
+    const seaCy = Math.floor(SEA / CHUNK_SIZE);
     outer:
-    for (let cx = 0; cx < 20; cx++) {
-      const wx = (cx * CHUNK_SIZE + 16) * VOXEL_SCALE, wz = 16 * VOXEL_SCALE;
-      if (gen.sampleHeight(wx, wz) >= SEA) continue;
-      const seaCy = Math.floor(SEA / CHUNK_SIZE);
-      for (let cy = seaCy - 2; cy <= seaCy + 1; cy++) {
-        const d = gen.generateChunk(cx, cy, 0);
-        for (let i = 0; i < d.length; i++)
-          if (getMaterial(d[i]) === waterMat && getWeight(d[i]) > 0) water++;
+    for (let cx = -20; cx < 20; cx++) {
+      for (let cz = -20; cz < 20; cz++) {
+        const wx = (cx * CHUNK_SIZE + 16) * VOXEL_SCALE, wz = (cz * CHUNK_SIZE + 16) * VOXEL_SCALE;
+        if (gen.sampleHeight(wx, wz) >= SEA) continue;
+        for (let cy = seaCy - 2; cy <= seaCy + 1; cy++) {
+          const d = gen.generateChunk(cx, cy, cz);
+          for (let i = 0; i < d.length; i++)
+            if (getMaterial(d[i]) === waterMat && getWeight(d[i]) > 0) water++;
+        }
+        if (water > 0) break outer;
       }
-      if (water > 0) break outer;
     }
     expect(water).toBeGreaterThan(200);   // a real body of sea water, not a stray voxel
   });
