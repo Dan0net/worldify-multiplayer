@@ -454,9 +454,9 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformSnowLine: 90,        // voxels above sea → snow caps (well below mountainHeight → more snow)
   landformCurve: DEFAULT_LANDFORM_CURVE,
 
-  landformDetailFrequency: 10, // detail ~10× the land base frequency (fine bumps over the macro shape)
-  landformDetailFlat: 4,       // voxels of detail on flat ground (visible texture, not glassy)
-  landformDetailSteep: 30,     // extra voxels of detail on steep / high mountainous ground (rugged)
+  landformDetailFrequency: 10, // ×0.03/m absolute → ~3 m base rubble (+ finer octaves)
+  landformDetailFlat: 2,       // voxels of fine texture on flat ground
+  landformDetailSteep: 14,     // extra fine rocks/rubble on slopes (jagged, not big bumps)
   landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
@@ -541,6 +541,9 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
 const LANDFORM_SKIN_DEPTH = 3;
 /** Landform continental base frequency (1/m) at landformScale = 1; the config scale multiplies it. */
 const LANDFORM_BASE_FREQ = 0.0012;
+/** Surface-detail base frequency (1/m) at detailFrequency = 1 — an ABSOLUTE rubble scale, independent
+ *  of the (very low) continental frequency, so detail can be fine rocks/rubble rather than broad bumps. */
+const LANDFORM_DETAIL_BASE_FREQ = 0.03;
 
 /** Lazily-filled per-column memo of the pathway predicates (each computed on first demand). */
 interface PathwayColumnInfo {
@@ -787,7 +790,7 @@ export class TerrainGenerator implements HeightSampler {
     this.landformDetail = new FastNoiseLite(landformSeed++);
     this.landformDetail.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.landformDetail.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.landformDetail.SetFractalOctaves(3);
+    this.landformDetail.SetFractalOctaves(4);   // several octaves → fine rocks/rubble at multiple scales
 
     // River noise (seed block +80000, off the base chain). Cellular edge-detection network + its own
     // domain warp — the same mechanism as pathways, but a separate field so rivers and paths are
@@ -948,6 +951,12 @@ export class TerrainGenerator implements HeightSampler {
     this.warpNoiseZ.SetFractalOctaves(warp.octaves);
   }
 
+  /** World scale (masterScale), clamped > 0. Caves scale with this alone (not landScale). */
+  private get masterScale(): number {
+    const m = this.config.terrainLayer.masterScale;
+    return m > 0 ? m : 1;
+  }
+
   /** Combined world+land size divisor: bigger master/land scale → lower frequency → larger features. */
   private landSizeScale(): number {
     const t = this.config.terrainLayer;
@@ -968,9 +977,9 @@ export class TerrainGenerator implements HeightSampler {
     this.landformBase.SetFrequency(baseFreq);
     this.landformWarpX.SetFrequency(warpFreq);
     this.landformWarpZ.SetFrequency(warpFreq);
-    // Detail frequency is an explicit multiple of the land base frequency (applied directly, NOT
-    // through GetNoise coordinate scaling — that would compound with the noise's internal frequency).
-    this.landformDetail.SetFrequency(baseFreq * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1));
+    // Detail frequency is an ABSOLUTE rubble scale (not tied to the tiny continental frequency), so it
+    // reads as rocks/rubble. Divided by the world size so it stays proportional at any master/land scale.
+    this.landformDetail.SetFrequency(LANDFORM_DETAIL_BASE_FREQ * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1) / sizeDiv);
     const pts = t.landformCurve && t.landformCurve.length >= 2 ? t.landformCurve : DEFAULT_LANDFORM_CURVE;
     this.landformCurveFn = new Curve(pts);
     this.updateRiverConfig();
@@ -1120,7 +1129,8 @@ export class TerrainGenerator implements HeightSampler {
       // spacing and disconnect it. The floor ≤ WORM_MIN_RADIUS ≤ stored radius, so it never reaches
       // past the gather cull → still seamless.
       let reff = pts[i + 3] + wall;
-      if (reff < WORM_CARVE_MIN) reff = WORM_CARVE_MIN;
+      const carveMin = WORM_CARVE_MIN * this.masterScale;   // floor scales with the world so caves shrink
+      if (reff < carveMin) reff = carveMin;
       if (d2 < reff * reff) return true;
     }
     return false;
@@ -1211,7 +1221,7 @@ export class TerrainGenerator implements HeightSampler {
             const cp = Math.cos(targetPitch);
             tdx = Math.cos(targetYaw) * cp; tdy = Math.sin(targetPitch); tdz = Math.sin(targetYaw) * cp;
           }
-          const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
+          const radius = Math.max(WORM_MIN_RADIUS * this.masterScale, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
           pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
           const rr = radius + wallSlop;
           if (hx - rr < bminX) bminX = hx - rr; if (hx + rr > bmaxX) bmaxX = hx + rr;
@@ -1235,7 +1245,7 @@ export class TerrainGenerator implements HeightSampler {
             yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
             pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
           }
-          const radius = Math.max(WORM_MIN_RADIUS, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
+          const radius = Math.max(WORM_MIN_RADIUS * this.masterScale, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
           pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
           const rr = radius + wallSlop;
           if (hx - rr < bminX) bminX = hx - rr; if (hx + rr > bmaxX) bmaxX = hx + rr;
@@ -1593,7 +1603,8 @@ export class TerrainGenerator implements HeightSampler {
   private cavernSpikeSolid(x: number, z: number, y: number, floorY: number, ceilY: number): boolean {
     const amount = this.config.caveConfig.cavernSpikeAmount;
     if (amount <= 0) return false;
-    const cell = CAVERN_SPIKE_CELL;
+    const m = this.masterScale;                 // spikes scale down with the world like the caverns
+    const cell = CAVERN_SPIKE_CELL * m;
     const seed = (this.config.seed + 70000) >>> 0;
     const bcx = Math.floor(x / cell), bcz = Math.floor(z / cell);
     // 3×3 neighbourhood: a spike centred in an adjacent cell can still reach this voxel (baseR > cell/2).
@@ -1611,8 +1622,8 @@ export class TerrainGenerator implements HeightSampler {
         const ddx = x - fx, ddz = z - fz;
         const distXZ = Math.sqrt(ddx * ddx + ddz * ddz);
         st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dPeakH = (st & 0x7fffffff) / 0x7fffffff;
-        const peakH = CAVERN_SPIKE_MAX_H * (0.4 + 0.6 * dPeakH);   // full height regardless of amount
-        const baseR = Math.max(CAVERN_SPIKE_MIN_R, peakH * CAVERN_SPIKE_BASE_RATIO);
+        const peakH = CAVERN_SPIKE_MAX_H * m * (0.4 + 0.6 * dPeakH);   // full height regardless of amount
+        const baseR = Math.max(CAVERN_SPIKE_MIN_R * m, peakH * CAVERN_SPIKE_BASE_RATIO);
         if (distXZ >= baseR) continue;
         const coneH = peakH * (1 - distXZ / baseR);
         st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dStal = (st & 0x7fffffff) / 0x7fffffff;
