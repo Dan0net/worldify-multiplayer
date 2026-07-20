@@ -85,4 +85,27 @@ describe('landform layer is visible', () => {
     expect(sand / cols).toBeLessThan(0.5);   // sand is a band, not the whole world
     expect(land).toBeGreaterThan(50);         // grass/rock/snow land still exists at small scale
   });
+
+  it('has visible surface detail (not glassy-smooth)', () => {
+    // Regression guard: the detail noise once double-applied frequency (via GetNoise coordinate scaling
+    // × the noise's internal frequency) → a ~km wavelength that read as perfectly smooth. Assert that a
+    // small patch of adjacent land columns actually varies at the fine detail scale.
+    const gen = landformGen();
+    // Find a land patch above the beach, then measure local height spread over a few metres.
+    let maxSpread = 0;
+    for (let bx = 0; bx < 400 && maxSpread < 3; bx += 20) {
+      const cx = bx + 4, cz = 4;
+      if (gen.sampleHeight(cx, cz) <= SEA + 12) continue;   // want land, not sea/beach
+      let mn = Infinity, mx = -Infinity;
+      for (let dx = 0; dx < 8; dx++) {
+        for (let dz = 0; dz < 8; dz++) {
+          const h = gen.sampleHeight(cx + dx, cz + dz);      // ~2 m steps
+          if (h < mn) mn = h;
+          if (h > mx) mx = h;
+        }
+      }
+      maxSpread = Math.max(maxSpread, mx - mn);
+    }
+    expect(maxSpread).toBeGreaterThan(3);   // several voxels of local relief → detail is present
+  });
 });

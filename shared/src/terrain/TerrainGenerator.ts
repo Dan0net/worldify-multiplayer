@@ -418,19 +418,19 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
 // or mountains/snow essentially never appear. The ocean descent is spread across the whole u<0.5 tail
 // so the seabed is a gradual slope, not a cliff off the beach.
 export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
-  { x: 0.00, y: -1.00 },   // deepest ocean floor, far out (× seaDepth)
-  { x: 0.10, y: -0.62 },   // gradual…
-  { x: 0.22, y: -0.34 },
-  { x: 0.34, y: -0.15 },
-  { x: 0.44, y: -0.04 },   // shallows approaching the beach
-  { x: 0.50, y: 0.00 },    // waterline — a smooth, gentle slope through here (the 1-voxel lip is in code)
-  { x: 0.55, y: 0.02 },    // gentle sand beach
-  { x: 0.61, y: 0.05 },    // grass plains begin
-  { x: 0.70, y: 0.14 },    // plains
-  { x: 0.76, y: 0.34 },    // foothills
-  { x: 0.80, y: 0.68 },    // mountains rising
-  { x: 0.83, y: 1.00 },    // reach the peak height (reachable u) …
-  { x: 1.00, y: 1.00 },    // … then PLATEAU from here up (flat snowy tops)
+  { x: 0.00, y: -1.00 },   // deepest ocean floor (× seaDepth)
+  { x: 0.15, y: -1.00 },   // PLATEAU: flat deep sea floor across the bottom of the range
+  { x: 0.28, y: -0.62 },   // gradual rise…
+  { x: 0.39, y: -0.28 },
+  { x: 0.46, y: -0.08 },   // shallows approaching the beach
+  { x: 0.50, y: 0.00 },    // waterline — smooth gentle slope through here (the 1-voxel lip is in code)
+  { x: 0.57, y: 0.03 },    // gentle sand beach
+  { x: 0.64, y: 0.08 },    // grass plains begin
+  { x: 0.73, y: 0.20 },    // plains → low hills (gradual)
+  { x: 0.82, y: 0.42 },    // hills (climbable grade)
+  { x: 0.90, y: 0.72 },    // mountains — snow line sits around here
+  { x: 0.96, y: 0.95 },    // upper slopes
+  { x: 1.00, y: 1.00 },    // short plateau: flat snowy peak tops
 ];
 
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
@@ -445,14 +445,14 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
 
   // Landform layer — OFF by default so existing worlds/the current terrain are byte-identical.
   landformEnabled: false,
-  landformScale: 2.5,          // compact features (~330 m landmasses at base 0.0012)
+  landformScale: 1.8,          // larger, gentler features (~460 m landmasses) so slopes are climbable
   landformWarpScale: 1.0,      // warp at the land frequency
   landformWarpStrength: 50,    // metres of coast warp → sweeping coasts/ranges
   landformSeaLevel: 40,        // voxels (~10 m)
-  landformSeaDepth: 200,       // voxels (~50 m) deep ocean floor
-  landformMountainHeight: 320, // voxels (~80 m) peaks above sea level
+  landformSeaDepth: 100,       // voxels (~25 m) — shallower ocean with a flat floor
+  landformMountainHeight: 180, // voxels (~45 m) peaks above sea level (shorter → climbable slopes)
   landformBeachWidth: 10,      // voxels the flat beach sits above sea
-  landformSnowLine: 220,       // voxels above sea → snow caps
+  landformSnowLine: 120,       // voxels above sea → snow caps (must be < mountainHeight to appear)
   landformCurve: DEFAULT_LANDFORM_CURVE,
 
   landformDetailFrequency: 10, // detail ~10× the land base frequency (fine bumps over the macro shape)
@@ -568,6 +568,7 @@ export class TerrainGenerator implements HeightSampler {
   private landformWarpX: FastNoiseLite;   // strong large-scale domain warp (sweeping coasts)
   private landformWarpZ: FastNoiseLite;
   private landformBase: FastNoiseLite;    // one low-freq continental fBm → the landmass shape
+  private landformDetail: FastNoiseLite;  // dedicated surface-detail fBm (own explicit frequency)
   // Compiled elevation curve (built from config.landformCurve). Maps continental noise 0..1 → a height
   // offset relative to sea level; scaled by the seaDepth/mountainHeight/beachWidth knobs at eval time.
   private landformCurveFn: Curve = new Curve(DEFAULT_LANDFORM_CURVE);
@@ -782,6 +783,12 @@ export class TerrainGenerator implements HeightSampler {
     this.landformBase.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.landformBase.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.landformBase.SetFractalOctaves(5);   // continental shape + mid-scale relief (was 3 → too smooth)
+    // Surface detail — its OWN explicit frequency (set in updateLandformConfig). Multi-octave FBm so
+    // there are bumps at several scales (foothold-scale ruggedness on slopes).
+    this.landformDetail = new FastNoiseLite(landformSeed++);
+    this.landformDetail.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.landformDetail.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.landformDetail.SetFractalOctaves(3);
 
     // River noise (seed block +80000, off the base chain). Cellular edge-detection network + its own
     // domain warp — the same mechanism as pathways, but a separate field so rivers and paths are
@@ -870,6 +877,7 @@ export class TerrainGenerator implements HeightSampler {
       this.landformWarpX.SetSeed(lfSeed++);
       this.landformWarpZ.SetSeed(lfSeed++);
       this.landformBase.SetSeed(lfSeed++);
+      this.landformDetail.SetSeed(lfSeed++);
 
       let rvSeed = config.seed + 80000;
       this.riverCellular.SetSeed(rvSeed++);
@@ -961,6 +969,9 @@ export class TerrainGenerator implements HeightSampler {
     this.landformBase.SetFrequency(baseFreq);
     this.landformWarpX.SetFrequency(warpFreq);
     this.landformWarpZ.SetFrequency(warpFreq);
+    // Detail frequency is an explicit multiple of the land base frequency (applied directly, NOT
+    // through GetNoise coordinate scaling — that would compound with the noise's internal frequency).
+    this.landformDetail.SetFrequency(baseFreq * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1));
     const pts = t.landformCurve && t.landformCurve.length >= 2 ? t.landformCurve : DEFAULT_LANDFORM_CURVE;
     this.landformCurveFn = new Curve(pts);
     this.updateRiverConfig();
@@ -2151,18 +2162,15 @@ export class TerrainGenerator implements HeightSampler {
   private sampleLandformHeight(worldX: number, worldZ: number): number {
     const t = this.config.terrainLayer;
     const macro = this.sampleLandformMacro(worldX, worldZ);
-    // Surface detail: a dedicated noise whose frequency tracks the land feature size (so bumps scale with
-    // the world) and whose amplitude is driven by slope — flat ground gets a small floor of texture,
-    // steep faces get jagged ruggedness. Applied EVERYWHERE, including steep seabed under the sea (the
-    // slope term is near-zero on flats, so beaches/plains stay gentle). Amplitude scales with the world
-    // so proportions hold at any master/land scale.
+    // Surface detail: a dedicated noise (its own frequency, set in updateLandformConfig) whose amplitude
+    // is driven by slope — flat ground gets a small floor of texture, steep faces get jagged ruggedness
+    // (footholds to climb). Applied EVERYWHERE, including steep seabed under the sea (the slope term is
+    // near-zero on flats, so beaches/plains stay gentle). Amplitude scales with the world.
     const vscale = this.landSizeScale();
-    const baseFreq = LANDFORM_BASE_FREQ * (t.landformScale > 0 ? t.landformScale : 1) / vscale;
-    const f = baseFreq * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1);
     const slope = this.landformSlope(worldX, worldZ);                 // tan(angle)
     const slope01 = Math.min(1, slope);                              // ~45° saturates the "steep" term
     const amp = (t.landformDetailFlat + t.landformDetailSteep * slope01) * vscale;
-    const h = amp <= 0 ? macro : macro + this.heightNoise.GetNoise(worldX * f, worldZ * f) * amp;
+    const h = amp <= 0 ? macro : macro + this.landformDetail.GetNoise(worldX, worldZ) * amp;
     return this.applyBeachLip(h);
   }
 
