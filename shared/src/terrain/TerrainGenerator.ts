@@ -2167,13 +2167,10 @@ export class TerrainGenerator implements HeightSampler {
     // near-zero on flats, so beaches/plains stay gentle). Amplitude scales with the world.
     const vscale = this.landSizeScale();
     const slope = this.landformSlope(worldX, worldZ);                 // tan(angle)
-    const slope01 = Math.min(1, slope);                              // ~45° saturates the slope term
-    // Ruggedness rises with slope OR elevation: mountainous ground is rocky/jagged even where its macro
-    // grade is gentle (climbable but still rugged), and cliffs are rugged at any height. elevation01 is
-    // 0 at sea level → 1 at the peak height.
-    const elev01 = Math.max(0, Math.min(1, (macro - t.landformSeaLevel) / (t.landformMountainHeight * vscale || 1)));
-    const rugged = Math.max(slope01, elev01);
-    const amp = (t.landformDetailFlat + t.landformDetailSteep * rugged) * vscale;
+    // Slope-driven only (elevation does NOT add detail). Reference ~tan(20°) so the steep term is
+    // already substantial on gentle grades and saturates by ~20° — detail shows on less-steep terrain.
+    const slope01 = Math.min(1, slope / 0.36);
+    const amp = (t.landformDetailFlat + t.landformDetailSteep * slope01) * vscale;
     const h = amp <= 0 ? macro : macro + this.landformDetail.GetNoise(worldX, worldZ) * amp;
     return this.applyBeachLip(h);
   }
