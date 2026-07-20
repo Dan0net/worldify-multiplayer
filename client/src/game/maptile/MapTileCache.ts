@@ -65,6 +65,23 @@ export class MapTileCache {
   }
 
   /**
+   * Evict tiles more than `radiusTiles` (Chebyshev) from the given center tile. Called as the player
+   * moves so explored map tiles don't accumulate without bound — this cache is otherwise only cleared
+   * on a world change, so roaming a large world would grow it forever (~3 KB/tile). Returns the number
+   * of tiles evicted.
+   */
+  prune(centerTx: number, centerTz: number, radiusTiles: number): number {
+    let evicted = 0;
+    for (const [key, tile] of this.tiles) {
+      if (Math.abs(tile.tx - centerTx) > radiusTiles || Math.abs(tile.tz - centerTz) > radiusTiles) {
+        this.tiles.delete(key);
+        evicted++;
+      }
+    }
+    return evicted;
+  }
+
+  /**
    * Store tile data from network response.
    */
   receiveTileData(tx: number, tz: number, heights: Int16Array, materials: Uint8Array): void {

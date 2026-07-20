@@ -974,6 +974,14 @@ export class TerrainGenerator implements HeightSampler {
     return m > 0 ? m : 1;
   }
 
+  /** Cave SIZE scale: masterScale clamped to a floor. Cave spawn-cell SPACING is deliberately NOT
+   *  scaled — shrinking cell size would multiply the 3D spawn-cell count by ~1/m³ and exhaust memory
+   *  (re-tracing thousands of cells per chunk). So caves get smaller with the world but keep roughly
+   *  constant spacing, and the floor keeps them above voxel resolution (a 0.1× worm would be sub-voxel). */
+  private get caveSizeScale(): number {
+    return Math.max(this.masterScale, 0.4);
+  }
+
   /** Combined world+land size divisor: bigger master/land scale → lower frequency → larger features. */
   private landSizeScale(): number {
     const t = this.config.terrainLayer;
@@ -1011,27 +1019,28 @@ export class TerrainGenerator implements HeightSampler {
     this.riverWarpZ.SetFrequency(t.riverWarpFrequency / sizeDiv);
   }
 
-  /** Bake masterScale into config.caveConfig from the un-scaled rawCaveConfig: spatial fields ×scale,
-   *  frequencies ÷scale, so caves grow/shrink with the world. Identity at masterScale = 1. Always
-   *  derives from rawCaveConfig, so repeated config changes never compound. */
+  /** Bake the cave SIZE scale into config.caveConfig from the un-scaled rawCaveConfig: size fields
+   *  ×scale, frequencies ÷scale, so caves shrink with the world. Cell SIZE (wormCellSize /
+   *  cavernCellSize) is deliberately NOT scaled — shrinking it multiplies the 3D spawn-cell count by
+   *  ~1/scale³ and exhausts memory. Identity at masterScale = 1; always derives from rawCaveConfig so
+   *  repeated config changes never compound. */
   private applyMasterScaleToCaves(): void {
-    const m = this.config.terrainLayer.masterScale > 0 ? this.config.terrainLayer.masterScale : 1;
+    const s = this.caveSizeScale;
     const raw = this.rawCaveConfig;
-    if (m === 1) { this.config.caveConfig = { ...raw }; return; }
+    if (this.masterScale === 1) { this.config.caveConfig = { ...raw }; return; }
     this.config.caveConfig = {
       ...raw,
-      wormCellSize: raw.wormCellSize * m,
-      wormRadius: raw.wormRadius * m,
-      wormStep: raw.wormStep * m,
-      wormWallAmp: raw.wormWallAmp * m,
-      wormSteerFrequency: raw.wormSteerFrequency / m,
-      wormWallFrequency: raw.wormWallFrequency / m,
-      cavernCellSize: raw.cavernCellSize * m,
-      cavernRadius: raw.cavernRadius * m,
-      cavernWinding: raw.cavernWinding * m,
-      cavernWallAmp: raw.cavernWallAmp * m,
-      cavernWarpFrequency: raw.cavernWarpFrequency / m,
-      cavernWallFrequency: raw.cavernWallFrequency / m,
+      // wormCellSize / cavernCellSize intentionally left at raw (constant spacing → no count blow-up).
+      wormRadius: raw.wormRadius * s,
+      wormStep: raw.wormStep * s,
+      wormWallAmp: raw.wormWallAmp * s,
+      wormSteerFrequency: raw.wormSteerFrequency / s,
+      wormWallFrequency: raw.wormWallFrequency / s,
+      cavernRadius: raw.cavernRadius * s,
+      cavernWinding: raw.cavernWinding * s,
+      cavernWallAmp: raw.cavernWallAmp * s,
+      cavernWarpFrequency: raw.cavernWarpFrequency / s,
+      cavernWallFrequency: raw.cavernWallFrequency / s,
     };
   }
 
@@ -1146,7 +1155,7 @@ export class TerrainGenerator implements HeightSampler {
       // spacing and disconnect it. The floor ≤ WORM_MIN_RADIUS ≤ stored radius, so it never reaches
       // past the gather cull → still seamless.
       let reff = pts[i + 3] + wall;
-      const carveMin = WORM_CARVE_MIN * this.masterScale;   // floor scales with the world so caves shrink
+      const carveMin = WORM_CARVE_MIN * this.caveSizeScale;   // floor scales with the (clamped) cave size
       if (reff < carveMin) reff = carveMin;
       if (d2 < reff * reff) return true;
     }
@@ -1238,7 +1247,7 @@ export class TerrainGenerator implements HeightSampler {
             const cp = Math.cos(targetPitch);
             tdx = Math.cos(targetYaw) * cp; tdy = Math.sin(targetPitch); tdz = Math.sin(targetYaw) * cp;
           }
-          const radius = Math.max(WORM_MIN_RADIUS * this.masterScale, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
+          const radius = Math.max(WORM_MIN_RADIUS * this.caveSizeScale, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
           pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
           const rr = radius + wallSlop;
           if (hx - rr < bminX) bminX = hx - rr; if (hx + rr > bmaxX) bmaxX = hx + rr;
@@ -1262,7 +1271,7 @@ export class TerrainGenerator implements HeightSampler {
             yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
             pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
           }
-          const radius = Math.max(WORM_MIN_RADIUS * this.masterScale, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
+          const radius = Math.max(WORM_MIN_RADIUS * this.caveSizeScale, baseR * (1 + cave.wormRadiusAlongVar * radiusN));
           pts[p++] = hx; pts[p++] = hy; pts[p++] = hz; pts[p++] = radius;
           const rr = radius + wallSlop;
           if (hx - rr < bminX) bminX = hx - rr; if (hx + rr > bmaxX) bmaxX = hx + rr;
@@ -1620,7 +1629,7 @@ export class TerrainGenerator implements HeightSampler {
   private cavernSpikeSolid(x: number, z: number, y: number, floorY: number, ceilY: number): boolean {
     const amount = this.config.caveConfig.cavernSpikeAmount;
     if (amount <= 0) return false;
-    const m = this.masterScale;                 // spikes scale down with the world like the caverns
+    const m = this.caveSizeScale;               // spikes scale down with the (clamped) cave size
     const cell = CAVERN_SPIKE_CELL * m;
     const seed = (this.config.seed + 70000) >>> 0;
     const bcx = Math.floor(x / cell), bcz = Math.floor(z / cell);
