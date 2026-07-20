@@ -301,8 +301,8 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   // surface downward.
   wormCellSize: 40,         // 40 m spawn cells (3D grid)
   wormsPerCell: 2.0,        // worms per 3D cell
-  wormSegments: 150,        // long worms (150 × 1.2 m ≈ 180 m)
-  wormStep: 1.2,            // 1.2 m per step (dense spheres → smooth, connected tunnels)
+  wormSegments: 120,        // long worms (120 × 1.5 m = 180 m) — fewer, larger steps than the
+  wormStep: 1.5,            // old 150×1.2; ~20% fewer trace steps/noise, still overlapping (r≈2 m)
   wormRadius: 2.0,          // ~4 m diameter tunnels
   wormRadiusJitter: 0.3,    // ±30% width variety between tunnels
   wormSteerFrequency: 0.05, // low flow-field frequency → large, sweeping bends
@@ -396,7 +396,7 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
     enabled: true,
     frequency: 0.01,
     amplitude: 8,
-    octaves: 2,
+    octaves: 1,   // 1 octave: the warp is a low-freq organic wiggle; the 2nd octave was fine detail
   },
   materialLayers: [
     { materialId: mat('moss2'), maxDepth: 2 },   // Grass: 0-2 voxels deep
@@ -557,13 +557,11 @@ export class TerrainGenerator implements HeightSampler {
     // Pathway domain warp noise for organic curved edges
     this.pathwayWarpX = new FastNoiseLite(seed++);
     this.pathwayWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.pathwayWarpX.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.pathwayWarpX.SetFractalOctaves(2);
+    this.pathwayWarpX.SetFractalOctaves(1);   // 1 octave — path curves are large-scale; fine warp detail is wasted
     
     this.pathwayWarpZ = new FastNoiseLite(seed++);
     this.pathwayWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.pathwayWarpZ.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.pathwayWarpZ.SetFractalOctaves(2);
+    this.pathwayWarpZ.SetFractalOctaves(1);
     
     // Pathway material selection noise - low frequency for gradual material transitions
     this.pathwayMaterialNoise = new FastNoiseLite(seed++);
@@ -907,11 +905,12 @@ export class TerrainGenerator implements HeightSampler {
         let sdx = dx, sdy = dy, sdz = dz;                     // segment-start heading
         let tdx = dx, tdy = dy, tdz = dz;                     // segment-target heading
         let radiusN = 0;
+        const K2 = K * 2;   // radius bulges are large-scale → sample the radius noise half as often as steering
         for (let s = 0; s <= cave.wormSegments; s++) {
           const local = s % K;
+          if (s % K2 === 0) radiusN = this.caveWormRadius.GetNoise(hx, hy, hz);
           if (local === 0) {
             sdx = dx; sdy = dy; sdz = dz;                     // curve begins from the current heading
-            radiusN = this.caveWormRadius.GetNoise(hx, hy, hz);
             const yawN = this.caveWormSteerYaw.GetNoise(hx + phase, hy, hz + phase);
             const pitchN = this.caveWormSteerPitch.GetNoise(hx + phase, hy, hz + phase);
             const targetYaw = yawN * Math.PI;

@@ -33,7 +33,7 @@ function generateChecksum(): number {
 }
 
 // Baseline captured from the generator BEFORE the stamp-cache change.
-const BASELINE = 3599987111; // re-baselined: worm 1-octave steering + smooth-interp trace (stride 16) + cavern breach warp-once
+const BASELINE = 3427913447; // re-baselined: Tier2 — worm step 1.5/120seg + radius 2x stride + 1-octave pathway/terrain warp
 
 describe('stamp cache preserves generated terrain', () => {
   it('generates byte-identical voxel data for the fixed chunk spread', () => {
