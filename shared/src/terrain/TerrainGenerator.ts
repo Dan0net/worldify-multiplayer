@@ -272,11 +272,15 @@ const WORM_TRACE_SUBSAMPLE = 16;
  *  under the terrain, not floating in the sky. */
 const CAVERN_SEED_TOP_Y = 8;
 /** Stalagmite/stalactite hash-grid spacing in meters (one candidate spike per XZ cell). */
-const CAVERN_SPIKE_CELL = 3;
-/** Max stalagmite/stalactite height in meters at cavernSpikeAmount = 1. */
+const CAVERN_SPIKE_CELL = 4;
+/** Max stalagmite/stalactite height in meters. NOTE: height is deliberately NOT scaled by
+ *  cavernSpikeAmount (that only gates how many cells get a spike) — otherwise a low amount made spikes
+ *  both rare AND tiny, which is why they were invisible for so long. */
 const CAVERN_SPIKE_MAX_H = 7;
-/** Max spike base radius in meters at cavernSpikeAmount = 1. */
-const CAVERN_SPIKE_MAX_R = 1.3;
+/** Base radius as a fraction of a spike's height (cone aspect) + a floor, so tall spikes read as cones
+ *  rather than needles. baseR up to ~2.3 m can cross a 4 m cell, hence the 3×3 neighbour scan. */
+const CAVERN_SPIKE_BASE_RATIO = 0.33;
+const CAVERN_SPIKE_MIN_R = 0.8;
 /** The 4 cardinal step directions for the pathway edge scan — module const so it isn't reallocated
  *  per pathway-depth query. */
 const PATH_CARDINALS: ReadonlyArray<readonly [number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -327,7 +331,7 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
   cavernWallFrequency: 0.3, // wall-bump scale
   cavernWarpFrequency: 0.03,// domain-warp scale
   cavernWaterLevel: 0.1,    // shallow water pool in the bottom
-  cavernSpikeAmount: 0.3,   // moderate stalagmites/stalactites
+  cavernSpikeAmount: 0.5,   // fraction of spike cells that get a stalagmite/stalactite (full-height)
   cavernTerrainTaper: 0.4,  // narrow surface breaches (still open)
 };
 
@@ -1276,10 +1280,12 @@ export class TerrainGenerator implements HeightSampler {
       const waterY = (cy - ry) + cave.cavernWaterLevel * 2 * ry;
 
       let fill: number;
-      if (cave.cavernWaterLevel > 0 && y < waterY) {
-        fill = 1; // water (priority 1)
-      } else if (this.cavernSpikeSolid(x, z, y, floorY, ceilY)) {
+      // Spike test BEFORE water so stalagmites rising through a shallow pool read as solid rock rather
+      // than being reclassified as water (which hid every floor spike at the default water level).
+      if (this.cavernSpikeSolid(x, z, y, floorY, ceilY)) {
         fill = 0; // stalagmite / stalactite (solid)
+      } else if (cave.cavernWaterLevel > 0 && y < waterY) {
+        fill = 1; // water (priority 1)
       } else {
         fill = 2; // open air (priority 2)
       }
@@ -1292,36 +1298,42 @@ export class TerrainGenerator implements HeightSampler {
 
   /**
    * Is this voxel inside a stalagmite (rising from the cavern floor) or stalactite (hanging from the
-   * ceiling)? A hashed 2D XZ grid places at most one conical spike per cell; each is a pure function
-   * of its cell → seamless. Height/radius/abundance scale with cavernSpikeAmount.
+   * ceiling)? A hashed 2D XZ grid places at most one conical spike per cell (a pure function of its cell
+   * → seamless). `cavernSpikeAmount` gates only how MANY cells get a spike; each spike is full height so
+   * a low amount still yields visible (just sparser) spikes. Because a spike's base can be wider than a
+   * cell, we scan the voxel's cell AND its 8 neighbours so spikes aren't clipped at cell borders.
    */
   private cavernSpikeSolid(x: number, z: number, y: number, floorY: number, ceilY: number): boolean {
     const amount = this.config.caveConfig.cavernSpikeAmount;
     if (amount <= 0) return false;
     const cell = CAVERN_SPIKE_CELL;
-    const scx = Math.floor(x / cell), scz = Math.floor(z / cell);
     const seed = (this.config.seed + 70000) >>> 0;
-    // Inline the makeRng LCG (byte-identical to makeRng) with no closure allocation — this is a hot
-    // per-voxel path in cavern chambers. Each `st = ...; d = ...` pair is one makeRng() draw.
-    let st = (hashInt2(hashInt2(scx, scz), seed)) >>> 0; if (st === 0) st = 1;
-    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dGate = (st & 0x7fffffff) / 0x7fffffff;
-    if (dGate > amount) return false;                 // this cell has no spike
-    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dFx = (st & 0x7fffffff) / 0x7fffffff;
-    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dFz = (st & 0x7fffffff) / 0x7fffffff;
-    const fx = (scx + dFx) * cell, fz = (scz + dFz) * cell;
-    const ddx = x - fx, ddz = z - fz;
-    const distXZ = Math.sqrt(ddx * ddx + ddz * ddz);
-    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dBaseR = (st & 0x7fffffff) / 0x7fffffff;
-    const baseR = CAVERN_SPIKE_MAX_R * (0.5 + 0.5 * dBaseR);
-    if (distXZ >= baseR) return false;
-    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dPeakH = (st & 0x7fffffff) / 0x7fffffff;
-    const peakH = CAVERN_SPIKE_MAX_H * amount * (0.4 + 0.6 * dPeakH);
-    const coneH = peakH * (1 - distXZ / baseR);
-    st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dStal = (st & 0x7fffffff) / 0x7fffffff;
-    const stalactite = dStal < 0.5;
-    return stalactite
-      ? (ceilY - y) >= 0 && ceilY - y < coneH
-      : (y - floorY) >= 0 && y - floorY < coneH;
+    const bcx = Math.floor(x / cell), bcz = Math.floor(z / cell);
+    // 3×3 neighbourhood: a spike centred in an adjacent cell can still reach this voxel (baseR > cell/2).
+    for (let oz = -1; oz <= 1; oz++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const scx = bcx + ox, scz = bcz + oz;
+        // Inline makeRng LCG (no closure alloc). Each `st = …; d = …` pair is one draw. dGate first so
+        // empty cells (the common case) bail after a single draw.
+        let st = (hashInt2(hashInt2(scx, scz), seed)) >>> 0; if (st === 0) st = 1;
+        st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dGate = (st & 0x7fffffff) / 0x7fffffff;
+        if (dGate > amount) continue;                 // this cell has no spike
+        st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dFx = (st & 0x7fffffff) / 0x7fffffff;
+        st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dFz = (st & 0x7fffffff) / 0x7fffffff;
+        const fx = (scx + dFx) * cell, fz = (scz + dFz) * cell;
+        const ddx = x - fx, ddz = z - fz;
+        const distXZ = Math.sqrt(ddx * ddx + ddz * ddz);
+        st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dPeakH = (st & 0x7fffffff) / 0x7fffffff;
+        const peakH = CAVERN_SPIKE_MAX_H * (0.4 + 0.6 * dPeakH);   // full height regardless of amount
+        const baseR = Math.max(CAVERN_SPIKE_MIN_R, peakH * CAVERN_SPIKE_BASE_RATIO);
+        if (distXZ >= baseR) continue;
+        const coneH = peakH * (1 - distXZ / baseR);
+        st = (Math.imul(st, 1103515245) + 12345) >>> 0; const dStal = (st & 0x7fffffff) / 0x7fffffff;
+        const h = dStal < 0.5 ? (ceilY - y) : (y - floorY);       // stalactite hangs / stalagmite rises
+        if (h >= 0 && h < coneH) return true;
+      }
+    }
+    return false;
   }
 
   // ---- Surface-breach map: where caves open the surface (to suppress surface features there) ----
