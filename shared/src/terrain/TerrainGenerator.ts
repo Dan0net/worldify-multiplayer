@@ -413,20 +413,24 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
  * mountainHeight/seaDepth/beachWidth at eval time, so the shape is authored once and the config
  * knobs stretch it. Height OFFSET so it's independent of sea level.
  */
+// NOTE on x placement: the continental noise is FBm, whose values cluster near the middle — u rarely
+// exceeds ~0.85. So the mountain ramp + plateau MUST live in the reachable band (peaks by ~u 0.82),
+// or mountains/snow essentially never appear. The ocean descent is spread across the whole u<0.5 tail
+// so the seabed is a gradual slope, not a cliff off the beach.
 export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
   { x: 0.00, y: -1.00 },   // deepest ocean floor, far out (× seaDepth)
-  { x: 0.22, y: -0.45 },   // ocean basin
-  { x: 0.38, y: -0.15 },   // GENTLE seabed — shallow well away from shore (was a steep drop)
-  { x: 0.46, y: -0.04 },   // shallows approaching the beach
-  { x: 0.49, y: -0.008 },  // wet sand ~1 voxel below the waterline (water covers it → no z-fight)
-  { x: 0.50, y: 0.004 },   // dry sand lip, just above the water
-  { x: 0.55, y: 0.028 },   // FLAT sand beach — a coastal strip, still within the sand band
-  { x: 0.61, y: 0.055 },   // grass plains begin just above the beach
-  { x: 0.75, y: 0.14 },    // plains climbing
-  { x: 0.87, y: 0.38 },    // hills
-  { x: 0.94, y: 0.75 },    // upper slopes
-  { x: 0.985, y: 1.00 },   // reach the peak height…
-  { x: 1.00, y: 1.00 },    // …then PLATEAU (flat snowy tops)
+  { x: 0.10, y: -0.62 },   // gradual…
+  { x: 0.22, y: -0.34 },
+  { x: 0.34, y: -0.15 },
+  { x: 0.44, y: -0.04 },   // shallows approaching the beach
+  { x: 0.50, y: 0.00 },    // waterline — a smooth, gentle slope through here (the 1-voxel lip is in code)
+  { x: 0.55, y: 0.02 },    // gentle sand beach
+  { x: 0.61, y: 0.05 },    // grass plains begin
+  { x: 0.70, y: 0.14 },    // plains
+  { x: 0.76, y: 0.34 },    // foothills
+  { x: 0.80, y: 0.68 },    // mountains rising
+  { x: 0.83, y: 1.00 },    // reach the peak height (reachable u) …
+  { x: 1.00, y: 1.00 },    // … then PLATEAU from here up (flat snowy tops)
 ];
 
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
@@ -442,8 +446,8 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   // Landform layer — OFF by default so existing worlds/the current terrain are byte-identical.
   landformEnabled: false,
   landformScale: 2.5,          // compact features (~330 m landmasses at base 0.0012)
-  landformWarpScale: 1.4,      // warp slightly finer than the land shape
-  landformWarpStrength: 90,    // metres of coast warp → sweeping coasts/ranges
+  landformWarpScale: 1.0,      // warp at the land frequency
+  landformWarpStrength: 50,    // metres of coast warp → sweeping coasts/ranges
   landformSeaLevel: 40,        // voxels (~10 m)
   landformSeaDepth: 200,       // voxels (~50 m) deep ocean floor
   landformMountainHeight: 320, // voxels (~80 m) peaks above sea level
@@ -2158,8 +2162,17 @@ export class TerrainGenerator implements HeightSampler {
     const slope = this.landformSlope(worldX, worldZ);                 // tan(angle)
     const slope01 = Math.min(1, slope);                              // ~45° saturates the "steep" term
     const amp = (t.landformDetailFlat + t.landformDetailSteep * slope01) * vscale;
-    if (amp <= 0) return macro;
-    return macro + this.heightNoise.GetNoise(worldX * f, worldZ * f) * amp;
+    const h = amp <= 0 ? macro : macro + this.heightNoise.GetNoise(worldX * f, worldZ * f) * amp;
+    return this.applyBeachLip(h);
+  }
+
+  /** 1-voxel beach lip: wherever the surface sits within a voxel of the waterline, duck it to sea−1 so
+   *  the flat water plane always covers the wet sand (kills z-fighting where sand ≈ sea). A fixed
+   *  absolute voxel (not scaled), applied only to the visible surface — not the macro height used by
+   *  slope estimation and river/path channels. */
+  private applyBeachLip(h: number): number {
+    const sea = this.config.terrainLayer.landformSeaLevel;
+    return (h > sea - 1 && h < sea + 1) ? sea - 1 : h;
   }
 
   /**
