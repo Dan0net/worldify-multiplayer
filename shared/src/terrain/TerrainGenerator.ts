@@ -591,6 +591,9 @@ export class TerrainGenerator implements HeightSampler {
   // (spatial fields × scale, frequencies ÷ scale) from THIS snapshot every time config/scale changes,
   // so re-applying config never double-bakes. At masterScale = 1 the baked values equal the raw ones.
   private rawCaveConfig!: CaveConfig;
+  // Un-scaled snapshot of the merged pathway config. masterScale is baked into config.pathwayConfig
+  // from this each time applyTerrainLayer runs, so re-applying never double-scales.
+  private rawPathwayConfig!: PathwayConfig;
 
   // Cave system - 3D noise fields (seed block config.seed + 30000)
   private caveWormSteerYaw: FastNoiseLite;   // worms: heading steering (yaw)
@@ -696,8 +699,9 @@ export class TerrainGenerator implements HeightSampler {
     if (config.terrainLayer) {
       this.config.terrainLayer = { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...config.terrainLayer };
     }
-    // Snapshot the un-scaled cave config, then bake masterScale into config.caveConfig from it.
+    // Snapshot the un-scaled cave + pathway configs, then bake masterScale into config.caveConfig.
     this.rawCaveConfig = { ...this.config.caveConfig };
+    this.rawPathwayConfig = { ...this.config.pathwayConfig };
     this.applyMasterScaleToCaves();
     // Fold the friendly Terrain-layer tunables onto pathwayConfig + stampConfig (single source of
     // truth). No-op at defaults, so a default generator stays byte-identical to before.
@@ -924,12 +928,17 @@ export class TerrainGenerator implements HeightSampler {
   private applyTerrainLayer(): void {
     const t = this.config.terrainLayer;
     const m = t.masterScale > 0 ? t.masterScale : 1;   // world scale: bigger = sparser/larger, so ×m spacing
+    const p = this.rawPathwayConfig;                    // un-scaled source (idempotent baking)
     this.config.pathwayConfig = {
-      ...this.config.pathwayConfig,
+      ...p,
       frequency: (1 / Math.max(1, t.pathSpacing)) / m,  // cell size in meters ≈ 1/frequency; ×m via ÷m freq
       pathWidth: t.pathWidth * m,
       warpAmplitude: t.pathWarpAmplitude * m,
       warpFrequency: t.pathWarpFrequency / m,
+      // Vertical / width path furniture also scales with the world so walls/dips/borders shrink with it.
+      wallHeight: p.wallHeight * m,
+      dipDepth: p.dipDepth * m,
+      borderWidth: p.borderWidth * m,
     };
     // Scale building distributions by buildingSpacing, and ALL distributions by masterScale so
     // density-per-area holds as the world stretches. At masterScale = 1 + default buildingSpacing the
@@ -2152,15 +2161,17 @@ export class TerrainGenerator implements HeightSampler {
     if (this.config.terrainLayer.landformEnabled) {
       height = this.sampleLandformHeight(worldX, worldZ);
     } else {
-      // Apply domain warping for organic shapes. masterScale divides the sample coordinates so the
-      // buildings-world hills stretch/shrink with the world (identity at masterScale = 1).
+      // Apply domain warping for organic shapes. masterScale divides the sample coordinates (wider
+      // hills) AND scales the relief height, so the buildings world shrinks uniformly (slopes
+      // preserved). Identity at masterScale = 1.
       const m = this.config.terrainLayer.masterScale > 0 ? this.config.terrainLayer.masterScale : 1;
       const [warpedX, warpedZ] = this.applyDomainWarp(worldX, worldZ);
       const sx = warpedX / m, sz = warpedZ / m;
-      height = this.config.baseHeight;
+      let relief = 0;
       for (const layer of this.config.heightLayers) {
-        height += this.sampleNoiseLayer(sx, sz, layer);
+        relief += this.sampleNoiseLayer(sx, sz, layer);
       }
+      height = this.config.baseHeight + relief * m;
     }
 
     // Bounded: clear wholesale past a generous cap (covers the active view's columns) rather than LRU.
@@ -2304,7 +2315,7 @@ export class TerrainGenerator implements HeightSampler {
     }
     // River bed.
     if (isRiver && tlSurf.riverDepth > 0) {
-      const bed = originalHeight - tlSurf.riverDepth * this.getRiverDepthFactor(worldX, worldZ);
+      const bed = originalHeight - tlSurf.riverDepth * this.landSizeScale() * this.getRiverDepthFactor(worldX, worldZ);
       if (bed < height) height = bed;
     }
 
@@ -2467,7 +2478,7 @@ export class TerrainGenerator implements HeightSampler {
         let riverWaterLevel = -Infinity;
         if (isRiverColumn && tl.riverDepth > 0) {
           const rf = this.getRiverDepthFactor(worldX, worldZ);
-          const bed = originalTerrainHeight - tl.riverDepth * rf;
+          const bed = originalTerrainHeight - tl.riverDepth * this.landSizeScale() * rf;   // depth scales with the world
           if (bed < terrainHeight) terrainHeight = bed;
           if (rf > 0) riverWaterLevel = originalTerrainHeight - 1;   // surface ~1 voxel below the bank
         }
@@ -2514,7 +2525,7 @@ export class TerrainGenerator implements HeightSampler {
 
             // Landform surface skin: sand/snow/gravel by elevation on the top few voxels (rock strata
             // underneath stay from getMaterialAtDepth). Short-circuits when the layer is off.
-            if (tl.landformEnabled && depthFromSurface <= LANDFORM_SKIN_DEPTH) {
+            if (tl.landformEnabled && depthFromSurface <= Math.max(1, LANDFORM_SKIN_DEPTH * this.landSizeScale())) {
               material = this.landformSurfaceMaterial(terrainHeight, worldX, worldZ);
             }
 
@@ -2625,7 +2636,8 @@ export class TerrainGenerator implements HeightSampler {
     if (buildingsOn && this.stampPlacer && chunkHasPath) {
       const torchPlacements = this.generatePathwayWallTorches(cx, cz);
       if (torchPlacements.length > 0) {
-        this.stampPlacer.applyStamps(data, cx, cy, cz, torchPlacements, this);
+        // Torches scale their model with the world too, and are seated on the (now scaled) wall top.
+        this.stampPlacer.applyStamps(data, cx, cy, cz, torchPlacements, this, this.masterScale);
       }
     }
 
@@ -2682,7 +2694,8 @@ export class TerrainGenerator implements HeightSampler {
 
     const out: StampPlacement[] = [];
     const M = TerrainGenerator.TORCH_MARGIN_VOX;
-    const stride = TerrainGenerator.TORCH_STRIDE;
+    // Torch spacing scales with the world so they aren't sparse on a small-scale world's short walls.
+    const stride = Math.max(1, Math.round(TerrainGenerator.TORCH_STRIDE * this.masterScale));
     const seedBase = (this.config.seed + 20000) >>> 0;
     const baseVoxX = cx * CHUNK_SIZE;
     const baseVoxZ = cz * CHUNK_SIZE;
@@ -2699,7 +2712,7 @@ export class TerrainGenerator implements HeightSampler {
         out.push({
           type: StampType.TORCH, variant: 0,
           worldX, worldZ, rotation: 0,
-          yOffset: cfg.wallHeight,
+          yOffset: Math.round(cfg.wallHeight),   // integer voxel offset; wallHeight already world-scaled
         });
       }
     }
