@@ -36,8 +36,9 @@ const MAX_CHUNKS_ABOVE = 4;
 
 export class LocalTerrainSource {
   private readonly gen: TerrainGenerator;
-  /** Cache raw generated chunk data so tile scanning and chunk requests agree. */
-  private readonly cache = new Map<string, Uint32Array>();
+  /** Cache raw generated chunk data so tile scanning and chunk requests agree. Packed integer key
+   *  (±2^16 chunk range) — avoids a per-lookup string build + Map<string> hash on this hot path. */
+  private readonly cache = new Map<number, Uint32Array>();
 
   constructor(seed: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig) {
     this.gen = new TerrainGenerator({
@@ -48,7 +49,8 @@ export class LocalTerrainSource {
   }
 
   private rawChunk(cx: number, cy: number, cz: number): Uint32Array {
-    const key = `${cx},${cy},${cz}`;
+    // Pack (cx,cy,cz) into one safe-integer key (±2^16 each) — no string alloc/hash per lookup.
+    const key = ((cx + 0x10000) * 0x20000 + (cy + 0x10000)) * 0x20000 + (cz + 0x10000);
     let data = this.cache.get(key);
     if (!data) {
       data = this.gen.generateChunk(cx, cy, cz);

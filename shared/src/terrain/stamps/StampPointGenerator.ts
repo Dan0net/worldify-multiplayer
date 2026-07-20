@@ -4,7 +4,7 @@
  */
 
 import { CHUNK_SIZE, CHUNK_WORLD_SIZE, VOXEL_SCALE } from '../../voxel/constants.js';
-import { StampType, getStamp } from './StampDefinitions.js';
+import { StampType, getStamp, getStampFootprintRadius, isBuildingStamp } from './StampDefinitions.js';
 
 // ============== Configuration ==============
 
@@ -294,25 +294,31 @@ export class StampPointGenerator {
     cz: number,
     margin: number
   ): boolean {
-    // Pass rotation to getStamp for buildings (affects bounds calculation)
-    const stamp = getStamp(placement.type, placement.variant, placement.rotation);
-    const bounds = stamp.bounds;
-    
     // Convert placement to voxel coordinates
     const stampVoxelX = placement.worldX / VOXEL_SCALE;
     const stampVoxelZ = placement.worldZ / VOXEL_SCALE;
-    
+
+    // Stamp X/Z footprint in world voxels. Buildings use a cheap rotation-invariant footprint radius
+    // (no ~95k-sample SDF generation per candidate — the big exploration cost); trees/rocks read their
+    // exact bounds, which are cached per type:variant (rotation-independent → a free lookup).
+    let stampMinX: number, stampMaxX: number, stampMinZ: number, stampMaxZ: number;
+    if (isBuildingStamp(placement.type)) {
+      const r = getStampFootprintRadius(placement.type, placement.variant);
+      stampMinX = stampVoxelX - r; stampMaxX = stampVoxelX + r;
+      stampMinZ = stampVoxelZ - r; stampMaxZ = stampVoxelZ + r;
+    } else {
+      const bounds = getStamp(placement.type, placement.variant, placement.rotation).bounds;
+      stampMinX = stampVoxelX + bounds.minX;
+      stampMaxX = stampVoxelX + bounds.maxX;
+      stampMinZ = stampVoxelZ + bounds.minZ;
+      stampMaxZ = stampVoxelZ + bounds.maxZ;
+    }
+
     // Chunk bounds in voxels
     const chunkMinVoxelX = cx * CHUNK_SIZE;
     const chunkMinVoxelZ = cz * CHUNK_SIZE;
     const chunkMaxVoxelX = chunkMinVoxelX + CHUNK_SIZE;
     const chunkMaxVoxelZ = chunkMinVoxelZ + CHUNK_SIZE;
-    
-    // Stamp bounds in world voxels
-    const stampMinX = stampVoxelX + bounds.minX;
-    const stampMaxX = stampVoxelX + bounds.maxX;
-    const stampMinZ = stampVoxelZ + bounds.minZ;
-    const stampMaxZ = stampVoxelZ + bounds.maxZ;
     
     // Check overlap with margin
     return stampMaxX >= chunkMinVoxelX - margin &&

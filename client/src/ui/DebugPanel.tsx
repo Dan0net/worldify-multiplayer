@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, ReactNode } from 'react';
 import { hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '@worldify/shared';
 import {
   ChevronDown, ChevronRight, Zap, Wrench, Search, Sliders, Palette, Droplet, Waves,
-  Sparkles, Wind, Sun, Moon, Clock, Grid3x3, Lightbulb, Sunrise, Trash2,
+  Sparkles, Wind, Sun, Moon, Clock, Grid3x3, Lightbulb, Sunrise, Trash2, Timer,
 } from 'lucide-react';
+import { runGenBench, deviceInfo, type GenBenchRow } from '../game/debug/genBench';
 import {
   useGameStore, TERRAIN_DEBUG_MODE_NAMES, TERRAIN_DEBUG_MODE_ORDER, type TerrainDebugMode,
   BUILD_PREVIEW_LIGHTING_ORDER, BUILD_PREVIEW_LIGHTING_LABELS, type BuildPreviewLighting,
@@ -264,6 +265,63 @@ function SegmentedRow({ label, segments, active, onSelect }: SegmentedRowProps) 
         ))}
       </div>
     </div>
+  );
+}
+
+// ============== Gen Timing Section ==============
+
+/**
+ * On-device generation timing. Runs the boot-stage bench (construct → cold column-gen → warm gen →
+ * ingest) with a fixed seed/column so 28, 70 and 70-terrain-only are directly comparable on the same
+ * phone. Self-contained (own open/running state). The cold column-gen row is the dominant "time to
+ * first chunk bound" stage.
+ */
+function GenTimingSection() {
+  const [open, setOpen] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [rows, setRows] = useState<GenBenchRow[]>([]);
+
+  const run = async () => {
+    if (running) return;
+    setRunning(true);
+    setRows([]);
+    const acc: GenBenchRow[] = [];
+    try {
+      await runGenBench((row) => { acc.push(row); setRows([...acc]); });
+      // eslint-disable-next-line no-console
+      console.log('[genBench]', deviceInfo(), JSON.stringify(acc));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Section title="Gen Timing" icon={<Timer size={13} />} isOpen={open} onToggle={() => setOpen((o) => !o)} color="cyan">
+      <div className="text-cyan-400">
+        <button
+          onClick={run}
+          disabled={running}
+          className="w-full py-1 px-2 mb-2 bg-cyan-900/50 hover:bg-cyan-800/50 disabled:opacity-50 text-cyan-300 rounded text-xs"
+        >
+          {running ? 'Running…' : 'Run gen bench (seed 12345 @ 0,0)'}
+        </button>
+        {rows.map((r) => (
+          <div key={r.label} className="mb-2 pb-1 border-b border-cyan-500/30">
+            <div className="text-cyan-300 font-bold">{r.label} — {r.chunks} chunks</div>
+            <div className="grid grid-cols-2 gap-x-3">
+              <div>gen cold:</div><div className="text-yellow-400">{r.genColdMs} ms</div>
+              <div>gen warm:</div><div>{r.genWarmMs} ms</div>
+              <div>ingest 1st:</div><div>{r.ingest1Ms} ms</div>
+              <div>ingest col:</div><div>{r.ingestAllMs} ms</div>
+              <div>construct:</div><div>{r.constructMs} ms</div>
+            </div>
+          </div>
+        ))}
+        {rows.length > 0 && (
+          <div className="text-[10px] text-cyan-500/70 break-all">{deviceInfo()}</div>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -537,6 +595,9 @@ export function DebugPanel() {
           </div>
         </div>
       </Section>
+
+      {/* ============== GEN TIMING SECTION (on-device bench) ============== */}
+      <GenTimingSection />
 
       {/* ============== DEBUG SECTION ============== */}
       <Section

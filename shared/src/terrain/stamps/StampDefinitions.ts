@@ -1237,6 +1237,67 @@ export function getStamp(type: StampType, variant: number, rotation: number = 0,
 const stampCache = new Map<string, StampDefinition>();
 const STAMP_CACHE_MAX = 512;
 
+/** Per-(type:variant) rotation-invariant horizontal footprint radius (voxels), for cheap cull. */
+const footprintRadiusCache = new Map<string, number>();
+
+/**
+ * Rotation-invariant horizontal footprint radius (voxels) for a stamp type+variant: the max distance
+ * from the stamp origin to any voxel in X/Z. Used by stampAffectsChunk to cull WITHOUT generating a
+ * building's ~95k-sample rotated SDF per candidate (the dominant cost of exploring into new columns).
+ * A building's SDF is a pure function of (variant,rotation,seed) but its X/Z footprint is a disc whose
+ * circumscribed radius is rotation-invariant, so one generation (rotation 0) yields a radius reused for
+ * every instance. Conservative (never smaller than any rotated footprint) → the cull never drops an
+ * overlapping stamp, so placement output is unchanged. Generated once per type:variant, then cached.
+ */
+/** Struct-of-arrays view of a stamp's voxels, sorted ascending by local Y. Flat typed arrays (not an
+ *  array of StampVoxel objects) so the hot placement loop reads contiguous memory instead of chasing a
+ *  pointer + five property loads per voxel — that object access was the dominant cost of applyStamp. */
+export interface StampVoxelsByY {
+  n: number;
+  xs: Int32Array; ys: Int32Array; zs: Int32Array;
+  mats: Int32Array; weights: Float64Array;   // weight kept float64 → packVoxel input is bit-for-bit unchanged
+}
+
+/**
+ * Voxels of a cached stamp sorted ascending by local Y (built once, memoised on the stamp) as flat
+ * typed arrays. Lets a caller iterate only the Y-slice of a tall stamp that intersects a given chunk
+ * instead of scanning every voxel once per chunk it spans. Two stamp voxels can only land on the same
+ * chunk cell when they share the same local (x,y,z) — hence the same Y — and the sort is stable (original
+ * index tiebreak), so voxels that collide keep their original blend order: output is byte-identical.
+ */
+export function getStampVoxelsByY(stamp: StampDefinition): StampVoxelsByY {
+  const holder = stamp as unknown as { _byY?: StampVoxelsByY };
+  let s = holder._byY;
+  if (!s) {
+    const v = stamp.voxels;
+    const n = v.length;
+    const idx = v.map((_, i) => i);
+    idx.sort((a, b) => (v[a].y - v[b].y) || (a - b));
+    const xs = new Int32Array(n), ys = new Int32Array(n), zs = new Int32Array(n), mats = new Int32Array(n);
+    const weights = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+      const vv = v[idx[k]];
+      xs[k] = vv.x; ys[k] = vv.y; zs[k] = vv.z; mats[k] = vv.material; weights[k] = vv.weight;
+    }
+    s = { n, xs, ys, zs, mats, weights };
+    holder._byY = s;
+  }
+  return s;
+}
+
+export function getStampFootprintRadius(type: StampType, variant: number): number {
+  const key = `${type}:${variant % VARIANTS_PER_TYPE}`;
+  let r = footprintRadiusCache.get(key);
+  if (r === undefined) {
+    const b = getStamp(type, variant, 0, 0).bounds;
+    const hx = Math.max(Math.abs(b.minX), Math.abs(b.maxX));
+    const hz = Math.max(Math.abs(b.minZ), Math.abs(b.maxZ));
+    r = Math.sqrt(hx * hx + hz * hz);   // circumscribed radius — bounds the footprint at any rotation
+    footprintRadiusCache.set(key, r);
+  }
+  return r;
+}
+
 /**
  * Create a new stamp definition
  */

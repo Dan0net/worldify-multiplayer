@@ -56,7 +56,7 @@ import {
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool, terrainWorkerCount } from './TerrainWorkerPool.js';
 import { SeamStitcher } from './SeamStitcher.js';
-import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConfig, hasChunk, loadChunk, saveChunk, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
+import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConfig, hasChunk, loadChunk, saveChunk, hasColumn, loadColumn, saveColumn, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
 /** Callback type for requesting chunk data from server */
 export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
@@ -517,6 +517,22 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
+      // Existing world: heights are persisted, so seed columnInfo from IDB and skip the full worker
+      // generateColumn (which would carve caves + stamps only to be discarded). The saved surface
+      // chunks then stream in via the normal per-chunk load path (loadLocalChunk prefers saved).
+      if (hasColumn(tx, tz)) {
+        loadColumn(tx, tz).then((col) => {
+          if (col) {
+            this.pendingColumns.delete(columnKey);
+            this.pendingColumnTimes.delete(columnKey);
+            this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
+          } else {
+            this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
+          }
+        }).catch(() => this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data)));
+        console.log(`[VoxelWorld] Seeded initial surface column from saved heights (${tx}, ${tz})`);
+        return;
+      }
       this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
       console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
       return;
@@ -839,6 +855,16 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.set(columnKey, Date.now());
 
     if (this.isLocal) {
+      // Existing world: the column's stamp-corrected heights are persisted, so read them from IDB
+      // instead of re-running the full worker generateTile (which re-carves caves just to measure the
+      // surface). Falls back to generation if the record is somehow missing.
+      if (hasColumn(tx, tz)) {
+        loadColumn(tx, tz).then((col) => {
+          if (col) this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
+          else this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
+        }).catch(() => this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data)));
+        return;
+      }
       this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
       return;
     }
@@ -860,6 +886,10 @@ export class VoxelWorld implements ChunkProvider {
     
     // Compute and store the column's chunk range from the (stamp-corrected) tile heights.
     this.columnInfo.set(columnKey, columnChunkRange(heights));
+
+    // Persist the heights the first time a column is generated so a later revisit reads them from IDB
+    // instead of regenerating (no-op if they came from loadColumn — already persisted).
+    if (this.isLocal && !hasColumn(tx, tz)) saveColumn(tx, tz, heights, materials);
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
@@ -1276,6 +1306,9 @@ export class VoxelWorld implements ChunkProvider {
     
     // Store the column's chunk range from the (stamp-corrected) tile heights.
     this.columnInfo.set(columnKey, columnChunkRange(heights));
+
+    // Persist heights on first generation so a revisit skips regeneration (Change 3).
+    if (this.isLocal && !hasColumn(tx, tz)) saveColumn(tx, tz, heights, materials);
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
