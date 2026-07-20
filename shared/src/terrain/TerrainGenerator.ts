@@ -455,8 +455,8 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformCurve: DEFAULT_LANDFORM_CURVE,
 
   landformDetailFrequency: 10, // ×0.03/m absolute → ~3 m base rubble (+ finer octaves)
-  landformDetailFlat: 2,       // voxels of fine texture on flat ground
-  landformDetailSteep: 14,     // extra fine rocks/rubble on slopes (jagged, not big bumps)
+  landformDetailFlat: 0,       // no detail on flat ground (kept smooth)
+  landformDetailSteep: 6,      // rubble amplitude that ramps in (squared) only toward vertical slopes
   landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
@@ -644,6 +644,12 @@ export class TerrainGenerator implements HeightSampler {
   // computed once per column and shared. Only used when landformEnabled. Cleared with the height memo.
   private slopeCache = new Map<number, Map<number, number>>();
   private slopeCacheEntries = 0;
+
+  // Per-column POST-detail slope angle (degrees) — the slope of the actual rendered surface including
+  // the rubble detail, used for the grass→rock material test (rock shows on the jagged steep faces).
+  // Separate from slopeCache (which is the smooth macro slope driving detail amplitude).
+  private detailSlopeCache = new Map<number, Map<number, number>>();
+  private detailSlopeCacheEntries = 0;
 
   // Per-(worldX,worldZ)-column memo of the pathway (road) queries. Pathways are XZ-only but were
   // re-evaluated per query type AND per cy chunk in a column — each doing domain warp + several
@@ -902,6 +908,8 @@ export class TerrainGenerator implements HeightSampler {
     this.heightCacheEntries = 0;
     this.slopeCache.clear();
     this.slopeCacheEntries = 0;
+    this.detailSlopeCache.clear();
+    this.detailSlopeCacheEntries = 0;
     this.pathwayCache.clear();
     this.pathwayCacheEntries = 0;
     this.placementCache.clear();
@@ -2177,11 +2185,13 @@ export class TerrainGenerator implements HeightSampler {
     // (footholds to climb). Applied EVERYWHERE, including steep seabed under the sea (the slope term is
     // near-zero on flats, so beaches/plains stay gentle). Amplitude scales with the world.
     const vscale = this.landSizeScale();
-    const slope = this.landformSlope(worldX, worldZ);                 // tan(angle)
-    // Slope-driven only (elevation does NOT add detail). Reference ~tan(20°) so the steep term is
-    // already substantial on gentle grades and saturates by ~20° — detail shows on less-steep terrain.
-    const slope01 = Math.min(1, slope / 0.36);
-    const amp = (t.landformDetailFlat + t.landformDetailSteep * slope01) * vscale;
+    // Detail amplitude grows with the SQUARE of the (macro) slope angle normalized to 0..1 over 0..90°:
+    // near-zero on most slopes, ramping quickly toward the steep amount only as the grade approaches
+    // vertical. (Uses the macro gradient; the post-detail slope can't drive detail without recursion.)
+    const slopeDeg = Math.atan(this.landformSlope(worldX, worldZ)) * (180 / Math.PI);
+    const t01 = Math.min(1, slopeDeg / 90);
+    const rugged = t01 * t01;
+    const amp = (t.landformDetailFlat + t.landformDetailSteep * rugged) * vscale;
     const h = amp <= 0 ? macro : macro + this.landformDetail.GetNoise(worldX, worldZ) * amp;
     return this.applyBeachLip(h);
   }
@@ -2244,9 +2254,30 @@ export class TerrainGenerator implements HeightSampler {
     return slope;
   }
 
-  /** Surface angle in degrees at a column (from the memoized slope). */
+  /** Surface angle in degrees at a column (from the memoized macro slope). */
   private landformSlopeDeg(worldX: number, worldZ: number): number {
     return Math.atan(this.landformSlope(worldX, worldZ)) * (180 / Math.PI);
+  }
+
+  /** POST-detail surface angle in degrees: central difference of the full detailed height (macro +
+   *  rubble) over a short (~2 m) span, so the jagged detail registers. Memoized per column; drives the
+   *  grass→rock material test. */
+  private landformDetailedSlopeDeg(worldX: number, worldZ: number): number {
+    let inner = this.detailSlopeCache.get(worldX);
+    if (inner) { const c = inner.get(worldZ); if (c !== undefined) return c; }
+    const step = 2;   // meters — short span to capture the detail bumps, not just the macro grade
+    const hL = this.sampleLandformHeight(worldX - step, worldZ);
+    const hR = this.sampleLandformHeight(worldX + step, worldZ);
+    const hD = this.sampleLandformHeight(worldX, worldZ - step);
+    const hU = this.sampleLandformHeight(worldX, worldZ + step);
+    const dhx = ((hR - hL) * VOXEL_SCALE) / (2 * step);
+    const dhz = ((hU - hD) * VOXEL_SCALE) / (2 * step);
+    const deg = Math.atan(Math.sqrt(dhx * dhx + dhz * dhz)) * (180 / Math.PI);
+    if (this.detailSlopeCacheEntries > 262144) { this.detailSlopeCache.clear(); this.detailSlopeCacheEntries = 0; inner = undefined; }
+    if (!inner) { inner = new Map(); this.detailSlopeCache.set(worldX, inner); }
+    inner.set(worldZ, deg);
+    this.detailSlopeCacheEntries++;
+    return deg;
   }
 
   /**
@@ -2325,11 +2356,11 @@ export class TerrainGenerator implements HeightSampler {
     const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
     if (rel < 0) return mat('gravel');               // sea floor
     if (rel <= t.landformBeachWidth * vscale) return mat('sand');
-    // Snow BEFORE rock so high peaks cap with snow (incl. their steep faces) rather than reading as
-    // bare rock — the flat plateau tops give broad snowfields; rock shows on the slopes below the line.
-    if (rel >= t.landformSnowLine * vscale) return mat('snow');
+    // Steep rock OVERRIDES snow: any steep face (measured on the post-detail surface) is bare rock,
+    // even up high. Snow then only shows above the snow line on the remaining SHALLOW slopes (caps).
     const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32;
-    if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');  // steep → rock cliffs
+    if (this.landformDetailedSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
+    if (rel >= t.landformSnowLine * vscale) return mat('snow');   // shallow + high → snow
     return this.getMaterialAtDepth(0);               // plains → the normal top material
   }
 
