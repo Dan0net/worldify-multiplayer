@@ -8,6 +8,7 @@ import { CHUNK_SIZE, VOXEL_SCALE } from '../voxel/constants.js';
 import { packVoxel } from '../voxel/voxelData.js';
 import { mat } from '../materials/index.js';
 import { smoothstep } from '../util/math.js';
+import { Curve, type CurvePoint } from './Curve.js';
 import {
   StampPointGenerator,
   StampPlacer,
@@ -172,6 +173,19 @@ export interface CaveConfig {
 export interface TerrainLayerConfig {
   /** Master toggle for the base landscape + pathways + stamps. */
   enabled: boolean;
+  /**
+   * WORLD-level feature scale, applied to EVERY generation type (land, rivers, paths, caves, and
+   * building/stamp spacing). Bigger = larger features everywhere (the world stretched uniformly);
+   * implemented as a coordinate/frequency divisor + a matching vertical scale on the landform. 1 =
+   * identity (byte-identical to a world without the knob), so existing worlds are unaffected.
+   */
+  masterScale: number;
+  /**
+   * LAND feature scale, composed on top of masterScale for the landform + rivers only (not paths,
+   * caves, or buildings). Lets you dial land size independently, then scale the whole world with
+   * masterScale. 1 = identity.
+   */
+  landScale: number;
   /** Pathway network spacing in meters (distance between path cells; larger = sparser roads). */
   pathSpacing: number;
   /** Pathway width in meters. */
@@ -203,6 +217,40 @@ export interface TerrainLayerConfig {
   landformBeachWidth: number;
   /** Elevation in voxels (above sea) beyond which mountain tops turn to snow. */
   landformSnowLine: number;
+
+  // ---- Elevation curve (replaces the hardcoded shelf/beach/plains/mountain step function). Control
+  // points map the continental noise (x: 0..1) to a height OFFSET in voxels relative to sea level
+  // (y). A monotone cubic spline (see Curve) interpolates them with no overshoot, so the sea→beach
+  // transition is a soft ramp you can shape in the panel. Empty → the built-in default curve.
+  /** Elevation curve control points (noise 0..1 → voxels above/below sea). Empty = default curve. */
+  landformCurve: CurvePoint[];
+
+  // ---- Detail + slope (LandLayer surface texture). Detail frequency is relative to the land scale
+  // so it tracks feature size; amplitude is driven by slope (steep = jagged) with a small floor on
+  // flats. Slope also drives grass→rock material and the stamp steepness cull.
+  /** Surface-detail noise frequency multiplier (relative to the land base frequency). */
+  landformDetailFrequency: number;
+  /** Surface-detail amplitude in voxels on flat ground (the floor so plains aren't glassy). */
+  landformDetailFlat: number;
+  /** Additional surface-detail amplitude in voxels at maximum slope (steep = more jagged/bumpy). */
+  landformDetailSteep: number;
+  /** Slope in degrees at which the surface fully turns from grass to rock (blend starts at ~half this). */
+  landformRockSlopeDeg: number;
+
+  // ---- Rivers (natural water channels). Own cellular network, drawn separately from paths, using the
+  // same cellular edge-detection approach the old pathway "streams" used — but its own noise + tuning.
+  /** Master toggle for rivers. Independent of paths/buildings. */
+  riversEnabled: boolean;
+  /** River network spacing in meters (cellular cell size; larger = sparser rivers). */
+  riverSpacing: number;
+  /** River width in meters. */
+  riverWidth: number;
+  /** River channel depth in voxels (how far the bed dips below the surrounding land). */
+  riverDepth: number;
+  /** River domain-warp amplitude in meters (how far channels meander). */
+  riverWarpAmplitude: number;
+  /** River domain-warp frequency (1/m); higher = tighter meanders. */
+  riverWarpFrequency: number;
 }
 
 export interface TerrainConfig {
@@ -358,8 +406,28 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
 
 // ============== Default Terrain Layer Configuration ==============
 
+/**
+ * Default elevation curve, expressed as (noise 0..1 → voxels relative to sea level). Reproduces the
+ * old ocean-shelf / beach / plains / mountain shape but with a SOFT sea→beach transition (the old
+ * hardcoded curve had a hard step at the waterline that z-fought the water shader). Scaled by
+ * mountainHeight/seaDepth/beachWidth at eval time, so the shape is authored once and the config
+ * knobs stretch it. Height OFFSET so it's independent of sea level.
+ */
+export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
+  { x: 0.00, y: -1.00 },   // deepest ocean floor (× seaDepth)
+  { x: 0.30, y: -0.55 },   // ocean basin
+  { x: 0.44, y: -0.06 },   // shelf: seabed rises to just under the waterline
+  { x: 0.50, y: 0.03 },    // soft step onto the beach (a gentle ramp, not a cliff)
+  { x: 0.56, y: 0.05 },    // flat sand shelf just above the water (× beachWidth-ish)
+  { x: 0.70, y: 0.12 },    // low plains (× mountainHeight)
+  { x: 0.88, y: 0.40 },    // hills
+  { x: 1.00, y: 1.00 },    // mountain peaks (× mountainHeight)
+];
+
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   enabled: true,            // base landscape + pathways + stamps on by default
+  masterScale: 1,           // world feature scale (1 = identity → existing worlds unchanged)
+  landScale: 1,             // land feature scale, on top of masterScale (1 = identity)
   pathSpacing: 160,         // ~160 m between path cells
   pathWidth: 6.0,           // 6 m roads
   pathWarpAmplitude: 30,    // gentle meander
@@ -376,6 +444,19 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformMountainHeight: 320, // voxels (~80 m) peaks above sea level
   landformBeachWidth: 10,      // voxels the flat beach sits above sea
   landformSnowLine: 220,       // voxels above sea → snow caps
+  landformCurve: DEFAULT_LANDFORM_CURVE,
+
+  landformDetailFrequency: 8,  // detail ~8× the land base frequency (fine bumps over the macro shape)
+  landformDetailFlat: 1.5,     // voxels of detail on flat ground (a little texture, not glassy)
+  landformDetailSteep: 10,     // extra voxels of detail on the steepest slopes (jagged mountains)
+  landformRockSlopeDeg: 55,    // fully rock by ~55°; grass→rock blend begins ~half that
+
+  riversEnabled: false,        // rivers off by default (opt-in landform feature)
+  riverSpacing: 240,           // ~240 m between river cells
+  riverWidth: 10,              // 10 m channels
+  riverDepth: 8,               // 8 voxels deep beds
+  riverWarpAmplitude: 120,     // strong meander
+  riverWarpFrequency: 0.006,   // broad river curves
 };
 
 /**
@@ -452,8 +533,6 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
 const LANDFORM_SKIN_DEPTH = 3;
 /** Landform continental base frequency (1/m) at landformScale = 1; the config scale multiplies it. */
 const LANDFORM_BASE_FREQ = 0.0012;
-/** Multiplier on the fine height layer used as landform surface detail (ramped in by altitude). */
-const LANDFORM_DETAIL_GAIN = 3;
 
 /** Lazily-filled per-column memo of the pathway predicates (each computed on first demand). */
 interface PathwayColumnInfo {
@@ -476,12 +555,26 @@ export class TerrainGenerator implements HeightSampler {
   private landformWarpX: FastNoiseLite;   // strong large-scale domain warp (sweeping coasts)
   private landformWarpZ: FastNoiseLite;
   private landformBase: FastNoiseLite;    // one low-freq continental fBm → the landmass shape
+  // Compiled elevation curve (built from config.landformCurve). Maps continental noise 0..1 → a height
+  // offset relative to sea level; scaled by the seaDepth/mountainHeight/beachWidth knobs at eval time.
+  private landformCurveFn: Curve = new Curve(DEFAULT_LANDFORM_CURVE);
+
+  // Rivers — natural water channels. Own cellular network (same edge-detect approach as pathways) with
+  // its own warp, seeded in a separate block (+80000) so it never perturbs the base seed chain.
+  private riverCellular: FastNoiseLite;
+  private riverWarpX: FastNoiseLite;
+  private riverWarpZ: FastNoiseLite;
 
   // Pathway system - cellular noise with domain warping
   private pathwayCellular: FastNoiseLite;
   private pathwayWarpX: FastNoiseLite;
   private pathwayWarpZ: FastNoiseLite;
   private pathwayMaterialNoise: FastNoiseLite;
+
+  // Un-scaled snapshot of the merged cave config. masterScale is baked into `config.caveConfig`
+  // (spatial fields × scale, frequencies ÷ scale) from THIS snapshot every time config/scale changes,
+  // so re-applying config never double-bakes. At masterScale = 1 the baked values equal the raw ones.
+  private rawCaveConfig!: CaveConfig;
 
   // Cave system - 3D noise fields (seed block config.seed + 30000)
   private caveWormSteerYaw: FastNoiseLite;   // worms: heading steering (yaw)
@@ -530,6 +623,12 @@ export class TerrainGenerator implements HeightSampler {
   private heightCache = new Map<number, Map<number, number>>();
   private heightCacheEntries = 0;
 
+  // Per-column landform slope (tan of the surface angle), memoized like heightCache. Drives detail
+  // amplitude (steep = jagged) AND the grass→rock material blend AND the stamp steepness cull, so it's
+  // computed once per column and shared. Only used when landformEnabled. Cleared with the height memo.
+  private slopeCache = new Map<number, Map<number, number>>();
+  private slopeCacheEntries = 0;
+
   // Per-(worldX,worldZ)-column memo of the pathway (road) queries. Pathways are XZ-only but were
   // re-evaluated per query type AND per cy chunk in a column — each doing domain warp + several
   // cellular samples — making them the single biggest noise-call source (≈77% of warm cave gen).
@@ -575,6 +674,9 @@ export class TerrainGenerator implements HeightSampler {
     if (config.terrainLayer) {
       this.config.terrainLayer = { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...config.terrainLayer };
     }
+    // Snapshot the un-scaled cave config, then bake masterScale into config.caveConfig from it.
+    this.rawCaveConfig = { ...this.config.caveConfig };
+    this.applyMasterScaleToCaves();
     // Fold the friendly Terrain-layer tunables onto pathwayConfig + stampConfig (single source of
     // truth). No-op at defaults, so a default generator stays byte-identical to before.
     this.applyTerrainLayer();
@@ -662,6 +764,22 @@ export class TerrainGenerator implements HeightSampler {
     this.landformBase.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.landformBase.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.landformBase.SetFractalOctaves(3);   // continental shape: a few octaves of large-scale relief
+
+    // River noise (seed block +80000, off the base chain). Cellular edge-detection network + its own
+    // domain warp — the same mechanism as pathways, but a separate field so rivers and paths are
+    // independent.
+    let riverSeed = this.config.seed + 80000;
+    this.riverCellular = new FastNoiseLite(riverSeed++);
+    this.riverCellular.SetNoiseType(FastNoiseLite.NoiseType.Cellular);
+    this.riverCellular.SetCellularReturnType(FastNoiseLite.CellularReturnType.CellValue);
+    this.riverCellular.SetCellularDistanceFunction(FastNoiseLite.CellularDistanceFunction.EuclideanSq);
+    this.riverWarpX = new FastNoiseLite(riverSeed++);
+    this.riverWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.riverWarpX.SetFractalOctaves(1);
+    this.riverWarpZ = new FastNoiseLite(riverSeed++);
+    this.riverWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.riverWarpZ.SetFractalOctaves(1);
+
     this.updateLandformConfig();
 
     // Initialize stamp system if enabled
@@ -699,12 +817,16 @@ export class TerrainGenerator implements HeightSampler {
       this.updateWarpConfig();
     }
     if (config.caveConfig) {
-      this.config.caveConfig = { ...this.config.caveConfig, ...normalizeCaveConfig(config.caveConfig) };
+      // Merge onto the UN-scaled snapshot, then re-bake masterScale so scaling never compounds.
+      this.rawCaveConfig = { ...this.rawCaveConfig, ...normalizeCaveConfig(config.caveConfig) };
+      this.applyMasterScaleToCaves();
       this.updateCaveConfig();
       this.invalidateCaveCaches();   // config change invalidates traced worms/caverns
     }
     if (config.terrainLayer) {
       this.config.terrainLayer = { ...this.config.terrainLayer, ...config.terrainLayer };
+      this.applyMasterScaleToCaves();   // masterScale may have changed → re-bake caves from raw
+      this.updateCaveConfig();
       this.applyTerrainLayer();
       this.updateLandformConfig();
       this.invalidateCaveCaches();   // landform reshapes height → drop the per-column height/pathway memos
@@ -730,6 +852,11 @@ export class TerrainGenerator implements HeightSampler {
       this.landformWarpX.SetSeed(lfSeed++);
       this.landformWarpZ.SetSeed(lfSeed++);
       this.landformBase.SetSeed(lfSeed++);
+
+      let rvSeed = config.seed + 80000;
+      this.riverCellular.SetSeed(rvSeed++);
+      this.riverWarpX.SetSeed(rvSeed++);
+      this.riverWarpZ.SetSeed(rvSeed++);
       this.invalidateCaveCaches();   // reseed invalidates traced worms/caverns + per-column memos
     }
   }
@@ -745,6 +872,8 @@ export class TerrainGenerator implements HeightSampler {
     // Per-column memos also depend on config/seed (height layers, warp, stamp/pathway/breach config).
     this.heightCache.clear();
     this.heightCacheEntries = 0;
+    this.slopeCache.clear();
+    this.slopeCacheEntries = 0;
     this.pathwayCache.clear();
     this.pathwayCacheEntries = 0;
     this.placementCache.clear();
@@ -758,23 +887,27 @@ export class TerrainGenerator implements HeightSampler {
    */
   private applyTerrainLayer(): void {
     const t = this.config.terrainLayer;
+    const m = t.masterScale > 0 ? t.masterScale : 1;   // world scale: bigger = sparser/larger, so ×m spacing
     this.config.pathwayConfig = {
       ...this.config.pathwayConfig,
-      frequency: 1 / Math.max(1, t.pathSpacing),  // cell size in meters ≈ 1/frequency
-      pathWidth: t.pathWidth,
-      warpAmplitude: t.pathWarpAmplitude,
-      warpFrequency: t.pathWarpFrequency,
+      frequency: (1 / Math.max(1, t.pathSpacing)) / m,  // cell size in meters ≈ 1/frequency; ×m via ÷m freq
+      pathWidth: t.pathWidth * m,
+      warpAmplitude: t.pathWarpAmplitude * m,
+      warpFrequency: t.pathWarpFrequency / m,
     };
-    // Scale only the building distributions by buildingSpacing; leave rocks/trees as-is. Keeps the
-    // default (50 m) byte-identical to DEFAULT_STAMP_DISTRIBUTION.
+    // Scale building distributions by buildingSpacing, and ALL distributions by masterScale so
+    // density-per-area holds as the world stretches. At masterScale = 1 + default buildingSpacing the
+    // result is byte-identical to DEFAULT_STAMP_DISTRIBUTION.
     const distributions = DEFAULT_STAMP_DISTRIBUTION.distributions.map((d) => {
+      let out = d;
       if (d.type === StampType.BUILDING_SMALL)
-        return { ...d, gridSize: t.buildingSpacing, exclusionRadius: t.buildingSpacing * 0.4 };
-      if (d.type === StampType.BUILDING_HUT)
-        return { ...d, gridSize: t.buildingSpacing * 0.6, exclusionRadius: t.buildingSpacing * 0.3 };
-      if (d.type === StampType.BUILDING_TOWER)
-        return { ...d, gridSize: t.buildingSpacing * 1.4, exclusionRadius: t.buildingSpacing * 0.5 };
-      return d;
+        out = { ...d, gridSize: t.buildingSpacing, exclusionRadius: t.buildingSpacing * 0.4 };
+      else if (d.type === StampType.BUILDING_HUT)
+        out = { ...d, gridSize: t.buildingSpacing * 0.6, exclusionRadius: t.buildingSpacing * 0.3 };
+      else if (d.type === StampType.BUILDING_TOWER)
+        out = { ...d, gridSize: t.buildingSpacing * 1.4, exclusionRadius: t.buildingSpacing * 0.5 };
+      if (m !== 1) out = { ...out, gridSize: out.gridSize * m, exclusionRadius: out.exclusionRadius * m };
+      return out;
     });
     this.config.stampConfig = { ...this.config.stampConfig, distributions };
   }
@@ -790,15 +923,62 @@ export class TerrainGenerator implements HeightSampler {
     this.warpNoiseZ.SetFractalOctaves(warp.octaves);
   }
 
-  /** Landform noise frequencies are fixed (large-scale); the amplitude/curve knobs live in config and
-   *  are read per-sample in sampleLandformHeight. */
+  /** Combined world+land size divisor: bigger master/land scale → lower frequency → larger features. */
+  private landSizeScale(): number {
+    const t = this.config.terrainLayer;
+    const m = t.masterScale > 0 ? t.masterScale : 1;
+    const l = t.landScale > 0 ? t.landScale : 1;
+    return m * l;
+  }
+
+  /** Landform noise frequencies derive from the land base frequency and the master/land scale (size
+   *  divisor). The amplitude/curve knobs live in config and are read per-sample. Also (re)compiles the
+   *  elevation curve from config.landformCurve. */
   private updateLandformConfig(): void {
     const t = this.config.terrainLayer;
-    const baseFreq = LANDFORM_BASE_FREQ * (t.landformScale > 0 ? t.landformScale : 1);
+    const sizeDiv = this.landSizeScale();
+    // Higher landformScale still = more compact land (kept from before); master/land scale enlarge.
+    const baseFreq = LANDFORM_BASE_FREQ * (t.landformScale > 0 ? t.landformScale : 1) / sizeDiv;
     const warpFreq = baseFreq * (t.landformWarpScale > 0 ? t.landformWarpScale : 1);
     this.landformBase.SetFrequency(baseFreq);
     this.landformWarpX.SetFrequency(warpFreq);
     this.landformWarpZ.SetFrequency(warpFreq);
+    const pts = t.landformCurve && t.landformCurve.length >= 2 ? t.landformCurve : DEFAULT_LANDFORM_CURVE;
+    this.landformCurveFn = new Curve(pts);
+    this.updateRiverConfig();
+  }
+
+  /** River cellular + warp frequencies (rivers scale with master+land size like the land). */
+  private updateRiverConfig(): void {
+    const t = this.config.terrainLayer;
+    const sizeDiv = this.landSizeScale();
+    this.riverCellular.SetFrequency((1 / Math.max(1, t.riverSpacing)) / sizeDiv);
+    this.riverWarpX.SetFrequency(t.riverWarpFrequency / sizeDiv);
+    this.riverWarpZ.SetFrequency(t.riverWarpFrequency / sizeDiv);
+  }
+
+  /** Bake masterScale into config.caveConfig from the un-scaled rawCaveConfig: spatial fields ×scale,
+   *  frequencies ÷scale, so caves grow/shrink with the world. Identity at masterScale = 1. Always
+   *  derives from rawCaveConfig, so repeated config changes never compound. */
+  private applyMasterScaleToCaves(): void {
+    const m = this.config.terrainLayer.masterScale > 0 ? this.config.terrainLayer.masterScale : 1;
+    const raw = this.rawCaveConfig;
+    if (m === 1) { this.config.caveConfig = { ...raw }; return; }
+    this.config.caveConfig = {
+      ...raw,
+      wormCellSize: raw.wormCellSize * m,
+      wormRadius: raw.wormRadius * m,
+      wormStep: raw.wormStep * m,
+      wormWallAmp: raw.wormWallAmp * m,
+      wormSteerFrequency: raw.wormSteerFrequency / m,
+      wormWallFrequency: raw.wormWallFrequency / m,
+      cavernCellSize: raw.cavernCellSize * m,
+      cavernRadius: raw.cavernRadius * m,
+      cavernWinding: raw.cavernWinding * m,
+      cavernWallAmp: raw.cavernWallAmp * m,
+      cavernWarpFrequency: raw.cavernWarpFrequency / m,
+      cavernWallFrequency: raw.cavernWallFrequency / m,
+    };
   }
 
   /**
@@ -1864,11 +2044,14 @@ export class TerrainGenerator implements HeightSampler {
     if (this.config.terrainLayer.landformEnabled) {
       height = this.sampleLandformHeight(worldX, worldZ);
     } else {
-      // Apply domain warping for organic shapes
+      // Apply domain warping for organic shapes. masterScale divides the sample coordinates so the
+      // buildings-world hills stretch/shrink with the world (identity at masterScale = 1).
+      const m = this.config.terrainLayer.masterScale > 0 ? this.config.terrainLayer.masterScale : 1;
       const [warpedX, warpedZ] = this.applyDomainWarp(worldX, worldZ);
+      const sx = warpedX / m, sz = warpedZ / m;
       height = this.config.baseHeight;
       for (const layer of this.config.heightLayers) {
-        height += this.sampleNoiseLayer(warpedX, warpedZ, layer);
+        height += this.sampleNoiseLayer(sx, sz, layer);
       }
     }
 
@@ -1888,60 +2071,75 @@ export class TerrainGenerator implements HeightSampler {
    */
   private sampleLandformHeight(worldX: number, worldZ: number): number {
     const t = this.config.terrainLayer;
-    const wa = t.landformWarpStrength;
-    const wx = worldX + this.landformWarpX.GetNoise(worldX, worldZ) * wa;
-    const wz = worldZ + this.landformWarpZ.GetNoise(worldX, worldZ) * wa;
-    const e = this.elevationCurve(this.landformBase.GetNoise(wx, wz));
-    // Surface detail: the finest existing height layer, ramped in gently by altitude (0 on the beach and
-    // low plains, growing into the mountains) so ruggedness looks natural rather than switching on hard.
-    const layers = this.config.heightLayers;
-    const detailLayer = layers[layers.length - 1];
-    if (!detailLayer) return e;
-    const onset = t.landformSeaLevel + t.landformBeachWidth;               // detail begins above the beach
-    const full = t.landformSeaLevel + t.landformMountainHeight * 0.6;      // full detail well up the range
-    const rough = smoothstep(onset, full, e);
-    return e + this.sampleNoiseLayer(wx, wz, detailLayer) * rough * LANDFORM_DETAIL_GAIN;
+    const macro = this.sampleLandformMacro(worldX, worldZ);
+    // Surface detail: a dedicated noise whose frequency tracks the land feature size (so bumps scale with
+    // the world) and whose amplitude is driven by slope — flat ground gets a small floor of texture,
+    // steep faces get jagged ruggedness. Faded out on the beach/shore so coastlines stay clean.
+    const sizeDiv = this.landSizeScale();
+    const baseFreq = LANDFORM_BASE_FREQ * (t.landformScale > 0 ? t.landformScale : 1) / sizeDiv;
+    const f = baseFreq * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1);
+    const slope = this.landformSlope(worldX, worldZ);                 // tan(angle)
+    const slope01 = Math.min(1, slope);                              // ~45° saturates the "steep" term
+    const amp = t.landformDetailFlat + t.landformDetailSteep * slope01;
+    const sea = t.landformSeaLevel;
+    const rel = macro - sea;
+    const fade = smoothstep(t.landformBeachWidth, t.landformBeachWidth + 12, rel);  // 0 on/below beach
+    if (amp <= 0 || fade <= 0) return macro;
+    return macro + this.heightNoise.GetNoise(worldX * f, worldZ * f) * amp * fade;
   }
 
   /**
    * Macro landform height (warp + curve, NO surface detail) — the smooth base used under pathways and
-   * streams so they carve a clean channel instead of being chopped up by the detail noise.
+   * rivers so their channels aren't chopped up by the detail noise, and the basis for the slope estimate.
    */
   private sampleLandformMacro(worldX: number, worldZ: number): number {
     const t = this.config.terrainLayer;
-    const wa = t.landformWarpStrength;
+    const wa = t.landformWarpStrength * this.landSizeScale();   // coast-sweep meters scale with the world
     const wx = worldX + this.landformWarpX.GetNoise(worldX, worldZ) * wa;
     const wz = worldZ + this.landformWarpZ.GetNoise(worldX, worldZ) * wa;
     return this.elevationCurve(this.landformBase.GetNoise(wx, wz));
   }
 
   /**
-   * Map the continental noise n ∈ [-1,1] to an absolute height in voxels. An ocean band (below the shelf
-   * fraction) drops to a deep floor and rises steeply only near the shore, ending just BELOW sea level so
-   * the water always covers it. Just above the shelf sits a short, near-flat sand beach a few voxels
-   * ABOVE the water — so there's a sharp step at the waterline (no sand sitting at sea level, which was
-   * z-fighting the water shader). Above the beach, land rises with a cubic ramp: mostly low plains, rare
-   * tall mountains.
+   * Map the continental noise n ∈ [-1,1] to an absolute height in voxels via the configurable elevation
+   * curve. The curve outputs a normalized offset relative to sea level: negative offsets scale by the
+   * sea depth (ocean floor), positive by the mountain height. Finally the whole relief is scaled about
+   * sea level by master×land scale, so enlarging the world stretches height and width together (slopes
+   * preserved). The default curve gives a soft sea→beach ramp (no waterline cliff).
    */
   private elevationCurve(n: number): number {
     const t = this.config.terrainLayer;
     const sea = t.landformSeaLevel;
-    const u = (n + 1) * 0.5;                    // 0..1
-    const SHELF = 0.44;                         // below this → ocean
-    if (u < SHELF) {
-      const d = u / SHELF;                      // 0 deep .. 1 shore
-      const floor = sea - t.landformSeaDepth;   // deepest ocean floor
-      const topSeabed = sea - 3;                // shore seabed sits just under the water
-      return floor + (topSeabed - floor) * Math.pow(d, 3);
-    }
-    const land = (u - SHELF) / (1 - SHELF);     // 0 shore .. 1 highest
-    const BEACH = 0.06;                         // fraction of the land range that is flat beach
-    if (land < BEACH) {
-      const b = land / BEACH;                   // steps up from sea+2 to the flat beach top
-      return (sea + 2) + (t.landformBeachWidth - 2) * b;
-    }
-    const p = (land - BEACH) / (1 - BEACH);     // 0..1 across plains → mountains
-    return sea + t.landformBeachWidth + Math.pow(p, 3) * t.landformMountainHeight;
+    const u = (n + 1) * 0.5;                            // 0..1
+    const off = this.landformCurveFn.eval(u);          // normalized offset (~ -1 .. +1)
+    const raw = off >= 0 ? sea + off * t.landformMountainHeight : sea + off * t.landformSeaDepth;
+    return sea + (raw - sea) * this.landSizeScale();   // vertical scale pivots on sea level
+  }
+
+  /** Landform surface slope as tan(angle): central difference of the MACRO height (so detail bumps
+   *  don't register as cliffs). Memoized per column; used by detail, material and the stamp cull. */
+  private landformSlope(worldX: number, worldZ: number): number {
+    let inner = this.slopeCache.get(worldX);
+    if (inner) { const c = inner.get(worldZ); if (c !== undefined) return c; }
+    const step = 4;   // meters
+    const hL = this.sampleLandformMacro(worldX - step, worldZ);
+    const hR = this.sampleLandformMacro(worldX + step, worldZ);
+    const hD = this.sampleLandformMacro(worldX, worldZ - step);
+    const hU = this.sampleLandformMacro(worldX, worldZ + step);
+    // heights are voxels → meters via VOXEL_SCALE; horizontal span is 2·step meters.
+    const dhx = ((hR - hL) * VOXEL_SCALE) / (2 * step);
+    const dhz = ((hU - hD) * VOXEL_SCALE) / (2 * step);
+    const slope = Math.sqrt(dhx * dhx + dhz * dhz);
+    if (this.slopeCacheEntries > 262144) { this.slopeCache.clear(); this.slopeCacheEntries = 0; inner = undefined; }
+    if (!inner) { inner = new Map(); this.slopeCache.set(worldX, inner); }
+    inner.set(worldZ, slope);
+    this.slopeCacheEntries++;
+    return slope;
+  }
+
+  /** Surface angle in degrees at a column (from the memoized slope). */
+  private landformSlopeDeg(worldX: number, worldZ: number): number {
+    return Math.atan(this.landformSlope(worldX, worldZ)) * (180 / Math.PI);
   }
 
   /**
@@ -1987,7 +2185,7 @@ export class TerrainGenerator implements HeightSampler {
       // Elevation-band material; submerged columns read as water on the 2D map. Reported height stays
       // the true (sea-floor) terrain so the load cap covers the floor — the water body above is
       // "content" that the surface-column scan picks up (same as stamp tops), raising the visible top.
-      material = originalHeight < tlSurf.landformSeaLevel ? waterConfig.waterMaterial : this.landformSurfaceMaterial(originalHeight);
+      material = originalHeight < tlSurf.landformSeaLevel ? waterConfig.waterMaterial : this.landformSurfaceMaterial(originalHeight, worldX, worldZ);
     } else {
       // Surface material (depth 0)
       material = this.getMaterialAtDepth(0);
@@ -2010,13 +2208,16 @@ export class TerrainGenerator implements HeightSampler {
     return this.config.defaultMaterial;
   }
 
-  /** Surface material for the landform layer, by elevation relative to sea level: gravel seabed → sand
-   *  beach shelf → normal grass/plains → snow above the snow line. (Slope-based rock is a later step.) */
-  private landformSurfaceMaterial(heightVoxels: number): number {
+  /** Surface material for the landform layer: gravel seabed → sand beach shelf → ROCK on steep faces
+   *  (cliffs, even up high) → snow above the snow line → grass/plains elsewhere. Slope is the memoized
+   *  macro-gradient angle so detail bumps don't flip flat ground to rock. */
+  private landformSurfaceMaterial(heightVoxels: number, worldX: number, worldZ: number): number {
     const t = this.config.terrainLayer;
     const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
     if (rel < 0) return mat('gravel');               // sea floor
     if (rel <= t.landformBeachWidth) return mat('sand');
+    const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 55;
+    if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');  // steep → rock cliffs
     if (rel >= t.landformSnowLine) return mat('snow');
     return this.getMaterialAtDepth(0);               // plains → the normal top material
   }
@@ -2163,7 +2364,7 @@ export class TerrainGenerator implements HeightSampler {
             // Landform surface skin: sand/snow/gravel by elevation on the top few voxels (rock strata
             // underneath stay from getMaterialAtDepth). Short-circuits when the layer is off.
             if (tl.landformEnabled && depthFromSurface <= LANDFORM_SKIN_DEPTH) {
-              material = this.landformSurfaceMaterial(terrainHeight);
+              material = this.landformSurfaceMaterial(terrainHeight, worldX, worldZ);
             }
 
             // Check for pathway override on surface voxels (use cached check)
@@ -2243,8 +2444,9 @@ export class TerrainGenerator implements HeightSampler {
       }
     }
 
-    // Apply stamps (trees, rocks) if enabled
-    if (this.stampPointGenerator && this.stampPlacer) {
+    // Apply stamps (trees, rocks, buildings). GATED ON buildingsOn: stamps belong to the Buildings
+    // layer, so a Landforms-only world (buildings off) produces no trees/rocks/buildings.
+    if (buildingsOn && this.stampPointGenerator && this.stampPlacer) {
       // The scatter + pathway/breach filter is XZ-only, so memoize it per (cx,cz) — every cy in the
       // column reuses the same filtered list instead of redoing the 25-neighbour scatter + O(n²)
       // collision + per-placement pathway/breach noise. applyStamps treats the list read-only.
@@ -2263,9 +2465,9 @@ export class TerrainGenerator implements HeightSampler {
       this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
     }
 
-    // Torches along the cobble pathway walls (the walls that line the water-filled paths).
-    // Gated on chunkHasPath so the per-column scan only runs where a path actually is.
-    if (this.stampPlacer && chunkHasPath) {
+    // Torches along the cobble pathway walls. Gated on chunkHasPath (which already requires buildingsOn)
+    // so the per-column scan only runs where a path actually is.
+    if (buildingsOn && this.stampPlacer && chunkHasPath) {
       const torchPlacements = this.generatePathwayWallTorches(cx, cz);
       if (torchPlacements.length > 0) {
         this.stampPlacer.applyStamps(data, cx, cy, cz, torchPlacements, this);
