@@ -73,7 +73,8 @@ export class StampPlacer {
     cy: number,
     cz: number,
     placements: StampPlacement[],
-    heightSampler: HeightSampler
+    heightSampler: HeightSampler,
+    scale = 1
   ): void {
     // Chunk bounds in voxel space
     const chunkVoxelX = cx * CHUNK_SIZE;
@@ -97,7 +98,8 @@ export class StampPlacer {
         chunkVoxelX,
         chunkVoxelY,
         chunkVoxelZ,
-        heightSampler
+        heightSampler,
+        scale
       );
     }
   }
@@ -111,7 +113,8 @@ export class StampPlacer {
     chunkVoxelX: number,
     chunkVoxelY: number,
     chunkVoxelZ: number,
-    heightSampler: HeightSampler
+    heightSampler: HeightSampler,
+    scale = 1
   ): void {
     // Deterministic per-building seed from world position (stable across chunks) → decorations.
     const seed = hashInt2(
@@ -135,27 +138,41 @@ export class StampPlacer {
     const f = getStampVoxelsByY(stamp);
     const ys = f.ys, xs = f.xs, zs = f.zs, mats = f.mats, weights = f.weights;
     const loY = chunkVoxelY - stampOriginY;          // inclusive local-Y of this chunk's bottom
-    let a = 0, b = f.n;
-    while (a < b) { const m = (a + b) >> 1; if (ys[m] < loY) a = m + 1; else b = m; }
-
-    // Flat typed-array loop — contiguous reads instead of a pointer + 5 property loads per voxel.
     const baseX = stampOriginX - chunkVoxelX, baseZ = stampOriginZ - chunkVoxelZ;
-    for (let i = a; i < f.n; i++) {
-      const localY = ys[i] - loY;                     // = stampOriginY + voxel.y - chunkVoxelY
-      if (localY >= CHUNK_SIZE) break;                // past this chunk's Y-window (sorted → done)
 
-      const localX = baseX + xs[i];
-      const localZ = baseZ + zs[i];
-      if (localX < 0 || localX >= CHUNK_SIZE ||
-          localZ < 0 || localZ >= CHUNK_SIZE) {
-        continue;
+    if (scale === 1) {
+      // Fast path (default): binary-search the [loY, hiY) Y-window and iterate just it. Byte-identical
+      // to before scaling existed — the stampCache guard depends on this staying exact.
+      let a = 0, b = f.n;
+      while (a < b) { const m = (a + b) >> 1; if (ys[m] < loY) a = m + 1; else b = m; }
+      for (let i = a; i < f.n; i++) {
+        const localY = ys[i] - loY;                   // = stampOriginY + voxel.y - chunkVoxelY
+        if (localY >= CHUNK_SIZE) break;              // past this chunk's Y-window (sorted → done)
+        const localX = baseX + xs[i];
+        const localZ = baseZ + zs[i];
+        if (localX < 0 || localX >= CHUNK_SIZE || localZ < 0 || localZ >= CHUNK_SIZE) continue;
+        const index = voxelIndex(localX, localY, localZ);
+        const newVoxel = this.blendVoxel(data[index], mats[i], weights[i]);
+        if (newVoxel !== null) data[index] = newVoxel;
       }
+      return;
+    }
 
+    // Scaled path (World scale ≠ 1): shrink/grow the voxel model about its base by `scale`. Voxel
+    // offsets are rounded to the grid, so several source voxels may collapse onto one target when
+    // shrinking (last write / blend wins) — a smaller model. ys is sorted, and round(y·s) is monotonic,
+    // so the Y-window bounds still work.
+    let a = 0, b = f.n;
+    while (a < b) { const m = (a + b) >> 1; if (Math.round(ys[m] * scale) < loY) a = m + 1; else b = m; }
+    for (let i = a; i < f.n; i++) {
+      const localY = Math.round(ys[i] * scale) - loY;
+      if (localY >= CHUNK_SIZE) break;
+      const localX = baseX + Math.round(xs[i] * scale);
+      const localZ = baseZ + Math.round(zs[i] * scale);
+      if (localX < 0 || localX >= CHUNK_SIZE || localZ < 0 || localZ >= CHUNK_SIZE) continue;
       const index = voxelIndex(localX, localY, localZ);
       const newVoxel = this.blendVoxel(data[index], mats[i], weights[i]);
-      if (newVoxel !== null) {
-        data[index] = newVoxel;
-      }
+      if (newVoxel !== null) data[index] = newVoxel;
     }
   }
 

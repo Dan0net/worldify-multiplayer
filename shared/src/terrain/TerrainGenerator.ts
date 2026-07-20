@@ -2585,7 +2585,8 @@ export class TerrainGenerator implements HeightSampler {
         if (this.placementCache.size > 4096) this.placementCache.clear();
         this.placementCache.set(pkey, placements);
       }
-      this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this);
+      // Trees/rocks/buildings scale their model size with World scale so they shrink with the land.
+      this.stampPlacer.applyStamps(data, cx, cy, cz, placements, this, this.masterScale);
     }
 
     // Torches along the cobble pathway walls. Gated on chunkHasPath (which already requires buildingsOn)
