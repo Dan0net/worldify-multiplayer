@@ -189,7 +189,8 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
   useEffect(() => {
     nextWorldName().then(setName);
-    nameRef.current?.focus();
+    // Deliberately NOT auto-focusing the name field: on mobile that pops the on-screen keyboard the
+    // moment the dialog opens. Name/seed are pre-filled; the user taps a field only if they want to edit.
   }, []);
 
   const submit = () => {

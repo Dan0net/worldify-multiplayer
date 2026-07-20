@@ -414,16 +414,19 @@ export const DEFAULT_CAVE_CONFIG: CaveConfig = {
  * knobs stretch it. Height OFFSET so it's independent of sea level.
  */
 export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
-  { x: 0.00, y: -1.00 },   // deepest ocean floor (× seaDepth)
-  { x: 0.32, y: -0.50 },   // ocean basin
-  { x: 0.44, y: -0.10 },   // seabed rising toward the shore
-  { x: 0.48, y: -0.02 },   // just under the waterline
-  { x: 0.50, y: 0.00 },    // waterline
-  { x: 0.62, y: 0.03 },    // FLAT low shelf: land barely rises over a wide band → gentle beach/plains
-  { x: 0.74, y: 0.09 },    // gentle low plains (× mountainHeight)
-  { x: 0.86, y: 0.24 },    // rolling hills
-  { x: 0.95, y: 0.55 },    // foothills
-  { x: 1.00, y: 1.00 },    // mountain peaks (× mountainHeight)
+  { x: 0.00, y: -1.00 },   // deepest ocean floor, far out (× seaDepth)
+  { x: 0.22, y: -0.45 },   // ocean basin
+  { x: 0.38, y: -0.15 },   // GENTLE seabed — shallow well away from shore (was a steep drop)
+  { x: 0.46, y: -0.04 },   // shallows approaching the beach
+  { x: 0.49, y: -0.008 },  // wet sand ~1 voxel below the waterline (water covers it → no z-fight)
+  { x: 0.50, y: 0.004 },   // dry sand lip, just above the water
+  { x: 0.55, y: 0.028 },   // FLAT sand beach — a coastal strip, still within the sand band
+  { x: 0.61, y: 0.055 },   // grass plains begin just above the beach
+  { x: 0.75, y: 0.14 },    // plains climbing
+  { x: 0.87, y: 0.38 },    // hills
+  { x: 0.94, y: 0.75 },    // upper slopes
+  { x: 0.985, y: 1.00 },   // reach the peak height…
+  { x: 1.00, y: 1.00 },    // …then PLATEAU (flat snowy tops)
 ];
 
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
@@ -448,10 +451,10 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformSnowLine: 220,       // voxels above sea → snow caps
   landformCurve: DEFAULT_LANDFORM_CURVE,
 
-  landformDetailFrequency: 8,  // detail ~8× the land base frequency (fine bumps over the macro shape)
-  landformDetailFlat: 1.5,     // voxels of detail on flat ground (a little texture, not glassy)
-  landformDetailSteep: 10,     // extra voxels of detail on the steepest slopes (jagged mountains)
-  landformRockSlopeDeg: 55,    // fully rock by ~55°; grass→rock blend begins ~half that
+  landformDetailFrequency: 10, // detail ~10× the land base frequency (fine bumps over the macro shape)
+  landformDetailFlat: 4,       // voxels of detail on flat ground (visible texture, not glassy)
+  landformDetailSteep: 22,     // extra voxels of detail on the steepest slopes (jagged mountains)
+  landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
   riverSpacing: 240,           // ~240 m between river cells
@@ -762,14 +765,19 @@ export class TerrainGenerator implements HeightSampler {
 
     // Landform noise (seed block +50000, kept off the base seed++ chain — see field decls).
     let landformSeed = this.config.seed + 50000;
+    // Warp: FBm with 2 octaves (was single) so coastlines/ranges get an extra layer of meander detail.
     this.landformWarpX = new FastNoiseLite(landformSeed++);
     this.landformWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.landformWarpX.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.landformWarpX.SetFractalOctaves(2);
     this.landformWarpZ = new FastNoiseLite(landformSeed++);
     this.landformWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.landformWarpZ.SetFractalType(FastNoiseLite.FractalType.FBm);
+    this.landformWarpZ.SetFractalOctaves(2);
     this.landformBase = new FastNoiseLite(landformSeed++);
     this.landformBase.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
     this.landformBase.SetFractalType(FastNoiseLite.FractalType.FBm);
-    this.landformBase.SetFractalOctaves(3);   // continental shape: a few octaves of large-scale relief
+    this.landformBase.SetFractalOctaves(5);   // continental shape + mid-scale relief (was 3 → too smooth)
 
     // River noise (seed block +80000, off the base chain). Cellular edge-detection network + its own
     // domain warp — the same mechanism as pathways, but a separate field so rivers and paths are
@@ -2284,9 +2292,11 @@ export class TerrainGenerator implements HeightSampler {
     const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
     if (rel < 0) return mat('gravel');               // sea floor
     if (rel <= t.landformBeachWidth * vscale) return mat('sand');
-    const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 55;
-    if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');  // steep → rock cliffs
+    // Snow BEFORE rock so high peaks cap with snow (incl. their steep faces) rather than reading as
+    // bare rock — the flat plateau tops give broad snowfields; rock shows on the slopes below the line.
     if (rel >= t.landformSnowLine * vscale) return mat('snow');
+    const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32;
+    if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');  // steep → rock cliffs
     return this.getMaterialAtDepth(0);               // plains → the normal top material
   }
 
@@ -2375,8 +2385,10 @@ export class TerrainGenerator implements HeightSampler {
           ? this.sampleLandformMacro(worldX, worldZ)
           : this.sampleHeight(worldX, worldZ);
 
-        let isWallColumn = (columnBreached || furnitureSuppressed) ? 0 : -1; // -1 = unchecked, 0 = no, 1 = yes
-        let isBorderColumn = (columnBreached || furnitureSuppressed) ? 0 : -1;
+        // Walls + borders are Buildings-layer path furniture — force them off when buildings are off
+        // (a Landforms/Rivers-only world), else the lazy wall/border scans below would still draw them.
+        let isWallColumn = (!buildingsOn || columnBreached || furnitureSuppressed) ? 0 : -1; // -1 = unchecked, 0 = no, 1 = yes
+        let isBorderColumn = (!buildingsOn || columnBreached || furnitureSuppressed) ? 0 : -1;
 
         // Store original terrain height before any dip (for water-level calculation).
         const originalTerrainHeight = terrainHeight;
