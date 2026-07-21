@@ -312,10 +312,10 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
         </div>
       </label>
 
-      {/* Generation layers: toggle Terrain / Worms / Caverns, then tune each enabled layer. */}
+      {/* Generation layers (independent) on top; biomes (region surfaces) as their own group below. */}
       <div className="flex flex-col gap-2 border-t border-white/10 pt-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-white/60 text-xs">Layers</span>
+          <span className="text-white/60 text-xs">Generation</span>
           <div className="flex gap-1.5 flex-wrap justify-end">
             <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
               Paths
@@ -326,18 +326,23 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
             <button className={pill(terrain.riversEnabled)} onClick={() => patchTerrain({ riversEnabled: !terrain.riversEnabled })}>
               Rivers
             </button>
-            {/* Per-biome toggles — biomes are on when ≥1 is enabled. */}
-            {terrain.biomes.map((b) => (
-              <button key={b.name} className={pill(b.enabled)} onClick={() => toggleBiome(b.name)}>
-                {b.name}
-              </button>
-            ))}
             <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
             </button>
             <button className={pill(cave.cavernsEnabled)} onClick={() => patchCave({ cavernsEnabled: !cave.cavernsEnabled })}>
               Caverns
             </button>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-white/60 text-xs">Biomes</span>
+          <div className="flex gap-1.5 flex-wrap justify-end">
+            {/* Per-biome toggles — biomes are on when ≥1 is enabled (needs Landforms to shape the surface). */}
+            {terrain.biomes.map((b) => (
+              <button key={b.name} className={pill(b.enabled)} onClick={() => toggleBiome(b.name)}>
+                {b.name}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -383,12 +388,23 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
               <>
                 {subheading('Biomes')}
                 <span className="text-white/40 text-[10px] leading-tight">
-                  Areas of different surface generation. Cells follow the river/region spacing; rivers run
-                  along the borders. Needs Landforms on to shape the surface.
+                  Each enabled biome is a region with its own surface material; rivers run along the cell
+                  borders. Needs Landforms on to shape the surface.
                 </span>
                 {sliderRow('Region spacing', 'Distance between biome cells (shared with rivers).',
                   terrain.riverSpacing, 60, 1000, 10,
                   (v) => patchTerrain({ riverSpacing: v }), (v) => String(v))}
+                {/* Debug view: flatten each biome cell to its material so borders + rivers read clearly. */}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-white/80 text-xs">Debug colors</span>
+                  <button className={pill(terrain.biomesDebug)} onClick={() => patchTerrain({ biomesDebug: !terrain.biomesDebug })}>
+                    {terrain.biomesDebug ? 'On' : 'Off'}
+                  </button>
+                </div>
+                <span className="text-white/40 text-[10px] leading-tight">
+                  Paints each biome cell flat with its material (skips beach/rock/snow) so cell edges and
+                  rivers are easy to see.
+                </span>
               </>
             )}
             {cave.wormsEnabled && (

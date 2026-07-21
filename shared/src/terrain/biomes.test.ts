@@ -45,20 +45,40 @@ describe('biomes layer is visible', () => {
     expect(seen.size).toBeLessThanOrEqual(DEFAULT_BIOMES.length);
   });
 
-  it('produces distinct biome surface materials (grass + desert sand somewhere on land)', () => {
+  it('produces distinct biome surface materials (grassland + desert tops somewhere on land)', () => {
     const gen = biomeGen();
     const SEA = DEFAULT_TERRAIN_LAYER_CONFIG.landformSeaLevel;
-    let grass = 0, sand = 0;
+    let grass = 0, desert = 0;
     for (let x = -1200; x <= 1200; x += 12) {
       for (let z = -1200; z <= 1200; z += 12) {
         const s = gen.sampleSurface(x, z);
         if (s.height <= SEA + 12) continue;              // skip sea/beach — want inland biome surface
-        if (s.material === mat('moss2')) grass++;         // grassland/forest top
-        if (s.material === mat('sand')) sand++;           // desert top (inland, not the beach band)
+        if (s.material === mat('moss2')) grass++;         // Grassland top
+        if (s.material === mat('roof')) desert++;         // Desert top (distinct from beach sand)
       }
     }
-    expect(grass).toBeGreaterThan(50);   // grassland/forest biomes present
-    expect(sand).toBeGreaterThan(50);    // desert biome present inland
+    expect(grass).toBeGreaterThan(50);    // Grassland biome present
+    expect(desert).toBeGreaterThan(50);   // Desert biome present inland
+  });
+
+  it('debug mode flattens land columns to biome materials (no rock/snow/sand above sea)', () => {
+    const gen = new TerrainGenerator({
+      seed: 12345,
+      terrainLayer: { ...DEFAULT_TERRAIN_LAYER_CONFIG, enabled: false, landformEnabled: true, biomes: ALL_BIOMES, biomesDebug: true },
+      caveConfig: { ...DEFAULT_CAVE_CONFIG, wormsEnabled: false, cavernsEnabled: false },
+    }) as unknown as { sampleSurface(x: number, z: number): { height: number; material: number } };
+    const SEA = DEFAULT_TERRAIN_LAYER_CONFIG.landformSeaLevel;
+    const biomeTops = new Set(ALL_BIOMES.map((b) => b.topMaterial));
+    let landCols = 0;
+    for (let x = -1000; x <= 1000; x += 16) {
+      for (let z = -1000; z <= 1000; z += 16) {
+        const s = gen.sampleSurface(x, z);
+        if (s.height <= SEA) continue;            // above-sea land columns only (sea/rivers stay water)
+        landCols++;
+        expect(biomeTops.has(s.material)).toBe(true);   // every land column is a flat biome color
+      }
+    }
+    expect(landCols).toBeGreaterThan(50);
   });
 });
 

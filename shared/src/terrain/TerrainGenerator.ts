@@ -260,6 +260,9 @@ export interface TerrainLayerConfig {
   /** Biome palette — each has its own `enabled` toggle. Biomes are active when ≥1 is enabled; N = the
    *  enabled count and the region cell hash maps into the enabled subset. */
   biomes: BiomeDefinition[];
+  /** Debug view: when on (and biomes active), paint each biome cell FLAT with its unique material
+   *  across the whole cell (skipping beach/rock/snow) so cell borders + rivers read as clean regions. */
+  biomesDebug: boolean;
 }
 
 export interface TerrainConfig {
@@ -447,6 +450,9 @@ export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
  * for dense trees; Desert is sandy with sparse rocks and no snow. Sea/beach stay elevation-driven.
  */
 export const DEFAULT_BIOMES: BiomeDefinition[] = [
+  // Each biome differs ONLY by its top material for now (unique color per biome). detail/rock/snow are
+  // global; stamps are not yet biome-filtered. Materials are distinct + non-emissive; the Mountains
+  // biome uses `rock2` (red-brown) so it reads apart from the global steep-rock `rock` (grey).
   {
     name: 'Grassland', enabled: false,
     topMaterial: mat('moss2'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
@@ -457,13 +463,18 @@ export const DEFAULT_BIOMES: BiomeDefinition[] = [
   },
   {
     name: 'Forest', enabled: false,
-    topMaterial: mat('moss2'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
+    topMaterial: mat('grass4'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
     stamps: [StampType.TREE_PINE, StampType.TREE_OAK, StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
   },
   {
     name: 'Desert', enabled: false,
-    topMaterial: mat('sand'), detailFlat: 0, detailSteep: 3, rockSlopeDeg: 40, snowLine: 100000,
+    topMaterial: mat('roof'), detailFlat: 0, detailSteep: 3, rockSlopeDeg: 40, snowLine: 100000,
     stamps: [StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
+  },
+  {
+    name: 'Mountains', enabled: false,
+    topMaterial: mat('rock2'), detailFlat: 0, detailSteep: 12, rockSlopeDeg: 28, snowLine: 70,
+    stamps: [StampType.ROCK_SMALL, StampType.ROCK_MEDIUM, StampType.ROCK_LARGE],
   },
 ];
 
@@ -490,8 +501,8 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformCurve: DEFAULT_LANDFORM_CURVE,
 
   landformDetailFrequency: 10, // ×0.03/m absolute → ~3 m base rubble (+ finer octaves)
-  landformDetailFlat: 0,       // no detail on flat ground (kept smooth)
-  landformDetailSteep: 6,      // rubble amplitude that ramps in (squared) only toward vertical slopes
+  landformDetailFlat: 0.2,     // slight texture on flat ground so plains aren't glassy
+  landformDetailSteep: 20,     // strong rubble amplitude that ramps in (squared) toward vertical slopes
   landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
@@ -502,6 +513,7 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   riverWarpFrequency: 0.006,   // broad river curves
 
   biomes: DEFAULT_BIOMES,      // all disabled by default → biomes off → existing worlds byte-identical
+  biomesDebug: false,          // flat per-biome debug coloring off by default
 };
 
 /**
@@ -1784,7 +1796,7 @@ export class TerrainGenerator implements HeightSampler {
   private isLandformSuppressed(worldX: number, worldZ: number): boolean {
     const t = this.config.terrainLayer;
     if (!t.landformEnabled) return false;
-    return this.sampleHeight(worldX, worldZ) <= t.landformSeaLevel + t.landformBeachWidth * this.landSizeScale();
+    return this.sampleHeight(worldX, worldZ) <= t.landformSeaLevel + this.beachBandVox();
   }
 
   private isBreachColumn(worldX: number, worldZ: number): boolean {
@@ -2278,13 +2290,18 @@ export class TerrainGenerator implements HeightSampler {
     const slopeDeg = Math.atan(this.landformSlope(worldX, worldZ)) * (180 / Math.PI);
     const t01 = Math.min(1, slopeDeg / 90);
     const rugged = t01 * t01;
-    // Biome (if any) sets the detail amplitude; else the global landform values.
-    const biome = this.biomeAt(worldX, worldZ);
-    const flat = biome ? biome.detailFlat : t.landformDetailFlat;
-    const steep = biome ? biome.detailSteep : t.landformDetailSteep;
-    const amp = (flat + steep * rugged) * vscale;
+    // Detail amplitude is global (not per-biome for now): flat floor + steep ruggedness ramp.
+    const amp = (t.landformDetailFlat + t.landformDetailSteep * rugged) * vscale;
     const h = amp <= 0 ? macro : macro + this.landformDetail.GetNoise(worldX, worldZ) * amp;
     return this.applyBeachLip(h);
+  }
+
+  /** Beach band height in voxels above sea level. Scales with the world (like the rest of the relief)
+   *  but is floored at MIN_BEACH_VOXELS so the sand shelf stays visible at small master scales (at 0.1
+   *  the scaled band would otherwise collapse below a single voxel and the beach would vanish). */
+  private beachBandVox(): number {
+    const MIN_BEACH_VOXELS = 3;
+    return Math.max(this.config.terrainLayer.landformBeachWidth * this.landSizeScale(), MIN_BEACH_VOXELS);
   }
 
   /** 1-voxel beach lip: wherever the surface sits within a voxel of the waterline, duck it to sea−1 so
@@ -2445,17 +2462,20 @@ export class TerrainGenerator implements HeightSampler {
     const t = this.config.terrainLayer;
     const vscale = this.landSizeScale();             // heights are vertically scaled → scale the bands too
     const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
+    const biome = this.biomeAt(worldX, worldZ);
+    // Debug view: flatten the whole biome cell (above sea) to its unique material so cell borders +
+    // rivers read as clean regions. Sea/rivers stay water (handled upstream), everything else is the
+    // biome color — beach/rock/snow overrides are skipped on purpose.
+    if (t.biomesDebug && biome) return biome.topMaterial;
     if (rel < 0) return mat('gravel');               // sea floor
-    if (rel <= t.landformBeachWidth * vscale) return mat('sand');
+    if (rel <= this.beachBandVox()) return mat('sand');
     // Steep rock OVERRIDES snow: any steep face (measured on the post-detail surface) is bare rock,
     // even up high. Snow then only shows above the snow line on the remaining SHALLOW slopes (caps).
-    // Above the beach the biome (if any) governs rock-slope / snow-line / top material; else the global
-    // landform values. Sea + beach above stay elevation-driven so coastlines are unaffected by biomes.
-    const biome = this.biomeAt(worldX, worldZ);
-    const rockDeg = biome ? biome.rockSlopeDeg : (t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32);
+    // Rock-slope / snow-line are GLOBAL (not per-biome for now); a biome only recolors the plains band.
+    // Sea + beach stay elevation-driven so coastlines are unaffected by biomes.
+    const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32;
     if (this.landformDetailedSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
-    const snowLine = biome ? biome.snowLine : t.landformSnowLine;
-    if (rel >= snowLine * vscale) return mat('snow');   // shallow + high → snow
+    if (rel >= t.landformSnowLine * vscale) return mat('snow');   // shallow + high → snow
     return biome ? biome.topMaterial : this.getMaterialAtDepth(0);   // plains → biome / normal top material
   }
 
@@ -2703,14 +2723,12 @@ export class TerrainGenerator implements HeightSampler {
         // Drop stamps (trees / rocks / buildings) on pathways + rivers, over cave breaches (nothing left
         // floating above an open cave mouth), below the beach line, and on terrain steeper than 60°
         // (they look fine on 45° slopes but wrong on cliffs). Slope only applies with the landform on.
-        const biomesOn = this.biomeCount() > 0;
+        // (Stamps are NOT biome-filtered for now — biomes differ only by surface material.)
         placements = allPlacements.filter(p =>
           !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ)
           && !this.isLandformSuppressed(p.worldX, p.worldZ)
           && !(riversOn && this.isOnRiver(p.worldX, p.worldZ))
-          && !(tl.landformEnabled && this.landformSlopeDeg(p.worldX, p.worldZ) > 60)
-          // Biome stamp filter: keep a placement only if its type is allowed in that column's biome.
-          && (!biomesOn || (this.biomeAt(p.worldX, p.worldZ)?.stamps.includes(p.type) ?? true)));
+          && !(tl.landformEnabled && this.landformSlopeDeg(p.worldX, p.worldZ) > 60));
         if (this.placementCache.size > 4096) this.placementCache.clear();
         this.placementCache.set(pkey, placements);
       }
