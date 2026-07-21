@@ -751,13 +751,15 @@ export class GameCore {
    * are off, or the biome name isn't in the palette (→ default origin spawn).
    */
   private computeSpawnBiomeXZ(): { x: number; z: number } | null {
-    const biomeName = getActiveWorldSpawnBiome();
+    const target = getActiveWorldSpawnBiome();   // '' = any, 'sea', 'beach', or a biome name
     const tcfg = getActiveWorldTerrainConfig();
-    if (!biomeName || !tcfg || !tcfg.biomesEnabled || !tcfg.biomes?.length) return null;
-    const idx = tcfg.biomes.findIndex((b) => b.name === biomeName);
-    if (idx < 0) return null;
+    if (!target || !tcfg) return null;
     try {
-      return new BiomeSpawnSampler(getActiveWorldSeed(), tcfg).findSpawn(idx);
+      const sampler = new BiomeSpawnSampler(getActiveWorldSeed(), tcfg);
+      if (target === 'sea') return tcfg.landformEnabled ? sampler.findSea() : null;
+      if (target === 'beach') return tcfg.landformEnabled ? sampler.findBeach() : null;
+      const idx = sampler.activeBiomeNames.indexOf(target);
+      return idx < 0 ? null : sampler.findSpawn(idx);
     } catch {
       return null;   // never block spawn on a sampler error
     }

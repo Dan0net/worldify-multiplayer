@@ -23,13 +23,16 @@ export class BiomeSpawnSampler {
   private lfBase: FastNoiseLite;
   private lfWarpAmp: number;
   readonly biomeCount: number;
+  /** Names of the ENABLED biomes, in the same order as the generator's active palette (index = biome ID). */
+  readonly activeBiomeNames: string[];
   readonly spacing: number;   // region cell size in meters (for the cell-enumeration step)
 
   constructor(seed: number, t: TerrainLayerConfig) {
     const m = t.masterScale > 0 ? t.masterScale : 1;
     const l = t.landScale > 0 ? t.landScale : 1;
     const sizeDiv = m * l;                                  // landSizeScale
-    this.biomeCount = t.biomesEnabled && t.biomes ? t.biomes.length : 0;
+    this.activeBiomeNames = (t.biomes ?? []).filter((b) => b.enabled).map((b) => b.name);
+    this.biomeCount = this.activeBiomeNames.length;
     this.spacing = Math.max(1, t.riverSpacing) * sizeDiv;   // world-meters between region cells
 
     // Region (biome/river) field — matches the generator's river block (seed + 80000).
@@ -76,38 +79,58 @@ export class BiomeSpawnSampler {
     return cellValueToBiomeId(this.region.GetNoise(wx, wz), this.biomeCount);
   }
 
-  /** Rough "is this column on land (above the beach)" test via the warped continental base noise sign. */
-  isLand(x: number, z: number): boolean {
+  /** The warped continental base noise at a column (≈ elevation before the curve; sign ≈ land/sea). */
+  baseNoiseAt(x: number, z: number): number {
     const wx = x + this.lfWarpX.GetNoise(x, z) * this.lfWarpAmp;
     const wz = z + this.lfWarpZ.GetNoise(x, z) * this.lfWarpAmp;
-    return this.lfBase.GetNoise(wx, wz) > LAND_NOISE_THRESHOLD;
+    return this.lfBase.GetNoise(wx, wz);
+  }
+
+  /** Rough "is this column on land (above the beach)" test via the continental base noise. */
+  isLand(x: number, z: number): boolean {
+    return this.baseNoiseAt(x, z) > LAND_NOISE_THRESHOLD;
   }
 
   /**
-   * Find a spawn XZ for `biomeIndex` by enumerating cell centres outward from the origin (one eval per
-   * cell on the region-spacing grid) and returning the nearest cell that is that biome AND on land.
-   * Returns null if none found within `maxRings`. Pure + cheap (a few thousand noise evals, no terrain
-   * generation) — reliably finds even a heavily down-weighted biome.
+   * Enumerate cell centres outward from the origin (one eval per cell on the region-spacing grid) and
+   * return the nearest cell whose centre satisfies `accept`. Pure + cheap (a few thousand noise evals,
+   * no terrain generation) — reliably finds even a heavily down-weighted target.
    */
-  findSpawn(biomeIndex: number, maxRings = 96): { x: number; z: number } | null {
-    if (this.biomeCount <= 0) return null;
+  private findByPredicate(accept: (x: number, z: number) => boolean, maxRings: number): { x: number; z: number } | null {
     const s = this.spacing;
-    let best: { x: number; z: number } | null = null;
-    let bestD2 = Infinity;
     for (let ring = 0; ring <= maxRings; ring++) {
-      // Scan the square ring at Chebyshev radius `ring`; stop early once a match is found in a ring
-      // (the nearest is within this ring or the next, so finish this ring then return).
+      let best: { x: number; z: number } | null = null;
+      let bestD2 = Infinity;
       for (let gz = -ring; gz <= ring; gz++) {
         for (let gx = -ring; gx <= ring; gx++) {
           if (ring > 0 && Math.max(Math.abs(gx), Math.abs(gz)) !== ring) continue; // ring shell only
           const x = (gx + 0.5) * s, z = (gz + 0.5) * s;   // cell centre
-          if (this.biomeIdAt(x, z) !== biomeIndex || !this.isLand(x, z)) continue;
+          if (!accept(x, z)) continue;
           const d2 = x * x + z * z;
           if (d2 < bestD2) { bestD2 = d2; best = { x, z }; }
         }
       }
       if (best) return best;   // nearest match found in this ring
     }
-    return best;
+    return null;
+  }
+
+  /** Nearest land cell of a biome (by its index in the enabled palette). */
+  findSpawn(biomeIndex: number, maxRings = 96): { x: number; z: number } | null {
+    if (this.biomeCount <= 0) return null;
+    return this.findByPredicate((x, z) => this.biomeIdAt(x, z) === biomeIndex && this.isLand(x, z), maxRings);
+  }
+
+  /** Nearest clearly-submerged cell (spawn on the sea). */
+  findSea(maxRings = 96): { x: number; z: number } | null {
+    return this.findByPredicate((x, z) => this.baseNoiseAt(x, z) < -0.1, maxRings);
+  }
+
+  /** Nearest shoreline cell (spawn on the beach) — base noise just above the waterline. */
+  findBeach(maxRings = 96): { x: number; z: number } | null {
+    return this.findByPredicate((x, z) => {
+      const n = this.baseNoiseAt(x, z);
+      return n > 0 && n < 0.1;
+    }, maxRings);
   }
 }

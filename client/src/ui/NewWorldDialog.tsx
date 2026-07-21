@@ -31,7 +31,7 @@ const WORLD_FIELDS: Field<TerrainLayerConfig>[] = [
 ];
 
 const RIVER_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'riverSpacing', label: 'River spacing', min: 60, max: 500, step: 10, desc: 'Distance between rivers — larger is sparser.' },
+  { key: 'riverSpacing', label: 'River spacing', min: 60, max: 1000, step: 10, desc: 'Distance between rivers — larger is sparser.' },
   { key: 'riverWidth', label: 'River width', min: 2, max: 40, step: 1, desc: 'Width of the river channels in meters.' },
   { key: 'riverDepth', label: 'River depth', min: 1, max: 30, step: 1, desc: 'How deep the channel bed cuts below the land (voxels).' },
   { key: 'riverWarpAmplitude', label: 'River warp amount', min: 0, max: 300, step: 10, desc: 'How far rivers meander away from straight.' },
@@ -197,7 +197,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const submit = () => {
     const parsedSeed = parseInt(seed, 10);
     saveSettings(cave, terrain);
-    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, terrain, spawnBiome);
+    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, terrain, effectiveSpawn);
   };
 
   // Copy the dialed-in generation settings to the clipboard as JSON, so they can be shared (e.g. to
@@ -251,8 +251,19 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   }
   const patchCave = (p: Partial<CaveConfig>) => setCave((c) => ({ ...c, ...p }));
   const patchTerrain = (p: Partial<TerrainLayerConfig>) => setTerrain((t) => ({ ...t, ...p }));
+  // Toggle one biome's `enabled` in the palette (biomes are "on" when ≥1 is enabled).
+  const toggleBiome = (name: string) =>
+    setTerrain((t) => ({ ...t, biomes: t.biomes.map((b) => (b.name === name ? { ...b, enabled: !b.enabled } : b)) }));
+  const enabledBiomeNames = terrain.biomes.filter((b) => b.enabled).map((b) => b.name);
+  const anyBiome = enabledBiomeNames.length > 0;
+  // Spawn options: Any + Sea/Beach (elevation biomes, only meaningful with Landforms on) + each
+  // enabled land biome. Sea/beach are elevation-driven, so they only appear when Landforms is on.
+  const spawnOptions = ['', ...(terrain.landformEnabled ? ['sea', 'beach'] : []), ...enabledBiomeNames];
+  const spawnLabel = (v: string) => (v === '' ? 'Any' : v === 'sea' ? 'Sea' : v === 'beach' ? 'Beach' : v);
+  // If the chosen spawn is no longer offered (its layer/biome got toggled off), treat it as Any.
+  const effectiveSpawn = spawnOptions.includes(spawnBiome) ? spawnBiome : '';
 
-  const anyLayer = terrain.enabled || terrain.landformEnabled || terrain.riversEnabled || terrain.biomesEnabled || cave.wormsEnabled || cave.cavernsEnabled;
+  const anyLayer = terrain.enabled || terrain.landformEnabled || terrain.riversEnabled || anyBiome || cave.wormsEnabled || cave.cavernsEnabled;
   const subheading = (text: string) => (
     <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">{text}</span>
   );
@@ -307,7 +318,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
           <span className="text-white/60 text-xs">Layers</span>
           <div className="flex gap-1.5 flex-wrap justify-end">
             <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
-              Buildings
+              Paths
             </button>
             <button className={pill(terrain.landformEnabled)} onClick={() => patchTerrain({ landformEnabled: !terrain.landformEnabled })}>
               Landforms
@@ -315,9 +326,12 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
             <button className={pill(terrain.riversEnabled)} onClick={() => patchTerrain({ riversEnabled: !terrain.riversEnabled })}>
               Rivers
             </button>
-            <button className={pill(terrain.biomesEnabled)} onClick={() => patchTerrain({ biomesEnabled: !terrain.biomesEnabled })}>
-              Biomes
-            </button>
+            {/* Per-biome toggles — biomes are on when ≥1 is enabled. */}
+            {terrain.biomes.map((b) => (
+              <button key={b.name} className={pill(b.enabled)} onClick={() => toggleBiome(b.name)}>
+                {b.name}
+              </button>
+            ))}
             <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
             </button>
@@ -331,6 +345,18 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
           <div className="flex flex-col gap-2.5 max-h-[42vh] overflow-y-auto scrollbar-compact pr-1">
             {subheading('World scale')}
             {WORLD_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+            {/* Spawn location — where the player starts. Any + Sea/Beach (with Landforms) + enabled biomes. */}
+            <div className="flex flex-col gap-0.5">
+              <span className="text-white/80 text-xs">Spawn on</span>
+              <div className="flex gap-1.5 flex-wrap">
+                {spawnOptions.map((v) => (
+                  <button key={v || 'any'} className={pill(effectiveSpawn === v)} onClick={() => setSpawnBiome(v)}>
+                    {spawnLabel(v)}
+                  </button>
+                ))}
+              </div>
+              <span className="text-white/40 text-[10px] leading-tight">Where the player starts. Rare biomes are found by scanning outward.</span>
+            </div>
             {terrain.enabled && (
               <>
                 {subheading('Buildings')}
@@ -353,7 +379,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
                 {RIVER_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
               </>
             )}
-            {terrain.biomesEnabled && (
+            {anyBiome && (
               <>
                 {subheading('Biomes')}
                 <span className="text-white/40 text-[10px] leading-tight">
@@ -361,20 +387,8 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
                   along the borders. Needs Landforms on to shape the surface.
                 </span>
                 {sliderRow('Region spacing', 'Distance between biome cells (shared with rivers).',
-                  terrain.riverSpacing, 60, 500, 10,
+                  terrain.riverSpacing, 60, 1000, 10,
                   (v) => patchTerrain({ riverSpacing: v }), (v) => String(v))}
-                {/* Spawn biome selector — where the player starts on this world. */}
-                <div className="flex flex-col gap-1">
-                  <span className="text-white/80 text-xs">Spawn on</span>
-                  <div className="flex gap-1.5 flex-wrap">
-                    <button className={pill(spawnBiome === '')} onClick={() => setSpawnBiome('')}>Any</button>
-                    {terrain.biomes.map((b) => (
-                      <button key={b.name} className={pill(spawnBiome === b.name)} onClick={() => setSpawnBiome(b.name)}>
-                        {b.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
               </>
             )}
             {cave.wormsEnabled && (

@@ -8,10 +8,12 @@ import { mat } from '../materials/index.js';
  * VISIBILITY GUARD for the biomes layer. Per docs/terrain-generation-performance.md §3, a new terrain
  * feature ships a visibility assertion so it can't silently generate nothing.
  */
+// Biomes are "on" when ≥1 is enabled; enable the whole default palette so all types are exercised.
+const ALL_BIOMES = DEFAULT_BIOMES.map((b) => ({ ...b, enabled: true }));
 function biomeGen() {
   return new TerrainGenerator({
     seed: 12345,
-    terrainLayer: { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true, biomesEnabled: true },
+    terrainLayer: { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true, biomes: ALL_BIOMES },
     caveConfig: { ...DEFAULT_CAVE_CONFIG, wormsEnabled: false, cavernsEnabled: false },
   }) as unknown as {
     biomeIdAt(x: number, z: number): number;
@@ -61,7 +63,7 @@ describe('biomes layer is visible', () => {
 });
 
 describe('BiomeSpawnSampler matches the generator (drift guard)', () => {
-  const cfg = { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true, biomesEnabled: true };
+  const cfg = { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true, biomes: ALL_BIOMES };
   const gen = new TerrainGenerator({
     seed: 12345, terrainLayer: cfg,
     caveConfig: { ...DEFAULT_CAVE_CONFIG, wormsEnabled: false, cavernsEnabled: false },

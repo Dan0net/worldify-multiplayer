@@ -10,8 +10,11 @@
 import type { StampType } from './stamps/index.js';
 
 export interface BiomeDefinition {
-  /** Display name (used by the spawn selector + UI). */
+  /** Display name (used by the spawn selector + UI + per-biome toggle). */
   name: string;
+  /** Whether this biome is part of the active palette. Biomes are "on" when ≥1 is enabled; N = the
+   *  number enabled, and the region cell hash maps into the enabled subset. */
+  enabled: boolean;
   /** Surface ("grass/plains") material for this biome — e.g. moss for grassland, sand for desert. */
   topMaterial: number;
   /** Flat-ground surface-detail amplitude (voxels). */

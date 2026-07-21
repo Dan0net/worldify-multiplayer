@@ -257,9 +257,8 @@ export interface TerrainLayerConfig {
   // draws rivers (cell interiors = biomes, edges = rivers), so cell size follows riverSpacing. Each
   // biome overrides surface treatment (material/detail/snow/rock/stamps) ON TOP of the shared land
   // height; sea/beach stay elevation-driven. Requires landformEnabled to shape the surface.
-  /** Master toggle for biomes. Independent of the other layers. */
-  biomesEnabled: boolean;
-  /** Biome palette. N = biomes.length; cell hash mod N selects the biome. */
+  /** Biome palette — each has its own `enabled` toggle. Biomes are active when ≥1 is enabled; N = the
+   *  enabled count and the region cell hash maps into the enabled subset. */
   biomes: BiomeDefinition[];
 }
 
@@ -449,7 +448,7 @@ export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
  */
 export const DEFAULT_BIOMES: BiomeDefinition[] = [
   {
-    name: 'Grassland',
+    name: 'Grassland', enabled: false,
     topMaterial: mat('moss2'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
     stamps: [
       StampType.BUILDING_SMALL, StampType.BUILDING_HUT, StampType.BUILDING_TOWER,
@@ -457,12 +456,12 @@ export const DEFAULT_BIOMES: BiomeDefinition[] = [
     ],
   },
   {
-    name: 'Forest',
+    name: 'Forest', enabled: false,
     topMaterial: mat('moss2'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
     stamps: [StampType.TREE_PINE, StampType.TREE_OAK, StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
   },
   {
-    name: 'Desert',
+    name: 'Desert', enabled: false,
     topMaterial: mat('sand'), detailFlat: 0, detailSteep: 3, rockSlopeDeg: 40, snowLine: 100000,
     stamps: [StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
   },
@@ -496,14 +495,13 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
-  riverSpacing: 240,           // ~240 m between river cells
+  riverSpacing: 480,           // ~480 m between river/region cells (biome cells 2× the earlier size)
   riverWidth: 10,              // 10 m channels
   riverDepth: 8,               // 8 voxels deep beds
   riverWarpAmplitude: 120,     // strong meander
   riverWarpFrequency: 0.006,   // broad river curves
 
-  biomesEnabled: false,        // biomes off by default → existing worlds byte-identical
-  biomes: DEFAULT_BIOMES,
+  biomes: DEFAULT_BIOMES,      // all disabled by default → biomes off → existing worlds byte-identical
 };
 
 /**
@@ -1935,14 +1933,20 @@ export class TerrainGenerator implements HeightSampler {
     const eps = 0.001;
     return Math.abs(c - c1) > eps || Math.abs(c - c2) > eps || Math.abs(c - c3) > eps || Math.abs(c - c4) > eps;
   }
-  /** Number of active biomes (0 when biomes are off or the palette is empty). */
-  private biomeCount(): number {
-    const t = this.config.terrainLayer;
-    return t.biomesEnabled && t.biomes ? t.biomes.length : 0;
+  /** The enabled biomes (the active palette). Biomes are "on" when this is non-empty. */
+  private activeBiomes(): BiomeDefinition[] {
+    const b = this.config.terrainLayer.biomes;
+    return b ? b.filter((x) => x.enabled) : [];
   }
 
-  /** Biome index for a column — the region cell hash mod N (cells = biomes, drawn from the SAME warped
-   *  cellular field as rivers so rivers run on biome borders). Memoized per column; returns 0 when off. */
+  /** Number of active (enabled) biomes — 0 when biomes are off. */
+  private biomeCount(): number {
+    return this.activeBiomes().length;
+  }
+
+  /** Biome index for a column — the region cell hash mod N over the ENABLED subset (cells = biomes,
+   *  drawn from the SAME warped cellular field as rivers so rivers run on biome borders). Memoized per
+   *  column; returns 0 when off. */
   biomeIdAt(worldX: number, worldZ: number): number {
     const n = this.biomeCount();
     if (n <= 0) return 0;
@@ -1951,11 +1955,11 @@ export class TerrainGenerator implements HeightSampler {
     return e.biomeId;
   }
 
-  /** The BiomeDefinition for a column, or null when biomes are off/empty. */
+  /** The BiomeDefinition for a column (from the enabled subset), or null when biomes are off. */
   private biomeAt(worldX: number, worldZ: number): BiomeDefinition | null {
-    const n = this.biomeCount();
-    if (n <= 0) return null;
-    return this.config.terrainLayer.biomes[this.biomeIdAt(worldX, worldZ)] ?? null;
+    const active = this.activeBiomes();
+    if (active.length === 0) return null;
+    return active[this.biomeIdAt(worldX, worldZ)] ?? null;
   }
 
   private computeGetRiverDepthFactor(worldX: number, worldZ: number): number {
