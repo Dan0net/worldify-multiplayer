@@ -18,7 +18,7 @@ import {
 
 interface NewWorldDialogProps {
   onCancel: () => void;
-  onCreate: (name: string, seed: number, caveConfig: CaveConfig, terrainConfig: TerrainLayerConfig) => void;
+  onCreate: (name: string, seed: number, caveConfig: CaveConfig, terrainConfig: TerrainLayerConfig, spawnBiome: string) => void;
 }
 
 type Field<T> = { key: keyof T; label: string; min: number; max: number; step: number; desc: string };
@@ -184,6 +184,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const [seed, setSeed] = useState(() => String(randomWorldSeed()));
   const [cave, setCave] = useState<CaveConfig>(initial.cave);
   const [terrain, setTerrain] = useState<TerrainLayerConfig>(initial.terrain);
+  const [spawnBiome, setSpawnBiome] = useState('');   // '' = any (default origin spawn)
   const [copied, setCopied] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -196,7 +197,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const submit = () => {
     const parsedSeed = parseInt(seed, 10);
     saveSettings(cave, terrain);
-    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, terrain);
+    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, terrain, spawnBiome);
   };
 
   // Copy the dialed-in generation settings to the clipboard as JSON, so they can be shared (e.g. to
@@ -251,7 +252,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const patchCave = (p: Partial<CaveConfig>) => setCave((c) => ({ ...c, ...p }));
   const patchTerrain = (p: Partial<TerrainLayerConfig>) => setTerrain((t) => ({ ...t, ...p }));
 
-  const anyLayer = terrain.enabled || terrain.landformEnabled || terrain.riversEnabled || cave.wormsEnabled || cave.cavernsEnabled;
+  const anyLayer = terrain.enabled || terrain.landformEnabled || terrain.riversEnabled || terrain.biomesEnabled || cave.wormsEnabled || cave.cavernsEnabled;
   const subheading = (text: string) => (
     <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">{text}</span>
   );
@@ -314,6 +315,9 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
             <button className={pill(terrain.riversEnabled)} onClick={() => patchTerrain({ riversEnabled: !terrain.riversEnabled })}>
               Rivers
             </button>
+            <button className={pill(terrain.biomesEnabled)} onClick={() => patchTerrain({ biomesEnabled: !terrain.biomesEnabled })}>
+              Biomes
+            </button>
             <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
             </button>
@@ -347,6 +351,30 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
               <>
                 {subheading('Rivers')}
                 {RIVER_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+              </>
+            )}
+            {terrain.biomesEnabled && (
+              <>
+                {subheading('Biomes')}
+                <span className="text-white/40 text-[10px] leading-tight">
+                  Areas of different surface generation. Cells follow the river/region spacing; rivers run
+                  along the borders. Needs Landforms on to shape the surface.
+                </span>
+                {sliderRow('Region spacing', 'Distance between biome cells (shared with rivers).',
+                  terrain.riverSpacing, 60, 500, 10,
+                  (v) => patchTerrain({ riverSpacing: v }), (v) => String(v))}
+                {/* Spawn biome selector — where the player starts on this world. */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-white/80 text-xs">Spawn on</span>
+                  <div className="flex gap-1.5 flex-wrap">
+                    <button className={pill(spawnBiome === '')} onClick={() => setSpawnBiome('')}>Any</button>
+                    {terrain.biomes.map((b) => (
+                      <button key={b.name} className={pill(spawnBiome === b.name)} onClick={() => setSpawnBiome(b.name)}>
+                        {b.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </>
             )}
             {cave.wormsEnabled && (

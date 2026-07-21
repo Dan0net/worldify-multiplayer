@@ -46,6 +46,9 @@ export class SpawnManager {
   private cachedSpawnPosition: THREE.Vector3 | null = null;
   private spawnFound = false;
   private lastMeshCount = 0;
+  // XZ the ground scan targets (default origin; set to a biome cell centre for spawn-biome selection).
+  private spawnTargetX = 0;
+  private spawnTargetZ = 0;
   
   // Debug visualization
   private debugObjects: THREE.Object3D[] = [];
@@ -62,6 +65,17 @@ export class SpawnManager {
     this.terrainProvider = provider;
   }
 
+  /** Set the XZ the ground scan targets (a chosen biome's cell centre). Resets spawn detection so the
+   *  next terrain update re-probes at the new target. Pass (0,0) for the default origin spawn. */
+  setSpawnTarget(x: number, z: number): void {
+    if (x === this.spawnTargetX && z === this.spawnTargetZ) return;
+    this.spawnTargetX = x;
+    this.spawnTargetZ = z;
+    this.spawnFound = false;
+    this.lastMeshCount = -1;   // force a re-raycast on the next update
+    this.cachedSpawnPosition = null;
+  }
+
   /**
    * Update spawn detection.
    * Call during spectator mode to find spawn point when terrain loads.
@@ -76,9 +90,9 @@ export class SpawnManager {
     if (currentMeshCount !== this.lastMeshCount) {
       this.lastMeshCount = currentMeshCount;
 
-      // Find ground near the origin (samples a small fan so we don't land on the
-      // exact 4-chunk corner seam at 0,0 where the ray can slip through).
-      const ground = this.findGroundNear(0, 0);
+      // Find ground near the spawn target (origin, or a chosen biome's cell centre). Samples a small
+      // fan so we don't land on the exact 4-chunk corner seam where the ray can slip through.
+      const ground = this.findGroundNear(this.spawnTargetX, this.spawnTargetZ);
       if (ground) {
         this.cachedSpawnPosition = new THREE.Vector3(ground.x, this.calculateSpawnY(ground.height), ground.z);
         this.spawnFound = true;

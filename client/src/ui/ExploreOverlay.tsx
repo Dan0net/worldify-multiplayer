@@ -167,9 +167,9 @@ export function ExploreOverlay() {
   };
   const selectWorld = async (id: string) => { await setActiveWorld(id); refreshWorlds(); setPanel('none'); };
   const removeWorld = async (id: string) => { await deleteWorld(id); refreshWorlds(); };
-  const createWorld = async (name: string, seed: number, caveConfig: CaveConfig, terrainConfig: TerrainLayerConfig) => {
+  const createWorld = async (name: string, seed: number, caveConfig: CaveConfig, terrainConfig: TerrainLayerConfig, spawnBiome: string) => {
     setShowNewWorld(false);
-    await createAndActivateWorld(name, seed, caveConfig, terrainConfig);
+    await createAndActivateWorld(name, seed, caveConfig, terrainConfig, spawnBiome);
     refreshWorlds();
     setPanel('none');
   };
