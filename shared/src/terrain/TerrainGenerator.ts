@@ -9,6 +9,7 @@ import { packVoxel } from '../voxel/voxelData.js';
 import { mat } from '../materials/index.js';
 import { smoothstep } from '../util/math.js';
 import { Curve, type CurvePoint } from './Curve.js';
+import { cellValueToBiomeId, type BiomeDefinition } from './Biome.js';
 import {
   StampPointGenerator,
   StampPlacer,
@@ -251,6 +252,15 @@ export interface TerrainLayerConfig {
   riverWarpAmplitude: number;
   /** River domain-warp frequency (1/m); higher = tighter meanders. */
   riverWarpFrequency: number;
+
+  // ---- Biomes (regions). The world is partitioned into cells by the SAME warped cellular field that
+  // draws rivers (cell interiors = biomes, edges = rivers), so cell size follows riverSpacing. Each
+  // biome overrides surface treatment (material/detail/snow/rock/stamps) ON TOP of the shared land
+  // height; sea/beach stay elevation-driven. Requires landformEnabled to shape the surface.
+  /** Master toggle for biomes. Independent of the other layers. */
+  biomesEnabled: boolean;
+  /** Biome palette. N = biomes.length; cell hash mod N selects the biome. */
+  biomes: BiomeDefinition[];
 }
 
 export interface TerrainConfig {
@@ -432,6 +442,32 @@ export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
   { x: 1.00, y: 1.00 },    // plateau: flat snowy peak tops
 ];
 
+/**
+ * Default biome palette. Each rides on the shared land height and overrides surface material / detail /
+ * snow+rock lines / which stamps scatter. Grassland reproduces the current look; Forest drops buildings
+ * for dense trees; Desert is sandy with sparse rocks and no snow. Sea/beach stay elevation-driven.
+ */
+export const DEFAULT_BIOMES: BiomeDefinition[] = [
+  {
+    name: 'Grassland',
+    topMaterial: mat('moss2'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
+    stamps: [
+      StampType.BUILDING_SMALL, StampType.BUILDING_HUT, StampType.BUILDING_TOWER,
+      StampType.TREE_PINE, StampType.TREE_OAK, StampType.ROCK_SMALL, StampType.ROCK_MEDIUM, StampType.ROCK_LARGE,
+    ],
+  },
+  {
+    name: 'Forest',
+    topMaterial: mat('moss2'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
+    stamps: [StampType.TREE_PINE, StampType.TREE_OAK, StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
+  },
+  {
+    name: 'Desert',
+    topMaterial: mat('sand'), detailFlat: 0, detailSteep: 3, rockSlopeDeg: 40, snowLine: 100000,
+    stamps: [StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
+  },
+];
+
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   enabled: true,            // base landscape + pathways + stamps on by default
   masterScale: 1,           // world feature scale (1 = identity → existing worlds unchanged)
@@ -465,6 +501,9 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   riverDepth: 8,               // 8 voxels deep beds
   riverWarpAmplitude: 120,     // strong meander
   riverWarpFrequency: 0.006,   // broad river curves
+
+  biomesEnabled: false,        // biomes off by default → existing worlds byte-identical
+  biomes: DEFAULT_BIOMES,
 };
 
 /**
@@ -557,6 +596,7 @@ interface PathwayColumnInfo {
   onRiver?: boolean;
   riverDepth?: number;   // 0..1 depth factor into the channel
   riverCenter?: number;  // warped river-cellular value AT this column
+  biomeId?: number;      // biome index for this column (from the region cell hash)
 }
 
 export class TerrainGenerator implements HeightSampler {
@@ -1895,6 +1935,29 @@ export class TerrainGenerator implements HeightSampler {
     const eps = 0.001;
     return Math.abs(c - c1) > eps || Math.abs(c - c2) > eps || Math.abs(c - c3) > eps || Math.abs(c - c4) > eps;
   }
+  /** Number of active biomes (0 when biomes are off or the palette is empty). */
+  private biomeCount(): number {
+    const t = this.config.terrainLayer;
+    return t.biomesEnabled && t.biomes ? t.biomes.length : 0;
+  }
+
+  /** Biome index for a column — the region cell hash mod N (cells = biomes, drawn from the SAME warped
+   *  cellular field as rivers so rivers run on biome borders). Memoized per column; returns 0 when off. */
+  biomeIdAt(worldX: number, worldZ: number): number {
+    const n = this.biomeCount();
+    if (n <= 0) return 0;
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.biomeId === undefined) e.biomeId = cellValueToBiomeId(this.riverCenterCell(worldX, worldZ), n);
+    return e.biomeId;
+  }
+
+  /** The BiomeDefinition for a column, or null when biomes are off/empty. */
+  private biomeAt(worldX: number, worldZ: number): BiomeDefinition | null {
+    const n = this.biomeCount();
+    if (n <= 0) return null;
+    return this.config.terrainLayer.biomes[this.biomeIdAt(worldX, worldZ)] ?? null;
+  }
+
   private computeGetRiverDepthFactor(worldX: number, worldZ: number): number {
     if (!this.config.terrainLayer.riversEnabled) return 0;
     const halfWidth = this.riverHalfWidth();
@@ -2211,7 +2274,11 @@ export class TerrainGenerator implements HeightSampler {
     const slopeDeg = Math.atan(this.landformSlope(worldX, worldZ)) * (180 / Math.PI);
     const t01 = Math.min(1, slopeDeg / 90);
     const rugged = t01 * t01;
-    const amp = (t.landformDetailFlat + t.landformDetailSteep * rugged) * vscale;
+    // Biome (if any) sets the detail amplitude; else the global landform values.
+    const biome = this.biomeAt(worldX, worldZ);
+    const flat = biome ? biome.detailFlat : t.landformDetailFlat;
+    const steep = biome ? biome.detailSteep : t.landformDetailSteep;
+    const amp = (flat + steep * rugged) * vscale;
     const h = amp <= 0 ? macro : macro + this.landformDetail.GetNoise(worldX, worldZ) * amp;
     return this.applyBeachLip(h);
   }
@@ -2378,10 +2445,14 @@ export class TerrainGenerator implements HeightSampler {
     if (rel <= t.landformBeachWidth * vscale) return mat('sand');
     // Steep rock OVERRIDES snow: any steep face (measured on the post-detail surface) is bare rock,
     // even up high. Snow then only shows above the snow line on the remaining SHALLOW slopes (caps).
-    const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32;
+    // Above the beach the biome (if any) governs rock-slope / snow-line / top material; else the global
+    // landform values. Sea + beach above stay elevation-driven so coastlines are unaffected by biomes.
+    const biome = this.biomeAt(worldX, worldZ);
+    const rockDeg = biome ? biome.rockSlopeDeg : (t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32);
     if (this.landformDetailedSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
-    if (rel >= t.landformSnowLine * vscale) return mat('snow');   // shallow + high → snow
-    return this.getMaterialAtDepth(0);               // plains → the normal top material
+    const snowLine = biome ? biome.snowLine : t.landformSnowLine;
+    if (rel >= snowLine * vscale) return mat('snow');   // shallow + high → snow
+    return biome ? biome.topMaterial : this.getMaterialAtDepth(0);   // plains → biome / normal top material
   }
 
   /**
@@ -2628,11 +2699,14 @@ export class TerrainGenerator implements HeightSampler {
         // Drop stamps (trees / rocks / buildings) on pathways + rivers, over cave breaches (nothing left
         // floating above an open cave mouth), below the beach line, and on terrain steeper than 60°
         // (they look fine on 45° slopes but wrong on cliffs). Slope only applies with the landform on.
+        const biomesOn = this.biomeCount() > 0;
         placements = allPlacements.filter(p =>
           !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ)
           && !this.isLandformSuppressed(p.worldX, p.worldZ)
           && !(riversOn && this.isOnRiver(p.worldX, p.worldZ))
-          && !(tl.landformEnabled && this.landformSlopeDeg(p.worldX, p.worldZ) > 60));
+          && !(tl.landformEnabled && this.landformSlopeDeg(p.worldX, p.worldZ) > 60)
+          // Biome stamp filter: keep a placement only if its type is allowed in that column's biome.
+          && (!biomesOn || (this.biomeAt(p.worldX, p.worldZ)?.stamps.includes(p.type) ?? true)));
         if (this.placementCache.size > 4096) this.placementCache.clear();
         this.placementCache.set(pkey, placements);
       }

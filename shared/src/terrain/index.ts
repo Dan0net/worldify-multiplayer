@@ -8,6 +8,7 @@ export {
   DEFAULT_CAVE_CONFIG,
   DEFAULT_TERRAIN_LAYER_CONFIG,
   DEFAULT_LANDFORM_CURVE,
+  DEFAULT_BIOMES,
   normalizeCaveConfig,
   type NoiseLayerConfig,
   type DomainWarpConfig,
@@ -18,6 +19,7 @@ export {
 } from './TerrainGenerator.js';
 
 export { Curve, type CurvePoint } from './Curve.js';
+export { cellValueToBiomeId, type BiomeDefinition } from './Biome.js';
 
 // Stamp system re-exports
 export {
