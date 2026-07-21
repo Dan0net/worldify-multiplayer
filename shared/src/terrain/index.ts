@@ -20,6 +20,7 @@ export {
 
 export { Curve, type CurvePoint } from './Curve.js';
 export { cellValueToBiomeId, type BiomeDefinition } from './Biome.js';
+export { BiomeSpawnSampler } from './BiomeSpawnSampler.js';
 
 // Stamp system re-exports
 export {

@@ -579,7 +579,7 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
 /** Depth (voxels) of the landform surface skin that gets sand/snow/gravel; below it, normal rock strata. */
 const LANDFORM_SKIN_DEPTH = 3;
 /** Landform continental base frequency (1/m) at landformScale = 1; the config scale multiplies it. */
-const LANDFORM_BASE_FREQ = 0.0012;
+export const LANDFORM_BASE_FREQ = 0.0012;
 /** Surface-detail base frequency (1/m) at detailFrequency = 1 — an ABSOLUTE rubble scale, independent
  *  of the (very low) continental frequency, so detail can be fine rocks/rubble rather than broad bumps. */
 const LANDFORM_DETAIL_BASE_FREQ = 0.03;

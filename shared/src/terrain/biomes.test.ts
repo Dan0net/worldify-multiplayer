@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { TerrainGenerator, DEFAULT_TERRAIN_LAYER_CONFIG, DEFAULT_CAVE_CONFIG, DEFAULT_BIOMES } from './TerrainGenerator.js';
 import { cellValueToBiomeId } from './Biome.js';
+import { BiomeSpawnSampler } from './BiomeSpawnSampler.js';
 import { mat } from '../materials/index.js';
 
 /**
@@ -56,5 +57,29 @@ describe('biomes layer is visible', () => {
     }
     expect(grass).toBeGreaterThan(50);   // grassland/forest biomes present
     expect(sand).toBeGreaterThan(50);    // desert biome present inland
+  });
+});
+
+describe('BiomeSpawnSampler matches the generator (drift guard)', () => {
+  const cfg = { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true, biomesEnabled: true };
+  const gen = new TerrainGenerator({
+    seed: 12345, terrainLayer: cfg,
+    caveConfig: { ...DEFAULT_CAVE_CONFIG, wormsEnabled: false, cavernsEnabled: false },
+  }) as unknown as { biomeIdAt(x: number, z: number): number };
+  const sampler = new BiomeSpawnSampler(12345, cfg);
+
+  it('agrees with the generator biomeIdAt across a grid', () => {
+    for (let x = -600; x <= 600; x += 40)
+      for (let z = -600; z <= 600; z += 40)
+        expect(sampler.biomeIdAt(x, z)).toBe(gen.biomeIdAt(x, z));
+  });
+
+  it('findSpawn returns a land cell of the requested biome', () => {
+    for (let b = 0; b < DEFAULT_BIOMES.length; b++) {
+      const spot = sampler.findSpawn(b);
+      expect(spot).not.toBeNull();
+      expect(sampler.biomeIdAt(spot!.x, spot!.z)).toBe(b);
+      expect(sampler.isLand(spot!.x, spot!.z)).toBe(true);
+    }
   });
 });
