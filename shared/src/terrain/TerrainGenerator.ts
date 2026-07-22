@@ -660,6 +660,11 @@ export class TerrainGenerator implements HeightSampler {
   // computed once per column and shared. Only used when landformEnabled. Cleared with the height memo.
   private slopeCache = new Map<number, Map<number, number>>();
   private slopeCacheEntries = 0;
+  // Per-column POST-detail slope angle (degrees): slope of the actual rendered surface INCLUDING the
+  // rubble detail, so the grass→rock test reads the jagged detailed faces (not just the smooth macro
+  // grade). Safe from the old aliasing because the detail wavelength is floored (updateLandformConfig).
+  private detailSlopeCache = new Map<number, Map<number, number>>();
+  private detailSlopeCacheEntries = 0;
 
 
   // Per-(worldX,worldZ)-column memo of the pathway (road) queries. Pathways are XZ-only but were
@@ -923,6 +928,8 @@ export class TerrainGenerator implements HeightSampler {
     this.heightCacheEntries = 0;
     this.slopeCache.clear();
     this.slopeCacheEntries = 0;
+    this.detailSlopeCache.clear();
+    this.detailSlopeCacheEntries = 0;
     this.pathwayCache.clear();
     this.pathwayCacheEntries = 0;
     this.placementCache.clear();
@@ -2334,9 +2341,25 @@ export class TerrainGenerator implements HeightSampler {
     return slope;
   }
 
-  /** Surface angle in degrees at a column (from the memoized macro slope). */
-  private landformSlopeDeg(worldX: number, worldZ: number): number {
-    return Math.atan(this.landformSlope(worldX, worldZ)) * (180 / Math.PI);
+  /** POST-detail surface angle in degrees: central difference of the full detailed height over a short
+   *  (~2 m) span, so the rubble detail registers. Drives the grass→rock material test — rock shows on
+   *  the jagged detailed faces, not just the smooth macro grade. Memoized per column. */
+  private landformDetailedSlopeDeg(worldX: number, worldZ: number): number {
+    let inner = this.detailSlopeCache.get(worldX);
+    if (inner) { const c = inner.get(worldZ); if (c !== undefined) return c; }
+    const step = 2;   // meters — short span to capture the detail bumps, not just the macro grade
+    const hL = this.sampleLandformHeight(worldX - step, worldZ);
+    const hR = this.sampleLandformHeight(worldX + step, worldZ);
+    const hD = this.sampleLandformHeight(worldX, worldZ - step);
+    const hU = this.sampleLandformHeight(worldX, worldZ + step);
+    const dhx = ((hR - hL) * VOXEL_SCALE) / (2 * step);
+    const dhz = ((hU - hD) * VOXEL_SCALE) / (2 * step);
+    const deg = Math.atan(Math.sqrt(dhx * dhx + dhz * dhz)) * (180 / Math.PI);
+    if (this.detailSlopeCacheEntries > 262144) { this.detailSlopeCache.clear(); this.detailSlopeCacheEntries = 0; inner = undefined; }
+    if (!inner) { inner = new Map(); this.detailSlopeCache.set(worldX, inner); }
+    inner.set(worldZ, deg);
+    this.detailSlopeCacheEntries++;
+    return deg;
   }
 
 
@@ -2420,11 +2443,10 @@ export class TerrainGenerator implements HeightSampler {
     if (rel < 0) return mat('gravel');               // sea floor
     if (rel <= this.beachBandVox()) return mat('sand');   // beach band
     // Steep rock OVERRIDES snow: any steep face is bare rock, even up high. Snow then only shows above
-    // the snow line on the remaining SHALLOW slopes (caps). Uses the MACRO (smooth) slope — NOT the
-    // post-detail slope — so fine detail bumps can't flip the material patch-by-patch (that was the
-    // "green contour lines" aliasing at small scale).
+    // the snow line on the remaining SHALLOW slopes (caps). Uses the POST-DETAIL slope so the detailed
+    // rubble faces read as rock (the detail-wavelength floor keeps this from aliasing at small scale).
     const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32;
-    if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
+    if (this.landformDetailedSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
     if (rel >= t.landformSnowLine * vscale) return mat('snow');   // shallow + high → snow
     return mat('moss2');                             // moss/grass everywhere else
   }
