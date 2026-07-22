@@ -31,11 +31,12 @@ const WORLD_FIELDS: Field<TerrainLayerConfig>[] = [
 ];
 
 const RIVER_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'riverSpacing', label: 'River spacing', min: 60, max: 1000, step: 10, desc: 'Distance between rivers — larger is sparser.' },
+  { key: 'riverSourceSpacing', label: 'Source spacing', min: 80, max: 800, step: 20, desc: 'Distance between river heads — larger is sparser (fewer rivers).' },
+  { key: 'riverSourceMinElevation', label: 'Source height', min: 0, max: 0.9, step: 0.05, desc: 'How high (fraction of mountain height) a river head must be — higher = only from peaks.' },
+  { key: 'riverMaxLength', label: 'Max length', min: 100, max: 1500, step: 50, desc: 'How far a river is traced downhill before cutting off (meters).' },
+  { key: 'riverMeander', label: 'Meander', min: 0, max: 1.5, step: 0.05, desc: 'How much rivers snake sideways vs. running straight downhill.' },
   { key: 'riverWidth', label: 'River width', min: 2, max: 40, step: 1, desc: 'Width of the river channels in meters.' },
   { key: 'riverDepth', label: 'River depth', min: 1, max: 30, step: 1, desc: 'How deep the channel bed cuts below the land (voxels).' },
-  { key: 'riverWarpAmplitude', label: 'River warp amount', min: 0, max: 300, step: 10, desc: 'How far rivers meander away from straight.' },
-  { key: 'riverWarpFrequency', label: 'River warp scale', min: 0.002, max: 0.03, step: 0.002, desc: 'Size of the river wiggles — higher is tighter.' },
 ];
 
 const PATH_FIELDS: Field<TerrainLayerConfig>[] = [

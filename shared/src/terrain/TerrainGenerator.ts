@@ -242,20 +242,24 @@ export interface TerrainLayerConfig {
   /** Slope in degrees at which the surface fully turns from grass to rock (blend starts at ~half this). */
   landformRockSlopeDeg: number;
 
-  // ---- Rivers (natural water channels). Own cellular network, drawn separately from paths, using the
-  // same cellular edge-detection approach the old pathway "streams" used — but its own noise + tuning.
+  // ---- Rivers (natural water channels). HYDROLOGY: sources are seeded on highland and traced DOWNHILL
+  // along the heightmap gradient, so channels lie in valleys, merge, and reach the sea. Drawn separately
+  // from paths. (Scales with the world like the rest of the land.)
   /** Master toggle for rivers. Independent of paths/buildings. */
   riversEnabled: boolean;
-  /** River network spacing in meters (cellular cell size; larger = sparser rivers). */
-  riverSpacing: number;
   /** River width in meters. */
   riverWidth: number;
   /** River channel depth in voxels (how far the bed dips below the surrounding land). */
   riverDepth: number;
-  /** River domain-warp amplitude in meters (how far channels meander). */
-  riverWarpAmplitude: number;
-  /** River domain-warp frequency (1/m); higher = tighter meanders. */
-  riverWarpFrequency: number;
+  /** Spacing in meters between candidate river sources (hashed grid; larger = fewer rivers). */
+  riverSourceSpacing: number;
+  /** Minimum source elevation as a fraction (0..1) of the mountain height above sea — only highland
+   *  columns spawn a river head, so sources sit near valley tops. */
+  riverSourceMinElevation: number;
+  /** Lateral meander strength (0 = straight downhill; higher = snakier channels). */
+  riverMeander: number;
+  /** Maximum length a river is traced, in meters, before it is cut off (bounds the per-chunk gather). */
+  riverMaxLength: number;
 }
 
 export interface TerrainConfig {
@@ -467,11 +471,12 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
-  riverSpacing: 480,           // ~480 m between river/region cells (biome cells 2× the earlier size)
   riverWidth: 10,              // 10 m channels
   riverDepth: 8,               // 8 voxels deep beds
-  riverWarpAmplitude: 120,     // strong meander
-  riverWarpFrequency: 0.006,   // broad river curves
+  riverSourceSpacing: 300,     // ~300 m between candidate river heads
+  riverSourceMinElevation: 0.4, // only seed sources on the upper 60% of the mountain height
+  riverMeander: 0.5,           // moderate snaking
+  riverMaxLength: 600,         // trace up to 600 m downhill
 };
 
 /**
@@ -564,10 +569,7 @@ interface PathwayColumnInfo {
   depth?: number;
   material?: number;
   centerCell?: number;   // warped cellular value AT this column — shared by every pathway predicate
-  // Rivers reuse the same per-column memo (separate noise + params, same edge-detect mechanism).
-  onRiver?: boolean;
-  riverDepth?: number;   // 0..1 depth factor into the channel
-  riverCenter?: number;  // warped river-cellular value AT this column
+  riverDepth?: number;   // 0..1 depth factor into the nearest traced river channel (0 = off-river)
 }
 
 export class TerrainGenerator implements HeightSampler {
@@ -588,11 +590,14 @@ export class TerrainGenerator implements HeightSampler {
   private seaU0 = 0.5;          // curve input where the elevation offset crosses sea level
   private seaUThreshold = 0.5;  // noise percentile (curve-input space) that should map to the sea crossing
 
-  // Rivers — natural water channels. Own cellular network (same edge-detect approach as pathways) with
-  // its own warp, seeded in a separate block (+80000) so it never perturbs the base seed chain.
-  private riverCellular: FastNoiseLite;
-  private riverWarpX: FastNoiseLite;
-  private riverWarpZ: FastNoiseLite;
+  // Rivers — HYDROLOGY: sources seeded on highland, traced downhill along the heightmap gradient. One
+  // low-frequency noise supplies the lateral meander; seeded in a separate block (+80000) so it never
+  // perturbs the base seed chain. Traced polylines are cached per source cell + gathered per chunk.
+  private riverMeanderNoise: FastNoiseLite;
+  // Traced polyline per source cell (packed key → {pts:[x0,z0,…], bbox:[minx,minz,maxx,maxz]}); empty
+  // pts means the source cell isn't highland (no river). Gathered segments per chunk key for the query.
+  private riverCellCache = new Map<number, { pts: Float32Array; bbox: Float32Array }>();
+  private riverSegCache = new Map<number, Float32Array>();
 
   // Pathway system - cellular noise with domain warping
   private pathwayCellular: FastNoiseLite;
@@ -818,20 +823,11 @@ export class TerrainGenerator implements HeightSampler {
     this.landformDetail.SetFractalType(FastNoiseLite.FractalType.FBm);
     this.landformDetail.SetFractalOctaves(4);   // several octaves → fine rocks/rubble at multiple scales
 
-    // River noise (seed block +80000, off the base chain). Cellular edge-detection network + its own
-    // domain warp — the same mechanism as pathways, but a separate field so rivers and paths are
-    // independent.
-    let riverSeed = this.config.seed + 80000;
-    this.riverCellular = new FastNoiseLite(riverSeed++);
-    this.riverCellular.SetNoiseType(FastNoiseLite.NoiseType.Cellular);
-    this.riverCellular.SetCellularReturnType(FastNoiseLite.CellularReturnType.CellValue);
-    this.riverCellular.SetCellularDistanceFunction(FastNoiseLite.CellularDistanceFunction.EuclideanSq);
-    this.riverWarpX = new FastNoiseLite(riverSeed++);
-    this.riverWarpX.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.riverWarpX.SetFractalOctaves(1);
-    this.riverWarpZ = new FastNoiseLite(riverSeed++);
-    this.riverWarpZ.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-    this.riverWarpZ.SetFractalOctaves(1);
+    // River meander noise (seed block +80000, off the base chain) — a single low-frequency field that
+    // nudges the downhill trace sideways so channels snake rather than run the straight fall line.
+    this.riverMeanderNoise = new FastNoiseLite(this.config.seed + 80000);
+    this.riverMeanderNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+    this.riverMeanderNoise.SetFractalOctaves(1);
 
     this.updateLandformConfig();
 
@@ -907,10 +903,9 @@ export class TerrainGenerator implements HeightSampler {
       this.landformBase.SetSeed(lfSeed++);
       this.landformDetail.SetSeed(lfSeed++);
 
-      let rvSeed = config.seed + 80000;
-      this.riverCellular.SetSeed(rvSeed++);
-      this.riverWarpX.SetSeed(rvSeed++);
-      this.riverWarpZ.SetSeed(rvSeed++);
+      this.riverMeanderNoise.SetSeed(config.seed + 80000);
+      this.riverCellCache.clear();
+      this.riverSegCache.clear();
       this.invalidateCaveCaches();   // reseed invalidates traced worms/caverns + per-column memos
     }
   }
@@ -1054,13 +1049,13 @@ export class TerrainGenerator implements HeightSampler {
     this.seaUThreshold = (noiseThresh + 1) * 0.5;   // noise [-1,1] → curve input [0,1]
   }
 
-  /** River cellular + warp frequencies (rivers scale with master+land size like the land). */
+  /** River meander frequency (scales with the world) + drop the traced-river caches (config changed). */
   private updateRiverConfig(): void {
-    const t = this.config.terrainLayer;
     const sizeDiv = this.landSizeScale();
-    this.riverCellular.SetFrequency((1 / Math.max(1, t.riverSpacing)) / sizeDiv);
-    this.riverWarpX.SetFrequency(t.riverWarpFrequency / sizeDiv);
-    this.riverWarpZ.SetFrequency(t.riverWarpFrequency / sizeDiv);
+    // ~1 meander wavelength per ~200 m of land at scale 1 → gentle snaking; scales with the world.
+    this.riverMeanderNoise.SetFrequency(0.005 / sizeDiv);
+    this.riverCellCache.clear();
+    this.riverSegCache.clear();
   }
 
   /** Bake the cave SIZE scale into config.caveConfig from the un-scaled rawCaveConfig: size fields
@@ -1896,69 +1891,133 @@ export class TerrainGenerator implements HeightSampler {
     return e.centerCell;
   }
 
-  // ---- Rivers: natural water channels. Same cellular edge-detection as pathways (a channel runs along
-  // the borders between warped cells), but a SEPARATE noise field + tuning, so rivers and paths are
-  // drawn independently. Memoized through the shared per-column entry. River width/warp scale with the
-  // world+land size like the landform.
-  private readonly riverWarpScratch: [number, number] = [0, 0];
-  private applyRiverWarp(worldX: number, worldZ: number): [number, number] {
-    const amp = this.config.terrainLayer.riverWarpAmplitude * this.landSizeScale();
-    this.riverWarpScratch[0] = worldX + this.riverWarpX.GetNoise(worldX, worldZ) * amp;
-    this.riverWarpScratch[1] = worldZ + this.riverWarpZ.GetNoise(worldX, worldZ) * amp;
-    return this.riverWarpScratch;
-  }
-  private riverCenterCell(worldX: number, worldZ: number): number {
-    const e = this.pathEntry(worldX, worldZ);
-    if (e.riverCenter === undefined) {
-      const [wx, wz] = this.applyRiverWarp(worldX, worldZ);
-      e.riverCenter = this.riverCellular.GetNoise(wx, wz);
-    }
-    return e.riverCenter;
-  }
-  isOnRiver(worldX: number, worldZ: number): boolean {
-    const e = this.pathEntry(worldX, worldZ);
-    if (e.onRiver === undefined) e.onRiver = this.computeIsOnRiver(worldX, worldZ);
-    return e.onRiver;
-  }
-  getRiverDepthFactor(worldX: number, worldZ: number): number {
-    const e = this.pathEntry(worldX, worldZ);
-    if (e.riverDepth === undefined) e.riverDepth = this.computeGetRiverDepthFactor(worldX, worldZ);
-    return e.riverDepth;
-  }
+  // ---- Rivers: HYDROLOGY. Sources are seeded on a hashed highland grid and traced DOWNHILL along the
+  // macro heightmap gradient (+ meander) into polylines — so channels lie in valleys, merge, and reach
+  // the sea. Polylines are cached per source cell + gathered per chunk; the surface carves a smoothed
+  // valley within riverWidth of the nearest segment. Everything scales with the world.
   private riverHalfWidth(): number {
     return (this.config.terrainLayer.riverWidth * this.landSizeScale()) * 0.5;
   }
-  /** True where the warped river cell value differs between the sample point and an offset (a cell
-   *  border). Rivers are drawn on these borders. (Cellular rivers — hydrology traces are a follow-up.) */
-  private riverEdgeAt(offX: number, offZ: number, centerVal: number): boolean {
-    const [wx, wz] = this.applyRiverWarp(offX, offZ);
-    return Math.abs(centerVal - this.riverCellular.GetNoise(wx, wz)) > 0.001;
-  }
-  private computeIsOnRiver(worldX: number, worldZ: number): boolean {
-    if (!this.config.terrainLayer.riversEnabled) return false;
-    const halfWidth = this.riverHalfWidth();
-    const c = this.riverCenterCell(worldX, worldZ);
-    return this.riverEdgeAt(worldX + halfWidth, worldZ, c)
-        || this.riverEdgeAt(worldX - halfWidth, worldZ, c)
-        || this.riverEdgeAt(worldX, worldZ + halfWidth, c)
-        || this.riverEdgeAt(worldX, worldZ - halfWidth, c);
+
+  /** Trace one source cell's river polyline downhill. Empty when the cell's source isn't highland.
+   *  Deterministic: source jitter from the cell hash, path a pure function of the (deterministic) macro
+   *  height. Cached per packed cell key. */
+  private traceRiverCell(gi: number, gj: number): { pts: Float32Array; bbox: Float32Array } {
+    const key = TerrainGenerator.cellKey2(gi, gj);
+    const cached = this.riverCellCache.get(key);
+    if (cached) return cached;
+    const t = this.config.terrainLayer;
+    const scale = this.landSizeScale();
+    const S = Math.max(1, t.riverSourceSpacing) * scale;
+    const rng = makeRng((hashInt2(gi, gj) ^ ((this.config.seed + 80001) >>> 0)) >>> 0);
+    const sx = (gi + 0.15 + rng() * 0.7) * S;
+    const sz = (gj + 0.15 + rng() * 0.7) * S;
+    const sea = t.landformSeaLevel;
+    const relief = t.landformMountainHeight * scale;
+    const empty = { pts: new Float32Array(0), bbox: new Float32Array([0, 0, 0, 0]) };
+    // Only highland columns spawn a river head (so sources sit near valley tops).
+    if (this.sampleLandformMacro(sx, sz) - sea < t.riverSourceMinElevation * relief) {
+      this.riverCellCache.set(key, empty); return empty;
+    }
+    const stepLen = Math.max(1, 3 * scale);
+    const maxSteps = Math.max(4, Math.floor((t.riverMaxLength * scale) / stepLen));
+    const meander = Math.max(0, t.riverMeander);
+    const pts: number[] = [sx, sz];
+    let minx = sx, minz = sz, maxx = sx, maxz = sz;
+    let x = sx, z = sz, dirx = 0, dirz = 0;
+    for (let k = 0; k < maxSteps; k++) {
+      const e = stepLen;
+      const hx = this.sampleLandformMacro(x + e, z) - this.sampleLandformMacro(x - e, z);
+      const hz = this.sampleLandformMacro(x, z + e) - this.sampleLandformMacro(x, z - e);
+      let gx = -hx, gz = -hz;                         // downhill = negative gradient
+      const glen = Math.hypot(gx, gz);
+      if (glen > 1e-6) { gx /= glen; gz /= glen; }
+      else { gx = dirx || 1; gz = dirz; }             // flat: keep the last heading
+      const m = this.riverMeanderNoise.GetNoise(x, z) * meander;   // lateral wander
+      let ndx = gx - gz * m, ndz = gz + gx * m;        // + perpendicular offset
+      ndx = ndx * 0.6 + dirx * 0.4; ndz = ndz * 0.6 + dirz * 0.4;   // inertia → snake, not zig-zag
+      const nl = Math.hypot(ndx, ndz) || 1; ndx /= nl; ndz /= nl;
+      dirx = ndx; dirz = ndz;
+      x += ndx * stepLen; z += ndz * stepLen;
+      pts.push(x, z);
+      if (x < minx) minx = x; else if (x > maxx) maxx = x;
+      if (z < minz) minz = z; else if (z > maxz) maxz = z;
+      if (this.sampleLandformMacro(x, z) <= sea) break;   // reached the coast
+    }
+    const out = { pts: new Float32Array(pts), bbox: new Float32Array([minx, minz, maxx, maxz]) };
+    if (this.riverCellCache.size > 8192) this.riverCellCache.clear();
+    this.riverCellCache.set(key, out);
+    return out;
   }
 
-  private computeGetRiverDepthFactor(worldX: number, worldZ: number): number {
-    if (!this.config.terrainLayer.riversEnabled) return 0;
-    const halfWidth = this.riverHalfWidth();
-    const c = this.riverCenterCell(worldX, worldZ);
-    let minEdgeDist = halfWidth;
-    const step = Math.max(0.3, halfWidth / 4);
-    for (const [dx, dz] of PATH_CARDINALS) {
-      for (let dist = step; dist <= halfWidth; dist += step) {
-        if (this.riverEdgeAt(worldX + dx * dist, worldZ + dz * dist, c)) {
-          minEdgeDist = Math.min(minEdgeDist, dist); break;
-        }
+  /** Gather the river segments touching the chunk containing (x,z), inflated by the half-width. Cached
+   *  per chunk key so all columns in the chunk share one gather. */
+  private riverSegsFor(worldX: number, worldZ: number): Float32Array {
+    const CW = CHUNK_SIZE * VOXEL_SCALE;
+    const cx = Math.floor(worldX / CW), cz = Math.floor(worldZ / CW);
+    const key = TerrainGenerator.cellKey2(cx, cz);
+    const cached = this.riverSegCache.get(key);
+    if (cached) return cached;
+    const t = this.config.terrainLayer;
+    const scale = this.landSizeScale();
+    const hw = this.riverHalfWidth();
+    const ax0 = cx * CW - hw, az0 = cz * CW - hw, ax1 = (cx + 1) * CW + hw, az1 = (cz + 1) * CW + hw;
+    const S = Math.max(1, t.riverSourceSpacing) * scale;
+    const reach = t.riverMaxLength * scale + hw;   // a source this far away could still trace through
+    const gi0 = Math.floor((ax0 - reach) / S), gi1 = Math.floor((ax1 + reach) / S);
+    const gj0 = Math.floor((az0 - reach) / S), gj1 = Math.floor((az1 + reach) / S);
+    const segs: number[] = [];
+    for (let gi = gi0; gi <= gi1; gi++) for (let gj = gj0; gj <= gj1; gj++) {
+      const r = this.traceRiverCell(gi, gj);
+      if (r.pts.length < 4) continue;
+      const b = r.bbox;
+      if (b[2] < ax0 || b[0] > ax1 || b[3] < az0 || b[1] > az1) continue;   // whole trace misses the chunk
+      const p = r.pts;
+      for (let i = 0; i + 3 < p.length; i += 2) {
+        const x0 = p[i], z0 = p[i + 1], x1 = p[i + 2], z1 = p[i + 3];
+        if (Math.max(x0, x1) < ax0 || Math.min(x0, x1) > ax1 || Math.max(z0, z1) < az0 || Math.min(z0, z1) > az1) continue;
+        segs.push(x0, z0, x1, z1);
       }
     }
-    const tt = 1 - Math.min(1, minEdgeDist / halfWidth);
-    return smoothstep(0, 1, tt);
+    const out = new Float32Array(segs);
+    if (this.riverSegCache.size > 4096) this.riverSegCache.clear();
+    this.riverSegCache.set(key, out);
+    return out;
+  }
+
+  /** Distance from (x,z) to the nearest traced river segment (Infinity if none near). */
+  private nearestRiverDist(worldX: number, worldZ: number): number {
+    const segs = this.riverSegsFor(worldX, worldZ);
+    let best = Infinity;
+    for (let i = 0; i + 3 < segs.length; i += 4) {
+      const x0 = segs[i], z0 = segs[i + 1], x1 = segs[i + 2], z1 = segs[i + 3];
+      const dx = x1 - x0, dz = z1 - z0;
+      const len2 = dx * dx + dz * dz;
+      let tt = len2 > 0 ? ((worldX - x0) * dx + (worldZ - z0) * dz) / len2 : 0;
+      tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
+      const px = x0 + tt * dx, pz = z0 + tt * dz;
+      const d2 = (worldX - px) * (worldX - px) + (worldZ - pz) * (worldZ - pz);
+      if (d2 < best) best = d2;
+    }
+    return best === Infinity ? Infinity : Math.sqrt(best);
+  }
+
+  isOnRiver(worldX: number, worldZ: number): boolean {
+    return this.getRiverDepthFactor(worldX, worldZ) > 0;
+  }
+  /** Depth factor 0..1 across the channel: 1 at the traced centre-line, easing to 0 at riverWidth/2.
+   *  Drives a smoothed valley cross-section so the channel blends into the banks. Memoized per column. */
+  getRiverDepthFactor(worldX: number, worldZ: number): number {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.riverDepth === undefined) {
+      if (!this.config.terrainLayer.riversEnabled) { e.riverDepth = 0; }
+      else {
+        const hw = this.riverHalfWidth();
+        const d = this.nearestRiverDist(worldX, worldZ);
+        e.riverDepth = d >= hw ? 0 : smoothstep(0, 1, 1 - d / hw);
+      }
+    }
+    return e.riverDepth;
   }
 
   /**
