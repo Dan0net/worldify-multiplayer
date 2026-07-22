@@ -247,8 +247,10 @@ export interface TerrainLayerConfig {
   // from paths. (Scales with the world like the rest of the land.)
   /** Master toggle for rivers. Independent of paths/buildings. */
   riversEnabled: boolean;
-  /** River width in meters. */
-  riverWidth: number;
+  /** Channel width in meters at the SOURCE (head). */
+  riverStartWidth: number;
+  /** Channel width in meters at the MOUTH; width lerps start→end along the river. */
+  riverEndWidth: number;
   /** River channel depth in voxels (how far the bed dips below the surrounding land). */
   riverDepth: number;
   /** Spacing in meters between candidate river sources (hashed grid; larger = fewer rivers). */
@@ -471,9 +473,10 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   landformRockSlopeDeg: 30,    // rock shows from ~30° (shallower — rocky hillsides, not just cliffs)
 
   riversEnabled: false,        // rivers off by default (opt-in landform feature)
-  riverWidth: 10,              // 10 m channels
+  riverStartWidth: 5,          // 5 m at the head
+  riverEndWidth: 15,           // 15 m at the mouth
   riverDepth: 8,               // 8 voxels deep beds
-  riverSourceSpacing: 300,     // ~300 m between candidate river heads
+  riverSourceSpacing: 50,      // ~50 m between candidate river heads
   riverSourceMinElevation: 0.4, // only seed sources on the upper 60% of the mountain height
   riverMeander: 0.5,           // moderate snaking
   riverMaxLength: 600,         // trace up to 600 m downhill
@@ -1898,8 +1901,9 @@ export class TerrainGenerator implements HeightSampler {
   // macro heightmap gradient (+ meander) into polylines — so channels lie in valleys, merge, and reach
   // the sea. Polylines are cached per source cell + gathered per chunk; the surface carves a smoothed
   // valley within riverWidth of the nearest segment. Everything scales with the world.
+  /** Maximum (mouth) half-width — used to inflate the bucket gather + size the channel. */
   private riverHalfWidth(): number {
-    return (this.config.terrainLayer.riverWidth * this.landSizeScale()) * 0.5;
+    return (this.config.terrainLayer.riverEndWidth * this.landSizeScale()) * 0.5;
   }
 
   /** Trace one source cell's river polyline downhill. Empty when the cell's source isn't highland. Each
@@ -2030,11 +2034,13 @@ export class TerrainGenerator implements HeightSampler {
     if (!t.riversEnabled) { e.riverWater = -Infinity; e.riverBed = Infinity; return e; }
     const info = this.nearestRiver(worldX, worldZ);
     if (!info) { e.riverWater = -Infinity; e.riverBed = Infinity; return e; }
-    const grow = 0.3 + 0.7 * info.growth;              // 30% at the head → 100% at the mouth
-    const widthEff = this.riverHalfWidth() * grow;
+    const scale = this.landSizeScale();
+    // Width lerps riverStartWidth (head) → riverEndWidth (mouth); depth still tapers with growth.
+    const widthM = t.riverStartWidth + (t.riverEndWidth - t.riverStartWidth) * info.growth;
+    const widthEff = Math.max(widthM * scale * 0.5, 0.3);
     if (info.dist >= widthEff) { e.riverWater = -Infinity; e.riverBed = Infinity; return e; }
     const rf = smoothstep(0, 1, 1 - info.dist / widthEff);   // 1 at centre → 0 at the bank (smooth)
-    const fullDepth = Math.max(t.riverDepth * this.landSizeScale() * grow, MIN_RIVER_DEPTH);
+    const fullDepth = Math.max(t.riverDepth * scale * (0.3 + 0.7 * info.growth), MIN_RIVER_DEPTH);
     e.riverWater = info.centreH - 1;                   // flat, level surface across the whole channel
     e.riverBed = e.riverWater - fullDepth * rf;        // deepest at the centre, rising to the banks
     return e;

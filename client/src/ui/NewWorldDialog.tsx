@@ -35,7 +35,8 @@ const RIVER_FIELDS: Field<TerrainLayerConfig>[] = [
   { key: 'riverSourceMinElevation', label: 'Source height', min: 0, max: 0.9, step: 0.05, desc: 'Minimum head elevation (fraction of mountain height). Higher = rivers only start on high peaks.' },
   { key: 'riverMaxLength', label: 'Max length', min: 100, max: 1500, step: 50, desc: 'How far a river is traced downhill (meters). Higher = longer rivers.' },
   { key: 'riverMeander', label: 'Meander', min: 0, max: 1.5, step: 0.05, desc: 'Sideways wander. Higher = snakier; 0 = straight downhill.' },
-  { key: 'riverWidth', label: 'River width', min: 2, max: 40, step: 1, desc: 'Channel width in meters (at the mouth). Higher = wider rivers.' },
+  { key: 'riverStartWidth', label: 'Start width', min: 1, max: 40, step: 1, desc: 'Channel width in meters at the source. Higher = fatter headwaters.' },
+  { key: 'riverEndWidth', label: 'End width', min: 1, max: 60, step: 1, desc: 'Channel width in meters at the mouth. Higher = wider toward the sea.' },
   { key: 'riverDepth', label: 'River depth', min: 1, max: 30, step: 1, desc: 'How far the bed cuts below the water (voxels). Higher = deeper channels.' },
 ];
 
