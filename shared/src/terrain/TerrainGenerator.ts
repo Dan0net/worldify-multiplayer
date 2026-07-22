@@ -200,8 +200,13 @@ export interface TerrainLayerConfig {
 
   // ---- Landform layer (sea / beach / plains / mountains) — a macro elevation model that reshapes the
   // base terrain height. Its own toggle, but nested here since it only shapes the terrain layer's height.
-  /** Master toggle for the landform elevation model. Independent of the buildings toggle above. */
+  /** Master toggle for the landform elevation model. In the UI it is DERIVED (on whenever Sea, Beach,
+   *  or any biome is enabled) — biomes/sea/beach all ride on this shared height. Independent of buildings. */
   landformEnabled: boolean;
+  /** Sea toggle: flood columns below sea level with water. Only takes effect when landformEnabled. */
+  seaEnabled: boolean;
+  /** Beach toggle: the flat sand band just above the waterline. Only takes effect when landformEnabled. */
+  beachEnabled: boolean;
   /** Feature scale — multiplies the continental base frequency. Higher = smaller, more compact land/sea. */
   landformScale: number;
   /** Coast-warp scale RELATIVE to the base scale (warp frequency = base × this). >1 = finer than the land. */
@@ -490,6 +495,8 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
 
   // Landform layer — OFF by default so existing worlds/the current terrain are byte-identical.
   landformEnabled: false,
+  seaEnabled: true,            // sea/beach on when landforms is on (gated by landformEnabled)
+  beachEnabled: true,
   landformScale: 1.8,          // larger, gentler features (~460 m landmasses) so slopes are climbable
   landformWarpScale: 1.0,      // warp at the land frequency
   landformWarpStrength: 50,    // metres of coast warp → sweeping coasts/ranges
@@ -590,6 +597,17 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
 const LANDFORM_SKIN_DEPTH = 3;
 /** Landform continental base frequency (1/m) at landformScale = 1; the config scale multiplies it. */
 export const LANDFORM_BASE_FREQ = 0.0012;
+/** Minimum beach band + river depth in voxels — feature sizes are floored here so uniform world
+ *  down-scaling (small masterScale) can't shrink them below the fixed voxel resolution and vanish. */
+const MIN_BEACH_VOXELS = 3;
+const MIN_RIVER_DEPTH = 3;
+/** Debug palette (biome index → material). Deliberately the most chromatically SEPARATED materials in
+ *  the earthy pallet — green / bright tan / terracotta / cream / red-brown / teal-grey — so biome cells
+ *  read apart from each other and from the water rivers/sea in `biomesDebug` view (not the biome's
+ *  normal top material, which stays realistic for non-debug play). */
+export const DEBUG_BIOME_MATERIALS: number[] = [
+  mat('moss2'), mat('sand'), mat('brick2'), mat('concrete'), mat('rock2'), mat('wood2'),
+];
 /** Surface-detail base frequency (1/m) at detailFrequency = 1 — an ABSOLUTE rubble scale, independent
  *  of the (very low) continental frequency, so detail can be fine rocks/rubble rather than broad bumps. */
 const LANDFORM_DETAIL_BASE_FREQ = 0.03;
@@ -748,6 +766,10 @@ export class TerrainGenerator implements HeightSampler {
     }
     if (config.terrainLayer) {
       this.config.terrainLayer = { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...config.terrainLayer };
+      // Back-compat: worlds predating the Sea/Beach toggles had them implicitly on whenever the landform
+      // layer was on — inherit from landformEnabled so those worlds stay byte-identical.
+      if (config.terrainLayer.seaEnabled === undefined) this.config.terrainLayer.seaEnabled = this.config.terrainLayer.landformEnabled;
+      if (config.terrainLayer.beachEnabled === undefined) this.config.terrainLayer.beachEnabled = this.config.terrainLayer.landformEnabled;
     }
     // Snapshot the un-scaled cave + pathway configs, then bake masterScale into config.caveConfig.
     this.rawCaveConfig = { ...this.config.caveConfig };
@@ -1053,8 +1075,13 @@ export class TerrainGenerator implements HeightSampler {
     this.landformWarpX.SetFrequency(warpFreq);
     this.landformWarpZ.SetFrequency(warpFreq);
     // Detail frequency is an ABSOLUTE rubble scale (not tied to the tiny continental frequency), so it
-    // reads as rocks/rubble. Divided by the world size so it stays proportional at any master/land scale.
-    this.landformDetail.SetFrequency(LANDFORM_DETAIL_BASE_FREQ * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1) / sizeDiv);
+    // reads as rocks/rubble. Divided by the world size so it stays proportional — but the divisor is
+    // FLOORED at 1 so shrinking the world (masterScale < 1) can't push the detail wavelength below its
+    // scale-1 value (~3 m). Without this floor, at 0.1 the wavelength drops to ~0.3 m (sub-voxel), the
+    // surface aliases to noise, and the post-detail slope reads vertical everywhere → rock everywhere
+    // (the "green contour lines", missing beach/snow).
+    const detailDiv = Math.max(sizeDiv, 1);
+    this.landformDetail.SetFrequency(LANDFORM_DETAIL_BASE_FREQ * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1) / detailDiv);
     const pts = t.landformCurve && t.landformCurve.length >= 2 ? t.landformCurve : DEFAULT_LANDFORM_CURVE;
     this.landformCurveFn = new Curve(pts);
     this.updateRiverConfig();
@@ -1795,7 +1822,7 @@ export class TerrainGenerator implements HeightSampler {
    *  below the beach line — i.e. underwater or on the bare sand shelf. Cheap (cached sampleHeight). */
   private isLandformSuppressed(worldX: number, worldZ: number): boolean {
     const t = this.config.terrainLayer;
-    if (!t.landformEnabled) return false;
+    if (!t.landformEnabled || !t.seaEnabled) return false;   // no waterline → nothing to suppress
     return this.sampleHeight(worldX, worldZ) <= t.landformSeaLevel + this.beachBandVox();
   }
 
@@ -2300,8 +2327,13 @@ export class TerrainGenerator implements HeightSampler {
    *  but is floored at MIN_BEACH_VOXELS so the sand shelf stays visible at small master scales (at 0.1
    *  the scaled band would otherwise collapse below a single voxel and the beach would vanish). */
   private beachBandVox(): number {
-    const MIN_BEACH_VOXELS = 3;
     return Math.max(this.config.terrainLayer.landformBeachWidth * this.landSizeScale(), MIN_BEACH_VOXELS);
+  }
+
+  /** River channel depth in voxels, floored at MIN_RIVER_DEPTH so the bed still carves (and water still
+   *  fills) at small master scales where the scaled depth would otherwise round away to nothing. */
+  private riverDepthVox(): number {
+    return Math.max(this.config.terrainLayer.riverDepth * this.landSizeScale(), MIN_RIVER_DEPTH);
   }
 
   /** 1-voxel beach lip: wherever the surface sits within a voxel of the waterline, duck it to sea−1 so
@@ -2309,6 +2341,7 @@ export class TerrainGenerator implements HeightSampler {
    *  absolute voxel (not scaled), applied only to the visible surface — not the macro height used by
    *  slope estimation and river/path channels. */
   private applyBeachLip(h: number): number {
+    if (!this.config.terrainLayer.seaEnabled) return h;   // no water → no z-fight lip needed
     const sea = this.config.terrainLayer.landformSeaLevel;
     return (h > sea - 1 && h < sea + 1) ? sea - 1 : h;
   }
@@ -2410,9 +2443,9 @@ export class TerrainGenerator implements HeightSampler {
     if (isPath && this.config.pathwayConfig.dipDepth > 0) {
       height -= this.config.pathwayConfig.dipDepth * this.getPathwayDepthFactor(worldX, worldZ);
     }
-    // River bed.
+    // River bed (depth floored so the channel survives at small master scales).
     if (isRiver && tlSurf.riverDepth > 0) {
-      const bed = originalHeight - tlSurf.riverDepth * this.landSizeScale() * this.getRiverDepthFactor(worldX, worldZ);
+      const bed = originalHeight - this.riverDepthVox() * this.getRiverDepthFactor(worldX, worldZ);
       if (bed < height) height = bed;
     }
 
@@ -2432,7 +2465,7 @@ export class TerrainGenerator implements HeightSampler {
       // Elevation-band material; submerged columns read as water on the 2D map. Reported height stays
       // the true (sea-floor) terrain so the load cap covers the floor — the water body above is
       // "content" that the surface-column scan picks up (same as stamp tops), raising the visible top.
-      material = originalHeight < tlSurf.landformSeaLevel ? waterConfig.waterMaterial : this.landformSurfaceMaterial(originalHeight, worldX, worldZ);
+      material = (tlSurf.seaEnabled && originalHeight < tlSurf.landformSeaLevel) ? waterConfig.waterMaterial : this.landformSurfaceMaterial(originalHeight, worldX, worldZ);
     } else {
       // Surface material (depth 0)
       material = this.getMaterialAtDepth(0);
@@ -2463,12 +2496,12 @@ export class TerrainGenerator implements HeightSampler {
     const vscale = this.landSizeScale();             // heights are vertically scaled → scale the bands too
     const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
     const biome = this.biomeAt(worldX, worldZ);
-    // Debug view: flatten the whole biome cell (above sea) to its unique material so cell borders +
-    // rivers read as clean regions. Sea/rivers stay water (handled upstream), everything else is the
-    // biome color — beach/rock/snow overrides are skipped on purpose.
-    if (t.biomesDebug && biome) return biome.topMaterial;
+    // Debug view: flatten the whole biome cell (above sea) to a highly-distinct debug color (by biome
+    // index) so cell borders + rivers read as clean regions. Sea/rivers stay water (handled upstream),
+    // everything else is the debug color — beach/rock/snow overrides are skipped on purpose.
+    if (t.biomesDebug && biome) return DEBUG_BIOME_MATERIALS[this.biomeIdAt(worldX, worldZ) % DEBUG_BIOME_MATERIALS.length];
     if (rel < 0) return mat('gravel');               // sea floor
-    if (rel <= this.beachBandVox()) return mat('sand');
+    if (t.beachEnabled && rel <= this.beachBandVox()) return mat('sand');
     // Steep rock OVERRIDES snow: any steep face (measured on the post-detail surface) is bare rock,
     // even up high. Snow then only shows above the snow line on the remaining SHALLOW slopes (caps).
     // Rock-slope / snow-line are GLOBAL (not per-biome for now); a biome only recolors the plains band.
@@ -2582,7 +2615,7 @@ export class TerrainGenerator implements HeightSampler {
         let riverWaterLevel = -Infinity;
         if (isRiverColumn && tl.riverDepth > 0) {
           const rf = this.getRiverDepthFactor(worldX, worldZ);
-          const bed = originalTerrainHeight - tl.riverDepth * this.landSizeScale() * rf;   // depth scales with the world
+          const bed = originalTerrainHeight - this.riverDepthVox() * rf;   // depth floored so it survives small scale
           if (bed < terrainHeight) terrainHeight = bed;
           if (rf > 0) riverWaterLevel = originalTerrainHeight - 1;   // surface ~1 voxel below the bank
         }
@@ -2591,7 +2624,7 @@ export class TerrainGenerator implements HeightSampler {
         // surface sits 1 voxel ABOVE seaLevel so a full voxel of water covers the beach lip (which ducks
         // the shoreline terrain to sea-1) — otherwise the top water voxel lands exactly on the surface
         // boundary and reads as empty. seaLevel itself stays the terrain/material reference.
-        const seaWaterLevel = terrainHeight < seaLevel ? seaLevel + 1 : -Infinity;
+        const seaWaterLevel = (tl.seaEnabled && terrainHeight < seaLevel) ? seaLevel + 1 : -Infinity;
         const waterLevel = Math.max(riverWaterLevel, seaWaterLevel);
 
         // Air-column skip (Change #2): a voxel is fully air (weight -0.5 → packVoxel = 0 = the array

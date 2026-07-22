@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TerrainGenerator, DEFAULT_TERRAIN_LAYER_CONFIG, DEFAULT_CAVE_CONFIG, DEFAULT_BIOMES } from './TerrainGenerator.js';
+import { TerrainGenerator, DEFAULT_TERRAIN_LAYER_CONFIG, DEFAULT_CAVE_CONFIG, DEFAULT_BIOMES, DEBUG_BIOME_MATERIALS } from './TerrainGenerator.js';
 import { cellValueToBiomeId } from './Biome.js';
 import { BiomeSpawnSampler } from './BiomeSpawnSampler.js';
 import { mat } from '../materials/index.js';
@@ -68,14 +68,14 @@ describe('biomes layer is visible', () => {
       caveConfig: { ...DEFAULT_CAVE_CONFIG, wormsEnabled: false, cavernsEnabled: false },
     }) as unknown as { sampleSurface(x: number, z: number): { height: number; material: number } };
     const SEA = DEFAULT_TERRAIN_LAYER_CONFIG.landformSeaLevel;
-    const biomeTops = new Set(ALL_BIOMES.map((b) => b.topMaterial));
+    const debugColors = new Set(DEBUG_BIOME_MATERIALS);
     let landCols = 0;
     for (let x = -1000; x <= 1000; x += 16) {
       for (let z = -1000; z <= 1000; z += 16) {
         const s = gen.sampleSurface(x, z);
         if (s.height <= SEA) continue;            // above-sea land columns only (sea/rivers stay water)
         landCols++;
-        expect(biomeTops.has(s.material)).toBe(true);   // every land column is a flat biome color
+        expect(debugColors.has(s.material)).toBe(true);   // every land column is a flat debug color
       }
     }
     expect(landCols).toBeGreaterThan(50);
