@@ -2572,28 +2572,40 @@ export class TerrainGenerator implements HeightSampler {
    * @param cz - Chunk Z coordinate
    * @returns Uint32Array of packed voxel data (CHUNK_SIZE^3 elements)
    */
-  generateChunk(cx: number, cy: number, cz: number): Uint32Array {
+  generateChunk(cx: number, cy: number, cz: number, level = 0): Uint32Array {
     const data = new Uint32Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
 
+    // LOD zoom: a level-L chunk samples the SAME fixed world field at a coarse step of 2^L, so each of
+    // its 32 voxels spans 2^L world-voxels and the chunk covers 8·2^L m. step=1 at level 0 makes every
+    // expression below reduce to the un-zoomed path → BYTE-IDENTICAL to today (the checksum guards call
+    // generateChunk with no level). Coarse levels are an approximate overview: detail features (caves,
+    // stamps, paths) are gated off — they're invisible when zoomed out and the most expensive part of
+    // generation, so skipping them is both correct and a speed win.
+    const step = 1 << level;              // 2^level world-voxels per voxel
+    const vs = VOXEL_SCALE * step;        // metres per voxel at this level
+    const detail = level === 0;
+
     // Calculate chunk's world origin
-    const chunkWorldX = cx * CHUNK_SIZE * VOXEL_SCALE;
-    const chunkWorldY = cy * CHUNK_SIZE; // Y is in voxels for height comparison
-    const chunkWorldZ = cz * CHUNK_SIZE * VOXEL_SCALE;
+    const chunkWorldX = cx * CHUNK_SIZE * vs;
+    const chunkWorldY = cy * CHUNK_SIZE * step; // Y is in voxels for height comparison
+    const chunkWorldZ = cz * CHUNK_SIZE * vs;
 
     // Gather+trace the caves relevant to this chunk once, before any per-voxel carve test. Both
     // types are independent, so prepare whichever are enabled (they combine in caveFillAt).
     const cave = this.config.caveConfig;
     const tl = this.config.terrainLayer;
     const seaLevel = tl.landformEnabled ? tl.landformSeaLevel : -Infinity;
-    const anyCave = cave.wormsEnabled || cave.cavernsEnabled;
-    if (cave.wormsEnabled) this.prepareChunkWorms(cx, cy, cz);
-    if (cave.cavernsEnabled) this.prepareChunkCaverns(cx, cy, cz);
+    const anyCave = detail && (cave.wormsEnabled || cave.cavernsEnabled);
+    if (anyCave && cave.wormsEnabled) this.prepareChunkWorms(cx, cy, cz);
+    if (anyCave && cave.cavernsEnabled) this.prepareChunkCaverns(cx, cy, cz);
 
     // Base landscape generates when EITHER the Buildings layer (base terrain + pathways + stamps) OR the
     // Landforms layer (sea/mountains height) is on. With BOTH off, any enabled cave layer is rendered as
     // SOLID casts in otherwise-empty space (the cave-inspection view); with no caves either, empty air.
-    const buildingsOn = tl.enabled;
-    const riversOn = tl.riversEnabled;
+    // Detail features (buildings/paths/stamps + rivers) are off above level 0 — invisible when zoomed
+    // out and the costliest part of generation; the landform macro terrain still renders coarsely.
+    const buildingsOn = detail && tl.enabled;
+    const riversOn = detail && tl.riversEnabled;
     if (!buildingsOn && !tl.landformEnabled && !riversOn) {
       return anyCave
         ? this.generateCaveCastChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ)
@@ -2610,11 +2622,12 @@ export class TerrainGenerator implements HeightSampler {
 
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-        // Calculate world position for this column
-        const worldX = chunkWorldX + lx * VOXEL_SCALE;
-        const worldZ = chunkWorldZ + lz * VOXEL_SCALE;
+        // Calculate world position for this column (coarse levels step by 2^L·VOXEL_SCALE metres)
+        const worldX = chunkWorldX + lx * vs;
+        const worldZ = chunkWorldZ + lz * vs;
 
-        // Pathway membership (roads only exist under the Buildings layer; a cave breach suppresses them).
+        // Pathway membership (roads only exist under the Buildings layer, which is detail-gated off at
+        // coarse zoom; a cave breach suppresses them).
         const columnBreached = breach !== null && breach.has(lx + lz * CHUNK_SIZE);
         const onPathRaw = buildingsOn && this.isOnPathway(worldX, worldZ) && !columnBreached;
         // Below the plains→beach edge, suppress path furniture so roads/walls stop at the coast.
@@ -2665,22 +2678,23 @@ export class TerrainGenerator implements HeightSampler {
         let colTop = terrainHeight;
         if (isPathColumn) colTop += this.config.pathwayConfig.wallHeight;
         if (waterLevel > colTop) colTop = waterLevel;
-        if (colTop <= chunkWorldY - 1) continue;
+        if (colTop <= chunkWorldY - step) continue;
 
         // Column-level cavern early-out (Change #3): compute once, reused for every voxel below.
         const columnCavern = cave.cavernsEnabled && this.columnHasCavern(worldX, worldZ);
 
         for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-          // Calculate voxel's Y position in world voxel space
-          const voxelY = chunkWorldY + ly;
-          
+          // Calculate voxel's Y position in world voxel space (coarse levels step by 2^L world-voxels)
+          const voxelY = chunkWorldY + ly * step;
+
           // Calculate signed distance from surface
           // Positive = inside terrain (solid), Negative = outside (air)
           const distanceFromSurface = terrainHeight - voxelY;
-          
-          // Convert to weight (+0.5 = solid, -0.5 = air, 0 = surface)
+
+          // Convert to weight (+0.5 = solid, -0.5 = air, 0 = surface). Distance is in world-voxels, so
+          // normalise by the voxel's world-voxel span (step) — at level 0 (step 1) this is unchanged.
           // Clamp to [-0.5, 0.5] range
-          const weight = Math.max(-0.5, Math.min(0.5, distanceFromSurface * 0.5));
+          const weight = Math.max(-0.5, Math.min(0.5, (distanceFromSurface / step) * 0.5));
           
           // Determine material based on depth from surface
           let material = 0;
@@ -2740,7 +2754,7 @@ export class TerrainGenerator implements HeightSampler {
             if (voxelY <= waterLevel && voxelY > terrainHeight) {
               // Calculate water weight based on distance from water surface
               const distanceFromWaterSurface = waterLevel - voxelY;
-              const waterWeight = Math.max(-0.5, Math.min(0.5, distanceFromWaterSurface * 0.5));
+              const waterWeight = Math.max(-0.5, Math.min(0.5, (distanceFromWaterSurface / step) * 0.5));
               finalWeight = waterWeight;
               material = waterConfig.waterMaterial;
             }
@@ -2775,8 +2789,9 @@ export class TerrainGenerator implements HeightSampler {
     }
 
     // Apply stamps (trees, rocks, buildings). GATED ON stampsEnabled (its own toggle, split from Paths)
-    // so "Paths" is just paths; stamps can scatter on a landform/biome world with paths off.
-    if (tl.stampsEnabled && this.stampPointGenerator && this.stampPlacer) {
+    // so "Paths" is just paths; stamps can scatter on a landform/biome world with paths off. Also a
+    // detail feature — off at coarse zoom levels.
+    if (detail && tl.stampsEnabled && this.stampPointGenerator && this.stampPlacer) {
       // The scatter + pathway/breach filter is XZ-only, so memoize it per (cx,cz) — every cy in the
       // column reuses the same filtered list instead of redoing the 25-neighbour scatter + O(n²)
       // collision + per-placement pathway/breach noise. applyStamps treats the list read-only.
