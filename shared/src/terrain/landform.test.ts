@@ -12,7 +12,8 @@ import { mat } from '../materials/index.js';
 function landformGen() {
   return new TerrainGenerator({
     seed: 12345,
-    terrainLayer: { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true },
+    // Explicit sea coverage so the sea/beach span guard isn't coupled to the (low) default.
+    terrainLayer: { ...DEFAULT_TERRAIN_LAYER_CONFIG, landformEnabled: true, seaCoveragePercent: 40 },
     caveConfig: { ...DEFAULT_CAVE_CONFIG, wormsEnabled: false, cavernsEnabled: false },
   }) as unknown as {
     sampleHeight(x: number, z: number): number;

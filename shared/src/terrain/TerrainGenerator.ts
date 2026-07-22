@@ -454,7 +454,7 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
 
   // Landform layer — OFF by default so existing worlds/the current terrain are byte-identical.
   landformEnabled: false,
-  seaCoveragePercent: 45,      // ~45% ocean by default (percentile of the continental noise)
+  seaCoveragePercent: 10,      // ~10% ocean by default (percentile of the continental noise)
   landformScale: 1.8,          // larger, gentler features (~460 m landmasses) so slopes are climbable
   landformWarpScale: 1.0,      // warp at the land frequency
   landformWarpStrength: 50,    // metres of coast warp → sweeping coasts/ranges
@@ -569,7 +569,10 @@ interface PathwayColumnInfo {
   depth?: number;
   material?: number;
   centerCell?: number;   // warped cellular value AT this column — shared by every pathway predicate
-  riverDepth?: number;   // 0..1 depth factor into the nearest traced river channel (0 = off-river)
+  // River (traced hydrology): the FLAT water surface + carved bed at this column. -Inf / +Inf when the
+  // column is off any channel. Computed together, memoized per column.
+  riverWater?: number;   // flat water-surface height (voxels); -Infinity off-river
+  riverBed?: number;     // carved channel-bed height (voxels); +Infinity off-river
 }
 
 export class TerrainGenerator implements HeightSampler {
@@ -1899,9 +1902,10 @@ export class TerrainGenerator implements HeightSampler {
     return (this.config.terrainLayer.riverWidth * this.landSizeScale()) * 0.5;
   }
 
-  /** Trace one source cell's river polyline downhill. Empty when the cell's source isn't highland.
-   *  Deterministic: source jitter from the cell hash, path a pure function of the (deterministic) macro
-   *  height. Cached per packed cell key. */
+  /** Trace one source cell's river polyline downhill. Empty when the cell's source isn't highland. Each
+   *  point stores [x, z, h, g]: position, the macro centre-line HEIGHT there (so the water surface can be
+   *  flat + level, following the centre-line downstream), and a 0→1 GROWTH factor along the trace (the
+   *  river starts small at the head and widens/deepens toward the sea). Deterministic + cached per cell. */
   private traceRiverCell(gi: number, gj: number): { pts: Float32Array; bbox: Float32Array } {
     const key = TerrainGenerator.cellKey2(gi, gj);
     const cached = this.riverCellCache.get(key);
@@ -1915,14 +1919,15 @@ export class TerrainGenerator implements HeightSampler {
     const sea = t.landformSeaLevel;
     const relief = t.landformMountainHeight * scale;
     const empty = { pts: new Float32Array(0), bbox: new Float32Array([0, 0, 0, 0]) };
+    const sh = this.sampleLandformMacro(sx, sz);
     // Only highland columns spawn a river head (so sources sit near valley tops).
-    if (this.sampleLandformMacro(sx, sz) - sea < t.riverSourceMinElevation * relief) {
+    if (sh - sea < t.riverSourceMinElevation * relief) {
       this.riverCellCache.set(key, empty); return empty;
     }
     const stepLen = Math.max(1, 3 * scale);
     const maxSteps = Math.max(4, Math.floor((t.riverMaxLength * scale) / stepLen));
     const meander = Math.max(0, t.riverMeander);
-    const pts: number[] = [sx, sz];
+    const raw: number[] = [sx, sz, sh];   // [x, z, centre-height] triples
     let minx = sx, minz = sz, maxx = sx, maxz = sz;
     let x = sx, z = sz, dirx = 0, dirz = 0;
     for (let k = 0; k < maxSteps; k++) {
@@ -1939,19 +1944,27 @@ export class TerrainGenerator implements HeightSampler {
       const nl = Math.hypot(ndx, ndz) || 1; ndx /= nl; ndz /= nl;
       dirx = ndx; dirz = ndz;
       x += ndx * stepLen; z += ndz * stepLen;
-      pts.push(x, z);
+      const hc = this.sampleLandformMacro(x, z);
+      raw.push(x, z, hc);
       if (x < minx) minx = x; else if (x > maxx) maxx = x;
       if (z < minz) minz = z; else if (z > maxz) maxz = z;
-      if (this.sampleLandformMacro(x, z) <= sea) break;   // reached the coast
+      if (hc <= sea) break;   // reached the coast
     }
-    const out = { pts: new Float32Array(pts), bbox: new Float32Array([minx, minz, maxx, maxz]) };
+    // Pack to [x, z, h, growth]; growth = fraction along the trace (0 at head → 1 at the mouth).
+    const n = raw.length / 3;
+    const pts = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      pts[i * 4] = raw[i * 3]; pts[i * 4 + 1] = raw[i * 3 + 1]; pts[i * 4 + 2] = raw[i * 3 + 2];
+      pts[i * 4 + 3] = n > 1 ? i / (n - 1) : 0;
+    }
+    const out = { pts, bbox: new Float32Array([minx, minz, maxx, maxz]) };
     if (this.riverCellCache.size > 8192) this.riverCellCache.clear();
     this.riverCellCache.set(key, out);
     return out;
   }
 
-  /** Gather the river segments touching the chunk containing (x,z), inflated by the half-width. Cached
-   *  per chunk key so all columns in the chunk share one gather. */
+  /** Gather the river segments touching the chunk containing (x,z), inflated by the max half-width.
+   *  Segments are 8 floats [x0,z0,h0,g0, x1,z1,h1,g1]. Cached per chunk key. */
   private riverSegsFor(worldX: number, worldZ: number): Float32Array {
     const CW = CHUNK_SIZE * VOXEL_SCALE;
     const cx = Math.floor(worldX / CW), cz = Math.floor(worldZ / CW);
@@ -1969,14 +1982,14 @@ export class TerrainGenerator implements HeightSampler {
     const segs: number[] = [];
     for (let gi = gi0; gi <= gi1; gi++) for (let gj = gj0; gj <= gj1; gj++) {
       const r = this.traceRiverCell(gi, gj);
-      if (r.pts.length < 4) continue;
+      if (r.pts.length < 8) continue;
       const b = r.bbox;
       if (b[2] < ax0 || b[0] > ax1 || b[3] < az0 || b[1] > az1) continue;   // whole trace misses the chunk
       const p = r.pts;
-      for (let i = 0; i + 3 < p.length; i += 2) {
-        const x0 = p[i], z0 = p[i + 1], x1 = p[i + 2], z1 = p[i + 3];
+      for (let i = 0; i + 7 < p.length; i += 4) {
+        const x0 = p[i], z0 = p[i + 1], x1 = p[i + 4], z1 = p[i + 5];
         if (Math.max(x0, x1) < ax0 || Math.min(x0, x1) > ax1 || Math.max(z0, z1) < az0 || Math.min(z0, z1) > az1) continue;
-        segs.push(x0, z0, x1, z1);
+        segs.push(x0, z0, p[i + 2], p[i + 3], x1, z1, p[i + 6], p[i + 7]);
       }
     }
     const out = new Float32Array(segs);
@@ -1985,39 +1998,58 @@ export class TerrainGenerator implements HeightSampler {
     return out;
   }
 
-  /** Distance from (x,z) to the nearest traced river segment (Infinity if none near). */
-  private nearestRiverDist(worldX: number, worldZ: number): number {
+  /** Nearest traced river to (x,z): distance + the centre-line height and growth at the closest point
+   *  (interpolated along the segment). Null if no river is near. */
+  private nearestRiver(worldX: number, worldZ: number): { dist: number; centreH: number; growth: number } | null {
     const segs = this.riverSegsFor(worldX, worldZ);
-    let best = Infinity;
-    for (let i = 0; i + 3 < segs.length; i += 4) {
-      const x0 = segs[i], z0 = segs[i + 1], x1 = segs[i + 2], z1 = segs[i + 3];
+    let best = Infinity, bH = 0, bG = 0;
+    for (let i = 0; i + 7 < segs.length; i += 8) {
+      const x0 = segs[i], z0 = segs[i + 1], x1 = segs[i + 4], z1 = segs[i + 5];
       const dx = x1 - x0, dz = z1 - z0;
       const len2 = dx * dx + dz * dz;
       let tt = len2 > 0 ? ((worldX - x0) * dx + (worldZ - z0) * dz) / len2 : 0;
       tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
       const px = x0 + tt * dx, pz = z0 + tt * dz;
       const d2 = (worldX - px) * (worldX - px) + (worldZ - pz) * (worldZ - pz);
-      if (d2 < best) best = d2;
+      if (d2 < best) {
+        best = d2;
+        bH = segs[i + 2] + tt * (segs[i + 6] - segs[i + 2]);   // interp centre-line height
+        bG = segs[i + 3] + tt * (segs[i + 7] - segs[i + 3]);   // interp growth
+      }
     }
-    return best === Infinity ? Infinity : Math.sqrt(best);
+    return best === Infinity ? null : { dist: Math.sqrt(best), centreH: bH, growth: bG };
+  }
+
+  /** Compute + memoize this column's river surface: the FLAT water level and carved bed (or off-river).
+   *  Water is level across the channel (from the centre-line height, not the sloped terrain) and the bed
+   *  is a smooth valley cross-section; both the width and depth grow from head (small) to mouth (large). */
+  private ensureRiver(worldX: number, worldZ: number): PathwayColumnInfo {
+    const e = this.pathEntry(worldX, worldZ);
+    if (e.riverWater !== undefined) return e;
+    const t = this.config.terrainLayer;
+    if (!t.riversEnabled) { e.riverWater = -Infinity; e.riverBed = Infinity; return e; }
+    const info = this.nearestRiver(worldX, worldZ);
+    if (!info) { e.riverWater = -Infinity; e.riverBed = Infinity; return e; }
+    const grow = 0.3 + 0.7 * info.growth;              // 30% at the head → 100% at the mouth
+    const widthEff = this.riverHalfWidth() * grow;
+    if (info.dist >= widthEff) { e.riverWater = -Infinity; e.riverBed = Infinity; return e; }
+    const rf = smoothstep(0, 1, 1 - info.dist / widthEff);   // 1 at centre → 0 at the bank (smooth)
+    const fullDepth = Math.max(t.riverDepth * this.landSizeScale() * grow, MIN_RIVER_DEPTH);
+    e.riverWater = info.centreH - 1;                   // flat, level surface across the whole channel
+    e.riverBed = e.riverWater - fullDepth * rf;        // deepest at the centre, rising to the banks
+    return e;
   }
 
   isOnRiver(worldX: number, worldZ: number): boolean {
-    return this.getRiverDepthFactor(worldX, worldZ) > 0;
+    return this.ensureRiver(worldX, worldZ).riverWater! > -Infinity;
   }
-  /** Depth factor 0..1 across the channel: 1 at the traced centre-line, easing to 0 at riverWidth/2.
-   *  Drives a smoothed valley cross-section so the channel blends into the banks. Memoized per column. */
-  getRiverDepthFactor(worldX: number, worldZ: number): number {
-    const e = this.pathEntry(worldX, worldZ);
-    if (e.riverDepth === undefined) {
-      if (!this.config.terrainLayer.riversEnabled) { e.riverDepth = 0; }
-      else {
-        const hw = this.riverHalfWidth();
-        const d = this.nearestRiverDist(worldX, worldZ);
-        e.riverDepth = d >= hw ? 0 : smoothstep(0, 1, 1 - d / hw);
-      }
-    }
-    return e.riverDepth;
+  /** Flat water-surface height for the column's channel (voxels); -Infinity when off-river. */
+  getRiverWaterLevel(worldX: number, worldZ: number): number {
+    return this.ensureRiver(worldX, worldZ).riverWater!;
+  }
+  /** Carved channel-bed height for the column (voxels); +Infinity when off-river. */
+  getRiverBed(worldX: number, worldZ: number): number {
+    return this.ensureRiver(worldX, worldZ).riverBed!;
   }
 
   /**
@@ -2331,12 +2363,6 @@ export class TerrainGenerator implements HeightSampler {
     return Math.max(this.config.terrainLayer.landformBeachWidth * this.landSizeScale(), MIN_BEACH_VOXELS);
   }
 
-  /** River channel depth in voxels, floored at MIN_RIVER_DEPTH so the bed still carves (and water still
-   *  fills) at small master scales where the scaled depth would otherwise round away to nothing. */
-  private riverDepthVox(): number {
-    return Math.max(this.config.terrainLayer.riverDepth * this.landSizeScale(), MIN_RIVER_DEPTH);
-  }
-
   /** 1-voxel beach lip: wherever the surface sits within a voxel of the waterline, duck it to sea−1 so
    *  the flat water plane always covers the wet sand (kills z-fighting where sand ≈ sea). A fixed
    *  absolute voxel (not scaled), applied only to the visible surface — not the macro height used by
@@ -2444,12 +2470,9 @@ export class TerrainGenerator implements HeightSampler {
     if (isPath && this.config.pathwayConfig.dipDepth > 0) {
       height -= this.config.pathwayConfig.dipDepth * this.getPathwayDepthFactor(worldX, worldZ);
     }
-    // River bed (depth floored so the channel survives at small master scales; sink to hold ≥1 water
-    // voxel so the map's carved height matches the chunk's).
-    if (isRiver && tlSurf.riverDepth > 0) {
-      const rf = this.getRiverDepthFactor(worldX, worldZ);
-      let bed = originalHeight - this.riverDepthVox() * rf;
-      if (rf > 0) bed = Math.min(bed, originalHeight - 2);
+    // River bed: carved valley cross-section (flat, level water surface handled by the material below).
+    if (isRiver) {
+      const bed = this.getRiverBed(worldX, worldZ);
       if (bed < height) height = bed;
     }
 
@@ -2607,8 +2630,6 @@ export class TerrainGenerator implements HeightSampler {
         let isWallColumn = (!buildingsOn || columnBreached || furnitureSuppressed) ? 0 : -1; // -1 = unchecked, 0 = no, 1 = yes
         let isBorderColumn = (!buildingsOn || columnBreached || furnitureSuppressed) ? 0 : -1;
 
-        // Store original terrain height before any dip (for water-level calculation).
-        const originalTerrainHeight = terrainHeight;
         const waterConfig = this.config.pathwayConfig;
 
         // Dry pathway dip (a sunken paved road — no water fill anymore; water lives in rivers).
@@ -2618,16 +2639,10 @@ export class TerrainGenerator implements HeightSampler {
         // River channel: cut a bed into the terrain and fill it with water to just below the banks so
         // the channel carries on across the land (and merges with the sea where it reaches it).
         let riverWaterLevel = -Infinity;
-        if (isRiverColumn && tl.riverDepth > 0) {
-          const rf = this.getRiverDepthFactor(worldX, worldZ);
-          const bed = originalTerrainHeight - this.riverDepthVox() * rf;   // depth floored so it survives small scale
+        if (isRiverColumn) {
+          const bed = this.getRiverBed(worldX, worldZ);       // carved valley bed (deepest at centre)
           if (bed < terrainHeight) terrainHeight = bed;
-          if (rf > 0) {
-            riverWaterLevel = originalTerrainHeight - 1;   // surface ~1 voxel below the bank
-            // Guarantee at least one voxel of water: at small scale the shallow bed can sit above the
-            // water surface (0 water voxels → visible trough, no water), so sink the bed if needed.
-            if (terrainHeight > riverWaterLevel - 1) terrainHeight = riverWaterLevel - 1;
-          }
+          riverWaterLevel = this.getRiverWaterLevel(worldX, worldZ);   // FLAT, level across the channel
         }
 
         // Water level: river channels and/or the sea (landform floods columns below sea level). The sea

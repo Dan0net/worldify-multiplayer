@@ -26,70 +26,70 @@ type Field<T> = { key: keyof T; label: string; min: number; max: number; step: n
 // World scale knobs — masterScale affects EVERY layer (land, rivers, paths, caves, buildings);
 // landScale scales only the land + rivers on top of it.
 const WORLD_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'masterScale', label: 'World scale', min: 0.1, max: 1, step: 0.05, desc: 'Overall feature scale — shrinks EVERYTHING uniformly (land, rivers, paths, caves, buildings). 1 = full size.' },
-  { key: 'landScale', label: 'Land scale', min: 0.1, max: 2, step: 0.1, desc: 'Scales the land + rivers only, on top of World scale. 1 = default.' },
+  { key: 'masterScale', label: 'World scale', min: 0.1, max: 1, step: 0.05, desc: 'Overall size of everything (land, rivers, paths, caves, buildings). Higher = bigger features; 1 = full size.' },
+  { key: 'landScale', label: 'Land scale', min: 0.1, max: 2, step: 0.1, desc: 'Size of the land + rivers only, on top of World scale. Higher = bigger landmasses.' },
 ];
 
 const RIVER_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'riverSourceSpacing', label: 'Source spacing', min: 80, max: 800, step: 20, desc: 'Distance between river heads — larger is sparser (fewer rivers).' },
-  { key: 'riverSourceMinElevation', label: 'Source height', min: 0, max: 0.9, step: 0.05, desc: 'How high (fraction of mountain height) a river head must be — higher = only from peaks.' },
-  { key: 'riverMaxLength', label: 'Max length', min: 100, max: 1500, step: 50, desc: 'How far a river is traced downhill before cutting off (meters).' },
-  { key: 'riverMeander', label: 'Meander', min: 0, max: 1.5, step: 0.05, desc: 'How much rivers snake sideways vs. running straight downhill.' },
-  { key: 'riverWidth', label: 'River width', min: 2, max: 40, step: 1, desc: 'Width of the river channels in meters.' },
-  { key: 'riverDepth', label: 'River depth', min: 1, max: 30, step: 1, desc: 'How deep the channel bed cuts below the land (voxels).' },
+  { key: 'riverSourceSpacing', label: 'Source spacing', min: 20, max: 800, step: 10, desc: 'Distance between river heads. Higher = fewer, more spread-out rivers.' },
+  { key: 'riverSourceMinElevation', label: 'Source height', min: 0, max: 0.9, step: 0.05, desc: 'Minimum head elevation (fraction of mountain height). Higher = rivers only start on high peaks.' },
+  { key: 'riverMaxLength', label: 'Max length', min: 100, max: 1500, step: 50, desc: 'How far a river is traced downhill (meters). Higher = longer rivers.' },
+  { key: 'riverMeander', label: 'Meander', min: 0, max: 1.5, step: 0.05, desc: 'Sideways wander. Higher = snakier; 0 = straight downhill.' },
+  { key: 'riverWidth', label: 'River width', min: 2, max: 40, step: 1, desc: 'Channel width in meters (at the mouth). Higher = wider rivers.' },
+  { key: 'riverDepth', label: 'River depth', min: 1, max: 30, step: 1, desc: 'How far the bed cuts below the water (voxels). Higher = deeper channels.' },
 ];
 
 const PATH_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'pathSpacing', label: 'Path spacing', min: 40, max: 220, step: 5, desc: 'Distance between roads/paths — larger is sparser.' },
-  { key: 'pathWidth', label: 'Path width', min: 1, max: 8, step: 0.5, desc: 'Width of the roads/paths in meters.' },
-  { key: 'pathWarpAmplitude', label: 'Path warp amount', min: 0, max: 150, step: 5, desc: 'How strongly paths meander away from straight.' },
-  { key: 'pathWarpFrequency', label: 'Path warp scale', min: 0.002, max: 0.05, step: 0.002, desc: 'Size of the path wiggles — higher is tighter.' },
+  { key: 'pathSpacing', label: 'Path spacing', min: 40, max: 220, step: 5, desc: 'Distance between roads. Higher = fewer, more spread-out paths.' },
+  { key: 'pathWidth', label: 'Path width', min: 1, max: 8, step: 0.5, desc: 'Road width in meters. Higher = wider roads.' },
+  { key: 'pathWarpAmplitude', label: 'Path warp amount', min: 0, max: 150, step: 5, desc: 'Sideways wander. Higher = paths meander more from straight.' },
+  { key: 'pathWarpFrequency', label: 'Path warp scale', min: 0.002, max: 0.05, step: 0.002, desc: 'Wiggle size. Higher = tighter, more frequent path curves.' },
 ];
 
 const BUILDING_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between trees/rocks/buildings — larger means fewer.' },
+  { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between trees/rocks/buildings. Higher = fewer, more spread out.' },
 ];
 
 const LANDFORM_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'landformScale', label: 'Feature scale', min: 0.5, max: 8, step: 0.25, desc: 'Bigger = smaller, more compact land/sea features.' },
-  { key: 'landformWarpScale', label: 'Coast warp scale', min: 0.4, max: 4, step: 0.1, desc: 'Warp frequency relative to the land scale (finer coastline wiggle).' },
-  { key: 'landformWarpStrength', label: 'Coast warp amount', min: 0, max: 300, step: 10, desc: 'How far the warp bends coastlines/ranges — bigger = more sweeping.' },
-  { key: 'seaCoveragePercent', label: 'Sea coverage', min: 0, max: 90, step: 5, desc: 'How much of the world is ocean (%). The easy sea-to-land ratio.' },
-  { key: 'landformSeaDepth', label: 'Sea depth', min: 40, max: 400, step: 10, desc: 'How deep the ocean floor drops below sea level (voxels).' },
-  { key: 'landformMountainHeight', label: 'Mountain height', min: 60, max: 500, step: 10, desc: 'Tallest peaks above sea level (voxels).' },
-  { key: 'landformBeachWidth', label: 'Beach height', min: 0, max: 48, step: 2, desc: 'How far the flat beach sits above the water (voxels).' },
-  { key: 'landformSnowLine', label: 'Snow line', min: 60, max: 400, step: 10, desc: 'Elevation above sea where peaks turn to snow (voxels).' },
-  { key: 'landformDetailFrequency', label: 'Detail scale', min: 1, max: 20, step: 0.5, desc: 'Surface-bump frequency relative to the land size — higher = finer bumps.' },
-  { key: 'landformDetailFlat', label: 'Detail (flat)', min: 0, max: 8, step: 0.5, desc: 'Surface texture on flat ground (voxels) — a little so plains aren\'t glassy.' },
-  { key: 'landformDetailSteep', label: 'Detail (steep)', min: 0, max: 30, step: 1, desc: 'Extra ruggedness on steep slopes (voxels) — jagged mountains.' },
-  { key: 'landformRockSlopeDeg', label: 'Rock slope', min: 20, max: 80, step: 5, desc: 'Slope angle (degrees) where the surface turns from grass to rock cliffs.' },
+  { key: 'landformScale', label: 'Feature scale', min: 0.5, max: 8, step: 0.25, desc: 'Land/sea feature frequency. Higher = smaller, more compact continents.' },
+  { key: 'landformWarpScale', label: 'Coast warp scale', min: 0.4, max: 4, step: 0.1, desc: 'Coastline wiggle frequency. Higher = finer, more detailed coasts.' },
+  { key: 'landformWarpStrength', label: 'Coast warp amount', min: 0, max: 300, step: 10, desc: 'How far coasts/ranges bend. Higher = more sweeping, distorted coastlines.' },
+  { key: 'seaCoveragePercent', label: 'Sea coverage', min: 0, max: 90, step: 5, desc: 'Percent of the world that is ocean. Higher = more sea, less land.' },
+  { key: 'landformSeaDepth', label: 'Sea depth', min: 40, max: 400, step: 10, desc: 'Ocean floor depth below sea level (voxels). Higher = deeper oceans.' },
+  { key: 'landformMountainHeight', label: 'Mountain height', min: 60, max: 500, step: 10, desc: 'Peak height above sea level (voxels). Higher = taller mountains.' },
+  { key: 'landformBeachWidth', label: 'Beach height', min: 0, max: 48, step: 2, desc: 'How far the flat beach rises above water (voxels). Higher = wider beaches.' },
+  { key: 'landformSnowLine', label: 'Snow line', min: 60, max: 400, step: 10, desc: 'Elevation above sea where snow starts (voxels). Higher = less snow (only the tallest peaks).' },
+  { key: 'landformDetailFrequency', label: 'Detail scale', min: 1, max: 20, step: 0.5, desc: 'Surface-bump frequency. Higher = finer, more frequent rubble.' },
+  { key: 'landformDetailFlat', label: 'Detail (flat)', min: 0, max: 8, step: 0.5, desc: 'Surface texture on flat ground (voxels). Higher = bumpier plains.' },
+  { key: 'landformDetailSteep', label: 'Detail (steep)', min: 0, max: 30, step: 1, desc: 'Surface texture on steep slopes (voxels). Higher = more jagged, rugged mountains.' },
+  { key: 'landformRockSlopeDeg', label: 'Rock slope', min: 20, max: 80, step: 5, desc: 'Slope angle where grass turns to rock (degrees). Higher = less rock (only sheer cliffs).' },
 ];
 
 const WORM_FIELDS: Field<CaveConfig>[] = [
-  { key: 'wormsPerCell', label: 'Density', min: 0, max: 20, step: 0.5, desc: 'How many tunnels are generated in each area.' },
-  { key: 'wormCellSize', label: 'Spacing', min: 15, max: 100, step: 5, desc: 'Distance between tunnel start points — larger is sparser.' },
-  { key: 'wormSegments', label: 'Length', min: 10, max: 150, step: 5, desc: 'How far each tunnel travels before it ends.' },
-  { key: 'wormRadius', label: 'Tunnel size', min: 0.8, max: 5, step: 0.1, desc: 'Radius of the tunnels — bigger means wider caves.' },
-  { key: 'wormTurnRate', label: 'Winding', min: 0.1, max: 1, step: 0.05, desc: 'How much tunnels curve and wind (low = straighter).' },
-  { key: 'wormPitchRange', label: 'Verticality', min: 0, max: 3, step: 0.05, desc: 'How much tunnels rise and dive (0 = flat and level).' },
-  { key: 'wormWallAmp', label: 'Wall roughness', min: 0, max: 3, step: 0.1, desc: 'Bumpiness of the tunnel walls (0 = perfectly smooth).' },
-  { key: 'wormWallFrequency', label: 'Roughness scale', min: 0.02, max: 0.4, step: 0.01, desc: 'Size of the wall bumps — higher is finer/more frequent.' },
-  { key: 'wormRadiusAlongVar', label: 'Size variation', min: 0, max: 1, step: 0.05, desc: 'How much a tunnel bulges and pinches along its length.' },
-  { key: 'wormRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'How much tunnel width differs from one tunnel to the next.' },
+  { key: 'wormsPerCell', label: 'Density', min: 0, max: 20, step: 0.5, desc: 'Tunnels per area. Higher = more tunnels.' },
+  { key: 'wormCellSize', label: 'Spacing', min: 15, max: 100, step: 5, desc: 'Distance between tunnel starts. Higher = fewer, more spread-out tunnels.' },
+  { key: 'wormSegments', label: 'Length', min: 10, max: 150, step: 5, desc: 'How far each tunnel travels. Higher = longer tunnels.' },
+  { key: 'wormRadius', label: 'Tunnel size', min: 0.8, max: 5, step: 0.1, desc: 'Tunnel radius. Higher = wider caves.' },
+  { key: 'wormTurnRate', label: 'Winding', min: 0.1, max: 1, step: 0.05, desc: 'How much tunnels curve. Higher = more winding; low = straighter.' },
+  { key: 'wormPitchRange', label: 'Verticality', min: 0, max: 3, step: 0.05, desc: 'Rise and dive. Higher = steeper vertical tunnels; 0 = flat.' },
+  { key: 'wormWallAmp', label: 'Wall roughness', min: 0, max: 3, step: 0.1, desc: 'Wall bumpiness. Higher = rougher; 0 = perfectly smooth.' },
+  { key: 'wormWallFrequency', label: 'Roughness scale', min: 0.02, max: 0.4, step: 0.01, desc: 'Wall-bump size. Higher = finer, more frequent bumps.' },
+  { key: 'wormRadiusAlongVar', label: 'Size variation', min: 0, max: 1, step: 0.05, desc: 'Bulge/pinch along a tunnel. Higher = more variation.' },
+  { key: 'wormRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'Width difference between tunnels. Higher = more varied widths.' },
 ];
 
 const CAVERN_FIELDS: Field<CaveConfig>[] = [
-  { key: 'cavernsPerCell', label: 'Density', min: 0, max: 4, step: 0.25, desc: 'How many caverns form in each area.' },
-  { key: 'cavernCellSize', label: 'Spacing', min: 40, max: 160, step: 5, desc: 'Distance between caverns — larger spaces them further apart.' },
-  { key: 'cavernRadius', label: 'Size', min: 6, max: 30, step: 1, desc: 'Base width of each chamber.' },
-  { key: 'cavernVerticality', label: 'Verticality', min: 0, max: 3, step: 0.1, desc: 'How tall chambers are relative to their width.' },
-  { key: 'cavernWinding', label: 'Winding', min: 0, max: 20, step: 0.5, desc: 'How much the chamber walls meander (0 = clean ellipsoid).' },
-  { key: 'cavernWallAmp', label: 'Wall roughness', min: 0, max: 6, step: 0.2, desc: 'Bumpiness of the walls (0 = perfectly smooth).' },
-  { key: 'cavernWallFrequency', label: 'Roughness scale', min: 0.05, max: 0.6, step: 0.01, desc: 'Size of the wall bumps — higher is finer.' },
-  { key: 'cavernRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'How much chamber size differs from one to the next.' },
-  { key: 'cavernWaterLevel', label: 'Water level', min: 0, max: 0.6, step: 0.05, desc: 'How deep the water pool at the bottom of each chamber is.' },
-  { key: 'cavernSpikeAmount', label: 'Stalagmites', min: 0, max: 1, step: 0.05, desc: 'Abundance and size of stalagmites and stalactites.' },
-  { key: 'cavernTerrainTaper', label: 'Terrain taper', min: 0, max: 1, step: 0.05, desc: 'Shrinks cavern openings where they breach the surface (0 = full-size; never fully sealed).' },
+  { key: 'cavernsPerCell', label: 'Density', min: 0, max: 4, step: 0.25, desc: 'Caverns per area. Higher = more caverns.' },
+  { key: 'cavernCellSize', label: 'Spacing', min: 40, max: 160, step: 5, desc: 'Distance between caverns. Higher = fewer, more spread-out chambers.' },
+  { key: 'cavernRadius', label: 'Size', min: 6, max: 30, step: 1, desc: 'Base chamber width. Higher = bigger caverns.' },
+  { key: 'cavernVerticality', label: 'Verticality', min: 0, max: 3, step: 0.1, desc: 'Chamber height vs. width. Higher = taller chambers.' },
+  { key: 'cavernWinding', label: 'Winding', min: 0, max: 20, step: 0.5, desc: 'Wall meander. Higher = more irregular; 0 = clean ellipsoid.' },
+  { key: 'cavernWallAmp', label: 'Wall roughness', min: 0, max: 6, step: 0.2, desc: 'Wall bumpiness. Higher = rougher; 0 = perfectly smooth.' },
+  { key: 'cavernWallFrequency', label: 'Roughness scale', min: 0.05, max: 0.6, step: 0.01, desc: 'Wall-bump size. Higher = finer bumps.' },
+  { key: 'cavernRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'Size difference between chambers. Higher = more varied.' },
+  { key: 'cavernWaterLevel', label: 'Water level', min: 0, max: 0.6, step: 0.05, desc: 'Water-pool depth at the chamber floor. Higher = deeper pools.' },
+  { key: 'cavernSpikeAmount', label: 'Stalagmites', min: 0, max: 1, step: 0.05, desc: 'Stalagmites/stalactites. Higher = more and larger spikes.' },
+  { key: 'cavernTerrainTaper', label: 'Terrain taper', min: 0, max: 1, step: 0.05, desc: 'Shrinks openings where caverns breach the surface. Higher = smaller surface mouths; 0 = full-size.' },
 ];
 
 // Persist the chosen generation settings across sessions (name/seed stay fresh).
