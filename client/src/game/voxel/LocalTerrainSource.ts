@@ -48,12 +48,13 @@ export class LocalTerrainSource {
     });
   }
 
-  private rawChunk(cx: number, cy: number, cz: number): Uint32Array {
-    // Pack (cx,cy,cz) into one safe-integer key (±2^16 each) — no string alloc/hash per lookup.
-    const key = ((cx + 0x10000) * 0x20000 + (cy + 0x10000)) * 0x20000 + (cz + 0x10000);
+  private rawChunk(cx: number, cy: number, cz: number, level = 0): Uint32Array {
+    // Pack (level,cx,cy,cz) into one safe-integer key. Coords ±2^15 (±262 km at level 0), level 0..15 —
+    // the whole key is < 2^53, so distinct LOD levels never collide in the cache. No string alloc/hash.
+    const key = ((level * 0x10000 + (cx + 0x8000)) * 0x10000 + (cy + 0x8000)) * 0x10000 + (cz + 0x8000);
     let data = this.cache.get(key);
     if (!data) {
-      data = this.gen.generateChunk(cx, cy, cz);
+      data = this.gen.generateChunk(cx, cy, cz, level);
       this.cache.set(key, data);
     }
     return data;
@@ -78,14 +79,15 @@ export class LocalTerrainSource {
     return tile;
   }
 
-  /** Generate a single chunk (equivalent of a server VOXEL_CHUNK_DATA response). */
-  generateChunk(cx: number, cy: number, cz: number): VoxelChunkData {
+  /** Generate a single chunk (equivalent of a server VOXEL_CHUNK_DATA response). `level` is the LOD
+   *  zoom level (0 = full detail); a coarse chunk samples the same field at a 2^level step. */
+  generateChunk(cx: number, cy: number, cz: number, level = 0): VoxelChunkData {
     return {
       chunkX: cx,
       chunkY: cy,
       chunkZ: cz,
       lastBuildSeq: 0,
-      voxelData: this.rawChunk(cx, cy, cz),
+      voxelData: this.rawChunk(cx, cy, cz, level),
     };
   }
 
