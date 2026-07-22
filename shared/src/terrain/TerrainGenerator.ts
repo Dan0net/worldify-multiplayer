@@ -172,8 +172,10 @@ export interface CaveConfig {
  * cave layer is rendered as solid casts for inspection).
  */
 export interface TerrainLayerConfig {
-  /** Master toggle for the base landscape + pathways + stamps. */
+  /** Paths toggle: the base landscape + pathways (roads / walls / torches). */
   enabled: boolean;
+  /** Stamps toggle: scattered trees / rocks / buildings. Separate from paths so "Paths" is just paths. */
+  stampsEnabled: boolean;
   /**
    * WORLD-level feature scale, applied to EVERY generation type (land, rivers, paths, caves, and
    * building/stamp spacing). Bigger = larger features everywhere (the world stretched uniformly);
@@ -484,7 +486,8 @@ export const DEFAULT_BIOMES: BiomeDefinition[] = [
 ];
 
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
-  enabled: true,            // base landscape + pathways + stamps on by default
+  enabled: true,            // base landscape + pathways on by default
+  stampsEnabled: true,      // trees / rocks / buildings on by default
   masterScale: 1,           // world feature scale (1 = identity → existing worlds unchanged)
   landScale: 1,             // land feature scale, on top of masterScale (1 = identity)
   pathSpacing: 160,         // ~160 m between path cells
@@ -606,7 +609,7 @@ const MIN_RIVER_DEPTH = 3;
  *  read apart from each other and from the water rivers/sea in `biomesDebug` view (not the biome's
  *  normal top material, which stays realistic for non-debug play). */
 export const DEBUG_BIOME_MATERIALS: number[] = [
-  mat('moss2'), mat('sand'), mat('brick2'), mat('concrete'), mat('rock2'), mat('wood2'),
+  mat('moss2'), mat('snow2'), mat('tile5'), mat('roof'), mat('sand'), mat('pebbles'),
 ];
 /** Surface-detail base frequency (1/m) at detailFrequency = 1 — an ABSOLUTE rubble scale, independent
  *  of the (very low) continental frequency, so detail can be fine rocks/rubble rather than broad bumps. */
@@ -716,11 +719,6 @@ export class TerrainGenerator implements HeightSampler {
   private slopeCache = new Map<number, Map<number, number>>();
   private slopeCacheEntries = 0;
 
-  // Per-column POST-detail slope angle (degrees) — the slope of the actual rendered surface including
-  // the rubble detail, used for the grass→rock material test (rock shows on the jagged steep faces).
-  // Separate from slopeCache (which is the smooth macro slope driving detail amplitude).
-  private detailSlopeCache = new Map<number, Map<number, number>>();
-  private detailSlopeCacheEntries = 0;
 
   // Per-(worldX,worldZ)-column memo of the pathway (road) queries. Pathways are XZ-only but were
   // re-evaluated per query type AND per cy chunk in a column — each doing domain warp + several
@@ -770,6 +768,9 @@ export class TerrainGenerator implements HeightSampler {
       // layer was on — inherit from landformEnabled so those worlds stay byte-identical.
       if (config.terrainLayer.seaEnabled === undefined) this.config.terrainLayer.seaEnabled = this.config.terrainLayer.landformEnabled;
       if (config.terrainLayer.beachEnabled === undefined) this.config.terrainLayer.beachEnabled = this.config.terrainLayer.landformEnabled;
+      // Stamps used to be gated by `enabled` (the old Buildings layer) — worlds predating the split
+      // inherit stampsEnabled from it so trees/rocks/buildings stay exactly as before.
+      if (config.terrainLayer.stampsEnabled === undefined) this.config.terrainLayer.stampsEnabled = this.config.terrainLayer.enabled;
     }
     // Snapshot the un-scaled cave + pathway configs, then bake masterScale into config.caveConfig.
     this.rawCaveConfig = { ...this.config.caveConfig };
@@ -984,8 +985,6 @@ export class TerrainGenerator implements HeightSampler {
     this.heightCacheEntries = 0;
     this.slopeCache.clear();
     this.slopeCacheEntries = 0;
-    this.detailSlopeCache.clear();
-    this.detailSlopeCacheEntries = 0;
     this.pathwayCache.clear();
     this.pathwayCacheEntries = 0;
     this.placementCache.clear();
@@ -1961,16 +1960,24 @@ export class TerrainGenerator implements HeightSampler {
   private riverHalfWidth(): number {
     return (this.config.terrainLayer.riverWidth * this.landSizeScale()) * 0.5;
   }
+  /** True where two DIFFERENT regions meet between the sample point and an offset. With biomes on
+   *  (≥2), a "region" is the biome ID, so rivers run only on the visible biome borders (many raw cell
+   *  borders are same-biome and invisible — putting a river there is what made rivers cross the middle
+   *  of a single-coloured region). Without biomes, it's the raw warped cell value (rivers-only worlds). */
+  private regionEdgeAt(offX: number, offZ: number, centerVal: number, biomesOn: boolean): boolean {
+    if (biomesOn) return this.biomeIdAt(offX, offZ) !== centerVal;
+    const [wx, wz] = this.applyRiverWarp(offX, offZ);
+    return Math.abs(centerVal - this.riverCellular.GetNoise(wx, wz)) > 0.001;
+  }
   private computeIsOnRiver(worldX: number, worldZ: number): boolean {
     if (!this.config.terrainLayer.riversEnabled) return false;
     const halfWidth = this.riverHalfWidth();
-    const c = this.riverCenterCell(worldX, worldZ);
-    const [wx1, wz1] = this.applyRiverWarp(worldX + halfWidth, worldZ); const c1 = this.riverCellular.GetNoise(wx1, wz1);
-    const [wx2, wz2] = this.applyRiverWarp(worldX - halfWidth, worldZ); const c2 = this.riverCellular.GetNoise(wx2, wz2);
-    const [wx3, wz3] = this.applyRiverWarp(worldX, worldZ + halfWidth); const c3 = this.riverCellular.GetNoise(wx3, wz3);
-    const [wx4, wz4] = this.applyRiverWarp(worldX, worldZ - halfWidth); const c4 = this.riverCellular.GetNoise(wx4, wz4);
-    const eps = 0.001;
-    return Math.abs(c - c1) > eps || Math.abs(c - c2) > eps || Math.abs(c - c3) > eps || Math.abs(c - c4) > eps;
+    const biomesOn = this.biomeCount() >= 2;
+    const c = biomesOn ? this.biomeIdAt(worldX, worldZ) : this.riverCenterCell(worldX, worldZ);
+    return this.regionEdgeAt(worldX + halfWidth, worldZ, c, biomesOn)
+        || this.regionEdgeAt(worldX - halfWidth, worldZ, c, biomesOn)
+        || this.regionEdgeAt(worldX, worldZ + halfWidth, c, biomesOn)
+        || this.regionEdgeAt(worldX, worldZ - halfWidth, c, biomesOn);
   }
   /** The enabled biomes (the active palette). Biomes are "on" when this is non-empty. */
   private activeBiomes(): BiomeDefinition[] {
@@ -2004,15 +2011,15 @@ export class TerrainGenerator implements HeightSampler {
   private computeGetRiverDepthFactor(worldX: number, worldZ: number): number {
     if (!this.config.terrainLayer.riversEnabled) return 0;
     const halfWidth = this.riverHalfWidth();
-    const c = this.riverCenterCell(worldX, worldZ);
-    const eps = 0.001;
+    const biomesOn = this.biomeCount() >= 2;
+    const c = biomesOn ? this.biomeIdAt(worldX, worldZ) : this.riverCenterCell(worldX, worldZ);
     let minEdgeDist = halfWidth;
     const step = Math.max(0.3, halfWidth / 4);
     for (const [dx, dz] of PATH_CARDINALS) {
       for (let dist = step; dist <= halfWidth; dist += step) {
-        const [wx, wz] = this.applyRiverWarp(worldX + dx * dist, worldZ + dz * dist);
-        const cell = this.riverCellular.GetNoise(wx, wz);
-        if (Math.abs(c - cell) > eps) { minEdgeDist = Math.min(minEdgeDist, dist); break; }
+        if (this.regionEdgeAt(worldX + dx * dist, worldZ + dz * dist, c, biomesOn)) {
+          minEdgeDist = Math.min(minEdgeDist, dist); break;
+        }
       }
     }
     const tt = 1 - Math.min(1, minEdgeDist / halfWidth);
@@ -2400,26 +2407,6 @@ export class TerrainGenerator implements HeightSampler {
     return Math.atan(this.landformSlope(worldX, worldZ)) * (180 / Math.PI);
   }
 
-  /** POST-detail surface angle in degrees: central difference of the full detailed height (macro +
-   *  rubble) over a short (~2 m) span, so the jagged detail registers. Memoized per column; drives the
-   *  grass→rock material test. */
-  private landformDetailedSlopeDeg(worldX: number, worldZ: number): number {
-    let inner = this.detailSlopeCache.get(worldX);
-    if (inner) { const c = inner.get(worldZ); if (c !== undefined) return c; }
-    const step = 2;   // meters — short span to capture the detail bumps, not just the macro grade
-    const hL = this.sampleLandformHeight(worldX - step, worldZ);
-    const hR = this.sampleLandformHeight(worldX + step, worldZ);
-    const hD = this.sampleLandformHeight(worldX, worldZ - step);
-    const hU = this.sampleLandformHeight(worldX, worldZ + step);
-    const dhx = ((hR - hL) * VOXEL_SCALE) / (2 * step);
-    const dhz = ((hU - hD) * VOXEL_SCALE) / (2 * step);
-    const deg = Math.atan(Math.sqrt(dhx * dhx + dhz * dhz)) * (180 / Math.PI);
-    if (this.detailSlopeCacheEntries > 262144) { this.detailSlopeCache.clear(); this.detailSlopeCacheEntries = 0; inner = undefined; }
-    if (!inner) { inner = new Map(); this.detailSlopeCache.set(worldX, inner); }
-    inner.set(worldZ, deg);
-    this.detailSlopeCacheEntries++;
-    return deg;
-  }
 
   /**
    * Sample terrain surface at a world position (height + material)
@@ -2443,9 +2430,12 @@ export class TerrainGenerator implements HeightSampler {
     if (isPath && this.config.pathwayConfig.dipDepth > 0) {
       height -= this.config.pathwayConfig.dipDepth * this.getPathwayDepthFactor(worldX, worldZ);
     }
-    // River bed (depth floored so the channel survives at small master scales).
+    // River bed (depth floored so the channel survives at small master scales; sink to hold ≥1 water
+    // voxel so the map's carved height matches the chunk's).
     if (isRiver && tlSurf.riverDepth > 0) {
-      const bed = originalHeight - this.riverDepthVox() * this.getRiverDepthFactor(worldX, worldZ);
+      const rf = this.getRiverDepthFactor(worldX, worldZ);
+      let bed = originalHeight - this.riverDepthVox() * rf;
+      if (rf > 0) bed = Math.min(bed, originalHeight - 2);
       if (bed < height) height = bed;
     }
 
@@ -2502,12 +2492,12 @@ export class TerrainGenerator implements HeightSampler {
     if (t.biomesDebug && biome) return DEBUG_BIOME_MATERIALS[this.biomeIdAt(worldX, worldZ) % DEBUG_BIOME_MATERIALS.length];
     if (rel < 0) return mat('gravel');               // sea floor
     if (t.beachEnabled && rel <= this.beachBandVox()) return mat('sand');
-    // Steep rock OVERRIDES snow: any steep face (measured on the post-detail surface) is bare rock,
-    // even up high. Snow then only shows above the snow line on the remaining SHALLOW slopes (caps).
-    // Rock-slope / snow-line are GLOBAL (not per-biome for now); a biome only recolors the plains band.
-    // Sea + beach stay elevation-driven so coastlines are unaffected by biomes.
+    // Steep rock OVERRIDES snow: any steep face is bare rock, even up high. Snow then only shows above
+    // the snow line on the remaining SHALLOW slopes (caps). Uses the MACRO (smooth) slope — NOT the
+    // post-detail slope — so fine detail bumps can't flip the material patch-by-patch (that was the
+    // "green contour lines" aliasing at small scale). Rock-slope / snow-line are GLOBAL (not per-biome).
     const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32;
-    if (this.landformDetailedSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
+    if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
     if (rel >= t.landformSnowLine * vscale) return mat('snow');   // shallow + high → snow
     return biome ? biome.topMaterial : this.getMaterialAtDepth(0);   // plains → biome / normal top material
   }
@@ -2617,7 +2607,12 @@ export class TerrainGenerator implements HeightSampler {
           const rf = this.getRiverDepthFactor(worldX, worldZ);
           const bed = originalTerrainHeight - this.riverDepthVox() * rf;   // depth floored so it survives small scale
           if (bed < terrainHeight) terrainHeight = bed;
-          if (rf > 0) riverWaterLevel = originalTerrainHeight - 1;   // surface ~1 voxel below the bank
+          if (rf > 0) {
+            riverWaterLevel = originalTerrainHeight - 1;   // surface ~1 voxel below the bank
+            // Guarantee at least one voxel of water: at small scale the shallow bed can sit above the
+            // water surface (0 water voxels → visible trough, no water), so sink the bed if needed.
+            if (terrainHeight > riverWaterLevel - 1) terrainHeight = riverWaterLevel - 1;
+          }
         }
 
         // Water level: river channels and/or the sea (landform floods columns below sea level). The sea
@@ -2743,9 +2738,9 @@ export class TerrainGenerator implements HeightSampler {
       }
     }
 
-    // Apply stamps (trees, rocks, buildings). GATED ON buildingsOn: stamps belong to the Buildings
-    // layer, so a Landforms-only world (buildings off) produces no trees/rocks/buildings.
-    if (buildingsOn && this.stampPointGenerator && this.stampPlacer) {
+    // Apply stamps (trees, rocks, buildings). GATED ON stampsEnabled (its own toggle, split from Paths)
+    // so "Paths" is just paths; stamps can scatter on a landform/biome world with paths off.
+    if (tl.stampsEnabled && this.stampPointGenerator && this.stampPlacer) {
       // The scatter + pathway/breach filter is XZ-only, so memoize it per (cx,cz) — every cy in the
       // column reuses the same filtered list instead of redoing the 25-neighbour scatter + O(n²)
       // collision + per-placement pathway/breach noise. applyStamps treats the list read-only.

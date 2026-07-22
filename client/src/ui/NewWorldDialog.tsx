@@ -274,7 +274,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   // Landform height is DERIVED (not its own toggle): keep the config field in sync for the generator.
   const syncedTerrain: TerrainLayerConfig = { ...terrain, landformEnabled: landformOn };
 
-  const anyLayer = terrain.enabled || landformOn || terrain.riversEnabled || cave.wormsEnabled || cave.cavernsEnabled;
+  const anyLayer = terrain.enabled || terrain.stampsEnabled || landformOn || terrain.riversEnabled || cave.wormsEnabled || cave.cavernsEnabled;
   const subheading = (text: string) => (
     <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">{text}</span>
   );
@@ -330,6 +330,9 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
           <div className="flex gap-1.5 flex-wrap justify-end">
             <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
               Paths
+            </button>
+            <button className={pill(terrain.stampsEnabled)} onClick={() => patchTerrain({ stampsEnabled: !terrain.stampsEnabled })}>
+              Buildings
             </button>
             <button className={pill(terrain.riversEnabled)} onClick={() => patchTerrain({ riversEnabled: !terrain.riversEnabled })}>
               Rivers
