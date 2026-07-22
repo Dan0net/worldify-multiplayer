@@ -7,6 +7,7 @@ export {
   DEFAULT_TERRAIN_CONFIG,
   DEFAULT_CAVE_CONFIG,
   DEFAULT_TERRAIN_LAYER_CONFIG,
+  DEFAULT_LANDFORM_CURVE,
   normalizeCaveConfig,
   type NoiseLayerConfig,
   type DomainWarpConfig,
@@ -15,6 +16,8 @@ export {
   type CaveConfig,
   type TerrainLayerConfig,
 } from './TerrainGenerator.js';
+
+export { Curve, type CurvePoint } from './Curve.js';
 
 // Stamp system re-exports
 export {

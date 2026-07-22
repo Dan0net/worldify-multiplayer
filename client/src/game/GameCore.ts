@@ -41,7 +41,11 @@ import {
 import { setRendererRef, setVisibilityRadiusCallback, syncQualityToStore } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, RequestNack, updateTileFromChunk, updateTileHash, createMapTile } from '@worldify/shared';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, RequestNack, updateTileFromChunk, updateTileHash, createMapTile, CHUNK_SIZE, VOXEL_SCALE } from '@worldify/shared';
+
+/** Chebyshev radius (in map tiles = 8 m each) of map tiles kept around the player; farther explored
+ *  tiles are evicted so the cache doesn't grow forever. ~48 tiles ≈ 384 m, ~28 MB worst case. */
+const MAP_TILE_KEEP_RADIUS = 48;
 import { VoxelIntegration } from './voxel/VoxelIntegration';
 import { setVoxelWireframe } from './voxel/VoxelMaterials';
 import { GameLoop } from './GameLoop';
@@ -86,6 +90,10 @@ export class GameCore {
   
   // Center point for spectator camera orbit (updated when leaving Playing mode)
   private spectatorCenter = new THREE.Vector3(0, 0, 0);
+  // Last tile the map cache was pruned around; prune only when the player crosses into a new tile so
+  // explored map tiles don't accumulate without bound (see MapTileCache.prune).
+  private mapPruneTx = NaN;
+  private mapPruneTz = NaN;
 
   // Last (x,z) the explore center-follow placed the spawn marker at, so it only re-raycasts
   // when the camera target actually moved (NaN = force placement on the next frame).
@@ -358,6 +366,7 @@ export class GameCore {
     // the origin — that's where SpawnManager probes for ground, so spawn resolves.
     const savedPose = loadPlayerPos();
     this.hasSavedSpawn = savedPose !== null;
+    this.spawnManager?.setSpawnTarget(0, 0);
     const streamCenter = savedPose
       ? new THREE.Vector3(savedPose.x, savedPose.y, savedPose.z)
       : new THREE.Vector3(0, 0, 0);
@@ -610,6 +619,15 @@ export class GameCore {
     const mapCenter = gameMode === GameMode.Playing ? localPlayer.position : this.spectatorCenter;
     updateMapPlayerPosition(mapCenter.x, mapCenter.z, localPlayer.yaw, this.playerManager.getLocalPlayerColor());
     updateMapOtherPlayers(this.playerManager.getRemotePlayerPositions());
+
+    // Bound the map-tile cache: when the player crosses into a new tile, evict tiles far from them so
+    // exploring a large world doesn't grow the (otherwise never-evicted) cache without bound.
+    const tileMeters = CHUNK_SIZE * VOXEL_SCALE;
+    const ctx = Math.floor(mapCenter.x / tileMeters), ctz = Math.floor(mapCenter.z / tileMeters);
+    if (ctx !== this.mapPruneTx || ctz !== this.mapPruneTz) {
+      this.mapPruneTx = ctx; this.mapPruneTz = ctz;
+      getMapTileCache().prune(ctx, ctz, MAP_TILE_KEEP_RADIUS);
+    }
 
     // Update wind animation for foliage
     updateWindTime(elapsedTime);

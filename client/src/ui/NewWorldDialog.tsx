@@ -11,7 +11,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { nextWorldName, randomWorldSeed } from '../game/world/WorldManager';
 import {
-  DEFAULT_CAVE_CONFIG, DEFAULT_TERRAIN_LAYER_CONFIG, normalizeCaveConfig,
+  DEFAULT_CAVE_CONFIG, DEFAULT_TERRAIN_LAYER_CONFIG, DEFAULT_LANDFORM_CURVE, normalizeCaveConfig,
+  Curve, type CurvePoint,
   type CaveConfig, type TerrainLayerConfig,
 } from '@worldify/shared';
 
@@ -22,39 +23,74 @@ interface NewWorldDialogProps {
 
 type Field<T> = { key: keyof T; label: string; min: number; max: number; step: number; desc: string };
 
-const TERRAIN_FIELDS: Field<TerrainLayerConfig>[] = [
-  { key: 'pathSpacing', label: 'Path spacing', min: 40, max: 220, step: 5, desc: 'Distance between roads/paths — larger is sparser.' },
-  { key: 'pathWidth', label: 'Path width', min: 1, max: 8, step: 0.5, desc: 'Width of the roads/paths in meters.' },
-  { key: 'pathWarpAmplitude', label: 'Path warp amount', min: 0, max: 150, step: 5, desc: 'How strongly paths meander away from straight.' },
-  { key: 'pathWarpFrequency', label: 'Path warp scale', min: 0.002, max: 0.05, step: 0.002, desc: 'Size of the path wiggles — higher is tighter.' },
-  { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between buildings — larger means fewer.' },
+// World scale knobs — masterScale affects EVERY layer (land, rivers, paths, caves, buildings);
+// landScale scales only the land + rivers on top of it.
+const WORLD_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'masterScale', label: 'World scale', min: 0.1, max: 1, step: 0.05, desc: 'Overall size of everything (land, rivers, paths, caves, buildings). Higher = bigger features; 1 = full size.' },
+  { key: 'landScale', label: 'Land scale', min: 0.1, max: 2, step: 0.1, desc: 'Size of the land + rivers only, on top of World scale. Higher = bigger landmasses.' },
+];
+
+const RIVER_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'riverSourceSpacing', label: 'Source spacing', min: 20, max: 800, step: 10, desc: 'Distance between river heads. Higher = fewer, more spread-out rivers.' },
+  { key: 'riverSourceMinElevation', label: 'Source height', min: 0, max: 0.9, step: 0.05, desc: 'Minimum head elevation (fraction of mountain height). Higher = rivers only start on high peaks.' },
+  { key: 'riverMaxLength', label: 'Max length', min: 100, max: 1500, step: 50, desc: 'How far a river is traced downhill (meters). Higher = longer rivers.' },
+  { key: 'riverMeander', label: 'Meander', min: 0, max: 1.5, step: 0.05, desc: 'Sideways wander. Higher = snakier; 0 = straight downhill.' },
+  { key: 'riverStartWidth', label: 'Start width', min: 1, max: 40, step: 1, desc: 'Channel width in meters at the source. Higher = fatter headwaters.' },
+  { key: 'riverEndWidth', label: 'End width', min: 1, max: 60, step: 1, desc: 'Channel width in meters at the mouth. Higher = wider toward the sea.' },
+  { key: 'riverDepth', label: 'River depth', min: 1, max: 30, step: 1, desc: 'How far the bed cuts below the water (voxels). Higher = deeper channels.' },
+];
+
+const PATH_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'pathSpacing', label: 'Path spacing', min: 40, max: 220, step: 5, desc: 'Distance between roads. Higher = fewer, more spread-out paths.' },
+  { key: 'pathWidth', label: 'Path width', min: 1, max: 8, step: 0.5, desc: 'Road width in meters. Higher = wider roads.' },
+  { key: 'pathWarpAmplitude', label: 'Path warp amount', min: 0, max: 150, step: 5, desc: 'Sideways wander. Higher = paths meander more from straight.' },
+  { key: 'pathWarpFrequency', label: 'Path warp scale', min: 0.002, max: 0.05, step: 0.002, desc: 'Wiggle size. Higher = tighter, more frequent path curves.' },
+];
+
+const BUILDING_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between trees/rocks/buildings. Higher = fewer, more spread out.' },
+];
+
+const LANDFORM_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'landformScale', label: 'Feature scale', min: 0.5, max: 8, step: 0.25, desc: 'Land/sea feature frequency. Higher = smaller, more compact continents.' },
+  { key: 'landformWarpScale', label: 'Coast warp scale', min: 0.4, max: 4, step: 0.1, desc: 'Coastline wiggle frequency. Higher = finer, more detailed coasts.' },
+  { key: 'landformWarpStrength', label: 'Coast warp amount', min: 0, max: 300, step: 10, desc: 'How far coasts/ranges bend. Higher = more sweeping, distorted coastlines.' },
+  { key: 'seaCoveragePercent', label: 'Sea coverage', min: 0, max: 90, step: 5, desc: 'Percent of the world that is ocean. Higher = more sea, less land.' },
+  { key: 'landformSeaDepth', label: 'Sea depth', min: 40, max: 400, step: 10, desc: 'Ocean floor depth below sea level (voxels). Higher = deeper oceans.' },
+  { key: 'landformMountainHeight', label: 'Mountain height', min: 60, max: 500, step: 10, desc: 'Peak height above sea level (voxels). Higher = taller mountains.' },
+  { key: 'landformBeachWidth', label: 'Beach height', min: 0, max: 48, step: 2, desc: 'How far the flat beach rises above water (voxels). Higher = wider beaches.' },
+  { key: 'landformSnowLine', label: 'Snow line', min: 60, max: 400, step: 10, desc: 'Elevation above sea where snow starts (voxels). Higher = less snow (only the tallest peaks).' },
+  { key: 'landformDetailFrequency', label: 'Detail scale', min: 1, max: 20, step: 0.5, desc: 'Surface-bump frequency. Higher = finer, more frequent rubble.' },
+  { key: 'landformDetailFlat', label: 'Detail (flat)', min: 0, max: 8, step: 0.5, desc: 'Surface texture on flat ground (voxels). Higher = bumpier plains.' },
+  { key: 'landformDetailSteep', label: 'Detail (steep)', min: 0, max: 30, step: 1, desc: 'Surface texture on steep slopes (voxels). Higher = more jagged, rugged mountains.' },
+  { key: 'landformRockSlopeDeg', label: 'Rock slope', min: 20, max: 80, step: 5, desc: 'Slope angle where grass turns to rock (degrees). Higher = less rock (only sheer cliffs).' },
 ];
 
 const WORM_FIELDS: Field<CaveConfig>[] = [
-  { key: 'wormsPerCell', label: 'Density', min: 0, max: 20, step: 0.5, desc: 'How many tunnels are generated in each area.' },
-  { key: 'wormCellSize', label: 'Spacing', min: 15, max: 100, step: 5, desc: 'Distance between tunnel start points — larger is sparser.' },
-  { key: 'wormSegments', label: 'Length', min: 10, max: 150, step: 5, desc: 'How far each tunnel travels before it ends.' },
-  { key: 'wormRadius', label: 'Tunnel size', min: 0.8, max: 5, step: 0.1, desc: 'Radius of the tunnels — bigger means wider caves.' },
-  { key: 'wormTurnRate', label: 'Winding', min: 0.1, max: 1, step: 0.05, desc: 'How much tunnels curve and wind (low = straighter).' },
-  { key: 'wormPitchRange', label: 'Verticality', min: 0, max: 3, step: 0.05, desc: 'How much tunnels rise and dive (0 = flat and level).' },
-  { key: 'wormWallAmp', label: 'Wall roughness', min: 0, max: 3, step: 0.1, desc: 'Bumpiness of the tunnel walls (0 = perfectly smooth).' },
-  { key: 'wormWallFrequency', label: 'Roughness scale', min: 0.02, max: 0.4, step: 0.01, desc: 'Size of the wall bumps — higher is finer/more frequent.' },
-  { key: 'wormRadiusAlongVar', label: 'Size variation', min: 0, max: 1, step: 0.05, desc: 'How much a tunnel bulges and pinches along its length.' },
-  { key: 'wormRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'How much tunnel width differs from one tunnel to the next.' },
+  { key: 'wormsPerCell', label: 'Density', min: 0, max: 20, step: 0.5, desc: 'Tunnels per area. Higher = more tunnels.' },
+  { key: 'wormCellSize', label: 'Spacing', min: 15, max: 100, step: 5, desc: 'Distance between tunnel starts. Higher = fewer, more spread-out tunnels.' },
+  { key: 'wormSegments', label: 'Length', min: 10, max: 150, step: 5, desc: 'How far each tunnel travels. Higher = longer tunnels.' },
+  { key: 'wormRadius', label: 'Tunnel size', min: 0.8, max: 5, step: 0.1, desc: 'Tunnel radius. Higher = wider caves.' },
+  { key: 'wormTurnRate', label: 'Winding', min: 0.1, max: 1, step: 0.05, desc: 'How much tunnels curve. Higher = more winding; low = straighter.' },
+  { key: 'wormPitchRange', label: 'Verticality', min: 0, max: 3, step: 0.05, desc: 'Rise and dive. Higher = steeper vertical tunnels; 0 = flat.' },
+  { key: 'wormWallAmp', label: 'Wall roughness', min: 0, max: 3, step: 0.1, desc: 'Wall bumpiness. Higher = rougher; 0 = perfectly smooth.' },
+  { key: 'wormWallFrequency', label: 'Roughness scale', min: 0.02, max: 0.4, step: 0.01, desc: 'Wall-bump size. Higher = finer, more frequent bumps.' },
+  { key: 'wormRadiusAlongVar', label: 'Size variation', min: 0, max: 1, step: 0.05, desc: 'Bulge/pinch along a tunnel. Higher = more variation.' },
+  { key: 'wormRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'Width difference between tunnels. Higher = more varied widths.' },
 ];
 
 const CAVERN_FIELDS: Field<CaveConfig>[] = [
-  { key: 'cavernsPerCell', label: 'Density', min: 0, max: 4, step: 0.25, desc: 'How many caverns form in each area.' },
-  { key: 'cavernCellSize', label: 'Spacing', min: 40, max: 160, step: 5, desc: 'Distance between caverns — larger spaces them further apart.' },
-  { key: 'cavernRadius', label: 'Size', min: 6, max: 30, step: 1, desc: 'Base width of each chamber.' },
-  { key: 'cavernVerticality', label: 'Verticality', min: 0, max: 3, step: 0.1, desc: 'How tall chambers are relative to their width.' },
-  { key: 'cavernWinding', label: 'Winding', min: 0, max: 20, step: 0.5, desc: 'How much the chamber walls meander (0 = clean ellipsoid).' },
-  { key: 'cavernWallAmp', label: 'Wall roughness', min: 0, max: 6, step: 0.2, desc: 'Bumpiness of the walls (0 = perfectly smooth).' },
-  { key: 'cavernWallFrequency', label: 'Roughness scale', min: 0.05, max: 0.6, step: 0.01, desc: 'Size of the wall bumps — higher is finer.' },
-  { key: 'cavernRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'How much chamber size differs from one to the next.' },
-  { key: 'cavernWaterLevel', label: 'Water level', min: 0, max: 0.6, step: 0.05, desc: 'How deep the water pool at the bottom of each chamber is.' },
-  { key: 'cavernSpikeAmount', label: 'Stalagmites', min: 0, max: 1, step: 0.05, desc: 'Abundance and size of stalagmites and stalactites.' },
-  { key: 'cavernTerrainTaper', label: 'Terrain taper', min: 0, max: 1, step: 0.05, desc: 'Shrinks cavern openings where they breach the surface (0 = full-size; never fully sealed).' },
+  { key: 'cavernsPerCell', label: 'Density', min: 0, max: 4, step: 0.25, desc: 'Caverns per area. Higher = more caverns.' },
+  { key: 'cavernCellSize', label: 'Spacing', min: 40, max: 160, step: 5, desc: 'Distance between caverns. Higher = fewer, more spread-out chambers.' },
+  { key: 'cavernRadius', label: 'Size', min: 6, max: 30, step: 1, desc: 'Base chamber width. Higher = bigger caverns.' },
+  { key: 'cavernVerticality', label: 'Verticality', min: 0, max: 3, step: 0.1, desc: 'Chamber height vs. width. Higher = taller chambers.' },
+  { key: 'cavernWinding', label: 'Winding', min: 0, max: 20, step: 0.5, desc: 'Wall meander. Higher = more irregular; 0 = clean ellipsoid.' },
+  { key: 'cavernWallAmp', label: 'Wall roughness', min: 0, max: 6, step: 0.2, desc: 'Wall bumpiness. Higher = rougher; 0 = perfectly smooth.' },
+  { key: 'cavernWallFrequency', label: 'Roughness scale', min: 0.05, max: 0.6, step: 0.01, desc: 'Wall-bump size. Higher = finer bumps.' },
+  { key: 'cavernRadiusJitter', label: 'Size variety', min: 0, max: 1, step: 0.05, desc: 'Size difference between chambers. Higher = more varied.' },
+  { key: 'cavernWaterLevel', label: 'Water level', min: 0, max: 0.6, step: 0.05, desc: 'Water-pool depth at the chamber floor. Higher = deeper pools.' },
+  { key: 'cavernSpikeAmount', label: 'Stalagmites', min: 0, max: 1, step: 0.05, desc: 'Stalagmites/stalactites. Higher = more and larger spikes.' },
+  { key: 'cavernTerrainTaper', label: 'Terrain taper', min: 0, max: 1, step: 0.05, desc: 'Shrinks openings where caverns breach the surface. Higher = smaller surface mouths; 0 = full-size.' },
 ];
 
 // Persist the chosen generation settings across sessions (name/seed stay fresh).
@@ -77,6 +113,76 @@ function saveSettings(cave: CaveConfig, terrain: TerrainLayerConfig) {
   try { localStorage.setItem(STORE_KEY, JSON.stringify({ cave, terrain })); } catch { /* ignore */ }
 }
 
+/**
+ * Draggable elevation-curve editor. Points map the continental noise (x: 0..1, left→right) to a
+ * normalized height offset (y: -1 ocean floor .. +1 mountain peak). Drag a point to reshape sea /
+ * beach / plains / mountains; the smooth line is the actual monotone-cubic curve the generator uses.
+ * End points move only vertically; interior points stay ordered between their neighbours.
+ */
+function CurveEditor({ points, onChange }: { points: CurvePoint[]; onChange: (p: CurvePoint[]) => void }) {
+  const W = 264, H = 120, pad = 10;
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [drag, setDrag] = useState<number | null>(null);
+  const px = (x: number) => pad + x * (W - 2 * pad);
+  const py = (y: number) => pad + (1 - (y + 1) / 2) * (H - 2 * pad);
+  const fromPx = (cx: number, cy: number) => ({
+    x: Math.min(1, Math.max(0, (cx - pad) / (W - 2 * pad))),
+    y: Math.min(1, Math.max(-1, (1 - (cy - pad) / (H - 2 * pad)) * 2 - 1)),
+  });
+  const move = (clientX: number, clientY: number) => {
+    if (drag === null || !svgRef.current) return;
+    const r = svgRef.current.getBoundingClientRect();
+    const { x, y } = fromPx(clientX - r.left, clientY - r.top);
+    const pts = points.map((p) => ({ ...p }));
+    const isEnd = drag === 0 || drag === pts.length - 1;
+    pts[drag].y = y;
+    if (!isEnd) pts[drag].x = Math.min(pts[drag + 1].x - 0.02, Math.max(pts[drag - 1].x + 0.02, x));
+    onChange(pts);
+  };
+  // Sample the actual compiled curve for a faithful preview line.
+  const curve = new Curve(points);
+  let path = '';
+  for (let i = 0; i <= 40; i++) {
+    const x = i / 40;
+    path += `${i === 0 ? 'M' : 'L'} ${px(x).toFixed(1)} ${py(curve.eval(x)).toFixed(1)} `;
+  }
+  const seaY = py(0);
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-white/80 text-xs">Elevation curve</span>
+      <svg
+        ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`}
+        className="bg-black/40 rounded-lg border border-white/15 touch-none select-none"
+        onPointerMove={(e) => { if (drag !== null) { e.preventDefault(); move(e.clientX, e.clientY); } }}
+        onPointerUp={() => setDrag(null)}
+        onPointerLeave={() => setDrag(null)}
+      >
+        {/* sea level reference */}
+        <line x1={pad} y1={seaY} x2={W - pad} y2={seaY} stroke="rgba(96,165,250,0.5)" strokeWidth="1" strokeDasharray="3 3" />
+        <text x={W - pad} y={seaY - 3} textAnchor="end" fontSize="8" fill="rgba(96,165,250,0.8)">sea</text>
+        <path d={path} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />
+        {points.map((p, i) => (
+          <circle
+            key={i} cx={px(p.x)} cy={py(p.y)} r={5}
+            fill={drag === i ? 'rgb(129,140,248)' : 'white'} stroke="rgb(79,70,229)" strokeWidth="1.5"
+            className="cursor-grab"
+            onPointerDown={(e) => { e.preventDefault(); (e.target as Element).setPointerCapture?.(e.pointerId); setDrag(i); }}
+          />
+        ))}
+      </svg>
+      <div className="flex items-center justify-between">
+        <span className="text-white/40 text-[10px] leading-tight">Drag points: left→right is low→high land; the dashed line is sea level.</span>
+        <button
+          className="text-white/50 hover:text-white/80 text-[10px] cursor-pointer underline"
+          onClick={() => onChange(DEFAULT_LANDFORM_CURVE.map((p) => ({ ...p })))}
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const initial = useRef(loadSaved()).current;
   const [name, setName] = useState('');
@@ -88,7 +194,8 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
   useEffect(() => {
     nextWorldName().then(setName);
-    nameRef.current?.focus();
+    // Deliberately NOT auto-focusing the name field: on mobile that pops the on-screen keyboard the
+    // moment the dialog opens. Name/seed are pre-filled; the user taps a field only if they want to edit.
   }, []);
 
   const submit = () => {
@@ -149,7 +256,7 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const patchCave = (p: Partial<CaveConfig>) => setCave((c) => ({ ...c, ...p }));
   const patchTerrain = (p: Partial<TerrainLayerConfig>) => setTerrain((t) => ({ ...t, ...p }));
 
-  const anyLayer = terrain.enabled || cave.wormsEnabled || cave.cavernsEnabled;
+  const anyLayer = terrain.enabled || terrain.stampsEnabled || terrain.landformEnabled || terrain.riversEnabled || cave.wormsEnabled || cave.cavernsEnabled;
   const subheading = (text: string) => (
     <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">{text}</span>
   );
@@ -198,13 +305,22 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
         </div>
       </label>
 
-      {/* Generation layers: toggle Terrain / Worms / Caverns, then tune each enabled layer. */}
+      {/* Generation layers — each independent. Toggle here, tune the enabled ones below. */}
       <div className="flex flex-col gap-2 border-t border-white/10 pt-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-white/60 text-xs">Layers</span>
+          <span className="text-white/60 text-xs">Generation</span>
           <div className="flex gap-1.5 flex-wrap justify-end">
+            <button className={pill(terrain.landformEnabled)} onClick={() => patchTerrain({ landformEnabled: !terrain.landformEnabled })}>
+              Landforms
+            </button>
+            <button className={pill(terrain.riversEnabled)} onClick={() => patchTerrain({ riversEnabled: !terrain.riversEnabled })}>
+              Rivers
+            </button>
             <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
-              Terrain
+              Paths
+            </button>
+            <button className={pill(terrain.stampsEnabled)} onClick={() => patchTerrain({ stampsEnabled: !terrain.stampsEnabled })}>
+              Buildings
             </button>
             <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
@@ -217,10 +333,41 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
         {anyLayer && (
           <div className="flex flex-col gap-2.5 max-h-[42vh] overflow-y-auto scrollbar-compact pr-1">
+            {subheading('World scale')}
+            {WORLD_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+            {terrain.landformEnabled && (
+              <>
+                {subheading('Landforms (sea / beach / mountains)')}
+                <span className="text-white/40 text-[10px] leading-tight">
+                  Elevation shapes the surface: sea, sand beaches, snowy peaks, steep rock, moss/grass
+                  elsewhere. Sea coverage sets the land-to-sea ratio.
+                </span>
+                {LANDFORM_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+                <CurveEditor
+                  points={terrain.landformCurve ?? DEFAULT_LANDFORM_CURVE}
+                  onChange={(landformCurve) => patchTerrain({ landformCurve })}
+                />
+              </>
+            )}
+            {terrain.riversEnabled && (
+              <>
+                {subheading('Rivers')}
+                {RIVER_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+              </>
+            )}
             {terrain.enabled && (
               <>
-                {subheading('Terrain')}
-                {TERRAIN_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+                {subheading('Paths')}
+                {PATH_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+              </>
+            )}
+            {terrain.stampsEnabled && (
+              <>
+                {subheading('Buildings')}
+                <span className="text-white/40 text-[10px] leading-tight">
+                  Trees, rocks and buildings scatter only on moss/grass or snow — never sea, sand, or steep rock.
+                </span>
+                {BUILDING_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
               </>
             )}
             {cave.wormsEnabled && (
