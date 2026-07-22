@@ -10,22 +10,58 @@
  */
 
 import * as THREE from 'three';
+import { MAX_ZOOM_LEVEL } from '@worldify/shared';
 
 const target = new THREE.Vector3(0, 0, 0);
 let yaw = 0;
 let pitch = -Math.PI / 4;   // 45° down
-let distance = 32;
+
+// LOD zoom. `zoomExp` is the CONTINUOUS wheel-driven zoom (0…MAX_ZOOM_LEVEL); the camera distance is
+// BASE_DISTANCE·2^zoomExp so zooming feels smooth/analog while the world's apparent chunk size stays
+// roughly constant (a level-L chunk is 2^L bigger, viewed from 2^L further). The DISCRETE data level is
+// round(zoomExp) with a settle-debounced dead-band (getExploreZoomLevel) so wheel jitter can't flip
+// levels and a fast multi-threshold sweep jumps straight to where it settles (no intermediate loads).
+let zoomExp = 0;
+const BASE_DISTANCE = 32;
+let distance = BASE_DISTANCE;
 
 // Look-down range: never flip past straight-down or up above the horizon.
 const MIN_PITCH = -Math.PI / 2 + 0.05;
 const MAX_PITCH = -0.12;
-const MIN_DISTANCE = 6;
-const MAX_DISTANCE = 140;
 
 const ROTATE_SPEED = 0.009;   // radians per pixel
 const PAN_SPEED = 0.0016;     // world units per pixel, per unit distance
-const ZOOM_SPEED = 0.0007;    // per wheel delta unit
-const PINCH_ZOOM = 0.006;     // per pixel of pinch distance change
+const ZOOM_EXP_SPEED = 0.0025;   // zoomExp change per wheel delta unit
+const PINCH_ZOOM = 0.006;        // per pixel of pinch distance change (→ zoomExp via ZOOM_EXP_SPEED)
+
+// Discrete level state (hysteresis + settle debounce).
+let committedLevel = 0;
+let pendingTarget = 0;
+let pendingSince = 0;
+const LEVEL_SETTLE_MS = 160;
+
+function applyZoom(): void {
+  distance = BASE_DISTANCE * Math.pow(2, zoomExp);
+}
+
+/** Discrete LOD data level for the current zoom. Snaps to round(zoomExp) only after it has held
+ *  steady for LEVEL_SETTLE_MS, so a fast sweep skips the levels it passes through. */
+export function getExploreZoomLevel(): number {
+  const t = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomExp)));
+  if (t !== committedLevel) {
+    const now = (typeof performance !== 'undefined' ? performance.now() : 0);
+    if (t !== pendingTarget) { pendingTarget = t; pendingSince = now; }
+    else if (now - pendingSince >= LEVEL_SETTLE_MS) committedLevel = t;
+  } else {
+    pendingTarget = t;
+  }
+  return committedLevel;
+}
+
+/** Linear scale factor (2^level) for the current committed data level. */
+export function getExploreZoomScale(): number {
+  return 1 << committedLevel;
+}
 
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _fwd = new THREE.Vector3();
@@ -47,7 +83,10 @@ export function initExploreCamera(center: THREE.Vector3): void {
   target.copy(center);
   yaw = 0;
   pitch = -Math.PI / 4;
-  distance = 32;
+  zoomExp = 0;
+  committedLevel = 0;
+  pendingTarget = 0;
+  applyZoom();
   gliding = false;
   markerInteracting = false;
 }
@@ -117,14 +156,15 @@ export function exploreCameraPan(dx: number, dy: number): void {
   target.z -= (rightZ * dx - fwdZ * dy) * s;
 }
 
-/** Zoom the orbit distance. Positive `delta` zooms out (wheel down / pinch in). */
+/** Zoom in/out. Positive `delta` zooms OUT (wheel down) → higher zoomExp → coarser LOD, further camera. */
 export function exploreCameraZoom(delta: number): void {
-  distance *= Math.exp(delta * ZOOM_SPEED);
-  if (distance < MIN_DISTANCE) distance = MIN_DISTANCE;
-  if (distance > MAX_DISTANCE) distance = MAX_DISTANCE;
+  zoomExp += delta * ZOOM_EXP_SPEED;
+  if (zoomExp < 0) zoomExp = 0;
+  if (zoomExp > MAX_ZOOM_LEVEL) zoomExp = MAX_ZOOM_LEVEL;
+  applyZoom();
 }
 
 /** Zoom from a pinch distance change (pixels); positive `deltaPixels` = fingers apart → zoom in. */
 export function exploreCameraPinch(deltaPixels: number): void {
-  exploreCameraZoom(-deltaPixels * PINCH_ZOOM / ZOOM_SPEED);
+  exploreCameraZoom(-deltaPixels * PINCH_ZOOM / ZOOM_EXP_SPEED);
 }

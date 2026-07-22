@@ -149,6 +149,14 @@ function createEmptyGroup(centerCx: number, centerCy: number, centerCz: number):
 
 export class ChunkGrouper {
   private scene: THREE.Scene;
+  /**
+   * All chunk meshes (standalone + merged) live under this root, not the scene directly, so the whole
+   * terrain can be scaled by the LOD zoom factor (2^level) in one place: a level-L chunk is meshed at
+   * the usual 0.25 m voxel scale, and the root's scale turns its 8 m footprint into the true 8·2^L m.
+   * Play / level 0 keeps scale 1 (identity → transparent). Baked-world-space vertex positions scale
+   * about the origin, so both a chunk's origin offset and its voxel size scale together — correct.
+   */
+  private root: THREE.Group;
   private slots = new Map<string, ChunkSlot>();
   private groups = new Map<string, ChunkGroup>();
 
@@ -163,9 +171,46 @@ export class ChunkGrouper {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    this.root = new THREE.Group();
+    this.scene.add(this.root);
   }
 
   // ---- Public API ----
+
+  /** Set the LOD zoom scale of the whole terrain root (2^level; 1 = play / full detail). */
+  setScale(scale: number): void {
+    this.root.scale.setScalar(scale);
+  }
+
+  /**
+   * Hold-then-swap primitive for an LOD level change: detach the CURRENT root (with its merged group
+   * meshes) and leave it in the scene, frozen at its old scale, so the previous level stays visible
+   * while the new one streams. Transient standalone meshes share geometry with the per-chunk buffers
+   * the caller is about to dispose, so they're removed (not frozen). A fresh empty root is installed at
+   * `newScale` and all internal tracking is cleared WITHOUT disposing the frozen merged meshes (they
+   * own independent merged geometry). Returns the frozen root; pass it to disposeDetachedRoot once the
+   * new level covers the view.
+   */
+  freezeAndReset(newScale: number): THREE.Group {
+    for (const slot of this.slots.values()) this.removeStandalone(slot);
+    const frozen = this.root;
+    this.root = new THREE.Group();
+    this.root.scale.setScalar(newScale);
+    this.scene.add(this.root);
+    this.slots.clear();
+    this.groups.clear();
+    this.pendingSuppressionCount = 0;
+    return frozen;
+  }
+
+  /** Dispose a root previously detached by freezeAndReset (its merged geometries + remove from scene). */
+  disposeDetachedRoot(group: THREE.Group): void {
+    group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+    });
+    this.scene.remove(group);
+  }
 
   /**
    * Register or update a chunk's geometry references.
@@ -649,6 +694,9 @@ export class ChunkGrouper {
     }
     this.groups.clear();
     this.slots.clear();
+    // Reset the root scale so a reused grouper (clearAndReload keeps the same instance) starts at
+    // level 0; any detached/frozen roots are the caller's to dispose via disposeDetachedRoot.
+    this.root.scale.setScalar(1);
   }
 
   // ---- Private: suppression helpers ----
@@ -744,7 +792,7 @@ export class ChunkGrouper {
 
       if (!geo || !geo.index || geo.index.count === 0) {
         if (existing) {
-          this.scene.remove(existing);
+          this.root.remove(existing);
           slot.standaloneMeshes[layer] = null;
         }
         continue;
@@ -759,7 +807,7 @@ export class ChunkGrouper {
         mesh.frustumCulled = true;
         mesh.position.set(slot.wx, slot.wy, slot.wz);
         mesh.visible = slot.visible;
-        this.scene.add(mesh);
+        this.root.add(mesh);
         slot.standaloneMeshes[layer] = mesh;
       }
     }
@@ -770,7 +818,7 @@ export class ChunkGrouper {
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
       const m = slot.standaloneMeshes[layer];
       if (m) {
-        this.scene.remove(m);
+        this.root.remove(m);
         slot.standaloneMeshes[layer] = null;
       }
     }
@@ -790,7 +838,7 @@ export class ChunkGrouper {
     for (let i = 0; i < LAYER_COUNT; i++) {
       const m = group.meshes[i];
       if (m) {
-        this.scene.remove(m);
+        this.root.remove(m);
         m.geometry.dispose();
         group.meshes[i] = null;
       }
@@ -975,7 +1023,7 @@ export class ChunkGrouper {
           const mesh = createLayerMesh(merged, layer);
           mesh.frustumCulled = true;
           mesh.position.set(0, 0, 0);
-          this.scene.add(mesh);
+          this.root.add(mesh);
           group.meshes[layer] = mesh;
         }
       } else {

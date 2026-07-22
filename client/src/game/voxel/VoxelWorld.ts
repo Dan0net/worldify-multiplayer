@@ -276,6 +276,73 @@ export class VoxelWorld implements ChunkProvider {
    * Set visibility radius dynamically (quality settings).
    * Invalidates BFS cache so chunks update next frame.
    */
+  // ---- LOD zoom (Explore) ----
+  /** Current LOD zoom level (0 = full detail / play). Coarse levels sample the same world at a 2^L
+   *  step; every chunk/tile/column request carries it, and the grouper root is scaled by 2^L. */
+  private currentLevel = 0;
+  /** Use a Chebyshev (cube) visibility volume instead of the L1 diamond — set in Explore so every
+   *  level always has a full shell of chunks to swap in/out on a level change. */
+  private cubeVisibility = false;
+  /** The previous level's meshes, held (frozen) in the scene while the new level streams (hold-then-
+   *  swap). Disposed once the new level covers the view or a timeout elapses. */
+  private frozenRoot: THREE.Group | null = null;
+  private frozenSince = 0;
+
+  get lodLevel(): number { return this.currentLevel; }
+
+  /** Toggle the cube (square) visibility volume — Explore uses it, play keeps the diamond. */
+  setCubeVisibility(cube: boolean): void {
+    if (cube === this.cubeVisibility) return;
+    this.cubeVisibility = cube;
+    this.lastBFSChunk = null;
+    this.visibilityDirty = true;
+  }
+
+  /**
+   * Change the Explore LOD zoom level (hold-then-swap). Freezes the current level's meshes in place,
+   * installs a fresh terrain root scaled by 2^level, and clears the live chunk state so the world
+   * re-streams at the new level (all requests now carry it). The frozen previous level stays visible
+   * until the new one covers the view (disposed in update). `center` is the level-LOCAL stream centre.
+   */
+  setExploreLevel(level: number, center?: THREE.Vector3): void {
+    if (level === this.currentLevel) return;
+    // Drop any still-held previous freeze before making a new one (fast multi-level sweep).
+    if (this.frozenRoot) { this.chunkGrouper.disposeDetachedRoot(this.frozenRoot); this.frozenRoot = null; }
+    this.frozenRoot = this.chunkGrouper.freezeAndReset(1 << level);
+    this.frozenSince = (typeof performance !== 'undefined' ? performance.now() : 0);
+    this.currentLevel = level;
+
+    // Clear live chunk state WITHOUT disposing the grouper (freezeAndReset already reset it, keeping the
+    // frozen merged meshes alive). Mirrors dispose(true)'s clears minus the grouper teardown.
+    for (const geo of this.geometries.values()) geo.dispose();
+    this.geometries.clear();
+    this.chunks.clear();
+    this.pendingChunks.clear(); this.pendingColumns.clear(); this.pendingTiles.clear();
+    this.pendingChunkTimes.clear(); this.pendingColumnTimes.clear(); this.pendingTileTimes.clear();
+    this.columnInfo.clear();
+    this.remeshPipeline.clear();
+    this.deferredBuildOps.length = 0;
+    this.previewChunks.clear();
+    this.lastPlayerChunk = null;
+    this.lastBFSChunk = null;
+    this.initialColumnRequested = false;
+    this.visibilityDirty = true;
+    this.initialized = true;
+    if (center) this.update(center);
+  }
+
+  /** Dispose the held previous-level meshes once the new level covers the view (or after a timeout). */
+  private maybeDisposeFrozen(): void {
+    if (!this.frozenRoot) return;
+    const now = (typeof performance !== 'undefined' ? performance.now() : 0);
+    const covered = this.geometries.size >= 8;
+    const timedOut = now - this.frozenSince > 4000;
+    if (covered || timedOut) {
+      this.chunkGrouper.disposeDetachedRoot(this.frozenRoot);
+      this.frozenRoot = null;
+    }
+  }
+
   setVisibilityRadius(radius: number): void {
     if (radius === this._visibilityRadius) return;
     this._visibilityRadius = radius;
@@ -393,6 +460,9 @@ export class VoxelWorld implements ChunkProvider {
     // Use visibility-based loading
     this.updateWithVisibility(playerChunk, playerPos);
 
+    // Release the held previous LOD level once the new one has streamed in (hold-then-swap).
+    this.maybeDisposeFrozen();
+
     // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');
     const priorityKeys = this.chunkGrouper.getPriorityChunkKeys();
@@ -445,7 +515,8 @@ export class VoxelWorld implements ChunkProvider {
         frustum,
         this,
         this._visibilityRadius,
-        playerPos
+        playerPos,
+        this.cubeVisibility,
       );
       this.cachedReachable = reachable;
       this.addMarginSourceRequests(reachable, toRequest);
@@ -517,6 +588,11 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
+      // Coarse LOD levels bypass persistence (keys collide with level 0; cheap to regenerate).
+      if (this.currentLevel > 0) {
+        this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data), this.currentLevel);
+        return;
+      }
       // Existing world: heights are persisted, so seed columnInfo from IDB and skip the full worker
       // generateColumn (which would carve caves + stamps only to be discarded). The saved surface
       // chunks then stream in via the normal per-chunk load path (loadLocalChunk prefers saved).
@@ -782,6 +858,12 @@ export class VoxelWorld implements ChunkProvider {
    * materialized in IndexedDB so the world reloads identically.
    */
   private loadLocalChunk(cx: number, cy: number, cz: number, key: string): void {
+    // Coarse LOD levels are cheap to regenerate and their (cx,cy,cz) keys would collide with level-0
+    // data in IndexedDB, so they bypass persistence entirely — always generate at the current level.
+    if (this.currentLevel > 0) {
+      this.getLocalPool().requestChunk(cx, cy, cz, (d) => this.receiveChunkData(d), this.currentLevel);
+      return;
+    }
     if (hasChunk(key)) {
       loadChunk(key).then((saved) => {
         if (saved) {
@@ -800,6 +882,8 @@ export class VoxelWorld implements ChunkProvider {
    * column; for each chunk, prefer the saved copy, otherwise save the generated one.
    */
   private async handleLocalColumn(columnData: SurfaceColumnResponse): Promise<void> {
+    // Coarse LOD levels aren't persisted — ingest directly.
+    if (this.currentLevel > 0) { this.receiveSurfaceColumnData(columnData); return; }
     for (const chunk of columnData.chunks) {
       const key = chunkKey(columnData.tx, chunk.chunkY, columnData.tz);
       if (hasChunk(key)) {
@@ -855,6 +939,11 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.set(columnKey, Date.now());
 
     if (this.isLocal) {
+      // Coarse LOD levels bypass persistence (keys collide with level 0; cheap to regenerate).
+      if (this.currentLevel > 0) {
+        this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data), this.currentLevel);
+        return;
+      }
       // Existing world: the column's stamp-corrected heights are persisted, so read them from IDB
       // instead of re-running the full worker generateTile (which re-carves caves just to measure the
       // surface). Falls back to generation if the record is somehow missing.

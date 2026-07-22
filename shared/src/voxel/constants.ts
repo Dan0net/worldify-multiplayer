@@ -130,6 +130,13 @@ export const VISIBILITY_RADIUS = 11;
 /** Buffer distance beyond visible before unloading */
 export const VISIBILITY_UNLOAD_BUFFER = 1;
 
+// ============== LOD zoom (Explore) ==============
+/**
+ * Highest LOD zoom level in Explore. A level-L chunk samples the same world at a 2^L step and covers
+ * 8·2^L m, so level MAX covers 8·2^MAX m per chunk. Bounds memory/coarseness of the zoomed-out view.
+ */
+export const MAX_ZOOM_LEVEL = 6;
+
 /**
  * Face indices for visibility graph.
  * Used to encode which faces can see each other through a chunk.

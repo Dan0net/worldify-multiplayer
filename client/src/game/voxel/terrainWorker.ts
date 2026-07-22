@@ -15,8 +15,8 @@ import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse, CaveConfig
 
 type InitMessage = { type: 'init'; seed: number; caveConfig?: CaveConfig; terrainConfig?: TerrainLayerConfig };
 type ChunkMessage = { type: 'chunk'; id: number; cx: number; cy: number; cz: number; level?: number };
-type TileMessage = { type: 'tile'; id: number; tx: number; tz: number };
-type ColumnMessage = { type: 'column'; id: number; tx: number; tz: number };
+type TileMessage = { type: 'tile'; id: number; tx: number; tz: number; level?: number };
+type ColumnMessage = { type: 'column'; id: number; tx: number; tz: number; level?: number };
 export type TerrainWorkerRequest = InitMessage | ChunkMessage | TileMessage | ColumnMessage;
 
 export type TerrainWorkerResponse =
@@ -41,10 +41,10 @@ self.onmessage = (e: MessageEvent<TerrainWorkerRequest>) => {
       data = source.generateChunk(msg.cx, msg.cy, msg.cz, msg.level ?? 0);
       break;
     case 'tile':
-      data = source.generateTile(msg.tx, msg.tz);
+      data = source.generateTile(msg.tx, msg.tz, msg.level ?? 0);
       break;
     case 'column':
-      data = source.generateColumn(msg.tx, msg.tz);
+      data = source.generateColumn(msg.tx, msg.tz, msg.level ?? 0);
       break;
   }
 

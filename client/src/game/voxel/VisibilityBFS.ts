@@ -159,7 +159,8 @@ export function getVisibleChunks(
   _frustum: THREE.Frustum,
   chunkProvider: ChunkProvider,
   maxRadius: number = VISIBILITY_RADIUS,
-  playerWorldPos?: { x: number; y: number; z: number }
+  playerWorldPos?: { x: number; y: number; z: number },
+  cube: boolean = false,
 ): VisibilityResult {
   // Reset generation counter if would overflow
   if (bfsGeneration >= 254) {
@@ -256,8 +257,14 @@ export function getVisibleChunks(
       // Skip if already visited
       if (bfsVisited[neighborIdx] === gen) continue;
       
-      // Distance check (offset by player's fractional position within their chunk)
-      const newDist = Math.abs(ngx - centerOffset - fracX) + Math.abs(ngy - centerOffset - fracY) + Math.abs(ngz - centerOffset - fracZ);
+      // Distance check (offset by player's fractional position within their chunk). `cube` uses a
+      // Chebyshev (square/box) radius — a full cube of chunks around the centre — so every LOD level
+      // always has a complete ring/shell to swap in/out (no missing-corner gaps on a level change);
+      // the default is the L1 (diamond) radius used in play.
+      const ax = Math.abs(ngx - centerOffset - fracX);
+      const ay = Math.abs(ngy - centerOffset - fracY);
+      const az = Math.abs(ngz - centerOffset - fracZ);
+      const newDist = cube ? Math.max(ax, ay, az) : ax + ay + az;
       if (newDist > maxRadius) continue;
 
       // Monotonic-direction rule (Minecraft ACCA): never step in a direction whose OPPOSITE has

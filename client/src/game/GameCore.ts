@@ -20,6 +20,7 @@ import { initFirstPersonArm, updateFirstPersonArm, startFirstPersonArmExit, tick
 import {
   initExploreCamera, updateExploreCamera, getExploreTarget,
   advanceExploreTargetGlide, isExploreGliding, isExploreMarkerInteracting,
+  getExploreZoomLevel, getExploreZoomScale,
 } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -94,6 +95,9 @@ export class GameCore {
   // explored map tiles don't accumulate without bound (see MapTileCache.prune).
   private mapPruneTx = NaN;
   private mapPruneTz = NaN;
+  /** Explore stream centre in level-LOCAL space (true target ÷ 2^level) fed to the voxel world, which
+   *  runs its streaming/BFS in 8 m chunk units while the grouper root scales geometry to true world. */
+  private _lodScaledCenter = new THREE.Vector3();
 
   // Last (x,z) the explore center-follow placed the spawn marker at, so it only re-raycasts
   // when the camera target actually moved (NaN = force placement on the next frame).
@@ -718,6 +722,11 @@ export class GameCore {
     // (works even for a re-play after pausing); otherwise the first-time spawn logic.
     if (currentMode === GameMode.Playing) {
       useGameStore.getState().setExploreReady(false); // explore UI animates out
+      // Play is always full detail: drop back to LOD level 0 (scale 1) and the diamond visibility
+      // volume. If the user hit Play while zoomed out, the coarse view is held (frozen) while the
+      // level-0 chunks stream in under the camera-intro tween.
+      this.voxelIntegration?.setCubeVisibility(false);
+      this.voxelIntegration?.setExploreLevel(0);
       const markerSpawn = consumeMarkerSpawn();
       if (markerSpawn) {
         this.playerManager.setSpawnPosition(markerSpawn);
@@ -833,7 +842,10 @@ export class GameCore {
     advanceExploreTargetGlide(deltaMs);
     setMarkerVisible(true);
     const target = getExploreTarget();
-    if (!isExploreMarkerInteracting() && !isExploreGliding()) {
+    // Surface-follow (marker placement + Y-ease) only at full detail (level 0). At coarse zoom the
+    // surface heights are approximate and the marker/height coupling would judder the camera, so the
+    // target height is left as-is while the user pans/zooms the overview.
+    if (getExploreZoomLevel() === 0 && !isExploreMarkerInteracting() && !isExploreGliding()) {
       const moved = target.x !== this.lastFollowX || target.z !== this.lastFollowZ;
       if ((moved || !isMarkerPlaced()) && placeMarkerAtColumn(target.x, target.z)) {
         this.lastFollowX = target.x;
@@ -871,8 +883,16 @@ export class GameCore {
     this.spectatorCenter.copy(target);
 
     if (this.voxelIntegration) {
+      // LOD zoom: the voxel world streams in level-LOCAL 8 m chunk units and the grouper root scales
+      // geometry to true world by 2^level. Feed it the target ÷ scale; a level change (settled on the
+      // wheel) triggers hold-then-swap. Explore uses the cube (square) visibility volume.
+      const level = getExploreZoomLevel();
+      const scale = getExploreZoomScale();
+      this.voxelIntegration.setCubeVisibility(true);
+      if (level !== this.voxelIntegration.lodLevel) this.voxelIntegration.setExploreLevel(level);
+      this._lodScaledCenter.copy(target).multiplyScalar(1 / scale);
       perfStats.begin('voxelUpdate');
-      this.voxelIntegration.update(this.spectatorCenter);
+      this.voxelIntegration.update(this._lodScaledCenter);
       perfStats.end('voxelUpdate');
     }
   }

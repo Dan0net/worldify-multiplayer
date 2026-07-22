@@ -136,9 +136,14 @@ export class VoxelIntegration implements TerrainRaycaster {
    * 
    * @param playerPos Current player world position
    */
+  /** LOD zoom passthroughs (Explore). See VoxelWorld.setExploreLevel / setCubeVisibility. */
+  setExploreLevel(level: number, center?: THREE.Vector3): void { this.world.setExploreLevel(level, center); }
+  setCubeVisibility(cube: boolean): void { this.world.setCubeVisibility(cube); }
+  get lodLevel(): number { return this.world.lodLevel; }
+
   update(playerPos: THREE.Vector3): void {
     if (!this.initialized) return;
-    
+
     // Update world (handles chunk loading/unloading)
     this.world.update(playerPos);
     
