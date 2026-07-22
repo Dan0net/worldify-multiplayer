@@ -18,7 +18,7 @@ import {
 
 interface NewWorldDialogProps {
   onCancel: () => void;
-  onCreate: (name: string, seed: number, caveConfig: CaveConfig, terrainConfig: TerrainLayerConfig, spawnBiome: string) => void;
+  onCreate: (name: string, seed: number, caveConfig: CaveConfig, terrainConfig: TerrainLayerConfig) => void;
 }
 
 type Field<T> = { key: keyof T; label: string; min: number; max: number; step: number; desc: string };
@@ -38,19 +38,22 @@ const RIVER_FIELDS: Field<TerrainLayerConfig>[] = [
   { key: 'riverWarpFrequency', label: 'River warp scale', min: 0.002, max: 0.03, step: 0.002, desc: 'Size of the river wiggles — higher is tighter.' },
 ];
 
-const TERRAIN_FIELDS: Field<TerrainLayerConfig>[] = [
+const PATH_FIELDS: Field<TerrainLayerConfig>[] = [
   { key: 'pathSpacing', label: 'Path spacing', min: 40, max: 220, step: 5, desc: 'Distance between roads/paths — larger is sparser.' },
   { key: 'pathWidth', label: 'Path width', min: 1, max: 8, step: 0.5, desc: 'Width of the roads/paths in meters.' },
   { key: 'pathWarpAmplitude', label: 'Path warp amount', min: 0, max: 150, step: 5, desc: 'How strongly paths meander away from straight.' },
   { key: 'pathWarpFrequency', label: 'Path warp scale', min: 0.002, max: 0.05, step: 0.002, desc: 'Size of the path wiggles — higher is tighter.' },
-  { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between buildings — larger means fewer.' },
+];
+
+const BUILDING_FIELDS: Field<TerrainLayerConfig>[] = [
+  { key: 'buildingSpacing', label: 'Building spacing', min: 20, max: 150, step: 5, desc: 'Distance between trees/rocks/buildings — larger means fewer.' },
 ];
 
 const LANDFORM_FIELDS: Field<TerrainLayerConfig>[] = [
   { key: 'landformScale', label: 'Feature scale', min: 0.5, max: 8, step: 0.25, desc: 'Bigger = smaller, more compact land/sea features.' },
   { key: 'landformWarpScale', label: 'Coast warp scale', min: 0.4, max: 4, step: 0.1, desc: 'Warp frequency relative to the land scale (finer coastline wiggle).' },
   { key: 'landformWarpStrength', label: 'Coast warp amount', min: 0, max: 300, step: 10, desc: 'How far the warp bends coastlines/ranges — bigger = more sweeping.' },
-  { key: 'landformSeaLevel', label: 'Sea level', min: 0, max: 160, step: 4, desc: 'Water height in voxels — land below this floods.' },
+  { key: 'seaCoveragePercent', label: 'Sea coverage', min: 0, max: 90, step: 5, desc: 'How much of the world is ocean (%). The easy sea-to-land ratio.' },
   { key: 'landformSeaDepth', label: 'Sea depth', min: 40, max: 400, step: 10, desc: 'How deep the ocean floor drops below sea level (voxels).' },
   { key: 'landformMountainHeight', label: 'Mountain height', min: 60, max: 500, step: 10, desc: 'Tallest peaks above sea level (voxels).' },
   { key: 'landformBeachWidth', label: 'Beach height', min: 0, max: 48, step: 2, desc: 'How far the flat beach sits above the water (voxels).' },
@@ -96,15 +99,9 @@ function loadSaved(): Saved {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const p = JSON.parse(raw);
-      const savedTerrain = p.terrain ?? {};
-      const terrain = { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...savedTerrain };
-      // Back-compat: settings predating the Sea/Beach toggles inherit them from landformEnabled (they
-      // were implicitly on with the old Landforms layer), so restored settings keep the same look.
-      if (savedTerrain.seaEnabled === undefined) terrain.seaEnabled = !!savedTerrain.landformEnabled;
-      if (savedTerrain.beachEnabled === undefined) terrain.beachEnabled = !!savedTerrain.landformEnabled;
       return {
         cave: { ...DEFAULT_CAVE_CONFIG, ...normalizeCaveConfig(p.cave ?? p) },
-        terrain,
+        terrain: { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...(p.terrain ?? {}) },
       };
     }
   } catch { /* ignore corrupt/absent */ }
@@ -190,7 +187,6 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   const [seed, setSeed] = useState(() => String(randomWorldSeed()));
   const [cave, setCave] = useState<CaveConfig>(initial.cave);
   const [terrain, setTerrain] = useState<TerrainLayerConfig>(initial.terrain);
-  const [spawnBiome, setSpawnBiome] = useState('');   // '' = any (default origin spawn)
   const [copied, setCopied] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -202,15 +198,14 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
 
   const submit = () => {
     const parsedSeed = parseInt(seed, 10);
-    const synced: TerrainLayerConfig = { ...terrain, landformEnabled: terrain.seaEnabled || terrain.beachEnabled || terrain.biomes.some((b) => b.enabled) };
-    saveSettings(cave, synced);
-    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, synced, effectiveSpawn);
+    saveSettings(cave, terrain);
+    onCreate(name.trim(), Number.isFinite(parsedSeed) ? parsedSeed : randomWorldSeed(), cave, terrain);
   };
 
   // Copy the dialed-in generation settings to the clipboard as JSON, so they can be shared (e.g. to
   // set as new engine defaults). Falls back to a prompt if the clipboard API is unavailable.
   const exportSettings = async () => {
-    const json = JSON.stringify({ cave, terrain: syncedTerrain }, null, 2);
+    const json = JSON.stringify({ cave, terrain }, null, 2);
     try {
       await navigator.clipboard.writeText(json);
       setCopied(true);
@@ -258,23 +253,8 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
   }
   const patchCave = (p: Partial<CaveConfig>) => setCave((c) => ({ ...c, ...p }));
   const patchTerrain = (p: Partial<TerrainLayerConfig>) => setTerrain((t) => ({ ...t, ...p }));
-  // Toggle one biome's `enabled` in the palette (biomes are "on" when ≥1 is enabled).
-  const toggleBiome = (name: string) =>
-    setTerrain((t) => ({ ...t, biomes: t.biomes.map((b) => (b.name === name ? { ...b, enabled: !b.enabled } : b)) }));
-  const enabledBiomeNames = terrain.biomes.filter((b) => b.enabled).map((b) => b.name);
-  const anyBiome = enabledBiomeNames.length > 0;
-  // Merged model: Sea, Beach and the land biomes all ride on the shared landform height, so the height
-  // model is ON whenever any of them is enabled (there is no separate "Landforms" toggle).
-  const landformOn = terrain.seaEnabled || terrain.beachEnabled || anyBiome;
-  // Spawn options: Any + Sea/Beach (when enabled) + each enabled land biome.
-  const spawnOptions = ['', ...(terrain.seaEnabled ? ['sea'] : []), ...(terrain.beachEnabled ? ['beach'] : []), ...enabledBiomeNames];
-  const spawnLabel = (v: string) => (v === '' ? 'Any' : v === 'sea' ? 'Sea' : v === 'beach' ? 'Beach' : v);
-  // If the chosen spawn is no longer offered (its biome got toggled off), treat it as Any.
-  const effectiveSpawn = spawnOptions.includes(spawnBiome) ? spawnBiome : '';
-  // Landform height is DERIVED (not its own toggle): keep the config field in sync for the generator.
-  const syncedTerrain: TerrainLayerConfig = { ...terrain, landformEnabled: landformOn };
 
-  const anyLayer = terrain.enabled || terrain.stampsEnabled || landformOn || terrain.riversEnabled || cave.wormsEnabled || cave.cavernsEnabled;
+  const anyLayer = terrain.enabled || terrain.stampsEnabled || terrain.landformEnabled || terrain.riversEnabled || cave.wormsEnabled || cave.cavernsEnabled;
   const subheading = (text: string) => (
     <span className="text-white/50 text-[11px] font-semibold uppercase tracking-wide pt-1">{text}</span>
   );
@@ -323,19 +303,22 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
         </div>
       </label>
 
-      {/* Generation layers (independent) on top; biomes (region surfaces) as their own group below. */}
+      {/* Generation layers — each independent. Toggle here, tune the enabled ones below. */}
       <div className="flex flex-col gap-2 border-t border-white/10 pt-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-white/60 text-xs">Generation</span>
           <div className="flex gap-1.5 flex-wrap justify-end">
+            <button className={pill(terrain.landformEnabled)} onClick={() => patchTerrain({ landformEnabled: !terrain.landformEnabled })}>
+              Landforms
+            </button>
+            <button className={pill(terrain.riversEnabled)} onClick={() => patchTerrain({ riversEnabled: !terrain.riversEnabled })}>
+              Rivers
+            </button>
             <button className={pill(terrain.enabled)} onClick={() => patchTerrain({ enabled: !terrain.enabled })}>
               Paths
             </button>
             <button className={pill(terrain.stampsEnabled)} onClick={() => patchTerrain({ stampsEnabled: !terrain.stampsEnabled })}>
               Buildings
-            </button>
-            <button className={pill(terrain.riversEnabled)} onClick={() => patchTerrain({ riversEnabled: !terrain.riversEnabled })}>
-              Rivers
             </button>
             <button className={pill(cave.wormsEnabled)} onClick={() => patchCave({ wormsEnabled: !cave.wormsEnabled })}>
               Worms
@@ -345,32 +328,23 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
             </button>
           </div>
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-white/60 text-xs">Biomes</span>
-          <div className="flex gap-1.5 flex-wrap justify-end">
-            {/* Sea + Beach + land biomes all ride on the shared landform height (enabling any turns it on). */}
-            <button className={pill(terrain.seaEnabled)} onClick={() => patchTerrain({ seaEnabled: !terrain.seaEnabled })}>
-              Sea
-            </button>
-            <button className={pill(terrain.beachEnabled)} onClick={() => patchTerrain({ beachEnabled: !terrain.beachEnabled })}>
-              Beach
-            </button>
-            {terrain.biomes.map((b) => (
-              <button key={b.name} className={pill(b.enabled)} onClick={() => toggleBiome(b.name)}>
-                {b.name}
-              </button>
-            ))}
-          </div>
-        </div>
 
         {anyLayer && (
           <div className="flex flex-col gap-2.5 max-h-[42vh] overflow-y-auto scrollbar-compact pr-1">
             {subheading('World scale')}
             {WORLD_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
-            {terrain.enabled && (
+            {terrain.landformEnabled && (
               <>
-                {subheading('Buildings')}
-                {TERRAIN_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+                {subheading('Landforms (sea / beach / mountains)')}
+                <span className="text-white/40 text-[10px] leading-tight">
+                  Elevation shapes the surface: sea, sand beaches, snowy peaks, steep rock, moss/grass
+                  elsewhere. Sea coverage sets the land-to-sea ratio.
+                </span>
+                {LANDFORM_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+                <CurveEditor
+                  points={terrain.landformCurve ?? DEFAULT_LANDFORM_CURVE}
+                  onChange={(landformCurve) => patchTerrain({ landformCurve })}
+                />
               </>
             )}
             {terrain.riversEnabled && (
@@ -379,45 +353,19 @@ export function NewWorldDialog({ onCancel, onCreate }: NewWorldDialogProps) {
                 {RIVER_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
               </>
             )}
-            {landformOn && (
+            {terrain.enabled && (
               <>
-                {subheading('Biomes')}
+                {subheading('Paths')}
+                {PATH_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
+              </>
+            )}
+            {terrain.stampsEnabled && (
+              <>
+                {subheading('Buildings')}
                 <span className="text-white/40 text-[10px] leading-tight">
-                  Sea, Beach and each land biome ride on the shared landform height. Enabled biomes are
-                  regions with their own surface material; rivers run along the cell borders.
+                  Trees, rocks and buildings scatter only on moss/grass or snow — never sea, sand, or steep rock.
                 </span>
-                {/* Spawn location — where the player starts. */}
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-white/80 text-xs">Spawn on</span>
-                  <div className="flex gap-1.5 flex-wrap">
-                    {spawnOptions.map((v) => (
-                      <button key={v || 'any'} className={pill(effectiveSpawn === v)} onClick={() => setSpawnBiome(v)}>
-                        {spawnLabel(v)}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="text-white/40 text-[10px] leading-tight">Rare biomes are found by scanning outward from the origin.</span>
-                </div>
-                {sliderRow('Region spacing', 'Distance between biome cells (shared with rivers).',
-                  terrain.riverSpacing, 60, 1000, 10,
-                  (v) => patchTerrain({ riverSpacing: v }), (v) => String(v))}
-                {/* Debug view: flatten each biome cell to a distinct color so borders + rivers read clearly. */}
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-white/80 text-xs">Debug colors</span>
-                  <button className={pill(terrain.biomesDebug)} onClick={() => patchTerrain({ biomesDebug: !terrain.biomesDebug })}>
-                    {terrain.biomesDebug ? 'On' : 'Off'}
-                  </button>
-                </div>
-                <span className="text-white/40 text-[10px] leading-tight">
-                  Paints each biome cell a distinct flat color (skips beach/rock/snow) so cell edges and
-                  rivers are easy to see.
-                </span>
-                {subheading('Land shape (sea / beach / mountains)')}
-                {LANDFORM_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
-                <CurveEditor
-                  points={terrain.landformCurve ?? DEFAULT_LANDFORM_CURVE}
-                  onChange={(landformCurve) => patchTerrain({ landformCurve })}
-                />
+                {BUILDING_FIELDS.map((f) => fieldSlider(f, terrain, patchTerrain))}
               </>
             )}
             {cave.wormsEnabled && (

@@ -29,8 +29,6 @@ export interface WorldMeta {
   caveConfig?: CaveConfig;
   /** Per-world base-terrain layer settings, chosen at creation (optional → engine defaults). */
   terrainConfig?: TerrainLayerConfig;
-  /** Biome the player chose to start on at creation (biome name, or undefined/"" = any). */
-  spawnBiome?: string;
 }
 
 /** Player position + look snapshot for persistence. */
@@ -185,11 +183,6 @@ export function getActiveWorldTerrainConfig(): TerrainLayerConfig | undefined {
   return activeWorld?.terrainConfig;
 }
 
-/** The biome the active world was created to spawn on (undefined/"" = any). */
-export function getActiveWorldSpawnBiome(): string | undefined {
-  return activeWorld?.spawnBiome;
-}
-
 /** A fresh random world seed (31-bit), matching createWorld's default. */
 export function randomWorldSeed(): number {
   return Math.floor(Math.random() * 0x7fffffff);
@@ -202,7 +195,6 @@ export async function nextWorldName(): Promise<string> {
 
 export async function createWorld(
   name?: string, seed?: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig,
-  spawnBiome?: string,
 ): Promise<WorldMeta> {
   const existing = await listWorlds();
   const world: WorldMeta = {
@@ -213,7 +205,6 @@ export async function createWorld(
     lastPlayedAt: Date.now(),
     ...(caveConfig ? { caveConfig } : {}),
     ...(terrainConfig ? { terrainConfig } : {}),
-    ...(spawnBiome ? { spawnBiome } : {}),
   };
   await idbPut(STORE_WORLDS, world);
   return world;
@@ -222,9 +213,8 @@ export async function createWorld(
 /** Create a new world AND make it active (rebuilds terrain). */
 export async function createAndActivateWorld(
   name?: string, seed?: number, caveConfig?: CaveConfig, terrainConfig?: TerrainLayerConfig,
-  spawnBiome?: string,
 ): Promise<WorldMeta> {
-  const world = await createWorld(name, seed, caveConfig, terrainConfig, spawnBiome);
+  const world = await createWorld(name, seed, caveConfig, terrainConfig);
   await setActiveWorld(world.id);
   return world;
 }

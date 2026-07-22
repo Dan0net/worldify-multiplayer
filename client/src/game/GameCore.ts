@@ -41,7 +41,7 @@ import {
 import { setRendererRef, setVisibilityRadiusCallback, syncQualityToStore } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
-import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, RequestNack, updateTileFromChunk, updateTileHash, createMapTile, CHUNK_SIZE, VOXEL_SCALE, BiomeSpawnSampler } from '@worldify/shared';
+import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, RequestNack, updateTileFromChunk, updateTileHash, createMapTile, CHUNK_SIZE, VOXEL_SCALE } from '@worldify/shared';
 
 /** Chebyshev radius (in map tiles = 8 m each) of map tiles kept around the player; farther explored
  *  tiles are evicted so the cache doesn't grow forever. ~48 tiles ≈ 384 m, ~28 MB worst case. */
@@ -56,7 +56,7 @@ import { SpawnManager } from './spawn/SpawnManager';
 import { materialManager, updateWindTime, subscribeMaterialSettings, subscribeWaterSettings } from './material';
 import { getMapTileCache } from './maptile/mapTileCacheSingleton';
 import { perfStats } from './debug/PerformanceStats';
-import { initWorlds, setWorldSwitchHandler, loadSnapPoints, saveSnapPoints, savePlayerPos, loadPlayerPos, setPlayerPosProvider, saveTimeOfDay, loadTimeOfDay, setTimeOfDayProvider, getActiveWorldSeed, getActiveWorldTerrainConfig, getActiveWorldSpawnBiome } from './world/WorldManager';
+import { initWorlds, setWorldSwitchHandler, loadSnapPoints, saveSnapPoints, savePlayerPos, loadPlayerPos, setPlayerPosProvider, saveTimeOfDay, loadTimeOfDay, setTimeOfDayProvider } from './world/WorldManager';
 
 /** How often to persist the player position while Playing (ms). */
 const POS_SAVE_INTERVAL_MS = 4000;
@@ -366,13 +366,10 @@ export class GameCore {
     // the origin — that's where SpawnManager probes for ground, so spawn resolves.
     const savedPose = loadPlayerPos();
     this.hasSavedSpawn = savedPose !== null;
-    // Fresh world with a chosen spawn biome: find that biome's nearest land cell centre (pure, no
-    // terrain generation) and start streaming + probing there instead of the origin.
-    const freshXZ = savedPose ? null : this.computeSpawnBiomeXZ();
-    this.spawnManager?.setSpawnTarget(freshXZ?.x ?? 0, freshXZ?.z ?? 0);
+    this.spawnManager?.setSpawnTarget(0, 0);
     const streamCenter = savedPose
       ? new THREE.Vector3(savedPose.x, savedPose.y, savedPose.z)
-      : new THREE.Vector3(freshXZ?.x ?? 0, 0, freshXZ?.z ?? 0);
+      : new THREE.Vector3(0, 0, 0);
     this.spectatorCenter.copy(streamCenter);
     // Reset the explore orbit camera onto the new world's center. Without this the module-
     // level target keeps the PREVIOUS world's location/Y (switchLocalWorld runs while in
@@ -742,26 +739,6 @@ export class GameCore {
           this.cameraIntroMs = GameCore.CAMERA_INTRO_DURATION_MS;
         }
       }
-    }
-  }
-
-  /**
-   * For a fresh world with a chosen spawn biome, find that biome's nearest land cell centre using the
-   * pure BiomeSpawnSampler (no terrain generation). Returns null when there's no biome choice, biomes
-   * are off, or the biome name isn't in the palette (→ default origin spawn).
-   */
-  private computeSpawnBiomeXZ(): { x: number; z: number } | null {
-    const target = getActiveWorldSpawnBiome();   // '' = any, 'sea', 'beach', or a biome name
-    const tcfg = getActiveWorldTerrainConfig();
-    if (!target || !tcfg) return null;
-    try {
-      const sampler = new BiomeSpawnSampler(getActiveWorldSeed(), tcfg);
-      if (target === 'sea') return tcfg.landformEnabled ? sampler.findSea() : null;
-      if (target === 'beach') return tcfg.landformEnabled ? sampler.findBeach() : null;
-      const idx = sampler.activeBiomeNames.indexOf(target);
-      return idx < 0 ? null : sampler.findSpawn(idx);
-    } catch {
-      return null;   // never block spawn on a sampler error
     }
   }
 

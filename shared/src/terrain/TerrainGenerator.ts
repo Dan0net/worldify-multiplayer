@@ -9,7 +9,6 @@ import { packVoxel } from '../voxel/voxelData.js';
 import { mat } from '../materials/index.js';
 import { smoothstep } from '../util/math.js';
 import { Curve, type CurvePoint } from './Curve.js';
-import { cellValueToBiomeId, type BiomeDefinition } from './Biome.js';
 import {
   StampPointGenerator,
   StampPlacer,
@@ -202,13 +201,11 @@ export interface TerrainLayerConfig {
 
   // ---- Landform layer (sea / beach / plains / mountains) — a macro elevation model that reshapes the
   // base terrain height. Its own toggle, but nested here since it only shapes the terrain layer's height.
-  /** Master toggle for the landform elevation model. In the UI it is DERIVED (on whenever Sea, Beach,
-   *  or any biome is enabled) — biomes/sea/beach all ride on this shared height. Independent of buildings. */
+  /** Master toggle for the landform elevation model (sea / beach / snow / rock / grass surface + height). */
   landformEnabled: boolean;
-  /** Sea toggle: flood columns below sea level with water. Only takes effect when landformEnabled. */
-  seaEnabled: boolean;
-  /** Beach toggle: the flat sand band just above the waterline. Only takes effect when landformEnabled. */
-  beachEnabled: boolean;
+  /** Fraction of the world that is ocean, 0..~90 (%). Sets the sea crossing by percentile of the
+   *  continental noise, so it's an intuitive sea:land ratio independent of the curve/scale. */
+  seaCoveragePercent: number;
   /** Feature scale — multiplies the continental base frequency. Higher = smaller, more compact land/sea. */
   landformScale: number;
   /** Coast-warp scale RELATIVE to the base scale (warp frequency = base × this). >1 = finer than the land. */
@@ -259,17 +256,6 @@ export interface TerrainLayerConfig {
   riverWarpAmplitude: number;
   /** River domain-warp frequency (1/m); higher = tighter meanders. */
   riverWarpFrequency: number;
-
-  // ---- Biomes (regions). The world is partitioned into cells by the SAME warped cellular field that
-  // draws rivers (cell interiors = biomes, edges = rivers), so cell size follows riverSpacing. Each
-  // biome overrides surface treatment (material/detail/snow/rock/stamps) ON TOP of the shared land
-  // height; sea/beach stay elevation-driven. Requires landformEnabled to shape the surface.
-  /** Biome palette — each has its own `enabled` toggle. Biomes are active when ≥1 is enabled; N = the
-   *  enabled count and the region cell hash maps into the enabled subset. */
-  biomes: BiomeDefinition[];
-  /** Debug view: when on (and biomes active), paint each biome cell FLAT with its unique material
-   *  across the whole cell (skipping beach/rock/snow) so cell borders + rivers read as clean regions. */
-  biomesDebug: boolean;
 }
 
 export interface TerrainConfig {
@@ -451,40 +437,6 @@ export const DEFAULT_LANDFORM_CURVE: CurvePoint[] = [
   { x: 1.00, y: 1.00 },    // plateau: flat snowy peak tops
 ];
 
-/**
- * Default biome palette. Each rides on the shared land height and overrides surface material / detail /
- * snow+rock lines / which stamps scatter. Grassland reproduces the current look; Forest drops buildings
- * for dense trees; Desert is sandy with sparse rocks and no snow. Sea/beach stay elevation-driven.
- */
-export const DEFAULT_BIOMES: BiomeDefinition[] = [
-  // Each biome differs ONLY by its top material for now (unique color per biome). detail/rock/snow are
-  // global; stamps are not yet biome-filtered. Materials are distinct + non-emissive; the Mountains
-  // biome uses `rock2` (red-brown) so it reads apart from the global steep-rock `rock` (grey).
-  {
-    name: 'Grassland', enabled: false,
-    topMaterial: mat('moss2'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
-    stamps: [
-      StampType.BUILDING_SMALL, StampType.BUILDING_HUT, StampType.BUILDING_TOWER,
-      StampType.TREE_PINE, StampType.TREE_OAK, StampType.ROCK_SMALL, StampType.ROCK_MEDIUM, StampType.ROCK_LARGE,
-    ],
-  },
-  {
-    name: 'Forest', enabled: false,
-    topMaterial: mat('grass4'), detailFlat: 0, detailSteep: 6, rockSlopeDeg: 30, snowLine: 90,
-    stamps: [StampType.TREE_PINE, StampType.TREE_OAK, StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
-  },
-  {
-    name: 'Desert', enabled: false,
-    topMaterial: mat('roof'), detailFlat: 0, detailSteep: 3, rockSlopeDeg: 40, snowLine: 100000,
-    stamps: [StampType.ROCK_SMALL, StampType.ROCK_MEDIUM],
-  },
-  {
-    name: 'Mountains', enabled: false,
-    topMaterial: mat('rock2'), detailFlat: 0, detailSteep: 12, rockSlopeDeg: 28, snowLine: 70,
-    stamps: [StampType.ROCK_SMALL, StampType.ROCK_MEDIUM, StampType.ROCK_LARGE],
-  },
-];
-
 export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   enabled: true,            // base landscape + pathways on by default
   stampsEnabled: true,      // trees / rocks / buildings on by default
@@ -498,8 +450,7 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
 
   // Landform layer — OFF by default so existing worlds/the current terrain are byte-identical.
   landformEnabled: false,
-  seaEnabled: true,            // sea/beach on when landforms is on (gated by landformEnabled)
-  beachEnabled: true,
+  seaCoveragePercent: 45,      // ~45% ocean by default (percentile of the continental noise)
   landformScale: 1.8,          // larger, gentler features (~460 m landmasses) so slopes are climbable
   landformWarpScale: 1.0,      // warp at the land frequency
   landformWarpStrength: 50,    // metres of coast warp → sweeping coasts/ranges
@@ -521,9 +472,6 @@ export const DEFAULT_TERRAIN_LAYER_CONFIG: TerrainLayerConfig = {
   riverDepth: 8,               // 8 voxels deep beds
   riverWarpAmplitude: 120,     // strong meander
   riverWarpFrequency: 0.006,   // broad river curves
-
-  biomes: DEFAULT_BIOMES,      // all disabled by default → biomes off → existing worlds byte-identical
-  biomesDebug: false,          // flat per-biome debug coloring off by default
 };
 
 /**
@@ -604,13 +552,6 @@ export const LANDFORM_BASE_FREQ = 0.0012;
  *  down-scaling (small masterScale) can't shrink them below the fixed voxel resolution and vanish. */
 const MIN_BEACH_VOXELS = 3;
 const MIN_RIVER_DEPTH = 3;
-/** Debug palette (biome index → material). Deliberately the most chromatically SEPARATED materials in
- *  the earthy pallet — green / bright tan / terracotta / cream / red-brown / teal-grey — so biome cells
- *  read apart from each other and from the water rivers/sea in `biomesDebug` view (not the biome's
- *  normal top material, which stays realistic for non-debug play). */
-export const DEBUG_BIOME_MATERIALS: number[] = [
-  mat('moss2'), mat('snow2'), mat('tile5'), mat('roof'), mat('sand'), mat('pebbles'),
-];
 /** Surface-detail base frequency (1/m) at detailFrequency = 1 — an ABSOLUTE rubble scale, independent
  *  of the (very low) continental frequency, so detail can be fine rocks/rubble rather than broad bumps. */
 const LANDFORM_DETAIL_BASE_FREQ = 0.03;
@@ -627,7 +568,6 @@ interface PathwayColumnInfo {
   onRiver?: boolean;
   riverDepth?: number;   // 0..1 depth factor into the channel
   riverCenter?: number;  // warped river-cellular value AT this column
-  biomeId?: number;      // biome index for this column (from the region cell hash)
 }
 
 export class TerrainGenerator implements HeightSampler {
@@ -645,6 +585,8 @@ export class TerrainGenerator implements HeightSampler {
   // Compiled elevation curve (built from config.landformCurve). Maps continental noise 0..1 → a height
   // offset relative to sea level; scaled by the seaDepth/mountainHeight/beachWidth knobs at eval time.
   private landformCurveFn: Curve = new Curve(DEFAULT_LANDFORM_CURVE);
+  private seaU0 = 0.5;          // curve input where the elevation offset crosses sea level
+  private seaUThreshold = 0.5;  // noise percentile (curve-input space) that should map to the sea crossing
 
   // Rivers — natural water channels. Own cellular network (same edge-detect approach as pathways) with
   // its own warp, seeded in a separate block (+80000) so it never perturbs the base seed chain.
@@ -764,10 +706,6 @@ export class TerrainGenerator implements HeightSampler {
     }
     if (config.terrainLayer) {
       this.config.terrainLayer = { ...DEFAULT_TERRAIN_LAYER_CONFIG, ...config.terrainLayer };
-      // Back-compat: worlds predating the Sea/Beach toggles had them implicitly on whenever the landform
-      // layer was on — inherit from landformEnabled so those worlds stay byte-identical.
-      if (config.terrainLayer.seaEnabled === undefined) this.config.terrainLayer.seaEnabled = this.config.terrainLayer.landformEnabled;
-      if (config.terrainLayer.beachEnabled === undefined) this.config.terrainLayer.beachEnabled = this.config.terrainLayer.landformEnabled;
       // Stamps used to be gated by `enabled` (the old Buildings layer) — worlds predating the split
       // inherit stampsEnabled from it so trees/rocks/buildings stay exactly as before.
       if (config.terrainLayer.stampsEnabled === undefined) this.config.terrainLayer.stampsEnabled = this.config.terrainLayer.enabled;
@@ -1083,7 +1021,30 @@ export class TerrainGenerator implements HeightSampler {
     this.landformDetail.SetFrequency(LANDFORM_DETAIL_BASE_FREQ * (t.landformDetailFrequency > 0 ? t.landformDetailFrequency : 1) / detailDiv);
     const pts = t.landformCurve && t.landformCurve.length >= 2 ? t.landformCurve : DEFAULT_LANDFORM_CURVE;
     this.landformCurveFn = new Curve(pts);
+    this.computeSeaRemap();
     this.updateRiverConfig();
+  }
+
+  /** Sea coverage: sample the continental noise distribution once and remap the elevation-curve input so
+   *  exactly `seaCoveragePercent` of columns fall below sea, regardless of the curve shape or world scale.
+   *  Sets seaUThreshold (the noise percentile, in curve-input space) and seaU0 (the curve's sea crossing);
+   *  elevationCurve() stretches its input so uThreshold → u0. */
+  private computeSeaRemap(): void {
+    const t = this.config.terrainLayer;
+    // Curve sea-crossing u0 (monotone offset: negative below sea, positive above) via bisection.
+    let lo = 0, hi = 1;
+    if (this.landformCurveFn.eval(0) >= 0) { this.seaU0 = 0; }
+    else if (this.landformCurveFn.eval(1) <= 0) { this.seaU0 = 1; }
+    else { for (let k = 0; k < 24; k++) { const mid = (lo + hi) / 2; if (this.landformCurveFn.eval(mid) < 0) lo = mid; else hi = mid; } this.seaU0 = (lo + hi) / 2; }
+    // Percentile threshold of the base noise over a fixed grid (deterministic, one-time ~2.3k evals).
+    const cov = Math.min(0.95, Math.max(0, (t.seaCoveragePercent ?? 45) / 100));
+    const N = 48, span = 4000, vals: number[] = [];
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      vals.push(this.landformBase.GetNoise((i / (N - 1) - 0.5) * span, (j / (N - 1) - 0.5) * span));
+    }
+    vals.sort((a, b) => a - b);
+    const noiseThresh = vals[Math.min(vals.length - 1, Math.floor(cov * vals.length))];
+    this.seaUThreshold = (noiseThresh + 1) * 0.5;   // noise [-1,1] → curve input [0,1]
   }
 
   /** River cellular + warp frequencies (rivers scale with master+land size like the land). */
@@ -1821,7 +1782,7 @@ export class TerrainGenerator implements HeightSampler {
    *  below the beach line — i.e. underwater or on the bare sand shelf. Cheap (cached sampleHeight). */
   private isLandformSuppressed(worldX: number, worldZ: number): boolean {
     const t = this.config.terrainLayer;
-    if (!t.landformEnabled || !t.seaEnabled) return false;   // no waterline → nothing to suppress
+    if (!t.landformEnabled) return false;   // no waterline → nothing to suppress
     return this.sampleHeight(worldX, worldZ) <= t.landformSeaLevel + this.beachBandVox();
   }
 
@@ -1960,64 +1921,31 @@ export class TerrainGenerator implements HeightSampler {
   private riverHalfWidth(): number {
     return (this.config.terrainLayer.riverWidth * this.landSizeScale()) * 0.5;
   }
-  /** True where two DIFFERENT regions meet between the sample point and an offset. With biomes on
-   *  (≥2), a "region" is the biome ID, so rivers run only on the visible biome borders (many raw cell
-   *  borders are same-biome and invisible — putting a river there is what made rivers cross the middle
-   *  of a single-coloured region). Without biomes, it's the raw warped cell value (rivers-only worlds). */
-  private regionEdgeAt(offX: number, offZ: number, centerVal: number, biomesOn: boolean): boolean {
-    if (biomesOn) return this.biomeIdAt(offX, offZ) !== centerVal;
+  /** True where the warped river cell value differs between the sample point and an offset (a cell
+   *  border). Rivers are drawn on these borders. (Cellular rivers — hydrology traces are a follow-up.) */
+  private riverEdgeAt(offX: number, offZ: number, centerVal: number): boolean {
     const [wx, wz] = this.applyRiverWarp(offX, offZ);
     return Math.abs(centerVal - this.riverCellular.GetNoise(wx, wz)) > 0.001;
   }
   private computeIsOnRiver(worldX: number, worldZ: number): boolean {
     if (!this.config.terrainLayer.riversEnabled) return false;
     const halfWidth = this.riverHalfWidth();
-    const biomesOn = this.biomeCount() >= 2;
-    const c = biomesOn ? this.biomeIdAt(worldX, worldZ) : this.riverCenterCell(worldX, worldZ);
-    return this.regionEdgeAt(worldX + halfWidth, worldZ, c, biomesOn)
-        || this.regionEdgeAt(worldX - halfWidth, worldZ, c, biomesOn)
-        || this.regionEdgeAt(worldX, worldZ + halfWidth, c, biomesOn)
-        || this.regionEdgeAt(worldX, worldZ - halfWidth, c, biomesOn);
-  }
-  /** The enabled biomes (the active palette). Biomes are "on" when this is non-empty. */
-  private activeBiomes(): BiomeDefinition[] {
-    const b = this.config.terrainLayer.biomes;
-    return b ? b.filter((x) => x.enabled) : [];
-  }
-
-  /** Number of active (enabled) biomes — 0 when biomes are off. */
-  private biomeCount(): number {
-    return this.activeBiomes().length;
-  }
-
-  /** Biome index for a column — the region cell hash mod N over the ENABLED subset (cells = biomes,
-   *  drawn from the SAME warped cellular field as rivers so rivers run on biome borders). Memoized per
-   *  column; returns 0 when off. */
-  biomeIdAt(worldX: number, worldZ: number): number {
-    const n = this.biomeCount();
-    if (n <= 0) return 0;
-    const e = this.pathEntry(worldX, worldZ);
-    if (e.biomeId === undefined) e.biomeId = cellValueToBiomeId(this.riverCenterCell(worldX, worldZ), n);
-    return e.biomeId;
-  }
-
-  /** The BiomeDefinition for a column (from the enabled subset), or null when biomes are off. */
-  private biomeAt(worldX: number, worldZ: number): BiomeDefinition | null {
-    const active = this.activeBiomes();
-    if (active.length === 0) return null;
-    return active[this.biomeIdAt(worldX, worldZ)] ?? null;
+    const c = this.riverCenterCell(worldX, worldZ);
+    return this.riverEdgeAt(worldX + halfWidth, worldZ, c)
+        || this.riverEdgeAt(worldX - halfWidth, worldZ, c)
+        || this.riverEdgeAt(worldX, worldZ + halfWidth, c)
+        || this.riverEdgeAt(worldX, worldZ - halfWidth, c);
   }
 
   private computeGetRiverDepthFactor(worldX: number, worldZ: number): number {
     if (!this.config.terrainLayer.riversEnabled) return 0;
     const halfWidth = this.riverHalfWidth();
-    const biomesOn = this.biomeCount() >= 2;
-    const c = biomesOn ? this.biomeIdAt(worldX, worldZ) : this.riverCenterCell(worldX, worldZ);
+    const c = this.riverCenterCell(worldX, worldZ);
     let minEdgeDist = halfWidth;
     const step = Math.max(0.3, halfWidth / 4);
     for (const [dx, dz] of PATH_CARDINALS) {
       for (let dist = step; dist <= halfWidth; dist += step) {
-        if (this.regionEdgeAt(worldX + dx * dist, worldZ + dz * dist, c, biomesOn)) {
+        if (this.riverEdgeAt(worldX + dx * dist, worldZ + dz * dist, c)) {
           minEdgeDist = Math.min(minEdgeDist, dist); break;
         }
       }
@@ -2348,7 +2276,6 @@ export class TerrainGenerator implements HeightSampler {
    *  absolute voxel (not scaled), applied only to the visible surface — not the macro height used by
    *  slope estimation and river/path channels. */
   private applyBeachLip(h: number): number {
-    if (!this.config.terrainLayer.seaEnabled) return h;   // no water → no z-fight lip needed
     const sea = this.config.terrainLayer.landformSeaLevel;
     return (h > sea - 1 && h < sea + 1) ? sea - 1 : h;
   }
@@ -2376,7 +2303,12 @@ export class TerrainGenerator implements HeightSampler {
     const t = this.config.terrainLayer;
     const sea = t.landformSeaLevel;
     const u = (n + 1) * 0.5;                            // 0..1
-    const off = this.landformCurveFn.eval(u);          // normalized offset (~ -1 .. +1)
+    // Sea-coverage remap: stretch the input so the noise percentile (seaUThreshold) lands on the curve's
+    // sea crossing (seaU0) → exactly `seaCoveragePercent` of columns below sea, curve shape preserved.
+    const uT = this.seaUThreshold, u0 = this.seaU0;
+    const ur = u <= uT ? (uT > 0 ? (u / uT) * u0 : u0)
+                       : (uT < 1 ? u0 + ((u - uT) / (1 - uT)) * (1 - u0) : u0);
+    const off = this.landformCurveFn.eval(ur);         // normalized offset (~ -1 .. +1)
     const raw = off >= 0 ? sea + off * t.landformMountainHeight : sea + off * t.landformSeaDepth;
     return sea + (raw - sea) * this.landSizeScale();   // vertical scale pivots on sea level
   }
@@ -2455,7 +2387,7 @@ export class TerrainGenerator implements HeightSampler {
       // Elevation-band material; submerged columns read as water on the 2D map. Reported height stays
       // the true (sea-floor) terrain so the load cap covers the floor — the water body above is
       // "content" that the surface-column scan picks up (same as stamp tops), raising the visible top.
-      material = (tlSurf.seaEnabled && originalHeight < tlSurf.landformSeaLevel) ? waterConfig.waterMaterial : this.landformSurfaceMaterial(originalHeight, worldX, worldZ);
+      material = originalHeight < tlSurf.landformSeaLevel ? waterConfig.waterMaterial : this.landformSurfaceMaterial(originalHeight, worldX, worldZ);
     } else {
       // Surface material (depth 0)
       material = this.getMaterialAtDepth(0);
@@ -2485,21 +2417,23 @@ export class TerrainGenerator implements HeightSampler {
     const t = this.config.terrainLayer;
     const vscale = this.landSizeScale();             // heights are vertically scaled → scale the bands too
     const rel = heightVoxels - t.landformSeaLevel;   // voxels above sea level
-    const biome = this.biomeAt(worldX, worldZ);
-    // Debug view: flatten the whole biome cell (above sea) to a highly-distinct debug color (by biome
-    // index) so cell borders + rivers read as clean regions. Sea/rivers stay water (handled upstream),
-    // everything else is the debug color — beach/rock/snow overrides are skipped on purpose.
-    if (t.biomesDebug && biome) return DEBUG_BIOME_MATERIALS[this.biomeIdAt(worldX, worldZ) % DEBUG_BIOME_MATERIALS.length];
     if (rel < 0) return mat('gravel');               // sea floor
-    if (t.beachEnabled && rel <= this.beachBandVox()) return mat('sand');
+    if (rel <= this.beachBandVox()) return mat('sand');   // beach band
     // Steep rock OVERRIDES snow: any steep face is bare rock, even up high. Snow then only shows above
     // the snow line on the remaining SHALLOW slopes (caps). Uses the MACRO (smooth) slope — NOT the
     // post-detail slope — so fine detail bumps can't flip the material patch-by-patch (that was the
-    // "green contour lines" aliasing at small scale). Rock-slope / snow-line are GLOBAL (not per-biome).
+    // "green contour lines" aliasing at small scale).
     const rockDeg = t.landformRockSlopeDeg > 0 ? t.landformRockSlopeDeg : 32;
     if (this.landformSlopeDeg(worldX, worldZ) >= rockDeg) return mat('rock');
     if (rel >= t.landformSnowLine * vscale) return mat('snow');   // shallow + high → snow
-    return biome ? biome.topMaterial : this.getMaterialAtDepth(0);   // plains → biome / normal top material
+    return mat('moss2');                             // moss/grass everywhere else
+  }
+
+  /** True where the visible landform surface is walkable ground for stamps — moss/grass or snow (not
+   *  sea, sand, or steep rock). Trees/rocks/buildings only scatter here. */
+  private isStampSurface(worldX: number, worldZ: number): boolean {
+    const m = this.landformSurfaceMaterial(this.sampleHeight(worldX, worldZ), worldX, worldZ);
+    return m === mat('moss2') || m === mat('snow');
   }
 
   /**
@@ -2619,7 +2553,7 @@ export class TerrainGenerator implements HeightSampler {
         // surface sits 1 voxel ABOVE seaLevel so a full voxel of water covers the beach lip (which ducks
         // the shoreline terrain to sea-1) — otherwise the top water voxel lands exactly on the surface
         // boundary and reads as empty. seaLevel itself stays the terrain/material reference.
-        const seaWaterLevel = (tl.seaEnabled && terrainHeight < seaLevel) ? seaLevel + 1 : -Infinity;
+        const seaWaterLevel = terrainHeight < seaLevel ? seaLevel + 1 : -Infinity;
         const waterLevel = Math.max(riverWaterLevel, seaWaterLevel);
 
         // Air-column skip (Change #2): a voxel is fully air (weight -0.5 → packVoxel = 0 = the array
@@ -2748,15 +2682,13 @@ export class TerrainGenerator implements HeightSampler {
       let placements = this.placementCache.get(pkey);
       if (!placements) {
         const allPlacements = this.stampPointGenerator.generateForChunk(cx, cz);
-        // Drop stamps (trees / rocks / buildings) on pathways + rivers, over cave breaches (nothing left
-        // floating above an open cave mouth), below the beach line, and on terrain steeper than 60°
-        // (they look fine on 45° slopes but wrong on cliffs). Slope only applies with the landform on.
-        // (Stamps are NOT biome-filtered for now — biomes differ only by surface material.)
+        // Drop stamps (trees / rocks / buildings) on pathways + rivers and over cave breaches. On the
+        // landform, they scatter ONLY on the moss/grass or snow surface (never sea, sand, or steep
+        // rock) — the surface-material gate replaces the old beach/slope culls.
         placements = allPlacements.filter(p =>
           !this.isOnPathway(p.worldX, p.worldZ) && !this.isBreachColumn(p.worldX, p.worldZ)
-          && !this.isLandformSuppressed(p.worldX, p.worldZ)
           && !(riversOn && this.isOnRiver(p.worldX, p.worldZ))
-          && !(tl.landformEnabled && this.landformSlopeDeg(p.worldX, p.worldZ) > 60));
+          && (tl.landformEnabled ? this.isStampSurface(p.worldX, p.worldZ) : true));
         if (this.placementCache.size > 4096) this.placementCache.clear();
         this.placementCache.set(pkey, placements);
       }
