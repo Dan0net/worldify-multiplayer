@@ -24,7 +24,7 @@ import {
 } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
-  getMarkerBase, consumeMarkerSpawn, resetMarker,
+  getMarkerBase, consumeMarkerSpawn, resetMarker, setMarkerScale,
 } from './spawn/SpawnMarker';
 import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
@@ -857,6 +857,8 @@ export class GameCore {
     // center column's terrain has streamed — which also lifts a fresh world onto its surface.
     advanceExploreTargetGlide(deltaMs);
     setMarkerVisible(true);
+    // Keep the spawn marker a constant apparent size as the LOD zoom pushes the camera out.
+    setMarkerScale(getExploreZoomScale());
     const target = getExploreTarget();
     // Surface-follow: keep the spawn marker under screen centre as the user pans — at ALL zoom levels
     // (coarse terrain renders at its true world height, so the top-down column raycast still resolves

@@ -109,6 +109,16 @@ export function setMarkerVisible(v: boolean): void {
   if (group) group.visible = v && placed;
 }
 
+/**
+ * Scale the marker to keep a constant APPARENT size at coarse LOD zoom. The explore camera sits 2^level
+ * further out per level, so a fixed ~1 m ring shrinks to a sub-pixel dot when zoomed out (invisible at
+ * level 2+). Scaling the group by 2^level keeps radius/distance constant, so the ring reads the same at
+ * every zoom. `scale = 1` at level 0 / play is a no-op.
+ */
+export function setMarkerScale(scale: number): void {
+  if (group) group.scale.setScalar(scale);
+}
+
 /** Arm the marker so the next Playing entry spawns at it (called by the Play button). */
 export function armMarkerSpawn(): void { armed = true; }
 
