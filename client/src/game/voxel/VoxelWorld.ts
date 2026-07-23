@@ -288,6 +288,10 @@ export class VoxelWorld implements ChunkProvider {
   /** Current LOD zoom level (0 = full detail / play). Coarse levels sample the same world at a 2^L
    *  step; every chunk/tile/column request carries it, and the grouper root is scaled by 2^L. */
   private currentLevel = 0;
+  /** Consecutive update() passes the new level has been fully quiet (nothing loading/meshing) since the
+   *  last transition. Once it crosses the threshold, reconcileRetiring force-drops any still-unresolved
+   *  retiring chunks (they'll never be covered). Reset on every level change. */
+  private retireSettledPasses = 0;
   /**
    * Generation epoch, bumped on every LOD level change and world switch. Terrain generation is async
    * (worker pool + IndexedDB), and chunk/column coords are level-LOCAL, so a request in flight when the
@@ -334,6 +338,7 @@ export class VoxelWorld implements ChunkProvider {
     // Invalidate any in-flight generation for the old level (async worker/IDB results ingested after
     // this point would land at reinterpreted coords with wrong-scale content — the flat-slab artifacts).
     this.genEpoch++;
+    this.retireSettledPasses = 0;   // new transition — the quiescence net must re-arm from scratch
     // Clone the currently-visible chunks into the retiring holder (old scale) BEFORE disposing the
     // per-chunk geometries below — the holder owns independent clones, so the disposal is safe.
     this.chunkGrouper.retireAndReset(1 << level, 1 << this.currentLevel);
@@ -542,7 +547,19 @@ export class VoxelWorld implements ChunkProvider {
 
     // Per-chunk LOD swap: drop each retiring (old-level) chunk once the new level has resolved its
     // world region. No-op when no level transition is in flight.
-    this.chunkGrouper.reconcileRetiring((box) => this.retiringResolved(box));
+    //
+    // Quiescence net (replaces the old wall-clock backstop): once the NEW level has gone fully quiet —
+    // nothing pending to load, nothing queued to mesh, BFS stable — for a few consecutive frames, any
+    // retiring chunk STILL unresolved will never be covered (its region is out of the new view, or the
+    // new level generated nothing there), so force-drop it. This is state-based (keyed on streaming
+    // quiescence), not a timer: during an active zoom sweep it never fires (streaming isn't quiet), so
+    // the per-region predicate does the gap-free swapping; the net only sweeps orphans left when the
+    // sweep stops — the "stuck chunks after scrolling too fast" case. `visibilityDirty` is re-set by
+    // every mesh result, so in-flight meshes keep the counter from advancing until the level truly rests.
+    const streamingQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
+      && this.pendingTiles.size === 0 && this.remeshPipeline.size === 0 && !this.visibilityDirty;
+    this.retireSettledPasses = streamingQuiet ? this.retireSettledPasses + 1 : 0;
+    this.chunkGrouper.reconcileRetiring((box) => this.retiringResolved(box), this.retireSettledPasses >= 3);
 
     // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');

@@ -283,17 +283,21 @@ export class ChunkGrouper {
    * a region resolves the moment the new level finishes there — and an old chunk over a region the new
    * level never fills stays put (showing real content) rather than being force-dropped into a gap.
    * No-op when no transition is live.
+   *
+   * `force` (the quiescence net, driven by VoxelWorld): dispose EVERY remaining retiring chunk this
+   * pass regardless of the predicate. Used once the new level has gone fully quiet — anything still
+   * held will never be covered, so it's an orphan to sweep, not a placeholder to keep.
    */
-  reconcileRetiring(isResolved: (box: THREE.Box3) => boolean): void {
+  reconcileRetiring(isResolved: (box: THREE.Box3) => boolean, force = false): void {
     if (this.retiringHolders.length === 0 && this.stagedKeys.size === 0) return;
 
-    // Step 1 — dispose retiring (old) chunks whose region the new level has resolved.
+    // Step 1 — dispose retiring (old) chunks whose region the new level has resolved (or all, if forced).
     for (let h = this.retiringHolders.length - 1; h >= 0; h--) {
       const holder = this.retiringHolders[h];
       let write = 0;
       for (let i = 0; i < holder.entries.length; i++) {
         const entry = holder.entries[i];
-        if (isResolved(entry.box)) {
+        if (force || isResolved(entry.box)) {
           for (const m of entry.meshes) { holder.root.remove(m); m.geometry.dispose(); }
         } else {
           holder.entries[write++] = entry;
