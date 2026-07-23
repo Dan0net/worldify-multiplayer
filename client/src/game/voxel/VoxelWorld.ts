@@ -307,6 +307,12 @@ export class VoxelWorld implements ChunkProvider {
 
   get lodLevel(): number { return this.currentLevel; }
 
+  /** True while a level swap is still retiring old-level geometry (not yet fully replaced). The Explore
+   *  driver gates single-level LOD stepping on this: it steps the level toward the camera's target one
+   *  at a time, only once the previous swap has fully retired — so a multi-level flick loads each
+   *  intermediate level in turn instead of one all-or-nothing swap of huge coarse chunks. */
+  get retireActive(): boolean { return this.chunkGrouper.hasRetiring(); }
+
   /**
    * Wrap an async generation-result callback so it's dropped if the generation epoch changed between
    * request and result (a level change / world switch happened in flight). Prevents stale, wrong-level

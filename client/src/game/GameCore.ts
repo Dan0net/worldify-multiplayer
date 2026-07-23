@@ -860,7 +860,9 @@ export class GameCore {
     // Tell the marker the current LOD scale BEFORE any raycast this frame (center-follow below and taps
     // between frames): the raycast target meshes are level-local, so the marker transforms true-world
     // queries by this scale to hit the coarse terrain. Must precede placeMarkerAtColumn.
-    setSpawnLodScale(getExploreZoomScale());
+    // Use the DISPLAYED terrain level (the meshes actually on screen), not the camera's target — during a
+    // multi-level LOD walk they differ, and the marker raycasts the live meshes at their current scale.
+    setSpawnLodScale(this.voxelIntegration ? (1 << this.voxelIntegration.lodLevel) : getExploreZoomScale());
     const target = getExploreTarget();
     // Surface-follow: keep the spawn marker under screen centre as the user pans — at ALL zoom levels
     // (coarse terrain renders at its true world height, so the top-down column raycast still resolves
@@ -906,10 +908,20 @@ export class GameCore {
       // LOD zoom: the voxel world streams in level-LOCAL 8 m chunk units and the grouper root scales
       // geometry to true world by 2^level. Feed it the target ÷ scale; a level change (settled on the
       // wheel) triggers hold-then-swap. Explore uses the cube (square) visibility volume.
-      const level = getExploreZoomLevel();
-      const scale = getExploreZoomScale();
+      const targetLevel = getExploreZoomLevel();
       this.voxelIntegration.setCubeVisibility(true);
-      if (level !== this.voxelIntegration.lodLevel) this.voxelIntegration.setExploreLevel(level);
+      // Step the terrain LOD ONE level at a time toward the camera's target, and only once the previous
+      // swap has fully retired. A fast multi-level flick (e.g. 6→0) thus loads each intermediate level in
+      // turn — a cheap 2× refinement per step — instead of collapsing to one all-or-nothing swap of huge
+      // coarse chunks that strands the view on the larger zoom level until the entire fine level streams.
+      let level = this.voxelIntegration.lodLevel;
+      if (level !== targetLevel && !this.voxelIntegration.retireActive) {
+        level += targetLevel > level ? 1 : -1;
+        this.voxelIntegration.setExploreLevel(level);
+      }
+      // Scale the stream centre by the DISPLAYED level (the grouper root's actual scale), not the camera's
+      // target — during a multi-level walk the two differ, and the centre must match the level being streamed.
+      const scale = 1 << level;
       this._lodScaledCenter.copy(target).multiplyScalar(1 / scale);
       perfStats.begin('voxelUpdate');
       this.voxelIntegration.update(this._lodScaledCenter);

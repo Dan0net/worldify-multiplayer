@@ -140,6 +140,7 @@ export class VoxelIntegration implements TerrainRaycaster {
   setExploreLevel(level: number, center?: THREE.Vector3): void { this.world.setExploreLevel(level, center); }
   setCubeVisibility(cube: boolean): void { this.world.setCubeVisibility(cube); }
   get lodLevel(): number { return this.world.lodLevel; }
+  get retireActive(): boolean { return this.world.retireActive; }
 
   update(playerPos: THREE.Vector3): void {
     if (!this.initialized) return;

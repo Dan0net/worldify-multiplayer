@@ -321,6 +321,13 @@ export class ChunkGrouper {
     return this.retiringEntries.map(e => e.box);
   }
 
+  /** True while a level swap is still in flight — old-level geometry is still retiring (not yet fully
+   *  replaced by the new level). VoxelWorld gates single-level LOD stepping on this so a multi-level
+   *  jump loads one level difference at a time instead of retiring everything at once. */
+  hasRetiring(): boolean {
+    return this.retiringEntries.length > 0;
+  }
+
   /** Does a live-root chunk at level-local origin (wx,wy,wz) overlap ANY retiring old chunk's true-world
    *  box? Decides staging (a new chunk over old must stay hidden until the old is gone) and reveal. */
   private overlapsRetiring(wx: number, wy: number, wz: number): boolean {
