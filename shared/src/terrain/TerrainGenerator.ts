@@ -2599,14 +2599,17 @@ export class TerrainGenerator implements HeightSampler {
     if (anyCave && cave.wormsEnabled) this.prepareChunkWorms(cx, cy, cz);
     if (anyCave && cave.cavernsEnabled) this.prepareChunkCaverns(cx, cy, cz);
 
-    // Base landscape generates when EITHER the Buildings layer (base terrain + pathways + stamps) OR the
-    // Landforms layer (sea/mountains height) is on. With BOTH off, any enabled cave layer is rendered as
-    // SOLID casts in otherwise-empty space (the cave-inspection view); with no caves either, empty air.
-    // Detail features (buildings/paths/stamps + rivers) are off above level 0 — invisible when zoomed
-    // out and the costliest part of generation; the landform macro terrain still renders coarsely.
-    const buildingsOn = detail && tl.enabled;
+    // The base heightmap LAND is the macro terrain — it renders at EVERY LOD level (a coarse zoom shows
+    // the decimated land), so it keys off tl.enabled directly, NOT `detail`. Only DETAIL furniture —
+    // pathways, walls, borders, stamps — is gated to level 0 (`buildingsOn`); it's invisible when zoomed
+    // out and the costliest part of generation. Previously the base land was tied to the detail-gated
+    // `buildingsOn`, so a non-landform (base-heightmap) world generated EMPTY chunks at every coarse
+    // level — the terrain vanished the moment you zoomed. At level 0 (detail=true) landOn === buildingsOn
+    // so this is byte-identical to before.
+    const landOn = tl.enabled;                 // base heightmap land — all levels (macro terrain)
+    const buildingsOn = detail && tl.enabled;  // path/wall/border furniture — detail (level 0) only
     const riversOn = detail && tl.riversEnabled;
-    if (!buildingsOn && !tl.landformEnabled && !riversOn) {
+    if (!landOn && !tl.landformEnabled && !riversOn) {
       return anyCave
         ? this.generateCaveCastChunk(data, chunkWorldX, chunkWorldY, chunkWorldZ)
         : data;

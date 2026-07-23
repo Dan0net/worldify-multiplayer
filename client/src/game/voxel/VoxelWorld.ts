@@ -71,9 +71,17 @@ export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
  *   sky anywhere in the footprint), so they may safely default to dark when the chunk above isn't
  *   loaded. Surface chunks (slopes, flush tops, BFS-edge columns) are at cy >= minCy and stay lit.
  */
-function columnChunkRange(heights: ArrayLike<number>): { minCy: number; maxCy: number } {
-  const { minCy, maxHeight } = getChunkRangeFromHeights(heights);
-  return { minCy, maxCy: Math.floor((maxHeight + 1) / CHUNK_SIZE) };
+function columnChunkRange(heights: ArrayLike<number>, level = 0): { minCy: number; maxCy: number } {
+  // `heights` are TRUE-world voxel surface heights at every level. A level-L chunk spans
+  // CHUNK_SIZE·2^L world-voxels vertically (matching generateChunk's chunkWorldY = cy·CHUNK_SIZE·2^L
+  // and buildSurfaceColumn's span), so the level-LOCAL chunk index is height / (CHUNK_SIZE·2^L). Dividing
+  // by CHUNK_SIZE alone (the old code) inflated maxCy by 2^L at coarse zoom, so the visibility BFS
+  // centred and its air/terrain test landed 2^L chunks above the real surface — coarse chunks streamed
+  // and meshed but the BFS never marked them visible, so nothing rendered. level 0 (span = CHUNK_SIZE)
+  // is unchanged.
+  const span = CHUNK_SIZE << level;
+  const { minHeight, maxHeight } = getChunkRangeFromHeights(heights);
+  return { minCy: Math.floor(minHeight / span), maxCy: Math.floor((maxHeight + 1) / span) };
 }
 
 /** Shared read-only all-dark "light from above" (used for underground chunks with no chunk above
@@ -990,7 +998,7 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.delete(columnKey);
     
     // Compute and store the column's chunk range from the (stamp-corrected) tile heights.
-    this.columnInfo.set(columnKey, columnChunkRange(heights));
+    this.columnInfo.set(columnKey, columnChunkRange(heights, this.currentLevel));
 
     // Persist the heights the first time a column is generated so a later revisit reads them from IDB
     // instead of regenerating (no-op if they came from loadColumn — already persisted).
@@ -1410,7 +1418,7 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumnTimes.delete(columnKey);
     
     // Store the column's chunk range from the (stamp-corrected) tile heights.
-    this.columnInfo.set(columnKey, columnChunkRange(heights));
+    this.columnInfo.set(columnKey, columnChunkRange(heights, this.currentLevel));
 
     // Persist heights on first generation so a revisit skips regeneration (Change 3).
     if (this.isLocal && !hasColumn(tx, tz)) saveColumn(tx, tz, heights, materials);
