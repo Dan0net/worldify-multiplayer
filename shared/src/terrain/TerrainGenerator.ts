@@ -2714,10 +2714,14 @@ export class TerrainGenerator implements HeightSampler {
 
             // Landform surface skin: sand/snow/gravel by elevation on the top few voxels (rock strata
             // underneath stay from getMaterialAtDepth). Short-circuits when the layer is off. The skin
-            // must be at least one coarse voxel (`step`) deep so a zoomed-out (LOD) chunk's top voxel —
-            // whose depthFromSurface can be up to `step` world-voxels — still reads as surface material
-            // (grass/sand/snow) instead of the deep rock strata. At level 0 (step 1) this is unchanged.
-            if (tl.landformEnabled && depthFromSurface <= Math.max(step, LANDFORM_SKIN_DEPTH * this.landSizeScale())) {
+            // must reach 2 coarse voxels (`2·step`) deep at LOD: the surface-net mesher paints each
+            // surface vertex with the material of the DEEPEST (max-weight) corner of its 2^L-wide cell,
+            // and across that cell the surface height varies, so that corner can sit up to ~one extra
+            // `step` below the local surface (one step for the cell's own vertical span, one for the
+            // height change across its width). At only `step` deep it fell into the rock band and coarse
+            // ground rendered as rock; `2·step` keeps the chosen corner on the skin. At level 0 (step 1)
+            // this is max(2,3)=3 === the previous max(1,3)=3, so it stays byte-identical.
+            if (tl.landformEnabled && depthFromSurface <= Math.max(2 * step, LANDFORM_SKIN_DEPTH * this.landSizeScale())) {
               material = this.landformSurfaceMaterial(terrainHeight, worldX, worldZ);
             }
 

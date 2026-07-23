@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { TerrainGenerator, DEFAULT_TERRAIN_LAYER_CONFIG, DEFAULT_CAVE_CONFIG } from './TerrainGenerator.js';
 import { CHUNK_SIZE, VOXEL_SCALE } from '../voxel/constants.js';
 import { getWeight, getMaterial } from '../voxel/voxelData.js';
+import { mat } from '../materials/Materials.js';
 
 /**
  * GUARD for the runtime LOD zoom (docs plan: "Runtime zoomable world-scale"). A level-L chunk samples
@@ -38,6 +39,19 @@ function highestTerrainY(
   return -Infinity;
 }
 
+/** (weight, material) of the coarse voxel at world-voxel Y `wy` (a multiple of `step`) in column (lx,lz). */
+function voxelAtWorldY(
+  gen: ReturnType<typeof landformGen>, level: number, lx: number, lz: number, wy: number,
+): { w: number; m: number } {
+  const step = 1 << level;
+  const gyStep = wy / step;                               // index in step-units
+  const cy = Math.floor(gyStep / CHUNK_SIZE);
+  const ly = gyStep - cy * CHUNK_SIZE;
+  const idx = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
+  const v = gen.generateChunk(0, cy, 0, level)[idx];
+  return { w: getWeight(v), m: getMaterial(v) };
+}
+
 describe('LOD zoom generation', () => {
   it('is byte-identical at level 0 (explicit level === no argument)', () => {
     const gen = landformGen();
@@ -60,6 +74,31 @@ describe('LOD zoom generation', () => {
       checked++;
     }
     expect(checked).toBe(3);
+  });
+
+  it('keeps the surface skin over the rock strata at coarse LOD (2·step deep)', () => {
+    // The surface-net mesher paints each surface vertex from the DEEPEST (max-weight) corner of its
+    // 2^L-wide cell, which can sit ~one `step` below the local surface. If the landform skin were only
+    // `step` deep, that corner would fall into the deep rock2 strata (getMaterialAtDepth 8+) and coarse
+    // ground would render as rock instead of moss/sand/snow. With the skin at 2·step, the voxel one step
+    // below the top solid voxel — the corner the mesher can pick — must still read as a landform surface
+    // material, never rock2. At level 3 (step 8) that voxel sits 8–16 world-voxels down, i.e. squarely in
+    // the rock2 band under the old `step`-deep skin, so this fails on the regression and passes on the fix.
+    const gen = landformGen();
+    const level = 3, step = 1 << level;
+    const rock2 = mat('rock2');
+    let checked = 0;
+    for (let lx = 2; lx < CHUNK_SIZE; lx += 5) {
+      for (let lz = 2; lz < CHUNK_SIZE; lz += 5) {
+        const topY = highestTerrainY(gen, 0, 0, level, lx, lz);
+        if (topY === -Infinity) continue;                 // all-water / air column → nothing to check
+        const below = voxelAtWorldY(gen, level, lx, lz, topY - step);
+        if (below.w <= 0) continue;                        // must be solid ground one step down
+        expect(below.m).not.toBe(rock2);                   // skin reaches the mesher's corner, not deep rock
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(5);                    // exercised a representative land sample
   });
 
   it('gates detail off at coarse levels (caves/stamps) so a coarse chunk stays cheap', () => {
