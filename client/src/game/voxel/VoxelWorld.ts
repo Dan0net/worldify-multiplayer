@@ -591,8 +591,16 @@ export class VoxelWorld implements ChunkProvider {
     // state-based, no wall-clock. During an active sweep the net never fires (streaming isn't quiet); the
     // per-column predicate does the gap-free, strict swapping.
     this.forceCoverRetiring();
+    // Streaming is "quiet" when no generation is in flight AND no mesh has completed this pass
+    // (visibilityDirty is set by the remesh listener on every applied mesh — line ~221). We deliberately
+    // do NOT require the remesh QUEUE to be empty: occluder-shell / underground chunks are left in the
+    // queue indefinitely by design (RemeshPipeline.shouldMeshNow), so a non-draining queue is the normal
+    // resting state at coarse LOD. Gating on queue-empty would mean the quiescence net never fires whenever
+    // any occluded chunk is queued — which strands a retiring swap forever if its last uncovered column is
+    // occluded (the coarse multi-level zoom-in freeze). The dirty flag already re-arms the counter whenever
+    // a real mesh lands, so this only trips once nothing meshable remains.
     const streamingQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
-      && this.pendingTiles.size === 0 && this.remeshPipeline.size === 0 && !this.visibilityDirty;
+      && this.pendingTiles.size === 0 && !this.visibilityDirty;
     this.retireSettledPasses = streamingQuiet ? this.retireSettledPasses + 1 : 0;
     this.chunkGrouper.reconcileRetiring((box) => this.retiringBoxResolved(box), this.retireSettledPasses >= 3);
 

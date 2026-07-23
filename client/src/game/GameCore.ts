@@ -20,7 +20,7 @@ import { initFirstPersonArm, updateFirstPersonArm, startFirstPersonArmExit, tick
 import {
   initExploreCamera, updateExploreCamera, getExploreTarget,
   advanceExploreTargetGlide, isExploreGliding, isExploreMarkerInteracting,
-  getExploreZoomLevel, getExploreZoomScale, resetCameraClipPlanes,
+  getExploreZoomLevel, getExploreZoomScale, resetCameraClipPlanes, setExploreDataLevel,
 } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -883,7 +883,7 @@ export class GameCore {
       }
     }
 
-    if (camera) updateExploreCamera(camera);
+    if (camera) updateExploreCamera(camera, deltaMs);
 
     // Brief first-person→explore glide on exiting play: blend from the captured FP pose
     // toward the explore pose (which updateExploreCamera just wrote into the camera).
@@ -919,6 +919,10 @@ export class GameCore {
         level += targetLevel > level ? 1 : -1;
         this.voxelIntegration.setExploreLevel(level);
       }
+      // Mirror the displayed level back into the camera so it clamps its rendered zoom to stay within one
+      // level of the terrain (can't outrun streaming — see ExploreCamera). getExploreZoomLevel then only
+      // ever asks for a level within ±1 of this, which is why the walk above steps exactly one at a time.
+      setExploreDataLevel(level);
       // Scale the stream centre by the DISPLAYED level (the grouper root's actual scale), not the camera's
       // target — during a multi-level walk the two differ, and the centre must match the level being streamed.
       const scale = 1 << level;
