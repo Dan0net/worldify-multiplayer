@@ -38,7 +38,7 @@ import {
   chunkHasEmitter,
   chunkHasBlockLight,
 } from '@worldify/shared';
-import { Chunk, ChunkPhase } from './Chunk.js';
+import { Chunk } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
@@ -354,16 +354,29 @@ export class VoxelWorld implements ChunkProvider {
     const cxMin = Math.floor(box.min.x / span), cxMax = Math.floor((box.max.x - 1e-3) / span);
     const cyMin = Math.floor(box.min.y / span), cyMax = Math.floor((box.max.y - 1e-3) / span);
     const czMin = Math.floor(box.min.z / span), czMax = Math.floor((box.max.z - 1e-3) / span);
+    const pc = this.lastPlayerChunk;
+    const r = this._visibilityRadius + 1;                        // +1 buffer, Chebyshev (cube view)
+    // Column (surface) based coverage. The old chunk is resolved once every COLUMN of new-level cells
+    // it overlaps is covered — either it's out of the new XZ view, its whole vertical band is air, or
+    // the new level has actually MESHED geometry somewhere in that band (the surface landed). We test
+    // real geometry, NOT the reachable/pending sets — those grow a ring per streamed chunk, so during
+    // active streaming most in-view cells look "won't load" and would drop the old chunk before the
+    // new one drew anything (the blank flash). A meshed-empty (interior) cell has no geometry, so a
+    // column that's all underground holds until the backstop — invisible, so harmless.
     for (let cx = cxMin; cx <= cxMax; cx++) {
-      for (let cy = cyMin; cy <= cyMax; cy++) {
-        for (let cz = czMin; cz <= czMax; cz++) {
-          if (this.isEmptyAir(cx, cy, cz)) continue;              // air — nothing renders here
-          const key = chunkKey(cx, cy, cz);
-          if (!this.cachedReachable.has(key) && !this.pendingChunks.has(key)) continue; // not incoming
-          const chunk = this.chunks.get(key);
-          if (chunk && chunk.phase !== ChunkPhase.Loaded) continue; // meshed (complete or empty)
-          return false;   // in view, expected, not yet meshed → keep holding this old chunk
+      for (let cz = czMin; cz <= czMax; cz++) {
+        // Beyond the new view's XZ visibility cube → nothing will render here → covered.
+        if (pc && (Math.abs(cx - pc.cx) > r || Math.abs(cz - pc.cz) > r)) continue;
+        let meshed = false;
+        let allAir = true;
+        for (let cy = cyMin; cy <= cyMax; cy++) {
+          if (this.isEmptyAir(cx, cy, cz)) continue;             // air cell — nothing renders here
+          allAir = false;
+          const geo = this.geometries.get(chunkKey(cx, cy, cz));
+          if (geo && geo.hasGeometry()) { meshed = true; break; } // new surface has landed in this column
         }
+        if (meshed || allAir) continue;                          // column covered
+        return false;   // in-view column with non-air cells, none meshed yet → keep holding
       }
     }
     return true;
