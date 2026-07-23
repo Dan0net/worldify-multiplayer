@@ -126,14 +126,10 @@ function groupKeyFromChunk(cx: number, cy: number, cz: number): string {
   return `${gx},${gy},${gz}`;
 }
 
-/** Key for a new-level chunk COLUMN (the atomic unit of the LOD swap). */
-function columnKey(cx: number, cz: number): string {
-  return `${cx},${cz}`;
-}
-
-/** Cap on split tiles per retiring chunk (bounds cost/draw-calls on a huge instant zoom-in). Beyond
- *  this the clone is kept whole at its origin column — coarser atomic granularity, but rare. */
-const MAX_SPLIT_TILES = 256;
+/** Cap on retiring old-chunk entries held at once. Bounds geometry/draw-calls if a pathological fast
+ *  multi-level sweep retires faster than swaps resolve; oldest entries beyond this are dropped. Sized
+ *  well above a normal view's visible-chunk count so it never triggers in ordinary zooming. */
+const MAX_RETIRING_ENTRIES = 4096;
 
 function groupCenter(gx: number, gy: number, gz: number): { cx: number; cy: number; cz: number } {
   return {
@@ -186,10 +182,17 @@ export class ChunkGrouper {
    * root scale. Empty while no transition is in flight.
    */
   private retiringRoot!: THREE.Group;
-  private retiringColumns = new Map<string, { cx: number; cz: number; meshes: THREE.Mesh[] }>();
+  /** Retiring OLD chunks as WHOLE per-chunk clones (no geometry splitting — splitting a coarse chunk to
+   *  the fine grid on a multi-level zoom-in explodes into thousands of sub-meshes and hangs the frame).
+   *  Each entry is one old chunk's layer meshes + its TRUE-world AABB. The swap is per-old-chunk: the
+   *  entry is disposed when every new-level column its box covers is resolved (drawn / air / out of
+   *  view), and the new chunks over it stay staged-hidden until then — strict no-overlap, no blank. For
+   *  an adjacent-level zoom the old chunk spans a 2×2 column block (near per-column); for a big jump the
+   *  few in-view coarse chunks act as a coarse backfill that pops to fine when it streams. */
+  private retiringEntries: Array<{ meshes: THREE.Mesh[]; box: THREE.Box3 }> = [];
 
   /** Keys of new chunks currently staged hidden (see ChunkSlot.staged). Iterated by reconcileRetiring
-   *  to reveal them the frame their column's retiring chunks are gone. Empty when no transition. */
+   *  to reveal them the frame no retiring chunk covers their column. Empty when no transition. */
   private stagedKeys = new Set<string>();
 
   /** Number of groups with suppressionPending === true (O(1) check). */
@@ -217,34 +220,43 @@ export class ChunkGrouper {
   }
 
   /**
-   * LOD level change with per-COLUMN atomic retirement. Clone the currently VISIBLE chunks' geometry
-   * into `retiringColumns`, bucketed by the NEW level's chunk column — so the previous level stays fully
-   * visible in true-world space, and each column is disposed independently the frame its new content is
-   * drawable (reconcileRetiring). When a source chunk is COARSER than a new column (zoom in) its clone is
-   * split into per-column tiles so we can drop exactly the column that swapped — never a superset (strict
-   * no-overlap). Clones are independent buffers, so the caller may dispose the originals immediately.
-   * Then the live root (its merged copies + standalones) is disposed and a fresh root installed at
-   * `newScale`.
-   *
-   * Re-buckets into the CURRENT (new) column grid every call, even mid-sweep, folding any still-retiring
-   * geometry from a superseded level into the newer grid — so a fast multi-level sweep stays gap-free and
-   * the swap unit is always the current level's column.
+   * LOD level change with WHOLE-chunk atomic retirement. Clone each currently VISIBLE chunk's geometry
+   * (per layer, no splitting) into `retiringEntries`, positioned in TRUE-world (mesh scale = oldScale,
+   * position = origin × oldScale) with its true-world AABB. The previous level stays fully visible while
+   * the new one streams; each entry is disposed the frame reconcileRetiring finds every new-level column
+   * its box covers resolved. New chunks over a retiring box are staged hidden until it's gone — strict
+   * no-overlap, no blank. Whole-chunk (not split) keeps this O(visible chunks) regardless of the level
+   * JUMP size: splitting a coarse chunk to the fine grid on a multi-level zoom-in explodes into thousands
+   * of sub-meshes and hangs the frame. Entries from a superseded level are KEPT (multi-level backfill),
+   * capped so a pathological sweep can't accumulate unbounded geometry.
    */
   retireAndReset(newScale: number, oldScale: number): void {
-    const newColStep = CHUNK_WORLD_SIZE * newScale;   // true-world width of a NEW-level column
-
-    // Fold any geometry STILL retiring from a superseded level into the new column grid FIRST, so a fast
-    // sweep past intermediate levels stays coherent (columns are always keyed at the current level).
-    if (this.retiringColumns.size > 0) this.rekeyRetiringColumns(newColStep);
-
-    // Then bucket the outgoing live level's visible chunks into new-level columns (already at newColStep).
     for (const slot of this.slots.values()) {
       if (!slot.visible || slot.staged) continue;   // staged chunks were never shown → nothing to retire
+      const meshes: THREE.Mesh[] = [];
       for (let layer = 0; layer < LAYER_COUNT; layer++) {
         const geo = slot.geometries[layer];
         if (!geo || !geo.index || geo.index.count === 0) continue;
-        this.retireGeometryIntoColumns(geo, layer, oldScale, slot.wx, slot.wy, slot.wz, newColStep);
+        const mesh = createLayerMesh(geo.clone(), layer);
+        mesh.frustumCulled = true;
+        mesh.castShadow = false;   // transient during the swap
+        mesh.scale.setScalar(oldScale);
+        mesh.position.set(slot.wx * oldScale, slot.wy * oldScale, slot.wz * oldScale);
+        this.retiringRoot.add(mesh);
+        meshes.push(mesh);
       }
+      if (meshes.length === 0) continue;
+      const box = new THREE.Box3(
+        new THREE.Vector3(slot.wx * oldScale, slot.wy * oldScale, slot.wz * oldScale),
+        new THREE.Vector3((slot.wx + CHUNK_WORLD_SIZE) * oldScale, (slot.wy + CHUNK_WORLD_SIZE) * oldScale, (slot.wz + CHUNK_WORLD_SIZE) * oldScale),
+      );
+      this.retiringEntries.push({ meshes, box });
+    }
+    // Bound accumulation on pathological fast sweeps: drop the OLDEST entries beyond the cap (their
+    // region falls back to whatever the new level has — a rare, brief edge blank, never a hang).
+    if (this.retiringEntries.length > MAX_RETIRING_ENTRIES) {
+      const drop = this.retiringEntries.splice(0, this.retiringEntries.length - MAX_RETIRING_ENTRIES);
+      for (const e of drop) for (const m of e.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
     }
 
     // Swap out the current live root (old or intermediate) and install a fresh one at the new scale.
@@ -258,143 +270,6 @@ export class ChunkGrouper {
     this.pendingSuppressionCount = 0;
   }
 
-  /** Add one live chunk-layer geometry to `retiringColumns`, keyed/split to the new column grid. The
-   *  source geometry has chunk-LOCAL coords; its true-world transform is scale = oldScale, position =
-   *  origin × oldScale. Delegates to the generic column splitter. */
-  private retireGeometryIntoColumns(
-    geo: THREE.BufferGeometry, layer: number,
-    oldScale: number, wx: number, wy: number, wz: number,
-    newColStep: number,
-  ): void {
-    this.bucketGeometryIntoColumns(geo, layer, oldScale, wx * oldScale, wy * oldScale, wz * oldScale, newColStep);
-  }
-
-  /**
-   * Generic column bucketer/splitter. Given a geometry with LOCAL coords whose true-world mapping is
-   * `scale·local + (posX,posY,posZ)`, emit retiring meshes bucketed by the new-level column each covers.
-   * If the geometry fits in one new column → one whole mesh; else split its triangles by true-world XZ
-   * centroid into one non-indexed sub-mesh per column (unless the tile count exceeds the cap, then keep
-   * it whole at its origin column). Handles both indexed (live per-chunk) and non-indexed (already-split
-   * tiles being re-keyed) sources.
-   */
-  private bucketGeometryIntoColumns(
-    geo: THREE.BufferGeometry, layer: number,
-    scale: number, posX: number, posY: number, posZ: number,
-    newColStep: number,
-  ): void {
-    const pos = geo.attributes.position.array as ArrayLike<number>;
-    const index = (geo.index ? geo.index.array : null) as ArrayLike<number> | null;
-    const triCount = (index ? index.length : pos.length / 3) / 3;
-    const vAt = (t: number, k: number): number => (index ? index[t * 3 + k] : t * 3 + k);
-
-    // Column span of the geometry's bounding box in the new grid.
-    geo.computeBoundingBox();
-    const bb = geo.boundingBox!;
-    const colX0 = Math.floor((scale * bb.min.x + posX) / newColStep);
-    const colX1 = Math.floor((scale * bb.max.x + posX - 1e-3) / newColStep);
-    const colZ0 = Math.floor((scale * bb.min.z + posZ) / newColStep);
-    const colZ1 = Math.floor((scale * bb.max.z + posZ - 1e-3) / newColStep);
-    const tiles = (colX1 - colX0 + 1) * (colZ1 - colZ0 + 1);
-
-    // Fast path: fits in one new column (zoom out / same), or split would exceed the cap → keep whole.
-    if (tiles <= 1 || tiles > MAX_SPLIT_TILES) {
-      const clone = index ? geo.clone() : this.expandGeometry(geo);   // own an independent buffer
-      this.addRetiringMesh(colX0, colZ0, this.makeRetiringMesh(clone, layer, scale, posX, posY, posZ), newColStep);
-      return;
-    }
-
-    // Split path: bucket triangles by the new column of their true-world XZ centroid.
-    const buckets = new Map<string, { cx: number; cz: number; tris: number[] }>();
-    for (let t = 0; t < triCount; t++) {
-      const a = vAt(t, 0), b = vAt(t, 1), c = vAt(t, 2);
-      const lx = (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3;
-      const lz = (pos[a * 3 + 2] + pos[b * 3 + 2] + pos[c * 3 + 2]) / 3;
-      const cx = Math.floor((scale * lx + posX) / newColStep);
-      const cz = Math.floor((scale * lz + posZ) / newColStep);
-      const key = columnKey(cx, cz);
-      let bucket = buckets.get(key);
-      if (!bucket) { bucket = { cx, cz, tris: [] }; buckets.set(key, bucket); }
-      bucket.tris.push(t);
-    }
-    for (const b of buckets.values()) {
-      const tileGeo = this.buildTileGeometry(geo, index, b.tris);
-      this.addRetiringMesh(b.cx, b.cz, this.makeRetiringMesh(tileGeo, layer, scale, posX, posY, posZ), newColStep);
-    }
-  }
-
-  /** Wrap a LOCAL-coord geometry as a retiring mesh at true-world transform (scale + already-scaled
-   *  position). Added to the scale-1 retiringRoot. Stores layer for later re-keying. */
-  private makeRetiringMesh(
-    geo: THREE.BufferGeometry, layer: number, scale: number, posX: number, posY: number, posZ: number,
-  ): THREE.Mesh {
-    const mesh = createLayerMesh(geo, layer);
-    mesh.frustumCulled = true;
-    mesh.castShadow = false;   // transient during the swap — skip shadow-caster cost
-    mesh.scale.setScalar(scale);
-    mesh.position.set(posX, posY, posZ);
-    mesh.userData.lodLayer = layer;
-    this.retiringRoot.add(mesh);
-    return mesh;
-  }
-
-  private addRetiringMesh(cx: number, cz: number, mesh: THREE.Mesh, _newColStep: number): void {
-    const key = columnKey(cx, cz);
-    let col = this.retiringColumns.get(key);
-    if (!col) { col = { cx, cz, meshes: [] }; this.retiringColumns.set(key, col); }
-    col.meshes.push(mesh);
-  }
-
-  /** Build a non-indexed geometry from the given triangles of `src`, copying every terrain attribute
-   *  (expanded: 3 verts per triangle). `index` may be null (src already non-indexed). Transient retiring
-   *  geometry — vertex sharing isn't worth it. */
-  private buildTileGeometry(src: THREE.BufferGeometry, index: ArrayLike<number> | null, tris: number[]): THREE.BufferGeometry {
-    const out = new THREE.BufferGeometry();
-    const vertCount = tris.length * 3;
-    for (const attr of TERRAIN_ATTRS) {
-      const srcAttr = src.attributes[attr.name];
-      if (!srcAttr) continue;
-      const srcArr = srcAttr.array as ArrayLike<number>;
-      const size = attr.itemSize;
-      const dst = new Float32Array(vertCount * size);
-      let w = 0;
-      for (const t of tris) {
-        for (let k = 0; k < 3; k++) {
-          const v = index ? index[t * 3 + k] : t * 3 + k;
-          for (let c = 0; c < size; c++) dst[w++] = srcArr[v * size + c];
-        }
-      }
-      out.setAttribute(attr.name, new THREE.BufferAttribute(dst, size));
-    }
-    return out;
-  }
-
-  /** Expand an indexed geometry to a non-indexed clone (independent buffers). Used when the source is
-   *  already non-indexed but we need an owned copy — falls back to plain clone via a single tri list. */
-  private expandGeometry(geo: THREE.BufferGeometry): THREE.BufferGeometry {
-    const vertCount = (geo.attributes.position.array as ArrayLike<number>).length / 3;
-    const tris: number[] = [];
-    for (let t = 0; t < vertCount / 3; t++) tris.push(t);
-    return this.buildTileGeometry(geo, null, tris);
-  }
-
-  /** Re-split/re-key every retiring mesh into the CURRENT new-level column grid, so a multi-level sweep
-   *  keeps the swap unit at the current level (strict no-overlap even when zooming further IN mid-swap).
-   *  Each existing retiring mesh carries its own true-world transform (scale + position) and layer, so
-   *  it is re-bucketed (and re-split if it now spans several new columns) generically. */
-  private rekeyRetiringColumns(newColStep: number): void {
-    const prev = this.retiringColumns;
-    this.retiringColumns = new Map();
-    for (const col of prev.values()) {
-      for (const mesh of col.meshes) {
-        const layer = (mesh.userData.lodLayer as number) ?? 0;
-        const geo = mesh.geometry as THREE.BufferGeometry;
-        this.bucketGeometryIntoColumns(geo, layer, mesh.scale.x, mesh.position.x, mesh.position.y, mesh.position.z, newColStep);
-        this.retiringRoot.remove(mesh);
-        mesh.geometry.dispose();   // superseded by the re-bucketed copies
-      }
-    }
-  }
-
   /** Dispose the current live root's meshes (merged group copies + standalones) and detach it. */
   private disposeLiveRoot(): void {
     for (const slot of this.slots.values()) this.removeStandalone(slot);
@@ -403,33 +278,35 @@ export class ChunkGrouper {
   }
 
   /**
-   * Per-frame per-COLUMN atomic swap. For each retiring column, when its new-level content is RESOLVED
-   * (`isColumnResolved(cx,cz)` — drawn, confirmed-empty, or out of view), dispose that column's old
-   * meshes AND reveal the new chunk(s) staged for that column, the SAME pass. Exactly one level draws a
-   * column before (old) and after (new) — never both (strict no-overlap), never neither (no blank).
-   * Columns are independent, so a laggard column never blocks another column's swap. No-op when no
-   * transition is live.
+   * Per-frame atomic swap. For each retiring old chunk, when `isBoxResolved(box)` (every new-level column
+   * its footprint covers is drawn / air / out of view) → dispose it. Then any staged new chunk no longer
+   * covered by a retiring box is revealed. Exactly one level draws a region before (old) and after (new)
+   * — never both (strict no-overlap), never neither (no blank). No-op when no transition is live.
    *
-   * `force` (the quiescence net, driven by VoxelWorld): resolve EVERY remaining column this pass. Used
-   * once the new level has gone fully quiet — anything still held will never be covered.
+   * `force` (quiescence net): resolve EVERY remaining entry this pass — once the new level has gone fully
+   * quiet, anything still held will never be covered.
    */
-  reconcileRetiring(isColumnResolved: (cx: number, cz: number) => boolean, force = false): void {
-    if (this.retiringColumns.size === 0 && this.stagedKeys.size === 0) return;
+  reconcileRetiring(isBoxResolved: (box: THREE.Box3) => boolean, force = false): void {
+    if (this.retiringEntries.length === 0 && this.stagedKeys.size === 0) return;
 
-    // Step 1 — dispose retiring old meshes in each resolved column.
-    for (const [key, col] of [...this.retiringColumns]) {
-      if (!(force || isColumnResolved(col.cx, col.cz))) continue;
-      for (const m of col.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
-      this.retiringColumns.delete(key);
+    // Step 1 — dispose resolved retiring old chunks.
+    let write = 0;
+    for (let i = 0; i < this.retiringEntries.length; i++) {
+      const e = this.retiringEntries[i];
+      if (force || isBoxResolved(e.box)) {
+        for (const m of e.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
+      } else {
+        this.retiringEntries[write++] = e;
+      }
     }
+    this.retiringEntries.length = write;
 
-    // Step 2 — reveal any staged (hidden) new chunk whose column no longer has retiring old geometry.
-    // Runs after step 1 so a column's old is gone the SAME pass its new is revealed (atomic swap).
+    // Step 2 — reveal any staged new chunk no longer covered by a retiring box (same pass → atomic).
     if (this.stagedKeys.size > 0) {
       for (const key of [...this.stagedKeys]) {
         const slot = this.slots.get(key);
         if (!slot) { this.stagedKeys.delete(key); continue; }
-        if (this.retiringColumns.has(columnKey(slot.cx, slot.cz))) continue;   // still covered → keep hidden
+        if (this.overlapsRetiring(slot.wx, slot.wy, slot.wz)) continue;   // still covered → keep hidden
         slot.staged = false;
         this.stagedKeys.delete(key);
         if (!slot.coveredByMerge) this.showStandalone(slot);
@@ -438,26 +315,30 @@ export class ChunkGrouper {
     }
   }
 
-  /** Column coords (new-level) of every column that still has retiring old geometry. Consumed by
-   *  VoxelWorld to force-request those columns so occlusion can't strand a swap unresolved. */
-  getRetiringColumns(): Array<{ cx: number; cz: number }> {
-    const out: Array<{ cx: number; cz: number }> = [];
-    for (const col of this.retiringColumns.values()) out.push({ cx: col.cx, cz: col.cz });
-    return out;
+  /** True-world AABBs of every retiring old chunk, for VoxelWorld's force-cover (request the in-view
+   *  columns each box covers so occlusion can't strand a swap unresolved). */
+  getRetiringBoxes(): THREE.Box3[] {
+    return this.retiringEntries.map(e => e.box);
   }
 
-  /** Does the new-level column (cx,cz) still have retiring old geometry? Decides whether a new chunk in
-   *  that column must be staged hidden (strict no-overlap) until its column swaps. */
-  private columnHasRetiring(cx: number, cz: number): boolean {
-    return this.retiringColumns.has(columnKey(cx, cz));
+  /** Does a live-root chunk at level-local origin (wx,wy,wz) overlap ANY retiring old chunk's true-world
+   *  box? Decides staging (a new chunk over old must stay hidden until the old is gone) and reveal. */
+  private overlapsRetiring(wx: number, wy: number, wz: number): boolean {
+    if (this.retiringEntries.length === 0) return false;
+    const s = this.root.scale.x;
+    const minX = wx * s, minY = wy * s, minZ = wz * s;
+    const maxX = (wx + CHUNK_WORLD_SIZE) * s, maxY = (wy + CHUNK_WORLD_SIZE) * s, maxZ = (wz + CHUNK_WORLD_SIZE) * s;
+    for (const e of this.retiringEntries) {
+      const b = e.box;
+      if (minX < b.max.x && maxX > b.min.x && minY < b.max.y && maxY > b.min.y && minZ < b.max.z && maxZ > b.min.z) return true;
+    }
+    return false;
   }
 
   /** Dispose all retiring geometry immediately (world switch / teardown). */
   private disposeRetiring(): void {
-    for (const col of this.retiringColumns.values()) {
-      for (const m of col.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
-    }
-    this.retiringColumns.clear();
+    for (const e of this.retiringEntries) for (const m of e.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
+    this.retiringEntries.length = 0;
   }
 
   /**
@@ -491,10 +372,10 @@ export class ChunkGrouper {
         this.addToGroup(key, gk, cx, cy, cz);
       }
     } else {
-      // Stage this NEW chunk hidden if its column still has retiring old geometry — drawing it now would
-      // overlap the old (strict no-overlap). Revealed atomically when its column swaps (reconcileRetiring).
-      // Its geometry still exists, so the coverage predicate sees it.
-      const staged = this.columnHasRetiring(cx, cz);
+      // Stage this NEW chunk hidden if a retiring old chunk still covers its world region — drawing it
+      // now would overlap the old (strict no-overlap). Revealed atomically when that old chunk is
+      // disposed (reconcileRetiring). Its geometry still exists, so the coverage predicate sees it.
+      const staged = this.overlapsRetiring(worldPos.x, worldPos.y, worldPos.z);
       slot = {
         cx, cy, cz,
         wx: worldPos.x,

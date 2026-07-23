@@ -377,39 +377,70 @@ export class VoxelWorld implements ChunkProvider {
    * is provided OUTSIDE this predicate by force-cover (VoxelWorld.forceCoverRetiring) + the quiescence
    * net, not by relaxing the draw requirement here — that relaxation is exactly what caused blanks.
    */
-  private retiringColumnResolved(cx: number, cz: number): boolean {
+  private retiringBoxResolved(box: THREE.Box3): boolean {
+    const span = CHUNK_WORLD_SIZE * (1 << this.currentLevel);    // true-world size of a new-level chunk
+    const cxMin = Math.floor(box.min.x / span), cxMax = Math.floor((box.max.x - 1e-3) / span);
+    const czMin = Math.floor(box.min.z / span), czMax = Math.floor((box.max.z - 1e-3) / span);
     const pc = this.lastPlayerChunk;
     const r = this._visibilityRadius + 1;                        // +1 buffer, Chebyshev (cube view)
-    if (pc && (Math.abs(cx - pc.cx) > r || Math.abs(cz - pc.cz) > r)) return true;   // out of view
+    // Every column the old chunk covers must be resolved. Out-of-view columns are auto-covered; only
+    // IN-view columns are actually checked, so a huge coarse box (multi-level zoom-in) costs at most the
+    // ~(2r+1)² in-view columns, not its full footprint. A column is resolved when its surface band is
+    // drawn or settled-empty (strict — never merely "expected"; liveness comes from force-cover).
+    for (let cx = cxMin; cx <= cxMax; cx++) {
+      if (pc && Math.abs(cx - pc.cx) > r) continue;              // whole column strip out of view
+      for (let cz = czMin; cz <= czMax; cz++) {
+        if (pc && Math.abs(cz - pc.cz) > r) continue;            // out of view → covered
+        if (!this.columnSurfaceDrawn(cx, cz)) return false;      // in-view column not yet drawable → hold
+      }
+    }
+    return true;
+  }
+
+  /** True when new-level column (cx,cz) is resolved: its surface band is drawn, or fully settled-empty
+   *  (air / meshed-empty). False while columnInfo is missing or a non-air cell hasn't finished meshing. */
+  private columnSurfaceDrawn(cx: number, cz: number): boolean {
     const info = this.columnInfo.get(`${cx},${cz}`);
-    if (!info) return false;   // new column's surface extent unknown yet → hold (force-cover requests it)
-    let drawable = false;      // some cell in the band has landed visible geometry
-    let undrawn = false;       // some non-air cell has no completed mesh yet → replacement not ready
+    if (!info) return false;   // extent unknown yet → not resolved (force-cover requests it)
+    let undrawn = false;
     for (let cy = info.minCy; cy <= info.maxCy; cy++) {
       if (this.isEmptyAir(cx, cy, cz)) continue;                 // air — nothing renders here
       const geo = this.geometries.get(chunkKey(cx, cy, cz));
-      if (geo && geo.hasGeometry()) { drawable = true; break; }  // new surface drawn → covered
+      if (geo && geo.hasGeometry()) return true;                 // surface drawn → resolved
       if (geo) continue;                                         // mesh complete but empty → doesn't block
-      undrawn = true;                                            // non-air, mesh not complete → hold
+      undrawn = true;                                            // non-air, not meshed → hold
     }
-    return drawable || !undrawn;
+    return !undrawn;   // no drawn cell, but nothing pending → settled-empty → resolved
   }
 
   /**
-   * Liveness for the atomic swap: force the new level to REQUEST every column that still has retiring old
-   * geometry, so occlusion culling (which skips hidden columns) can't strand a column unmeshed forever —
-   * which would hold its old geometry (invisible but leaking) indefinitely. Bounded by the retiring set,
-   * which is bounded by the view. No-op when no transition is live.
+   * Liveness for the atomic swap: force the new level to REQUEST the IN-VIEW columns of every retiring
+   * old chunk's box, so occlusion culling (which skips hidden columns) can't strand a column unmeshed —
+   * which would hold the old chunk indefinitely. Clamped to the view, so even a huge coarse box only
+   * requests the bounded in-view set. No-op when no transition is live.
    */
   private forceCoverRetiring(): void {
-    const cols = this.chunkGrouper.getRetiringColumns();
-    if (cols.length === 0) return;
-    for (const { cx, cz } of cols) {
-      const info = this.columnInfo.get(`${cx},${cz}`);
-      if (!info) { this.requestTileFromServer(cx, cz); continue; }   // need columnInfo first (self-guards)
-      for (let cy = info.minCy; cy <= info.maxCy; cy++) {
-        const key = chunkKey(cx, cy, cz);
-        if (!this.chunks.has(key) && !this.pendingChunks.has(key)) this.requestChunkFromServer(cx, cy, cz);
+    const boxes = this.chunkGrouper.getRetiringBoxes();
+    if (boxes.length === 0) return;
+    const span = CHUNK_WORLD_SIZE * (1 << this.currentLevel);
+    const pc = this.lastPlayerChunk;
+    const r = this._visibilityRadius + 1;
+    for (const box of boxes) {
+      let cxMin = Math.floor(box.min.x / span), cxMax = Math.floor((box.max.x - 1e-3) / span);
+      let czMin = Math.floor(box.min.z / span), czMax = Math.floor((box.max.z - 1e-3) / span);
+      if (pc) {   // clamp to the in-view window
+        cxMin = Math.max(cxMin, pc.cx - r); cxMax = Math.min(cxMax, pc.cx + r);
+        czMin = Math.max(czMin, pc.cz - r); czMax = Math.min(czMax, pc.cz + r);
+      }
+      for (let cx = cxMin; cx <= cxMax; cx++) {
+        for (let cz = czMin; cz <= czMax; cz++) {
+          const info = this.columnInfo.get(`${cx},${cz}`);
+          if (!info) { this.requestTileFromServer(cx, cz); continue; }
+          for (let cy = info.minCy; cy <= info.maxCy; cy++) {
+            const key = chunkKey(cx, cy, cz);
+            if (!this.chunks.has(key) && !this.pendingChunks.has(key)) this.requestChunkFromServer(cx, cy, cz);
+          }
+        }
       }
     }
   }
@@ -557,7 +588,7 @@ export class VoxelWorld implements ChunkProvider {
     const streamingQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
       && this.pendingTiles.size === 0 && this.remeshPipeline.size === 0 && !this.visibilityDirty;
     this.retireSettledPasses = streamingQuiet ? this.retireSettledPasses + 1 : 0;
-    this.chunkGrouper.reconcileRetiring((cx, cz) => this.retiringColumnResolved(cx, cz), this.retireSettledPasses >= 3);
+    this.chunkGrouper.reconcileRetiring((box) => this.retiringBoxResolved(box), this.retireSettledPasses >= 3);
 
     // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');
