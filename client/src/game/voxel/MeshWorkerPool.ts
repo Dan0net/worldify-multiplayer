@@ -118,6 +118,11 @@ export class MeshWorkerPool {
     return this.inFlight.has(chunkKey);
   }
 
+  /** True while any chunk is dispatched to a worker and awaiting its result (not yet applied). */
+  hasInFlight(): boolean {
+    return this.inFlight.size > 0;
+  }
+
   /**
    * Check if a chunk key is owned by the active preview batch.
    * VoxelWorld.processRemeshQueue should skip these.

@@ -111,6 +111,28 @@ export class RemeshPipeline {
   clear(): void { this.queue.clear(); this.generation++; }
   get size(): number { return this.queue.size; }
 
+  /**
+   * True while mesh work that will actually PRODUCE geometry is still outstanding — i.e. a chunk is
+   * dispatched to a worker (in-flight, result not yet applied) OR a queued chunk is dispatchable right now
+   * (loaded, drawable per shouldMeshNow, margins ready). Crucially this is NOT `size > 0`: occluder-shell /
+   * underground chunks are parked in the queue indefinitely by design (shouldMeshNow=false) and never
+   * produce geometry, so counting them would make a resting coarse view look perpetually "busy". Used by
+   * the LOD quiescence net so it won't force-drop retiring geometry while the new level's meshes are still
+   * being produced (the fast-cache blank: generation finishes instantly, meshes are still in the pipeline).
+   */
+  hasPendingMeshWork(): boolean {
+    if (this.meshPool.hasInFlight()) return true;   // dispatched → result pending → will draw
+    for (const key of this.queue) {
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue;
+      if (this.meshPool.isInFlight(key) || this.meshPool.isPreviewChunk(key)) continue;
+      if (!this.shouldMeshNow(chunk.cx, chunk.cy, chunk.cz)) continue;      // occluded → never draws
+      if (!this.marginSourcesReady(chunk.cx, chunk.cy, chunk.cz)) continue; // waiting on a neighbour
+      return true;   // a chunk that can mesh THIS frame → real work remains
+    }
+    return false;
+  }
+
   /** Monotonic generation; bumped by clear() so stale async mesh results can be dropped on apply. */
   private generation = 0;
 

@@ -591,18 +591,28 @@ export class VoxelWorld implements ChunkProvider {
     // state-based, no wall-clock. During an active sweep the net never fires (streaming isn't quiet); the
     // per-column predicate does the gap-free, strict swapping.
     this.forceCoverRetiring();
-    // Streaming is "quiet" when no generation is in flight AND no mesh has completed this pass
-    // (visibilityDirty is set by the remesh listener on every applied mesh — line ~221). We deliberately
-    // do NOT require the remesh QUEUE to be empty: occluder-shell / underground chunks are left in the
-    // queue indefinitely by design (RemeshPipeline.shouldMeshNow), so a non-draining queue is the normal
-    // resting state at coarse LOD. Gating on queue-empty would mean the quiescence net never fires whenever
-    // any occluded chunk is queued — which strands a retiring swap forever if its last uncovered column is
-    // occluded (the coarse multi-level zoom-in freeze). The dirty flag already re-arms the counter whenever
-    // a real mesh lands, so this only trips once nothing meshable remains.
-    const streamingQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
-      && this.pendingTiles.size === 0 && !this.visibilityDirty;
-    this.retireSettledPasses = streamingQuiet ? this.retireSettledPasses + 1 : 0;
-    this.chunkGrouper.reconcileRetiring((box) => this.retiringBoxResolved(box), this.retireSettledPasses >= 3);
+    // Streaming is "quiet" when generation is idle AND no mesh work that would produce geometry remains
+    // (nothing in-flight or dispatchable — remeshPipeline.hasPendingMeshWork) AND no mesh landed this pass.
+    // We do NOT gate on the raw remesh QUEUE being empty: occluder-shell / underground chunks are parked in
+    // it indefinitely by design (RemeshPipeline.shouldMeshNow), so queue-empty would strand a swap forever
+    // if its last uncovered column is occluded (the coarse zoom-in freeze). But we MUST wait for in-flight /
+    // dispatchable meshes: if generation finishes fast (cache hit) while the new level's meshes are still in
+    // the worker pipeline, firing here would force-drop the retiring geometry before anything is on screen —
+    // an all-chunks-blank flash. hasPendingMeshWork covers exactly that window; the dirty flag re-arms the
+    // counter on every applied mesh so this only trips once nothing meshable remains.
+    // Only evaluate quiescence while a swap is actually live — hasPendingMeshWork scans the remesh queue,
+    // and the force flag is meaningless with no retiring entries. reconcileRetiring is still called every
+    // frame (it also reveals staged chunks and cheaply no-ops when idle).
+    let forceRetire = false;
+    if (this.chunkGrouper.hasRetiring()) {
+      const streamingQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
+        && this.pendingTiles.size === 0 && !this.visibilityDirty && !this.remeshPipeline.hasPendingMeshWork();
+      this.retireSettledPasses = streamingQuiet ? this.retireSettledPasses + 1 : 0;
+      forceRetire = this.retireSettledPasses >= 3;
+    } else {
+      this.retireSettledPasses = 0;
+    }
+    this.chunkGrouper.reconcileRetiring((box) => this.retiringBoxResolved(box), forceRetire);
 
     // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');
