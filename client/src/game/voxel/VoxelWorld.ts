@@ -364,61 +364,54 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Coverage predicate for the per-chunk LOD retire-and-swap. Given a retiring (old-level) chunk's
-   * TRUE-world AABB, return true once the NEW level has RESOLVED every cell of that region — i.e. it's
-   * safe to drop the old chunk without leaving a gap. A new-level cell is resolved when it is:
-   *   - genuine empty sky (nothing will ever render there), OR
-   *   - not part of the incoming view (out of the reachable set and not pending — e.g. zoom-in
-   *     periphery that the smaller new view won't load), OR
-   *   - already meshed (has drawable geometry), OR
-   *   - mesh-COMPLETE-but-empty (the new level generated + meshed the cell and it produced nothing to
-   *     draw — a genuinely empty region, so there is no replacement coming and the old chunk is redundant).
-   * Only an in-view cell that is non-air AND whose mesh has NOT completed yet (no geometry entry) blocks
-   * disposal, so the old chunk survives exactly until its replacement is drawable OR the new level has
-   * settled that region to empty. This state-based rule is what lets us drop the 8 s time backstop: a
-   * column the new level renders resolves the frame it meshes, and a column the new level empties
-   * resolves the frame that mesh completes — neither needs a timer, and neither leaves a gap.
+   * Per-COLUMN coverage predicate for the atomic sub-chunk LOD swap. Given a NEW-level column (cx,cz),
+   * return true once it's safe to drop the old (retiring) geometry in that column and reveal the new one
+   * — STRICTLY, only when the new content is actually DRAWABLE (or genuinely empty / out of view), never
+   * merely "expected". A column is resolved when:
+   *   - it's out of the new view's XZ cube (you zoomed away → nothing to draw here), OR
+   *   - the new level has landed DRAWN geometry somewhere in the column's surface band, OR
+   *   - the whole band is settled-empty: every cell is air or has a completed-but-empty mesh (nothing to
+   *     draw — the correct strict-empty state).
+   * A band cell that is non-air with NO completed mesh yet keeps the column held (its old geometry stays
+   * as backfill — never a blank). Liveness for a column the new level never draws (occluded / deferred)
+   * is provided OUTSIDE this predicate by force-cover (VoxelWorld.forceCoverRetiring) + the quiescence
+   * net, not by relaxing the draw requirement here — that relaxation is exactly what caused blanks.
    */
-  private retiringResolved(box: THREE.Box3): boolean {
-    const span = CHUNK_WORLD_SIZE * (1 << this.currentLevel);   // true-world size of a new-level chunk
-    const cxMin = Math.floor(box.min.x / span), cxMax = Math.floor((box.max.x - 1e-3) / span);
-    const cyMin = Math.floor(box.min.y / span), cyMax = Math.floor((box.max.y - 1e-3) / span);
-    const czMin = Math.floor(box.min.z / span), czMax = Math.floor((box.max.z - 1e-3) / span);
+  private retiringColumnResolved(cx: number, cz: number): boolean {
     const pc = this.lastPlayerChunk;
     const r = this._visibilityRadius + 1;                        // +1 buffer, Chebyshev (cube view)
-    // Column (surface) based coverage. The old chunk is resolved once every COLUMN of new-level cells
-    // it overlaps is covered. A column is covered when it is out of the new XZ view, or every non-air
-    // cell in its band is settled. A cell is settled when it has drawn geometry (the surface landed),
-    // meshed to empty (nothing to draw), OR is NOT EXPECTED to load — the new level's streaming is not
-    // going to fill it (not pending and not in the BFS reachable frontier). Only a cell that is genuinely
-    // EXPECTED (pending or reachable) and not yet drawn keeps the column — and the old chunk — alive.
-    //
-    // This is the liveness fix: the old geometry-only test blocked on ANY undrawn non-air cell, so a
-    // region the new level never streams (occluded, out of frontier, abandoned after a fast sweep) held
-    // the retiring chunk forever — stuck old chunks + staged new chunks hidden under them. Gating on
-    // `expected` disposes those the moment the frontier settles, while still holding (gap-free) for cells
-    // that really are inbound. Using `pending || reachable` — not raw geometry — mirrors
-    // isMarginSourceExpected; the frontier is stable when idle, so no perpetual deadlock.
-    for (let cx = cxMin; cx <= cxMax; cx++) {
-      for (let cz = czMin; cz <= czMax; cz++) {
-        // Beyond the new view's XZ visibility cube → nothing will render here → covered.
-        if (pc && (Math.abs(cx - pc.cx) > r || Math.abs(cz - pc.cz) > r)) continue;
-        let drawable = false;        // some cell in this column has landed visible geometry
-        let expectedUndrawn = false; // some non-air cell is inbound (pending/reachable) but not drawn yet
-        for (let cy = cyMin; cy <= cyMax; cy++) {
-          if (this.isEmptyAir(cx, cy, cz)) continue;             // air cell — nothing renders here
-          const key = chunkKey(cx, cy, cz);
-          const geo = this.geometries.get(key);
-          if (geo && geo.hasGeometry()) { drawable = true; break; } // new surface has landed → covered
-          if (geo) continue;         // mesh complete but empty → nothing to draw here, does not block
-          // Not yet meshed: only blocks if the new level is actually going to bring it.
-          if (this.pendingChunks.has(key) || this.cachedReachable.has(key)) expectedUndrawn = true;
-        }
-        if (drawable || !expectedUndrawn) continue;              // covered (drawn, empty, or not inbound)
-        return false;   // an in-view column has an inbound-but-undrawn cell → keep holding
+    if (pc && (Math.abs(cx - pc.cx) > r || Math.abs(cz - pc.cz) > r)) return true;   // out of view
+    const info = this.columnInfo.get(`${cx},${cz}`);
+    if (!info) return false;   // new column's surface extent unknown yet → hold (force-cover requests it)
+    let drawable = false;      // some cell in the band has landed visible geometry
+    let undrawn = false;       // some non-air cell has no completed mesh yet → replacement not ready
+    for (let cy = info.minCy; cy <= info.maxCy; cy++) {
+      if (this.isEmptyAir(cx, cy, cz)) continue;                 // air — nothing renders here
+      const geo = this.geometries.get(chunkKey(cx, cy, cz));
+      if (geo && geo.hasGeometry()) { drawable = true; break; }  // new surface drawn → covered
+      if (geo) continue;                                         // mesh complete but empty → doesn't block
+      undrawn = true;                                            // non-air, mesh not complete → hold
+    }
+    return drawable || !undrawn;
+  }
+
+  /**
+   * Liveness for the atomic swap: force the new level to REQUEST every column that still has retiring old
+   * geometry, so occlusion culling (which skips hidden columns) can't strand a column unmeshed forever —
+   * which would hold its old geometry (invisible but leaking) indefinitely. Bounded by the retiring set,
+   * which is bounded by the view. No-op when no transition is live.
+   */
+  private forceCoverRetiring(): void {
+    const cols = this.chunkGrouper.getRetiringColumns();
+    if (cols.length === 0) return;
+    for (const { cx, cz } of cols) {
+      const info = this.columnInfo.get(`${cx},${cz}`);
+      if (!info) { this.requestTileFromServer(cx, cz); continue; }   // need columnInfo first (self-guards)
+      for (let cy = info.minCy; cy <= info.maxCy; cy++) {
+        const key = chunkKey(cx, cy, cz);
+        if (!this.chunks.has(key) && !this.pendingChunks.has(key)) this.requestChunkFromServer(cx, cy, cz);
       }
     }
-    return true;
   }
 
   setVisibilityRadius(radius: number): void {
@@ -552,21 +545,19 @@ export class VoxelWorld implements ChunkProvider {
     // Use visibility-based loading
     this.updateWithVisibility(playerChunk, this._streamPos);
 
-    // Per-chunk LOD swap: drop each retiring (old-level) chunk once the new level has resolved its
-    // world region. No-op when no level transition is in flight.
+    // Per-COLUMN atomic LOD swap: dispose each retiring column's old geometry AND reveal its new chunk
+    // the same frame the column's new content is drawable-or-empty. No-op when no transition is live.
     //
-    // Quiescence net (replaces the old wall-clock backstop): once the NEW level has gone fully quiet —
-    // nothing pending to load, nothing queued to mesh, BFS stable — for a few consecutive frames, any
-    // retiring chunk STILL unresolved will never be covered (its region is out of the new view, or the
-    // new level generated nothing there), so force-drop it. This is state-based (keyed on streaming
-    // quiescence), not a timer: during an active zoom sweep it never fires (streaming isn't quiet), so
-    // the per-region predicate does the gap-free swapping; the net only sweeps orphans left when the
-    // sweep stops — the "stuck chunks after scrolling too fast" case. `visibilityDirty` is re-set by
-    // every mesh result, so in-flight meshes keep the counter from advancing until the level truly rests.
+    // Force-cover: make the new level request every still-retiring column so occlusion can't strand one
+    // unmeshed (which would hold its old geometry forever). Quiescence net: once the new level has gone
+    // fully quiet for a few frames, force-resolve any column still held (deferred-mesh orphan). Both are
+    // state-based, no wall-clock. During an active sweep the net never fires (streaming isn't quiet); the
+    // per-column predicate does the gap-free, strict swapping.
+    this.forceCoverRetiring();
     const streamingQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
       && this.pendingTiles.size === 0 && this.remeshPipeline.size === 0 && !this.visibilityDirty;
     this.retireSettledPasses = streamingQuiet ? this.retireSettledPasses + 1 : 0;
-    this.chunkGrouper.reconcileRetiring((box) => this.retiringResolved(box), this.retireSettledPasses >= 3);
+    this.chunkGrouper.reconcileRetiring((cx, cz) => this.retiringColumnResolved(cx, cz), this.retireSettledPasses >= 3);
 
     // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');
