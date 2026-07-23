@@ -365,9 +365,14 @@ export class VoxelWorld implements ChunkProvider {
    *   - genuine empty sky (nothing will ever render there), OR
    *   - not part of the incoming view (out of the reachable set and not pending — e.g. zoom-in
    *     periphery that the smaller new view won't load), OR
-   *   - already meshed (phase past Loaded — has geometry, or meshed-empty).
-   * Only an in-view, expected-but-not-yet-meshed cell blocks disposal, so the old chunk survives
-   * exactly until its replacement is drawable.
+   *   - already meshed (has drawable geometry), OR
+   *   - mesh-COMPLETE-but-empty (the new level generated + meshed the cell and it produced nothing to
+   *     draw — a genuinely empty region, so there is no replacement coming and the old chunk is redundant).
+   * Only an in-view cell that is non-air AND whose mesh has NOT completed yet (no geometry entry) blocks
+   * disposal, so the old chunk survives exactly until its replacement is drawable OR the new level has
+   * settled that region to empty. This state-based rule is what lets us drop the 8 s time backstop: a
+   * column the new level renders resolves the frame it meshes, and a column the new level empties
+   * resolves the frame that mesh completes — neither needs a timer, and neither leaves a gap.
    */
   private retiringResolved(box: THREE.Box3): boolean {
     const span = CHUNK_WORLD_SIZE * (1 << this.currentLevel);   // true-world size of a new-level chunk
@@ -377,26 +382,28 @@ export class VoxelWorld implements ChunkProvider {
     const pc = this.lastPlayerChunk;
     const r = this._visibilityRadius + 1;                        // +1 buffer, Chebyshev (cube view)
     // Column (surface) based coverage. The old chunk is resolved once every COLUMN of new-level cells
-    // it overlaps is covered — either it's out of the new XZ view, its whole vertical band is air, or
-    // the new level has actually MESHED geometry somewhere in that band (the surface landed). We test
-    // real geometry, NOT the reachable/pending sets — those grow a ring per streamed chunk, so during
-    // active streaming most in-view cells look "won't load" and would drop the old chunk before the
-    // new one drew anything (the blank flash). A meshed-empty (interior) cell has no geometry, so a
-    // column that's all underground holds until the backstop — invisible, so harmless.
+    // it overlaps is covered. A column is covered when it is out of the new XZ view, or every non-air
+    // cell in its band has FINISHED meshing — either it drew geometry (the surface landed) or it meshed
+    // to empty (nothing there). We test real mesh state via the geometries map (an entry exists once the
+    // mesh result is applied, empty or not), NOT the reachable/pending sets — those grow a ring per
+    // streamed chunk, so during active streaming most in-view cells look "won't load" and would drop the
+    // old chunk before the new one drew anything (the blank flash). Only a cell still awaiting its mesh
+    // (no geometry entry yet) keeps the column — and the old chunk — alive.
     for (let cx = cxMin; cx <= cxMax; cx++) {
       for (let cz = czMin; cz <= czMax; cz++) {
         // Beyond the new view's XZ visibility cube → nothing will render here → covered.
         if (pc && (Math.abs(cx - pc.cx) > r || Math.abs(cz - pc.cz) > r)) continue;
-        let meshed = false;
-        let allAir = true;
+        let drawable = false;    // some cell in this column has landed visible geometry
+        let pending = false;     // some non-air cell has not finished meshing yet
         for (let cy = cyMin; cy <= cyMax; cy++) {
           if (this.isEmptyAir(cx, cy, cz)) continue;             // air cell — nothing renders here
-          allAir = false;
           const geo = this.geometries.get(chunkKey(cx, cy, cz));
-          if (geo && geo.hasGeometry()) { meshed = true; break; } // new surface has landed in this column
+          if (geo && geo.hasGeometry()) { drawable = true; break; } // new surface has landed → covered
+          if (!geo) pending = true;    // non-air, mesh not complete → replacement still coming
+          // geo && !hasGeometry() → mesh complete but empty → nothing to draw here, does not block.
         }
-        if (meshed || allAir) continue;                          // column covered
-        return false;   // in-view column with non-air cells, none meshed yet → keep holding
+        if (drawable || !pending) continue;                      // column covered (drawn, or fully settled)
+        return false;   // an in-view column still has an unmeshed cell → keep holding
       }
     }
     return true;

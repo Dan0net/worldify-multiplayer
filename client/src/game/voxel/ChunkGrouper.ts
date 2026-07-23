@@ -41,13 +41,6 @@ const REBUILD_BUDGET_MS = 2;
 /** Hard ceiling on group rebuilds per frame — a safety cap above the time budget. */
 const MAX_REBUILDS_PER_FRAME = 16;
 
-/**
- * Safety backstop (ms) for the LOD retiring holder: if the new level never resolves some retiring
- * chunk's region (e.g. it panned out of view before loading), force-dispose the whole retiring set
- * after this long so it can't leak. NOT the normal swap trigger — that's per-chunk coverage.
- */
-const RETIRE_BACKSTOP_MS = 8000;
-
 // ---- Interfaces ----
 
 interface ChunkSlot {
@@ -188,7 +181,6 @@ export class ChunkGrouper {
   private retiringHolders: Array<{
     root: THREE.Group;
     entries: Array<{ meshes: THREE.Mesh[]; box: THREE.Box3 }>;
-    since: number;
   }> = [];
 
   /** Keys of new chunks currently staged hidden (see ChunkSlot.staged). Iterated by reconcileRetiring
@@ -262,7 +254,7 @@ export class ChunkGrouper {
     }
     if (entries.length > 0) {
       this.scene.add(holder);
-      this.retiringHolders.push({ root: holder, entries, since: performance.now() });
+      this.retiringHolders.push({ root: holder, entries });
     }
 
     // Swap out the current live root (old or intermediate) and install a fresh one at the new scale.
@@ -286,21 +278,22 @@ export class ChunkGrouper {
   /**
    * Per-frame: dispose each retiring chunk whose world region the new level has RESOLVED (predicate
    * true). This is the per-chunk swap — as each new chunk becomes drawable, the old chunk(s) it covers
-   * disappear, so the view is always fully covered. Removes the holder once empty; a backstop timeout
-   * force-clears it so a region the new level never loads can't leak. No-op when no transition is live.
+   * disappear, so the view is always fully covered. Removes the holder once empty. No time backstop: the
+   * `isResolved` predicate is purely STATE-based (region is drawn, genuinely empty, or out of view), so
+   * a region resolves the moment the new level finishes there — and an old chunk over a region the new
+   * level never fills stays put (showing real content) rather than being force-dropped into a gap.
+   * No-op when no transition is live.
    */
   reconcileRetiring(isResolved: (box: THREE.Box3) => boolean): void {
     if (this.retiringHolders.length === 0 && this.stagedKeys.size === 0) return;
 
     // Step 1 — dispose retiring (old) chunks whose region the new level has resolved.
-    const now = performance.now();
     for (let h = this.retiringHolders.length - 1; h >= 0; h--) {
       const holder = this.retiringHolders[h];
-      const expired = now - holder.since > RETIRE_BACKSTOP_MS;
       let write = 0;
       for (let i = 0; i < holder.entries.length; i++) {
         const entry = holder.entries[i];
-        if (expired || isResolved(entry.box)) {
+        if (isResolved(entry.box)) {
           for (const m of entry.meshes) { holder.root.remove(m); m.geometry.dispose(); }
         } else {
           holder.entries[write++] = entry;
