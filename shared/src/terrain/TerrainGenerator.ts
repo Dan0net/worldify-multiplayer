@@ -2461,10 +2461,14 @@ export class TerrainGenerator implements HeightSampler {
    * @param worldZ - World Z coordinate in meters
    * @returns Surface height (voxels) and material ID
    */
-  sampleSurface(worldX: number, worldZ: number): { height: number; material: number } {
+  sampleSurface(worldX: number, worldZ: number, detail = true): { height: number; material: number } {
     const tlSurf = this.config.terrainLayer;
-    const isPath = tlSurf.enabled && this.isOnPathway(worldX, worldZ);
-    const isRiver = tlSurf.riversEnabled && this.isOnRiver(worldX, worldZ);
+    // Coarse LOD (detail=false) mirrors generateChunk: pathways, rivers and their dips/beds/borders are
+    // DETAIL furniture (gated off at coarse zoom), so the reported surface must ignore them too —
+    // otherwise the coarse tile height/material disagrees with the coarse chunk (columnInfo + minimap
+    // would track a carved channel the coarse land never cuts). At detail (level 0) this is unchanged.
+    const isPath = detail && tlSurf.enabled && this.isOnPathway(worldX, worldZ);
+    const isRiver = detail && tlSurf.riversEnabled && this.isOnRiver(worldX, worldZ);
     // Reported surface height must match generateChunk: landform paths/rivers sit on the smooth macro
     // height so the load cap / map track the carved channel, not the (absent) detail bumps.
     const originalHeight = (tlSurf.landformEnabled && (isPath || isRiver))
@@ -2492,7 +2496,7 @@ export class TerrainGenerator implements HeightSampler {
       material = waterConfig.waterMaterial;   // rivers read as water on the 2D map
     } else if (isPath) {
       material = this.getPathwayMaterial(worldX, worldZ);
-    } else if (tlSurf.enabled && this.isOnPathwayBorder(worldX, worldZ)) {
+    } else if (detail && tlSurf.enabled && this.isOnPathwayBorder(worldX, worldZ)) {
       material = this.config.pathwayConfig.borderMaterial;
     } else if (tlSurf.landformEnabled) {
       // Elevation-band material; submerged columns read as water on the 2D map. Reported height stays

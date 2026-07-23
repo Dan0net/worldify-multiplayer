@@ -72,6 +72,7 @@ export class LocalTerrainSource {
         const { height, material } = this.gen.sampleSurface(
           worldX0 + lx * vs,
           worldZ0 + lz * vs,
+          level === 0,   // coarse LOD skips path/river furniture, matching generateChunk
         );
         const i = tilePixelIndex(lx, lz);
         tile.heights[i] = height;
