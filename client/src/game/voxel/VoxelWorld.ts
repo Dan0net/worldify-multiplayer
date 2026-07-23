@@ -38,7 +38,7 @@ import {
   chunkHasEmitter,
   chunkHasBlockLight,
 } from '@worldify/shared';
-import { Chunk } from './Chunk.js';
+import { Chunk, ChunkPhase } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
@@ -291,10 +291,6 @@ export class VoxelWorld implements ChunkProvider {
   /** Use a Chebyshev (cube) visibility volume instead of the L1 diamond — set in Explore so every
    *  level always has a full shell of chunks to swap in/out on a level change. */
   private cubeVisibility = false;
-  /** The previous level's meshes, held (frozen) in the scene while the new level streams (hold-then-
-   *  swap). Disposed once the new level covers the view or a timeout elapses. */
-  private frozenRoot: THREE.Group | null = null;
-  private frozenSince = 0;
   /** Scratch stream centre: horizontal from the caller, vertical pinned to the surface in Explore. */
   private _streamPos = new THREE.Vector3();
 
@@ -309,21 +305,22 @@ export class VoxelWorld implements ChunkProvider {
   }
 
   /**
-   * Change the Explore LOD zoom level (hold-then-swap). Freezes the current level's meshes in place,
-   * installs a fresh terrain root scaled by 2^level, and clears the live chunk state so the world
-   * re-streams at the new level (all requests now carry it). The frozen previous level stays visible
-   * until the new one covers the view (disposed in update). `center` is the level-LOCAL stream centre.
+   * Change the Explore LOD zoom level (per-chunk hold-then-swap). Retires the current level's visible
+   * chunks into the grouper's retiring holder (kept fully visible at the old scale), installs a fresh
+   * terrain root scaled by 2^level, and clears the live chunk state so the world re-streams at the new
+   * level (all requests now carry it). The retiring chunks are disposed INDIVIDUALLY as the new level
+   * resolves their world regions (reconcileRetiring in update) — never a blank frame. `center` is the
+   * level-LOCAL stream centre.
    */
   setExploreLevel(level: number, center?: THREE.Vector3): void {
     if (level === this.currentLevel) return;
-    // Drop any still-held previous freeze before making a new one (fast multi-level sweep).
-    if (this.frozenRoot) { this.chunkGrouper.disposeDetachedRoot(this.frozenRoot); this.frozenRoot = null; }
-    this.frozenRoot = this.chunkGrouper.freezeAndReset(1 << level);
-    this.frozenSince = (typeof performance !== 'undefined' ? performance.now() : 0);
+    // Clone the currently-visible chunks into the retiring holder (old scale) BEFORE disposing the
+    // per-chunk geometries below — the holder owns independent clones, so the disposal is safe.
+    this.chunkGrouper.retireAndReset(1 << level, 1 << this.currentLevel);
     this.currentLevel = level;
 
-    // Clear live chunk state WITHOUT disposing the grouper (freezeAndReset already reset it, keeping the
-    // frozen merged meshes alive). Mirrors dispose(true)'s clears minus the grouper teardown.
+    // Clear live chunk state. The grouper's live root was already reset by retireAndReset; the retiring
+    // holder keeps the old level visible until its per-chunk clones are swapped out.
     for (const geo of this.geometries.values()) geo.dispose();
     this.geometries.clear();
     this.chunks.clear();
@@ -341,16 +338,35 @@ export class VoxelWorld implements ChunkProvider {
     if (center) this.update(center);
   }
 
-  /** Dispose the held previous-level meshes once the new level covers the view (or after a timeout). */
-  private maybeDisposeFrozen(): void {
-    if (!this.frozenRoot) return;
-    const now = (typeof performance !== 'undefined' ? performance.now() : 0);
-    const covered = this.geometries.size >= 8;
-    const timedOut = now - this.frozenSince > 4000;
-    if (covered || timedOut) {
-      this.chunkGrouper.disposeDetachedRoot(this.frozenRoot);
-      this.frozenRoot = null;
+  /**
+   * Coverage predicate for the per-chunk LOD retire-and-swap. Given a retiring (old-level) chunk's
+   * TRUE-world AABB, return true once the NEW level has RESOLVED every cell of that region — i.e. it's
+   * safe to drop the old chunk without leaving a gap. A new-level cell is resolved when it is:
+   *   - genuine empty sky (nothing will ever render there), OR
+   *   - not part of the incoming view (out of the reachable set and not pending — e.g. zoom-in
+   *     periphery that the smaller new view won't load), OR
+   *   - already meshed (phase past Loaded — has geometry, or meshed-empty).
+   * Only an in-view, expected-but-not-yet-meshed cell blocks disposal, so the old chunk survives
+   * exactly until its replacement is drawable.
+   */
+  private retiringResolved(box: THREE.Box3): boolean {
+    const span = CHUNK_WORLD_SIZE * (1 << this.currentLevel);   // true-world size of a new-level chunk
+    const cxMin = Math.floor(box.min.x / span), cxMax = Math.floor((box.max.x - 1e-3) / span);
+    const cyMin = Math.floor(box.min.y / span), cyMax = Math.floor((box.max.y - 1e-3) / span);
+    const czMin = Math.floor(box.min.z / span), czMax = Math.floor((box.max.z - 1e-3) / span);
+    for (let cx = cxMin; cx <= cxMax; cx++) {
+      for (let cy = cyMin; cy <= cyMax; cy++) {
+        for (let cz = czMin; cz <= czMax; cz++) {
+          if (this.isEmptyAir(cx, cy, cz)) continue;              // air — nothing renders here
+          const key = chunkKey(cx, cy, cz);
+          if (!this.cachedReachable.has(key) && !this.pendingChunks.has(key)) continue; // not incoming
+          const chunk = this.chunks.get(key);
+          if (chunk && chunk.phase !== ChunkPhase.Loaded) continue; // meshed (complete or empty)
+          return false;   // in view, expected, not yet meshed → keep holding this old chunk
+        }
+      }
     }
+    return true;
   }
 
   setVisibilityRadius(radius: number): void {
@@ -484,8 +500,9 @@ export class VoxelWorld implements ChunkProvider {
     // Use visibility-based loading
     this.updateWithVisibility(playerChunk, this._streamPos);
 
-    // Release the held previous LOD level once the new one has streamed in (hold-then-swap).
-    this.maybeDisposeFrozen();
+    // Per-chunk LOD swap: drop each retiring (old-level) chunk once the new level has resolved its
+    // world region. No-op when no level transition is in flight.
+    this.chunkGrouper.reconcileRetiring((box) => this.retiringResolved(box));
 
     // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');

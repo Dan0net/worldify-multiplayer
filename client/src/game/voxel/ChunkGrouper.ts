@@ -41,6 +41,13 @@ const REBUILD_BUDGET_MS = 2;
 /** Hard ceiling on group rebuilds per frame — a safety cap above the time budget. */
 const MAX_REBUILDS_PER_FRAME = 16;
 
+/**
+ * Safety backstop (ms) for the LOD retiring holder: if the new level never resolves some retiring
+ * chunk's region (e.g. it panned out of view before loading), force-dispose the whole retiring set
+ * after this long so it can't leak. NOT the normal swap trigger — that's per-chunk coverage.
+ */
+const RETIRE_BACKSTOP_MS = 8000;
+
 // ---- Interfaces ----
 
 interface ChunkSlot {
@@ -160,6 +167,17 @@ export class ChunkGrouper {
   private slots = new Map<string, ChunkSlot>();
   private groups = new Map<string, ChunkGroup>();
 
+  /**
+   * LOD transition state. On a level change the CURRENTLY VISIBLE chunks are cloned as individual
+   * per-chunk meshes into `retiringRoot` (scaled to the OLD level) so the previous level stays fully
+   * visible in true-world space, and each is disposed independently once the new level resolves its
+   * world region (reconcileRetiring). Per-CHUNK — not the whole level — so the view is never blank
+   * and a fine↔coarse swap happens incrementally. Null when no transition is in flight.
+   */
+  private retiringRoot: THREE.Group | null = null;
+  private retiring: { meshes: THREE.Mesh[]; box: THREE.Box3 }[] = [];
+  private retiringSince = 0;
+
   /** Number of groups with suppressionPending === true (O(1) check). */
   private pendingSuppressionCount = 0;
 
@@ -183,33 +201,108 @@ export class ChunkGrouper {
   }
 
   /**
-   * Hold-then-swap primitive for an LOD level change: detach the CURRENT root (with its merged group
-   * meshes) and leave it in the scene, frozen at its old scale, so the previous level stays visible
-   * while the new one streams. Transient standalone meshes share geometry with the per-chunk buffers
-   * the caller is about to dispose, so they're removed (not frozen). A fresh empty root is installed at
-   * `newScale` and all internal tracking is cleared WITHOUT disposing the frozen merged meshes (they
-   * own independent merged geometry). Returns the frozen root; pass it to disposeDetachedRoot once the
-   * new level covers the view.
+   * LOD level change with PER-CHUNK retirement (hold-then-swap, incrementally). Clone the currently
+   * VISIBLE chunks' geometry into a retiring holder Group scaled to the OLD level, so the previous
+   * level stays fully visible in true-world space; each clone is disposed independently by
+   * reconcileRetiring() once the new level resolves that chunk's world region. Clones are independent
+   * buffers, so the caller is free to dispose the originals immediately. Then the current live root
+   * (its merged group copies + standalones) is disposed and a fresh empty root is installed at
+   * `newScale`.
+   *
+   * If a retirement is ALREADY in flight (a fast multi-level sweep), the existing retiring set — the
+   * last COMPLETE level — is KEPT as-is; only the current (partial, intermediate) live root is
+   * swapped out. So the level you started the sweep from holds until the final level covers it.
    */
-  freezeAndReset(newScale: number): THREE.Group {
-    for (const slot of this.slots.values()) this.removeStandalone(slot);
-    const frozen = this.root;
+  retireAndReset(newScale: number, oldScale: number): void {
+    if (!this.retiringRoot) {
+      const holder = new THREE.Group();
+      holder.scale.setScalar(oldScale);
+      this.scene.add(holder);
+      for (const slot of this.slots.values()) {
+        if (!slot.visible) continue;
+        const meshes: THREE.Mesh[] = [];
+        for (let layer = 0; layer < LAYER_COUNT; layer++) {
+          const geo = slot.geometries[layer];
+          if (!geo || !geo.index || geo.index.count === 0) continue;
+          const mesh = createLayerMesh(geo.clone(), layer);
+          mesh.frustumCulled = true;
+          mesh.castShadow = false;   // transient during the swap — skip shadow-caster cost
+          mesh.position.set(slot.wx, slot.wy, slot.wz);
+          holder.add(mesh);
+          meshes.push(mesh);
+        }
+        if (meshes.length === 0) continue;
+        // Core chunk AABB in TRUE world (level-local origin × oldScale). Used by reconcileRetiring to
+        // map this chunk onto the new level's grid — no MESH_OVERHANG (that's only for frustum culling).
+        const box = new THREE.Box3(
+          new THREE.Vector3(slot.wx * oldScale, slot.wy * oldScale, slot.wz * oldScale),
+          new THREE.Vector3(
+            (slot.wx + CHUNK_WORLD_SIZE) * oldScale,
+            (slot.wy + CHUNK_WORLD_SIZE) * oldScale,
+            (slot.wz + CHUNK_WORLD_SIZE) * oldScale,
+          ),
+        );
+        this.retiring.push({ meshes, box });
+      }
+      if (this.retiring.length > 0) {
+        this.retiringRoot = holder;
+        this.retiringSince = performance.now();
+      } else {
+        this.scene.remove(holder);   // nothing visible to retire (e.g. first entry)
+      }
+    }
+
+    // Swap out the current live root (old or intermediate) and install a fresh one at the new scale.
+    this.disposeLiveRoot();
     this.root = new THREE.Group();
     this.root.scale.setScalar(newScale);
     this.scene.add(this.root);
     this.slots.clear();
     this.groups.clear();
     this.pendingSuppressionCount = 0;
-    return frozen;
   }
 
-  /** Dispose a root previously detached by freezeAndReset (its merged geometries + remove from scene). */
-  disposeDetachedRoot(group: THREE.Group): void {
-    group.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.geometry) m.geometry.dispose();
-    });
-    this.scene.remove(group);
+  /** Dispose the current live root's meshes (merged group copies + standalones) and detach it. */
+  private disposeLiveRoot(): void {
+    for (const slot of this.slots.values()) this.removeStandalone(slot);
+    for (const gk of [...this.groups.keys()]) this.disposeGroup(gk);
+    this.scene.remove(this.root);
+  }
+
+  /**
+   * Per-frame: dispose each retiring chunk whose world region the new level has RESOLVED (predicate
+   * true). This is the per-chunk swap — as each new chunk becomes drawable, the old chunk(s) it covers
+   * disappear, so the view is always fully covered. Removes the holder once empty; a backstop timeout
+   * force-clears it so a region the new level never loads can't leak. No-op when no transition is live.
+   */
+  reconcileRetiring(isResolved: (box: THREE.Box3) => boolean): void {
+    if (!this.retiringRoot) return;
+    const expired = performance.now() - this.retiringSince > RETIRE_BACKSTOP_MS;
+    let write = 0;
+    for (let i = 0; i < this.retiring.length; i++) {
+      const entry = this.retiring[i];
+      if (expired || isResolved(entry.box)) {
+        for (const m of entry.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
+      } else {
+        this.retiring[write++] = entry;
+      }
+    }
+    this.retiring.length = write;
+    if (this.retiring.length === 0) {
+      this.scene.remove(this.retiringRoot);
+      this.retiringRoot = null;
+    }
+  }
+
+  /** Dispose the retiring holder and all its clones immediately (world switch / teardown). */
+  private disposeRetiring(): void {
+    if (!this.retiringRoot) return;
+    for (const entry of this.retiring) {
+      for (const m of entry.meshes) m.geometry.dispose();
+    }
+    this.retiring.length = 0;
+    this.scene.remove(this.retiringRoot);
+    this.retiringRoot = null;
   }
 
   /**
@@ -694,8 +787,10 @@ export class ChunkGrouper {
     }
     this.groups.clear();
     this.slots.clear();
+    // Drop any in-flight LOD retirement (its clones) too, so a world switch leaves nothing behind.
+    this.disposeRetiring();
     // Reset the root scale so a reused grouper (clearAndReload keeps the same instance) starts at
-    // level 0; any detached/frozen roots are the caller's to dispose via disposeDetachedRoot.
+    // level 0.
     this.root.scale.setScalar(1);
   }
 
