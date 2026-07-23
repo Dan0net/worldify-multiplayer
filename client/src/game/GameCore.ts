@@ -20,7 +20,7 @@ import { initFirstPersonArm, updateFirstPersonArm, startFirstPersonArmExit, tick
 import {
   initExploreCamera, updateExploreCamera, getExploreTarget,
   advanceExploreTargetGlide, isExploreGliding, isExploreMarkerInteracting,
-  getExploreZoomLevel, getExploreZoomScale,
+  getExploreZoomLevel, getExploreZoomScale, resetCameraClipPlanes,
 } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
@@ -736,6 +736,9 @@ export class GameCore {
       // level-0 chunks stream in under the camera-intro tween.
       this.voxelIntegration?.setCubeVisibility(false);
       this.voxelIntegration?.setExploreLevel(0);
+      // Restore the base near/far clip planes (explore may have widened them for a coarse LOD).
+      const playCam = getCamera();
+      if (playCam) resetCameraClipPlanes(playCam);
       const markerSpawn = consumeMarkerSpawn();
       if (markerSpawn) {
         this.playerManager.setSpawnPosition(markerSpawn);

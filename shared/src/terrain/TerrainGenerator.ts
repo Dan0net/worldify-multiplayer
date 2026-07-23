@@ -2706,8 +2706,11 @@ export class TerrainGenerator implements HeightSampler {
             material = this.getMaterialAtDepth(depthFromSurface);
 
             // Landform surface skin: sand/snow/gravel by elevation on the top few voxels (rock strata
-            // underneath stay from getMaterialAtDepth). Short-circuits when the layer is off.
-            if (tl.landformEnabled && depthFromSurface <= Math.max(1, LANDFORM_SKIN_DEPTH * this.landSizeScale())) {
+            // underneath stay from getMaterialAtDepth). Short-circuits when the layer is off. The skin
+            // must be at least one coarse voxel (`step`) deep so a zoomed-out (LOD) chunk's top voxel —
+            // whose depthFromSurface can be up to `step` world-voxels — still reads as surface material
+            // (grass/sand/snow) instead of the deep rock strata. At level 0 (step 1) this is unchanged.
+            if (tl.landformEnabled && depthFromSurface <= Math.max(step, LANDFORM_SKIN_DEPTH * this.landSizeScale())) {
               material = this.landformSurfaceMaterial(terrainHeight, worldX, worldZ);
             }
 

@@ -127,6 +127,22 @@ export function getExploreTarget(): THREE.Vector3 {
   return target;
 }
 
+// Base near/far (must match createCamera). At coarse LOD the whole scene is scaled by 2^level, so the
+// camera sits 2^level further out and the terrain extends 2^level further — the fixed far plane would
+// clip it. Scale near+far by the zoom so the view volume grows with the world; keeping the near:far
+// RATIO constant preserves depth-buffer precision (no z-fighting) at every level.
+const BASE_NEAR = 0.1;
+const BASE_FAR = 1000;
+
+/** Reset the camera near/far planes to their base (play / full detail). */
+export function resetCameraClipPlanes(camera: THREE.PerspectiveCamera): void {
+  if (camera.near !== BASE_NEAR || camera.far !== BASE_FAR) {
+    camera.near = BASE_NEAR;
+    camera.far = BASE_FAR;
+    camera.updateProjectionMatrix();
+  }
+}
+
 /** Position + orient the camera from the current orbit state. Call each frame. */
 export function updateExploreCamera(camera: THREE.PerspectiveCamera): void {
   _euler.set(pitch, yaw, 0, 'YXZ');
@@ -134,6 +150,15 @@ export function updateExploreCamera(camera: THREE.PerspectiveCamera): void {
   camera.position.copy(target).addScaledVector(_fwd, -distance);
   camera.rotation.order = 'YXZ';
   camera.rotation.set(pitch, yaw, 0);
+
+  // Grow the clip planes with the LOD zoom so coarse (far, large) terrain isn't clipped.
+  const scale = 1 << getExploreZoomLevel();
+  const near = BASE_NEAR * scale, far = BASE_FAR * scale;
+  if (camera.near !== near || camera.far !== far) {
+    camera.near = near;
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  }
 }
 
 /** Rotate the orbit (right-drag / two-finger). dx/dy in pixels. */
