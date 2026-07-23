@@ -39,7 +39,12 @@ export interface PlayerPose { x: number; y: number; z: number; yaw: number; pitc
 const DB_NAME = 'worldify-worlds';
 // v3: voxel word widened 16-bit → 32-bit. Old Uint16Array chunk records are
 // migrated lazily on load (see loadChunk) — no onupgradeneeded rewrite needed.
-const DB_VERSION = 4;
+// v5: LOD persistence keys are now level-namespaced (columnStorageKey / VoxelWorld.persistKey). Pre-v5
+// builds could save a COARSE column's heights under the level-0 (tx,tz) key, which then loaded as
+// wrong-height / terraced terrain at level 0. The columns store is wiped once on upgrade to drop those
+// aliased records (heights regenerate on next visit). The chunks store holds player edits and was always
+// level-0-only, so it is left intact.
+const DB_VERSION = 5;
 const STORE_WORLDS = 'worlds';   // keyPath 'id' → WorldMeta
 const STORE_CHUNKS = 'chunks';   // key `${worldId}:${chunkKey}` → Uint32Array
 const STORE_SNAPS = 'snaps';     // key worldId → {x,y,z}[]
@@ -57,13 +62,16 @@ function openDB(): Promise<IDBDatabase> {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onerror = () => reject(req.error);
     req.onsuccess = () => resolve(req.result);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE_WORLDS)) db.createObjectStore(STORE_WORLDS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(STORE_CHUNKS)) db.createObjectStore(STORE_CHUNKS);
       if (!db.objectStoreNames.contains(STORE_SNAPS)) db.createObjectStore(STORE_SNAPS);
       if (!db.objectStoreNames.contains(STORE_UNDO)) db.createObjectStore(STORE_UNDO);
       if (!db.objectStoreNames.contains(STORE_COLUMNS)) db.createObjectStore(STORE_COLUMNS);
+      // v5: wipe pre-v5 column records saved under un-namespaced (tx,tz) keys, which could alias a
+      // coarse tile onto level 0 (terraced/wrong-height terrain). Heights regenerate on next visit.
+      else if (event.oldVersion < 5) req.transaction!.objectStore(STORE_COLUMNS).clear();
     };
   });
   return dbPromise;
@@ -327,6 +335,14 @@ export function saveChunk(key: string, data: Uint32Array): void {
 
 export interface SavedColumn { heights: Int16Array; materials: Uint8Array; }
 
+/** Per-world storage key for a column's heights, namespaced by LOD level. Level 0 keeps the bare
+ *  `tx,tz` key (back-compat with worlds saved before LOD persistence); coarse levels are prefixed
+ *  `L:tx,tz` so a coarse tile — which covers a 2^L-larger world region than the level-0 tile with the
+ *  same (tx,tz) — never aliases level 0. Mirrors VoxelWorld.persistKey for chunks. */
+export function columnStorageKey(tx: number, tz: number, level = 0): string {
+  return level === 0 ? `${tx},${tz}` : `${level}:${tx},${tz}`;
+}
+
 let persistedColumnKeys = new Set<string>();
 
 async function preloadColumnKeys(worldId: string): Promise<void> {
@@ -344,21 +360,21 @@ async function preloadColumnKeys(worldId: string): Promise<void> {
   });
 }
 
-/** Sync: are this column's heights already persisted for the active world? */
-export function hasColumn(tx: number, tz: number): boolean {
-  return persistedColumnKeys.has(`${tx},${tz}`);
+/** Sync: are this column's heights already persisted for the active world (at this LOD level)? */
+export function hasColumn(tx: number, tz: number, level = 0): boolean {
+  return persistedColumnKeys.has(columnStorageKey(tx, tz, level));
 }
 
-export async function loadColumn(tx: number, tz: number): Promise<SavedColumn | null> {
+export async function loadColumn(tx: number, tz: number, level = 0): Promise<SavedColumn | null> {
   if (!activeWorld) return null;
-  const rec = await idbGet<SavedColumn>(STORE_COLUMNS, `${activeWorld.id}:${tx},${tz}`);
+  const rec = await idbGet<SavedColumn>(STORE_COLUMNS, `${activeWorld.id}:${columnStorageKey(tx, tz, level)}`);
   return rec ?? null;
 }
 
-/** Fire-and-forget save of a column's stamp-corrected heights/materials. */
-export function saveColumn(tx: number, tz: number, heights: Int16Array, materials: Uint8Array): void {
+/** Fire-and-forget save of a column's stamp-corrected heights/materials (at this LOD level). */
+export function saveColumn(tx: number, tz: number, heights: Int16Array, materials: Uint8Array, level = 0): void {
   if (!activeWorld) return;
-  const ck = `${tx},${tz}`;
+  const ck = columnStorageKey(tx, tz, level);
   persistedColumnKeys.add(ck);
   idbPut(STORE_COLUMNS, { heights: new Int16Array(heights), materials: new Uint8Array(materials) } as SavedColumn,
     `${activeWorld.id}:${ck}`).catch(() => { /* non-critical */ });

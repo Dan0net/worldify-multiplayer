@@ -739,32 +739,29 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
+      const level = this.currentLevel;
       const onColumn = this.guardEpoch((data: SurfaceColumnResponse) => this.handleLocalColumn(data));
-      // Coarse LOD levels bypass persistence (keys collide with level 0; cheap to regenerate).
-      if (this.currentLevel > 0) {
-        this.getLocalPool().requestColumn(tx, tz, onColumn, this.currentLevel);
-        return;
-      }
-      // Existing world: heights are persisted, so seed columnInfo from IDB and skip the full worker
-      // generateColumn (which would carve caves + stamps only to be discarded). The saved surface
-      // chunks then stream in via the normal per-chunk load path (loadLocalChunk prefers saved).
-      if (hasColumn(tx, tz)) {
+      // Persisted (this LOD level): seed columnInfo from IDB and skip the full worker generateColumn
+      // (which would carve caves + stamps only to be discarded). The saved surface chunks then stream in
+      // via the normal per-chunk load path (loadLocalChunk prefers saved). Every level persists under a
+      // level-namespaced key, so this path is uniform for all levels (no coarse special-case).
+      if (hasColumn(tx, tz, level)) {
         const epoch = this.genEpoch;
-        loadColumn(tx, tz).then((col) => {
+        loadColumn(tx, tz, level).then((col) => {
           if (epoch !== this.genEpoch) return;   // level/world changed while loading → drop
           if (col) {
             this.pendingColumns.delete(columnKey);
             this.pendingColumnTimes.delete(columnKey);
             this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
           } else {
-            this.getLocalPool().requestColumn(tx, tz, onColumn);
+            this.getLocalPool().requestColumn(tx, tz, onColumn, level);
           }
-        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestColumn(tx, tz, onColumn); });
-        console.log(`[VoxelWorld] Seeded initial surface column from saved heights (${tx}, ${tz})`);
+        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestColumn(tx, tz, onColumn, level); });
+        console.log(`[VoxelWorld] Seeded initial surface column from saved heights (${tx}, ${tz}) L${level}`);
         return;
       }
-      this.getLocalPool().requestColumn(tx, tz, onColumn);
-      console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
+      this.getLocalPool().requestColumn(tx, tz, onColumn, level);
+      console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz}) L${level}`);
       return;
     }
 
@@ -1006,27 +1003,32 @@ export class VoxelWorld implements ChunkProvider {
     return this.localPool;
   }
 
+  /** Per-world IndexedDB key for a chunk/column at the current LOD level. Level 0 keeps the bare key
+   *  (back-compat with worlds saved before LOD persistence); coarse levels are prefixed `level:` so a
+   *  coarse chunk — whose level-LOCAL (cx,cy,cz) covers a 2^L-larger world region than the level-0
+   *  chunk with the same coords — never aliases level 0. This is what lets EVERY level persist to IDB
+   *  through one uniform path (no per-level branching). Mirrors WorldManager.columnStorageKey. */
+  private persistKey(base: string, level: number): string {
+    return level === 0 ? base : `${level}:${base}`;
+  }
+
   /**
-   * Local chunk source with persistence: use the saved chunk if this world has
-   * one, otherwise generate it off-thread and save it. Every explored chunk is
-   * materialized in IndexedDB so the world reloads identically.
+   * Local chunk source with persistence: use the saved chunk if this world has one (at this LOD level),
+   * otherwise generate it off-thread and save it. Every explored chunk — at every level — is
+   * materialized in IndexedDB (level-namespaced key) so revisiting reloads it instead of regenerating.
    */
   private loadLocalChunk(cx: number, cy: number, cz: number, key: string): void {
-    // Coarse LOD levels are cheap to regenerate and their (cx,cy,cz) keys would collide with level-0
-    // data in IndexedDB, so they bypass persistence entirely — always generate at the current level.
-    if (this.currentLevel > 0) {
-      this.getLocalPool().requestChunk(cx, cy, cz, this.guardEpoch((d) => this.receiveChunkData(d)), this.currentLevel);
-      return;
-    }
-    const genAndSave = this.guardEpoch((d: VoxelChunkData) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
-    if (hasChunk(key)) {
+    const level = this.currentLevel;
+    const pKey = this.persistKey(key, level);
+    const genAndSave = this.guardEpoch((d: VoxelChunkData) => { saveChunk(pKey, d.voxelData); this.receiveChunkData(d); });
+    if (hasChunk(pKey)) {
       const onSaved = this.guardEpoch((saved: Uint32Array | null) => {
         if (saved) this.receiveChunkData({ chunkX: cx, chunkY: cy, chunkZ: cz, voxelData: saved, lastBuildSeq: 0 });
-        else this.getLocalPool().requestChunk(cx, cy, cz, genAndSave);
+        else this.getLocalPool().requestChunk(cx, cy, cz, genAndSave, level);
       });
-      loadChunk(key).then(onSaved);
+      loadChunk(pKey).then(onSaved);
     } else {
-      this.getLocalPool().requestChunk(cx, cy, cz, genAndSave);
+      this.getLocalPool().requestChunk(cx, cy, cz, genAndSave, level);
     }
   }
 
@@ -1035,15 +1037,14 @@ export class VoxelWorld implements ChunkProvider {
    * column; for each chunk, prefer the saved copy, otherwise save the generated one.
    */
   private async handleLocalColumn(columnData: SurfaceColumnResponse): Promise<void> {
-    // Coarse LOD levels aren't persisted — ingest directly.
-    if (this.currentLevel > 0) { this.receiveSurfaceColumnData(columnData); return; }
+    const level = this.currentLevel;
     for (const chunk of columnData.chunks) {
-      const key = chunkKey(columnData.tx, chunk.chunkY, columnData.tz);
-      if (hasChunk(key)) {
-        const saved = await loadChunk(key);
+      const pKey = this.persistKey(chunkKey(columnData.tx, chunk.chunkY, columnData.tz), level);
+      if (hasChunk(pKey)) {
+        const saved = await loadChunk(pKey);
         if (saved) chunk.voxelData = saved;
       } else {
-        saveChunk(key, chunk.voxelData);
+        saveChunk(pKey, chunk.voxelData);
       }
     }
     this.receiveSurfaceColumnData(columnData);
@@ -1092,25 +1093,21 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.set(columnKey, Date.now());
 
     if (this.isLocal) {
+      const level = this.currentLevel;
       const onTile = this.guardEpoch((data: MapTileResponse) => this.receiveTileData(data));
-      // Coarse LOD levels bypass persistence (keys collide with level 0; cheap to regenerate).
-      if (this.currentLevel > 0) {
-        this.getLocalPool().requestTile(tx, tz, onTile, this.currentLevel);
-        return;
-      }
-      // Existing world: the column's stamp-corrected heights are persisted, so read them from IDB
-      // instead of re-running the full worker generateTile (which re-carves caves just to measure the
-      // surface). Falls back to generation if the record is somehow missing.
-      if (hasColumn(tx, tz)) {
+      // Persisted (this LOD level): read the stamp-corrected heights from IDB instead of re-running the
+      // full worker generateTile (which re-carves caves just to measure the surface). Falls back to
+      // generation if the record is missing. Level-namespaced keys make this uniform for all levels.
+      if (hasColumn(tx, tz, level)) {
         const epoch = this.genEpoch;
-        loadColumn(tx, tz).then((col) => {
+        loadColumn(tx, tz, level).then((col) => {
           if (epoch !== this.genEpoch) return;   // level/world changed while loading → drop
           if (col) this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
-          else this.getLocalPool().requestTile(tx, tz, onTile);
-        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestTile(tx, tz, onTile); });
+          else this.getLocalPool().requestTile(tx, tz, onTile, level);
+        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestTile(tx, tz, onTile, level); });
         return;
       }
-      this.getLocalPool().requestTile(tx, tz, onTile);
+      this.getLocalPool().requestTile(tx, tz, onTile, level);
       return;
     }
 
@@ -1132,9 +1129,10 @@ export class VoxelWorld implements ChunkProvider {
     // Compute and store the column's chunk range from the (stamp-corrected) tile heights.
     this.columnInfo.set(columnKey, columnChunkRange(heights, this.currentLevel));
 
-    // Persist the heights the first time a column is generated so a later revisit reads them from IDB
-    // instead of regenerating (no-op if they came from loadColumn — already persisted).
-    if (this.isLocal && !hasColumn(tx, tz)) saveColumn(tx, tz, heights, materials);
+    // Persist the heights the first time a column is generated (at this LOD level) so a later revisit
+    // reads them from IDB instead of regenerating. Level-namespaced so a coarse column can't overwrite
+    // or alias the level-0 column for the same (tx,tz) — that aliasing was the wrong-height-chunks bug.
+    if (this.isLocal && !hasColumn(tx, tz, this.currentLevel)) saveColumn(tx, tz, heights, materials, this.currentLevel);
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
@@ -1552,8 +1550,9 @@ export class VoxelWorld implements ChunkProvider {
     // Store the column's chunk range from the (stamp-corrected) tile heights.
     this.columnInfo.set(columnKey, columnChunkRange(heights, this.currentLevel));
 
-    // Persist heights on first generation so a revisit skips regeneration (Change 3).
-    if (this.isLocal && !hasColumn(tx, tz)) saveColumn(tx, tz, heights, materials);
+    // Persist heights on first generation (at this LOD level) so a revisit skips regeneration. Level-
+    // namespaced so a coarse column never aliases the level-0 column for the same (tx,tz).
+    if (this.isLocal && !hasColumn(tx, tz, this.currentLevel)) saveColumn(tx, tz, heights, materials, this.currentLevel);
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
