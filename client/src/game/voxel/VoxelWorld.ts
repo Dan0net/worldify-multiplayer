@@ -287,6 +287,8 @@ export class VoxelWorld implements ChunkProvider {
    *  swap). Disposed once the new level covers the view or a timeout elapses. */
   private frozenRoot: THREE.Group | null = null;
   private frozenSince = 0;
+  /** Scratch stream centre: horizontal from the caller, vertical pinned to the surface in Explore. */
+  private _streamPos = new THREE.Vector3();
 
   get lodLevel(): number { return this.currentLevel; }
 
@@ -450,15 +452,29 @@ export class VoxelWorld implements ChunkProvider {
     // re-bakes normals into merged buffers (updateWithVisibility → chunkGrouper.rebuild).
     this.seamStitcher.flush();
 
-    // Get player's current chunk
-    const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
+    // Stream centre. In Explore, PIN THE VERTICAL to the surface of the centre column (from the loaded
+    // column range) — the orbit target's Y can sit below the surface (a fresh landform world at origin,
+    // or returning from a zoomed-out level), which would centre the BFS underground in unloaded solid
+    // where it can't traverse up to the surface, so nothing loads until the user taps the ground. The
+    // horizontal centre still follows the caller. maxCy is just above the surface (air side), so the BFS
+    // reliably floods DOWN through air onto the terrain. In Play (cubeVisibility off) the real position
+    // is used unchanged (the player may legitimately be underground/in a cave).
+    this._streamPos.copy(playerPos);
+    if (this.cubeVisibility) {
+      const pc = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
+      const ci = this.columnInfo.get(`${pc.cx},${pc.cz}`);
+      if (ci) this._streamPos.y = (ci.maxCy + 0.5) * CHUNK_WORLD_SIZE;
+    }
+
+    // Get player's current chunk (from the surface-pinned stream position in Explore)
+    const playerChunk = worldToChunk(this._streamPos.x, this._streamPos.y, this._streamPos.z);
     this.lastPlayerChunk = { ...playerChunk };
 
     // Expire stale pending requests so they can be re-requested
     this.cleanStalePending();
 
     // Use visibility-based loading
-    this.updateWithVisibility(playerChunk, playerPos);
+    this.updateWithVisibility(playerChunk, this._streamPos);
 
     // Release the held previous LOD level once the new one has streamed in (hold-then-swap).
     this.maybeDisposeFrozen();
@@ -466,7 +482,7 @@ export class VoxelWorld implements ChunkProvider {
     // Dispatch from remesh queue to workers (async meshing)
     perfStats.begin('remesh');
     const priorityKeys = this.chunkGrouper.getPriorityChunkKeys();
-    this.remeshPipeline.process(playerPos, priorityKeys.size > 0 ? priorityKeys : undefined);
+    this.remeshPipeline.process(this._streamPos, priorityKeys.size > 0 ? priorityKeys : undefined);
     perfStats.end('remesh');
 
     // Report queue stats for debug overlay
