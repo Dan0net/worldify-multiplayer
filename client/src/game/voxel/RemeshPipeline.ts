@@ -101,8 +101,18 @@ export class RemeshPipeline {
 
   add(key: string): void { this.queue.add(key); }
   delete(key: string): void { this.queue.delete(key); }
-  clear(): void { this.queue.clear(); }
+  /**
+   * Clear the queue AND bump the generation. Called on an LOD level change / world switch, when the
+   * chunk map is cleared and re-populated. Mesh jobs are async: one dispatched from OLD voxel data
+   * (its grid captured at dispatch) could return after the swap and apply onto the RE-USED chunk key,
+   * writing wrong-scale geometry onto the new chunk (the flat-slab artifacts). Dispatch captures the
+   * generation and applyResult drops results whose generation no longer matches.
+   */
+  clear(): void { this.queue.clear(); this.generation++; }
   get size(): number { return this.queue.size; }
+
+  /** Monotonic generation; bumped by clear() so stale async mesh results can be dropped on apply. */
+  private generation = 0;
 
   // ---- Processing ----
 
@@ -157,7 +167,9 @@ export class RemeshPipeline {
       const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
       const complete = !(skipHighBoundary[0] || skipHighBoundary[1] || skipHighBoundary[2]);
 
+      const gen = this.generation;
       this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {
+        if (gen !== this.generation) return;   // level/world changed since dispatch → stale, drop
         this.setComplete(key, complete);
         this.applyResult(result);
       });
@@ -220,7 +232,9 @@ export class RemeshPipeline {
 
     if (batchItems.length === 0) return;
 
+    const gen = this.generation;
     this.meshPool.dispatchBatch(batchItems, (results) => {
+      if (gen !== this.generation) return;   // level/world changed since dispatch → stale, drop
       for (const result of results) {
         const item = batchItems.find((b) => b.chunkKey === result.chunkKey);
         if (item) {

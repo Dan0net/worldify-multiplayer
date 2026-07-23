@@ -288,6 +288,13 @@ export class VoxelWorld implements ChunkProvider {
   /** Current LOD zoom level (0 = full detail / play). Coarse levels sample the same world at a 2^L
    *  step; every chunk/tile/column request carries it, and the grouper root is scaled by 2^L. */
   private currentLevel = 0;
+  /**
+   * Generation epoch, bumped on every LOD level change and world switch. Terrain generation is async
+   * (worker pool + IndexedDB), and chunk/column coords are level-LOCAL, so a request in flight when the
+   * level changes would otherwise be ingested into the NEW level at reinterpreted coords with wrong-
+   * scale content (the flat-slab / hole artifacts). Every generation request captures the epoch (via
+   * guardEpoch); a result whose epoch no longer matches is dropped. */
+  private genEpoch = 0;
   /** Use a Chebyshev (cube) visibility volume instead of the L1 diamond — set in Explore so every
    *  level always has a full shell of chunks to swap in/out on a level change. */
   private cubeVisibility = false;
@@ -295,6 +302,16 @@ export class VoxelWorld implements ChunkProvider {
   private _streamPos = new THREE.Vector3();
 
   get lodLevel(): number { return this.currentLevel; }
+
+  /**
+   * Wrap an async generation-result callback so it's dropped if the generation epoch changed between
+   * request and result (a level change / world switch happened in flight). Prevents stale, wrong-level
+   * chunk/column data from being ingested into the new level.
+   */
+  private guardEpoch<T>(cb: (data: T) => void): (data: T) => void {
+    const epoch = this.genEpoch;
+    return (data: T) => { if (epoch === this.genEpoch) cb(data); };
+  }
 
   /** Toggle the cube (square) visibility volume — Explore uses it, play keeps the diamond. */
   setCubeVisibility(cube: boolean): void {
@@ -314,6 +331,9 @@ export class VoxelWorld implements ChunkProvider {
    */
   setExploreLevel(level: number, center?: THREE.Vector3): void {
     if (level === this.currentLevel) return;
+    // Invalidate any in-flight generation for the old level (async worker/IDB results ingested after
+    // this point would land at reinterpreted coords with wrong-scale content — the flat-slab artifacts).
+    this.genEpoch++;
     // Clone the currently-visible chunks into the retiring holder (old scale) BEFORE disposing the
     // per-chunk geometries below — the holder owns independent clones, so the disposal is safe.
     this.chunkGrouper.retireAndReset(1 << level, 1 << this.currentLevel);
@@ -642,28 +662,31 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
+      const onColumn = this.guardEpoch((data: SurfaceColumnResponse) => this.handleLocalColumn(data));
       // Coarse LOD levels bypass persistence (keys collide with level 0; cheap to regenerate).
       if (this.currentLevel > 0) {
-        this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data), this.currentLevel);
+        this.getLocalPool().requestColumn(tx, tz, onColumn, this.currentLevel);
         return;
       }
       // Existing world: heights are persisted, so seed columnInfo from IDB and skip the full worker
       // generateColumn (which would carve caves + stamps only to be discarded). The saved surface
       // chunks then stream in via the normal per-chunk load path (loadLocalChunk prefers saved).
       if (hasColumn(tx, tz)) {
+        const epoch = this.genEpoch;
         loadColumn(tx, tz).then((col) => {
+          if (epoch !== this.genEpoch) return;   // level/world changed while loading → drop
           if (col) {
             this.pendingColumns.delete(columnKey);
             this.pendingColumnTimes.delete(columnKey);
             this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
           } else {
-            this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
+            this.getLocalPool().requestColumn(tx, tz, onColumn);
           }
-        }).catch(() => this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data)));
+        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestColumn(tx, tz, onColumn); });
         console.log(`[VoxelWorld] Seeded initial surface column from saved heights (${tx}, ${tz})`);
         return;
       }
-      this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
+      this.getLocalPool().requestColumn(tx, tz, onColumn);
       console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
       return;
     }
@@ -915,19 +938,18 @@ export class VoxelWorld implements ChunkProvider {
     // Coarse LOD levels are cheap to regenerate and their (cx,cy,cz) keys would collide with level-0
     // data in IndexedDB, so they bypass persistence entirely — always generate at the current level.
     if (this.currentLevel > 0) {
-      this.getLocalPool().requestChunk(cx, cy, cz, (d) => this.receiveChunkData(d), this.currentLevel);
+      this.getLocalPool().requestChunk(cx, cy, cz, this.guardEpoch((d) => this.receiveChunkData(d)), this.currentLevel);
       return;
     }
+    const genAndSave = this.guardEpoch((d: VoxelChunkData) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
     if (hasChunk(key)) {
-      loadChunk(key).then((saved) => {
-        if (saved) {
-          this.receiveChunkData({ chunkX: cx, chunkY: cy, chunkZ: cz, voxelData: saved, lastBuildSeq: 0 });
-        } else {
-          this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
-        }
+      const onSaved = this.guardEpoch((saved: Uint32Array | null) => {
+        if (saved) this.receiveChunkData({ chunkX: cx, chunkY: cy, chunkZ: cz, voxelData: saved, lastBuildSeq: 0 });
+        else this.getLocalPool().requestChunk(cx, cy, cz, genAndSave);
       });
+      loadChunk(key).then(onSaved);
     } else {
-      this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
+      this.getLocalPool().requestChunk(cx, cy, cz, genAndSave);
     }
   }
 
@@ -993,22 +1015,25 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.set(columnKey, Date.now());
 
     if (this.isLocal) {
+      const onTile = this.guardEpoch((data: MapTileResponse) => this.receiveTileData(data));
       // Coarse LOD levels bypass persistence (keys collide with level 0; cheap to regenerate).
       if (this.currentLevel > 0) {
-        this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data), this.currentLevel);
+        this.getLocalPool().requestTile(tx, tz, onTile, this.currentLevel);
         return;
       }
       // Existing world: the column's stamp-corrected heights are persisted, so read them from IDB
       // instead of re-running the full worker generateTile (which re-carves caves just to measure the
       // surface). Falls back to generation if the record is somehow missing.
       if (hasColumn(tx, tz)) {
+        const epoch = this.genEpoch;
         loadColumn(tx, tz).then((col) => {
+          if (epoch !== this.genEpoch) return;   // level/world changed while loading → drop
           if (col) this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
-          else this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
-        }).catch(() => this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data)));
+          else this.getLocalPool().requestTile(tx, tz, onTile);
+        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestTile(tx, tz, onTile); });
         return;
       }
-      this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
+      this.getLocalPool().requestTile(tx, tz, onTile);
       return;
     }
 
@@ -1928,6 +1953,10 @@ export class VoxelWorld implements ChunkProvider {
       this.localPool = null;
     }
 
+    // Clear the remesh queue AND bump its generation so any in-flight mesh job from the old world
+    // can't apply onto a re-used chunk key after the swap (world switch mirrors the level-change guard).
+    this.remeshPipeline.clear();
+
     // Dispose chunk grouper (removes merged meshes from scene)
     this.chunkGrouper.dispose();
 
@@ -1976,7 +2005,10 @@ export class VoxelWorld implements ChunkProvider {
    */
   clearAndReload(playerPos?: THREE.Vector3): void {
     console.log('[VoxelWorld] Clearing all chunks and reloading...');
-    
+
+    // Invalidate in-flight generation from the previous world/level so stale results can't be ingested.
+    this.genEpoch++;
+
     // Dispose chunks but keep workers alive
     this.dispose(true);
     
