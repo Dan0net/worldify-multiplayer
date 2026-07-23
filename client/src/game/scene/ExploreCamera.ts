@@ -16,27 +16,13 @@ const target = new THREE.Vector3(0, 0, 0);
 let yaw = 0;
 let pitch = -Math.PI / 4;   // 45° down
 
-// LOD zoom. The CAMERA distance must always match the TERRAIN's currently-loaded data level, because the
-// camera frustum drives chunk streaming AND the LOD swap's coverage predicate: if the camera sits closer
-// than the loaded level's nominal distance, the frustum no longer covers that level's visibility radius,
-// the swap can never resolve, and the transition freezes. So the rendered zoom is pinned to the loaded
-// level while the terrain is still catching up, and only takes the user's fractional zoom once it arrives.
-//   • `zoomTarget` — the user's INTENT, set INSTANTLY by wheel/pinch (0…MAX_ZOOM_LEVEL). Never blocked;
-//     spinning the wheel registers immediately. round(zoomTarget) is the data-level target the terrain
-//     walks toward (getExploreZoomLevel), one level per completed swap (the Explore driver in GameCore).
-//   • `dataLevel` — the terrain's currently-displayed LOD level, mirrored from VoxelWorld each frame
-//     (setExploreDataLevel). Lags zoomTarget during a multi-level flick as each level streams in.
-//   • `zoomExp` — the RENDERED zoom that sets the camera distance (BASE_DISTANCE·2^zoomExp). Eases toward
-//     `dataLevel` WHILE the terrain is walking toward the target (so the camera stays at the loaded
-//     level's nominal distance — the invariant that lets swaps resolve), and toward the fractional
-//     `zoomTarget` once the terrain has arrived (so analog within-level zoom stays smooth). Net effect on
-//     a fast flick: the camera visibly steps through the levels exactly as fast as each one loads.
-let zoomTarget = 0;
+// LOD zoom. `zoomExp` is the CONTINUOUS wheel-driven zoom (0…MAX_ZOOM_LEVEL), applied INSTANTLY and never
+// constrained — the camera distance is BASE_DISTANCE·2^zoomExp so the wheel/pinch always zooms the full
+// range immediately. round(zoomExp) (settle-debounced via getExploreZoomLevel) is the DISCRETE data-level
+// TARGET: the terrain doesn't jump there, it walks toward it one level per completed swap (the Explore
+// driver in GameCore), so chunks build up/down through the intermediate levels toward wherever the camera
+// has zoomed. The settle debounce only stops wheel jitter from flipping the target mid-sweep.
 let zoomExp = 0;
-let dataLevel = 0;
-/** Exponential-ease time constant (ms) for zoomExp → its per-frame goal. Short enough that within-level
- *  zoom feels near-instant; multi-level flicks are paced by load completion (dataLevel), not this. */
-const ZOOM_EASE_TAU_MS = 70;
 const BASE_DISTANCE = 32;
 let distance = BASE_DISTANCE;
 
@@ -59,11 +45,11 @@ function applyZoom(): void {
   distance = BASE_DISTANCE * Math.pow(2, zoomExp);
 }
 
-/** Discrete LOD data-level TARGET the terrain walks toward — round(zoomTarget), the user's INTENT (NOT the
- *  rendered zoom, which lags behind while loading). Snaps after it has held steady for LEVEL_SETTLE_MS
- *  (debounces jitter). The Explore driver steps the terrain toward this one level per completed swap. */
+/** Discrete LOD data-level TARGET the terrain walks toward — round(zoomExp), where the camera has zoomed.
+ *  Snaps after it has held steady for LEVEL_SETTLE_MS (debounces wheel jitter). The Explore driver steps
+ *  the terrain toward this one level per completed swap; the camera itself is never held back. */
 export function getExploreZoomLevel(): number {
-  const t = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomTarget)));
+  const t = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomExp)));
   if (t !== committedLevel) {
     const now = (typeof performance !== 'undefined' ? performance.now() : 0);
     if (t !== pendingTarget) { pendingTarget = t; pendingSince = now; }
@@ -72,13 +58,6 @@ export function getExploreZoomLevel(): number {
     pendingTarget = t;
   }
   return committedLevel;
-}
-
-/** Mirror the terrain's currently-displayed LOD level into the camera so the rendered zoom can be clamped
- *  to stay within ZOOM_LEVEL_LEAD of it (camera never outruns chunk loading). Call each frame before
- *  updateExploreCamera. */
-export function setExploreDataLevel(level: number): void {
-  dataLevel = level;
 }
 
 /** Linear scale factor (2^level) for the current committed data level. */
@@ -106,9 +85,7 @@ export function initExploreCamera(center: THREE.Vector3): void {
   target.copy(center);
   yaw = 0;
   pitch = -Math.PI / 4;
-  zoomTarget = 0;
   zoomExp = 0;
-  dataLevel = 0;
   committedLevel = 0;
   pendingTarget = 0;
   applyZoom();
@@ -168,28 +145,17 @@ export function resetCameraClipPlanes(camera: THREE.PerspectiveCamera): void {
   }
 }
 
-/** Position + orient the camera from the current orbit state. Call each frame with the frame delta (ms). */
-export function updateExploreCamera(camera: THREE.PerspectiveCamera, deltaMs = 16): void {
-  // Ease the RENDERED zoom toward the loaded level while the terrain is still walking toward the target
-  // (keeps the camera at that level's nominal distance so the frustum covers it and the swap can resolve),
-  // and toward the fractional intent once the terrain has arrived (smooth analog within-level zoom). See
-  // the zoom-state comment at the top of this file for why the camera must not outrun the loaded level.
-  const arrived = Math.round(zoomTarget) === dataLevel;
-  const goal = arrived ? zoomTarget : dataLevel;
-  const k = 1 - Math.exp(-Math.max(0, deltaMs) / ZOOM_EASE_TAU_MS);
-  zoomExp += (goal - zoomExp) * k;
-  applyZoom();
-
+/** Position + orient the camera from the current orbit state. Call each frame. */
+export function updateExploreCamera(camera: THREE.PerspectiveCamera): void {
   _euler.set(pitch, yaw, 0, 'YXZ');
   _fwd.set(0, 0, -1).applyEuler(_euler);
   camera.position.copy(target).addScaledVector(_fwd, -distance);
   camera.rotation.order = 'YXZ';
   camera.rotation.set(pitch, yaw, 0);
 
-  // Grow the clip planes with the LOD zoom so coarse (far, large) terrain isn't clipped. Cover the coarsest
-  // of {loaded data level, committed zoom target}, plus one level of headroom for the still-coarser geometry
-  // that's retiring mid-swap (a zoom-in holds the level-above until the finer level covers it).
-  const viewLevel = Math.max(dataLevel, getExploreZoomLevel());
+  // Grow the clip planes with the LOD zoom so coarse (far, large) terrain isn't clipped. One level of
+  // headroom covers the still-coarser geometry that's retiring while the terrain walks toward this level.
+  const viewLevel = getExploreZoomLevel();
   const near = BASE_NEAR * (1 << viewLevel);
   const far = BASE_FAR * (1 << Math.min(MAX_ZOOM_LEVEL + 1, viewLevel + 1));
   if (camera.near !== near || camera.far !== far) {
@@ -219,13 +185,14 @@ export function exploreCameraPan(dx: number, dy: number): void {
   target.z -= (rightZ * dx - fwdZ * dy) * s;
 }
 
-/** Zoom in/out. Positive `delta` zooms OUT (wheel down) → higher zoom → coarser LOD, further camera. Sets
- *  the INTENT instantly (never blocked); updateExploreCamera eases the rendered zoom toward it, clamped to
- *  the loaded terrain level so the camera can't outrun chunk streaming. */
+/** Zoom in/out. Positive `delta` zooms OUT (wheel down) → higher zoomExp → coarser LOD, further camera.
+ *  Applied instantly and unconstrained: the camera always zooms the full range immediately. round(zoomExp)
+ *  becomes the data-level target the terrain walks toward (getExploreZoomLevel). */
 export function exploreCameraZoom(delta: number): void {
-  zoomTarget += delta * ZOOM_EXP_SPEED;
-  if (zoomTarget < 0) zoomTarget = 0;
-  if (zoomTarget > MAX_ZOOM_LEVEL) zoomTarget = MAX_ZOOM_LEVEL;
+  zoomExp += delta * ZOOM_EXP_SPEED;
+  if (zoomExp < 0) zoomExp = 0;
+  if (zoomExp > MAX_ZOOM_LEVEL) zoomExp = MAX_ZOOM_LEVEL;
+  applyZoom();
 }
 
 /** Zoom from a pinch distance change (pixels); positive `deltaPixels` = fingers apart → zoom in. */
