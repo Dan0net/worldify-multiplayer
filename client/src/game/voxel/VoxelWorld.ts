@@ -388,27 +388,34 @@ export class VoxelWorld implements ChunkProvider {
     const r = this._visibilityRadius + 1;                        // +1 buffer, Chebyshev (cube view)
     // Column (surface) based coverage. The old chunk is resolved once every COLUMN of new-level cells
     // it overlaps is covered. A column is covered when it is out of the new XZ view, or every non-air
-    // cell in its band has FINISHED meshing — either it drew geometry (the surface landed) or it meshed
-    // to empty (nothing there). We test real mesh state via the geometries map (an entry exists once the
-    // mesh result is applied, empty or not), NOT the reachable/pending sets — those grow a ring per
-    // streamed chunk, so during active streaming most in-view cells look "won't load" and would drop the
-    // old chunk before the new one drew anything (the blank flash). Only a cell still awaiting its mesh
-    // (no geometry entry yet) keeps the column — and the old chunk — alive.
+    // cell in its band is settled. A cell is settled when it has drawn geometry (the surface landed),
+    // meshed to empty (nothing to draw), OR is NOT EXPECTED to load — the new level's streaming is not
+    // going to fill it (not pending and not in the BFS reachable frontier). Only a cell that is genuinely
+    // EXPECTED (pending or reachable) and not yet drawn keeps the column — and the old chunk — alive.
+    //
+    // This is the liveness fix: the old geometry-only test blocked on ANY undrawn non-air cell, so a
+    // region the new level never streams (occluded, out of frontier, abandoned after a fast sweep) held
+    // the retiring chunk forever — stuck old chunks + staged new chunks hidden under them. Gating on
+    // `expected` disposes those the moment the frontier settles, while still holding (gap-free) for cells
+    // that really are inbound. Using `pending || reachable` — not raw geometry — mirrors
+    // isMarginSourceExpected; the frontier is stable when idle, so no perpetual deadlock.
     for (let cx = cxMin; cx <= cxMax; cx++) {
       for (let cz = czMin; cz <= czMax; cz++) {
         // Beyond the new view's XZ visibility cube → nothing will render here → covered.
         if (pc && (Math.abs(cx - pc.cx) > r || Math.abs(cz - pc.cz) > r)) continue;
-        let drawable = false;    // some cell in this column has landed visible geometry
-        let pending = false;     // some non-air cell has not finished meshing yet
+        let drawable = false;        // some cell in this column has landed visible geometry
+        let expectedUndrawn = false; // some non-air cell is inbound (pending/reachable) but not drawn yet
         for (let cy = cyMin; cy <= cyMax; cy++) {
           if (this.isEmptyAir(cx, cy, cz)) continue;             // air cell — nothing renders here
-          const geo = this.geometries.get(chunkKey(cx, cy, cz));
+          const key = chunkKey(cx, cy, cz);
+          const geo = this.geometries.get(key);
           if (geo && geo.hasGeometry()) { drawable = true; break; } // new surface has landed → covered
-          if (!geo) pending = true;    // non-air, mesh not complete → replacement still coming
-          // geo && !hasGeometry() → mesh complete but empty → nothing to draw here, does not block.
+          if (geo) continue;         // mesh complete but empty → nothing to draw here, does not block
+          // Not yet meshed: only blocks if the new level is actually going to bring it.
+          if (this.pendingChunks.has(key) || this.cachedReachable.has(key)) expectedUndrawn = true;
         }
-        if (drawable || !pending) continue;                      // column covered (drawn, or fully settled)
-        return false;   // an in-view column still has an unmeshed cell → keep holding
+        if (drawable || !expectedUndrawn) continue;              // covered (drawn, empty, or not inbound)
+        return false;   // an in-view column has an inbound-but-undrawn cell → keep holding
       }
     }
     return true;
