@@ -58,7 +58,10 @@ export function raycastMarkerNDC(ndc: { x: number; y: number }, camera: THREE.Ca
   if (!terrain) return null;
   _ndc.set(ndc.x, ndc.y);
   raycaster.setFromCamera(_ndc, camera);
-  raycaster.far = 1000;
+  // Reach as far as the camera can see. At a coarse LOD zoom the explore camera sits far out (up to
+  // ~2 km) and its far plane grows with the zoom, so a fixed 1000 m would fall short of the terrain and
+  // taps wouldn't register. Match the camera's far plane so a tap hits whatever is visible.
+  raycaster.far = (camera as THREE.PerspectiveCamera).far || 1000;
   const hits = raycaster.intersectObjects(terrain.getSolidMeshes(), false);
   return hits.length > 0 ? hits[0].point.clone() : null;
 }

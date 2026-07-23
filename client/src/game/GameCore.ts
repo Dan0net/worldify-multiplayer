@@ -858,20 +858,20 @@ export class GameCore {
     advanceExploreTargetGlide(deltaMs);
     setMarkerVisible(true);
     const target = getExploreTarget();
-    // Surface-follow (marker placement + Y-ease) only at full detail (level 0). At coarse zoom the
-    // surface heights are approximate and the marker/height coupling would judder the camera, so the
-    // target height is left as-is while the user pans/zooms the overview.
-    if (getExploreZoomLevel() === 0 && !isExploreMarkerInteracting() && !isExploreGliding()) {
+    // Surface-follow: keep the spawn marker under screen centre as the user pans — at ALL zoom levels
+    // (coarse terrain renders at its true world height, so the top-down column raycast still resolves
+    // the surface). The camera-height ease is kept to level 0 only, since at coarse zoom the far camera
+    // over blocky/streaming terrain would judder if its height chased the surface.
+    if (!isExploreMarkerInteracting() && !isExploreGliding()) {
       const moved = target.x !== this.lastFollowX || target.z !== this.lastFollowZ;
       if ((moved || !isMarkerPlaced()) && placeMarkerAtColumn(target.x, target.z)) {
         this.lastFollowX = target.x;
         this.lastFollowZ = target.z;
       }
-      // Ease the orbit height onto the marker's surface instead of snapping, so the camera
-      // doesn't judder as the surface height changes across a pan (or as chunks stream in).
-      // Runs every frame (not gated on x/z movement) so it keeps settling after a pan stops
-      // and gives a smooth one-time rise onto the surface when a world opens.
-      if (isMarkerPlaced()) {
+      // Ease the orbit height onto the marker's surface (level 0 only — see above). Runs every frame
+      // (not gated on x/z movement) so it keeps settling after a pan stops and gives a smooth one-time
+      // rise onto the surface when a world opens.
+      if (getExploreZoomLevel() === 0 && isMarkerPlaced()) {
         const k = 1 - Math.exp(-deltaMs / GameCore.EXPLORE_Y_SMOOTH_MS);
         target.y += (getMarkerBase().y - target.y) * k;
       }
