@@ -32,13 +32,16 @@ const MAX_PITCH = -0.12;
 
 const ROTATE_SPEED = 0.009;   // radians per pixel
 const PAN_SPEED = 0.0016;     // world units per pixel, per unit distance
-// Zoom sensitivity, deliberately gentle: it takes ~3× the scroll/pinch of the old feel to cross one LOD
-// level (and to traverse the full range to base MAX_ZOOM_LEVEL). The camera still reaches the same
-// distance range — BASE_DISTANCE·2^zoomExp, zoomExp 0…MAX — just 3× less eagerly, so the terrain base
-// level (round(zoomExp)) no longer flips on small wheel movements.
-const ZOOM_SENSITIVITY = 1 / 3;                  // 3× less sensitive than the original 1:1 feel
-const ZOOM_EXP_SPEED = 0.0025 * ZOOM_SENSITIVITY;   // zoomExp change per wheel delta unit
-const PINCH_ZOOM = 0.006 * ZOOM_SENSITIVITY;        // per pixel of pinch distance change
+const ZOOM_EXP_SPEED = 0.0025;   // zoomExp change per wheel delta unit (original camera zoom speed)
+const PINCH_ZOOM = 0.006;        // per pixel of pinch distance change (→ zoomExp via ZOOM_EXP_SPEED)
+
+// Wheel-zoom octaves (`zoomExp`) required to step the terrain base LOD level by one. The camera distance
+// still moves at full speed with `zoomExp` (BASE_DISTANCE·2^zoomExp), but the DATA level is
+// round(zoomExp / ZOOM_UNITS_PER_LEVEL), so it takes 3× more camera zoom to switch a level — the level no
+// longer flips on small movements. Because zoomExp is capped at MAX_ZOOM_LEVEL to keep the camera framing
+// sane, the CENTRE base level tops out at MAX_ZOOM_LEVEL / 3; the coarse rings still extend to
+// MAX_ZOOM_LEVEL in the periphery, so full LOD coarseness is reached out there.
+const ZOOM_UNITS_PER_LEVEL = 3;
 
 // Discrete level state (hysteresis + settle debounce).
 let committedLevel = 0;
@@ -54,7 +57,7 @@ function applyZoom(): void {
  *  Snaps after it has held steady for LEVEL_SETTLE_MS (debounces wheel jitter). The Explore driver steps
  *  the terrain toward this one level per completed swap; the camera itself is never held back. */
 export function getExploreZoomLevel(): number {
-  const t = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomExp)));
+  const t = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomExp / ZOOM_UNITS_PER_LEVEL)));
   if (t !== committedLevel) {
     const now = (typeof performance !== 'undefined' ? performance.now() : 0);
     if (t !== pendingTarget) { pendingTarget = t; pendingSince = now; }
@@ -158,11 +161,13 @@ export function updateExploreCamera(camera: THREE.PerspectiveCamera): void {
   camera.rotation.order = 'YXZ';
   camera.rotation.set(pitch, yaw, 0);
 
-  // Grow the clip planes with the LOD zoom so coarse (far, large) terrain isn't clipped. One level of
-  // headroom covers the still-coarser geometry that's retiring while the terrain walks toward this level.
-  const viewLevel = getExploreZoomLevel();
-  const near = BASE_NEAR * (1 << viewLevel);
-  const far = BASE_FAR * (1 << Math.min(MAX_ZOOM_LEVEL + 1, viewLevel + 1));
+  // Grow the clip planes with the CAMERA zoom (its octave = round(zoomExp)), NOT the data base level:
+  // the base level now caps at MAX/ZOOM_UNITS_PER_LEVEL, but the camera still pulls back the full range
+  // and the coarse rings extend far beyond it, so the far plane must track how far the camera has zoomed
+  // or those rings clip. Keeping the near:far ratio constant preserves depth precision at every zoom.
+  const viewOctave = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomExp)));
+  const near = BASE_NEAR * (1 << viewOctave);
+  const far = BASE_FAR * (1 << Math.min(MAX_ZOOM_LEVEL + 1, viewOctave + 1));
   if (camera.near !== near || camera.far !== far) {
     camera.near = near;
     camera.far = far;
