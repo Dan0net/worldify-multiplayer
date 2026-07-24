@@ -47,9 +47,9 @@ interface ChunkSlot {
   cx: number;
   cy: number;
   cz: number;
-  /** LOD level this chunk was generated at — selects which scaled root it lives under (`rootFor`). In
-   *  Phase B this is per-region (concentric rings); today (single global level) it's always the grouper's
-   *  `liveLevel`, so behaviour is identical to the old single root. */
+  /** LOD level this chunk was generated at — selects which scaled root it lives under (`rootFor`). Set
+   *  from the chunk's own level (updateChunk arg). Phase B rings make it per-region; today all live
+   *  chunks share the single streamed level, so behaviour is identical to the old single root. */
   level: number;
   /** World-space origin of this chunk */
   wx: number;
@@ -97,7 +97,7 @@ interface LayerBuffers {
 /** A spatial group of chunks whose geometry is merged for draw-call reduction. */
 interface ChunkGroup {
   /** LOD level of this group's chunks (all members share it) — selects the scaled root the merged mesh
-   *  lives under. Today always the grouper's `liveLevel`. */
+   *  lives under. Today all groups are at the single streamed level. */
   level: number;
   /** Per-layer merged meshes in the scene */
   meshes: (THREE.Mesh | null)[];
@@ -176,13 +176,10 @@ export class ChunkGrouper {
    * at the usual 0.25 m voxel scale, and the root's scale turns its 8 m footprint into the true 8·2^L m.
    * Level 0 keeps scale 1 (identity → transparent). Baked-world-space vertex positions scale about the
    * origin, so a chunk's origin offset and its voxel size scale together — correct. Phase B keeps geometry
-   * from several levels resident at once (concentric rings); today only `liveLevel` is populated, so this
-   * is exactly the old single scaled root.
+   * from several levels resident at once (concentric rings); today only one is populated, so this is
+   * exactly the old single scaled root. Each chunk carries its own `level` (updateChunk arg) → its root.
    */
   private roots = new Map<number, THREE.Group>();
-  /** The single LOD level currently being streamed. Every chunk handed to updateChunk is tagged with it.
-   *  (Phase B replaces this with a per-region ring level.) */
-  private liveLevel = 0;
   private slots = new Map<string, ChunkSlot>();
   private groups = new Map<string, ChunkGroup>();
 
@@ -249,7 +246,7 @@ export class ChunkGrouper {
    * of sub-meshes and hangs the frame. Entries from a superseded level are KEPT (multi-level backfill),
    * capped so a pathological sweep can't accumulate unbounded geometry.
    */
-  retireAndReset(newLevel: number): void {
+  retireAndReset(): void {
     for (const slot of this.slots.values()) {
       if (!slot.visible || slot.staged) continue;   // staged chunks were never shown → nothing to retire
       const oldScale = 1 << slot.level;              // this chunk's own level scale (true-world clone)
@@ -279,10 +276,9 @@ export class ChunkGrouper {
       for (const e of drop) for (const m of e.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
     }
 
-    // Tear down all live roots and re-stream at the new level (its root is created lazily by rootFor on
-    // the first chunk). Behaves like the old single-root swap while only one level is ever live.
+    // Tear down all live roots and re-stream; each new chunk's level (updateChunk arg) recreates its root
+    // lazily via rootFor. Behaves like the old single-root swap while only one level is ever live.
     this.disposeLiveRoot();
-    this.liveLevel = newLevel;
     this.slots.clear();
     this.groups.clear();
     this.stagedKeys.clear();   // staged chunks belonged to the (now discarded) previous live roots
@@ -377,6 +373,7 @@ export class ChunkGrouper {
     cx: number,
     cy: number,
     cz: number,
+    level: number,
     geometries: (THREE.BufferGeometry | null)[],
     worldPos: { x: number; y: number; z: number },
   ): void {
@@ -396,16 +393,16 @@ export class ChunkGrouper {
         slot.wy = worldPos.y;
         slot.wz = worldPos.z;
         slot.coveredByMerge = false; // left its old merged set; new group hasn't baked it
-        this.addToGroup(key, gk, this.liveLevel);
+        this.addToGroup(key, gk, level);
       }
     } else {
       // Stage this NEW chunk hidden if a retiring old chunk still covers its world region — drawing it
       // now would overlap the old (strict no-overlap). Revealed atomically when that old chunk is
       // disposed (reconcileRetiring). Its geometry still exists, so the coverage predicate sees it.
-      const staged = this.overlapsRetiring(worldPos.x, worldPos.y, worldPos.z, 1 << this.liveLevel);
+      const staged = this.overlapsRetiring(worldPos.x, worldPos.y, worldPos.z, 1 << level);
       slot = {
         cx, cy, cz,
-        level: this.liveLevel,
+        level,
         wx: worldPos.x,
         wy: worldPos.y,
         wz: worldPos.z,
@@ -419,7 +416,7 @@ export class ChunkGrouper {
       };
       this.slots.set(key, slot);
       if (staged) this.stagedKeys.add(key);
-      this.addToGroup(key, gk, this.liveLevel);
+      this.addToGroup(key, gk, level);
     }
 
     this.markGroupDirty(gk);
@@ -863,7 +860,6 @@ export class ChunkGrouper {
     // restarts clean at level 0 — rootFor recreates lazily on the first chunk.
     for (const root of this.roots.values()) this.scene.remove(root);
     this.roots.clear();
-    this.liveLevel = 0;
   }
 
   // ---- Private: suppression helpers ----

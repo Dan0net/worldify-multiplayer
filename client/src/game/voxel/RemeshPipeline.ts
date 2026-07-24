@@ -314,7 +314,7 @@ export class RemeshPipeline {
   /** Register chunk geometry with the grouper for merged rendering. */
   private registerWithGrouper(key: string, chunk: Chunk, geo: ChunkGeometry): void {
     const worldPos = chunk.getWorldPosition();
-    this.grouper.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, geo.getGeometries(), worldPos);
+    this.grouper.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, chunk.level, geo.getGeometries(), worldPos);
   }
 
   /**

@@ -347,8 +347,8 @@ export class VoxelWorld implements ChunkProvider {
     this.retireSettledPasses = 0;   // new transition — the quiescence net must re-arm from scratch
     // Clone the currently-visible chunks into the retiring holder (each at its own level scale) BEFORE
     // disposing the per-chunk geometries below — the holder owns independent clones, so disposal is safe.
-    // The grouper tags new chunks with this level (its `liveLevel`) and roots them at 2^level.
-    this.chunkGrouper.retireAndReset(level);
+    // New chunks arrive tagged with the new currentLevel (chunk.level → grouper root at 2^level).
+    this.chunkGrouper.retireAndReset();
     this.currentLevel = level;
 
     // Clear live chunk state. The grouper's live root was already reset by retireAndReset; the retiring
@@ -1162,6 +1162,9 @@ export class VoxelWorld implements ChunkProvider {
       chunk = new Chunk(cx, cy, cz);
       this.chunks.set(key, chunk);
     }
+    // Tag with the LOD level it was generated at so the grouper roots it correctly. Today all live
+    // chunks share currentLevel; Phase B rings will ingest several levels concurrently.
+    chunk.level = this.currentLevel;
 
     // Skip re-processing if the voxel data is identical (server re-send or no-op)
     if (!isNewChunk && arraysEqual(chunk.data, voxelData) && chunk.lastBuildSeq === lastBuildSeq) {
