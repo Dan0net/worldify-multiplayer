@@ -49,6 +49,10 @@ export class Chunk extends ChunkData {
   /** Explicit mesh lifecycle phase (see ChunkPhase). Set by the remesh pipeline when a mesh applies. */
   phase: ChunkPhase = ChunkPhase.Loaded;
 
+  /** LOD level this chunk was generated at (0 = full detail). The grouper roots it at 2^level; carried
+   *  per-chunk so several levels can be resident at once (Phase B rings). Set by VoxelWorld on ingest. */
+  level: number = 0;
+
   /**
    * Cached: does this chunk currently hold any block light (emitter or propagated)?
    * Set by the lighting pass; used to cheaply gate incremental block-light relights so

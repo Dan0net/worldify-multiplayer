@@ -10,22 +10,68 @@
  */
 
 import * as THREE from 'three';
+import { MAX_ZOOM_LEVEL } from '@worldify/shared';
 
 const target = new THREE.Vector3(0, 0, 0);
 let yaw = 0;
 let pitch = -Math.PI / 4;   // 45° down
-let distance = 32;
+
+// LOD zoom. `zoomExp` is the CONTINUOUS wheel-driven zoom (0…MAX_ZOOM_LEVEL), applied INSTANTLY and never
+// constrained — the camera distance is BASE_DISTANCE·2^zoomExp so the wheel/pinch always zooms the full
+// range immediately. round(zoomExp) (settle-debounced via getExploreZoomLevel) is the DISCRETE data-level
+// TARGET: the terrain doesn't jump there, it walks toward it one level per completed swap (the Explore
+// driver in GameCore), so chunks build up/down through the intermediate levels toward wherever the camera
+// has zoomed. The settle debounce only stops wheel jitter from flipping the target mid-sweep.
+let zoomExp = 0;
+const BASE_DISTANCE = 32;
+let distance = BASE_DISTANCE;
 
 // Look-down range: never flip past straight-down or up above the horizon.
 const MIN_PITCH = -Math.PI / 2 + 0.05;
 const MAX_PITCH = -0.12;
-const MIN_DISTANCE = 6;
-const MAX_DISTANCE = 140;
 
 const ROTATE_SPEED = 0.009;   // radians per pixel
 const PAN_SPEED = 0.0016;     // world units per pixel, per unit distance
-const ZOOM_SPEED = 0.0007;    // per wheel delta unit
-const PINCH_ZOOM = 0.006;     // per pixel of pinch distance change
+const ZOOM_EXP_SPEED = 0.0025;   // zoomExp change per wheel delta unit (original camera zoom speed)
+const PINCH_ZOOM = 0.006;        // per pixel of pinch distance change (→ zoomExp via ZOOM_EXP_SPEED)
+
+// Wheel-zoom octaves (`zoomExp`) required to step the terrain base LOD level by one. The camera distance
+// still moves at full speed with `zoomExp` (BASE_DISTANCE·2^zoomExp), but the DATA level is
+// round(zoomExp / ZOOM_UNITS_PER_LEVEL), so it takes 3× more camera zoom to switch a level — the level no
+// longer flips on small movements. Because zoomExp is capped at MAX_ZOOM_LEVEL to keep the camera framing
+// sane, the CENTRE base level tops out at MAX_ZOOM_LEVEL / 3; the coarse rings still extend to
+// MAX_ZOOM_LEVEL in the periphery, so full LOD coarseness is reached out there.
+const ZOOM_UNITS_PER_LEVEL = 3;
+
+// Discrete level state (hysteresis + settle debounce).
+let committedLevel = 0;
+let pendingTarget = 0;
+let pendingSince = 0;
+const LEVEL_SETTLE_MS = 160;
+
+function applyZoom(): void {
+  distance = BASE_DISTANCE * Math.pow(2, zoomExp);
+}
+
+/** Discrete LOD data-level TARGET the terrain walks toward — round(zoomExp), where the camera has zoomed.
+ *  Snaps after it has held steady for LEVEL_SETTLE_MS (debounces wheel jitter). The Explore driver steps
+ *  the terrain toward this one level per completed swap; the camera itself is never held back. */
+export function getExploreZoomLevel(): number {
+  const t = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomExp / ZOOM_UNITS_PER_LEVEL)));
+  if (t !== committedLevel) {
+    const now = (typeof performance !== 'undefined' ? performance.now() : 0);
+    if (t !== pendingTarget) { pendingTarget = t; pendingSince = now; }
+    else if (now - pendingSince >= LEVEL_SETTLE_MS) committedLevel = t;
+  } else {
+    pendingTarget = t;
+  }
+  return committedLevel;
+}
+
+/** Linear scale factor (2^level) for the current committed data level. */
+export function getExploreZoomScale(): number {
+  return 1 << committedLevel;
+}
 
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _fwd = new THREE.Vector3();
@@ -47,7 +93,10 @@ export function initExploreCamera(center: THREE.Vector3): void {
   target.copy(center);
   yaw = 0;
   pitch = -Math.PI / 4;
-  distance = 32;
+  zoomExp = 0;
+  committedLevel = 0;
+  pendingTarget = 0;
+  applyZoom();
   gliding = false;
   markerInteracting = false;
 }
@@ -88,6 +137,22 @@ export function getExploreTarget(): THREE.Vector3 {
   return target;
 }
 
+// Base near/far (must match createCamera). At coarse LOD the whole scene is scaled by 2^level, so the
+// camera sits 2^level further out and the terrain extends 2^level further — the fixed far plane would
+// clip it. Scale near+far by the zoom so the view volume grows with the world; keeping the near:far
+// RATIO constant preserves depth-buffer precision (no z-fighting) at every level.
+const BASE_NEAR = 0.1;
+const BASE_FAR = 1000;
+
+/** Reset the camera near/far planes to their base (play / full detail). */
+export function resetCameraClipPlanes(camera: THREE.PerspectiveCamera): void {
+  if (camera.near !== BASE_NEAR || camera.far !== BASE_FAR) {
+    camera.near = BASE_NEAR;
+    camera.far = BASE_FAR;
+    camera.updateProjectionMatrix();
+  }
+}
+
 /** Position + orient the camera from the current orbit state. Call each frame. */
 export function updateExploreCamera(camera: THREE.PerspectiveCamera): void {
   _euler.set(pitch, yaw, 0, 'YXZ');
@@ -95,6 +160,19 @@ export function updateExploreCamera(camera: THREE.PerspectiveCamera): void {
   camera.position.copy(target).addScaledVector(_fwd, -distance);
   camera.rotation.order = 'YXZ';
   camera.rotation.set(pitch, yaw, 0);
+
+  // Grow the clip planes with the CAMERA zoom (its octave = round(zoomExp)), NOT the data base level:
+  // the base level now caps at MAX/ZOOM_UNITS_PER_LEVEL, but the camera still pulls back the full range
+  // and the coarse rings extend far beyond it, so the far plane must track how far the camera has zoomed
+  // or those rings clip. Keeping the near:far ratio constant preserves depth precision at every zoom.
+  const viewOctave = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.round(zoomExp)));
+  const near = BASE_NEAR * (1 << viewOctave);
+  const far = BASE_FAR * (1 << Math.min(MAX_ZOOM_LEVEL + 1, viewOctave + 1));
+  if (camera.near !== near || camera.far !== far) {
+    camera.near = near;
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  }
 }
 
 /** Rotate the orbit (right-drag / two-finger). dx/dy in pixels. */
@@ -117,14 +195,17 @@ export function exploreCameraPan(dx: number, dy: number): void {
   target.z -= (rightZ * dx - fwdZ * dy) * s;
 }
 
-/** Zoom the orbit distance. Positive `delta` zooms out (wheel down / pinch in). */
+/** Zoom in/out. Positive `delta` zooms OUT (wheel down) → higher zoomExp → coarser LOD, further camera.
+ *  Applied instantly and unconstrained: the camera always zooms the full range immediately. round(zoomExp)
+ *  becomes the data-level target the terrain walks toward (getExploreZoomLevel). */
 export function exploreCameraZoom(delta: number): void {
-  distance *= Math.exp(delta * ZOOM_SPEED);
-  if (distance < MIN_DISTANCE) distance = MIN_DISTANCE;
-  if (distance > MAX_DISTANCE) distance = MAX_DISTANCE;
+  zoomExp += delta * ZOOM_EXP_SPEED;
+  if (zoomExp < 0) zoomExp = 0;
+  if (zoomExp > MAX_ZOOM_LEVEL) zoomExp = MAX_ZOOM_LEVEL;
+  applyZoom();
 }
 
 /** Zoom from a pinch distance change (pixels); positive `deltaPixels` = fingers apart → zoom in. */
 export function exploreCameraPinch(deltaPixels: number): void {
-  exploreCameraZoom(-deltaPixels * PINCH_ZOOM / ZOOM_SPEED);
+  exploreCameraZoom(-deltaPixels * PINCH_ZOOM / ZOOM_EXP_SPEED);
 }

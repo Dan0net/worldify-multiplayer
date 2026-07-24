@@ -44,6 +44,7 @@ import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool, meshWorkerCount } from './MeshWorkerPool.js';
 import { expandChunkToGrid, setEmptyAirPredicate } from './ChunkMesher.js';
+import { levelOuterBounds } from './ringLevel.js';
 import { resampleLightAttributes } from './MeshGeometry.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
@@ -56,6 +57,7 @@ import {
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool, terrainWorkerCount } from './TerrainWorkerPool.js';
 import { SeamStitcher } from './SeamStitcher.js';
+import { CoarseRingStreamer } from './CoarseRingStreamer.js';
 import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConfig, hasChunk, loadChunk, saveChunk, hasColumn, loadColumn, saveColumn, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
 /** Callback type for requesting chunk data from server */
@@ -71,9 +73,17 @@ export type ChunkRequestFn = (cx: number, cy: number, cz: number) => void;
  *   sky anywhere in the footprint), so they may safely default to dark when the chunk above isn't
  *   loaded. Surface chunks (slopes, flush tops, BFS-edge columns) are at cy >= minCy and stay lit.
  */
-function columnChunkRange(heights: ArrayLike<number>): { minCy: number; maxCy: number } {
-  const { minCy, maxHeight } = getChunkRangeFromHeights(heights);
-  return { minCy, maxCy: Math.floor((maxHeight + 1) / CHUNK_SIZE) };
+function columnChunkRange(heights: ArrayLike<number>, level = 0): { minCy: number; maxCy: number } {
+  // `heights` are TRUE-world voxel surface heights at every level. A level-L chunk spans
+  // CHUNK_SIZE·2^L world-voxels vertically (matching generateChunk's chunkWorldY = cy·CHUNK_SIZE·2^L
+  // and buildSurfaceColumn's span), so the level-LOCAL chunk index is height / (CHUNK_SIZE·2^L). Dividing
+  // by CHUNK_SIZE alone (the old code) inflated maxCy by 2^L at coarse zoom, so the visibility BFS
+  // centred and its air/terrain test landed 2^L chunks above the real surface — coarse chunks streamed
+  // and meshed but the BFS never marked them visible, so nothing rendered. level 0 (span = CHUNK_SIZE)
+  // is unchanged.
+  const span = CHUNK_SIZE << level;
+  const { minHeight, maxHeight } = getChunkRangeFromHeights(heights);
+  return { minCy: Math.floor(minHeight / span), maxCy: Math.floor((maxHeight + 1) / span) };
 }
 
 /** Shared read-only all-dark "light from above" (used for underground chunks with no chunk above
@@ -94,11 +104,22 @@ function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
  * Manages the voxel world - chunk loading, unloading, and streaming.
  */
 export class VoxelWorld implements ChunkProvider {
-  /** All loaded chunks, keyed by "cx,cy,cz" */
-  readonly chunks: Map<string, Chunk> = new Map();
+  /**
+   * Per-LOD-level chunk / geometry / column stores (Phase B concentric rings). Each level's inner map is
+   * bare-keyed "cx,cy,cz" in that level's own local coords, so the existing streaming/mesher/BFS operate
+   * on one level's map unchanged. `chunks`/`geometries`/`columnInfo` below always point at the ACTIVE
+   * level's inner map (activateLevel) — today only one level is ever active, so this is identical to the
+   * old single map; Phase B keeps several populated at once and streams each over its ring annulus.
+   */
+  private chunksByLevel = new Map<number, Map<string, Chunk>>();
+  private geometriesByLevel = new Map<number, Map<string, ChunkGeometry>>();
+  private columnInfoByLevel = new Map<number, Map<string, { maxCy: number; minCy: number }>>();
 
-  /** All chunk geometries, keyed by "cx,cy,cz" */
-  readonly geometries: Map<string, ChunkGeometry> = new Map();
+  /** Loaded chunks of the ACTIVE level, keyed by "cx,cy,cz" (an entry of chunksByLevel). */
+  chunks: Map<string, Chunk> = new Map();
+
+  /** Chunk geometries of the ACTIVE level, keyed by "cx,cy,cz" (an entry of geometriesByLevel). */
+  geometries: Map<string, ChunkGeometry> = new Map();
 
   /** Chunk keys currently in build preview (set by BuildPreview, read by visibility) */
   readonly previewChunks: Set<string> = new Set();
@@ -185,8 +206,21 @@ export class VoxelWorld implements ChunkProvider {
   /** Reconciles vertex normals across chunk-mesh seams. */
   readonly seamStitcher: SeamStitcher;
 
+  /** Explore concentric coarse-LOD rings BEYOND the base disk (Phase B). Additive + isolated: owns its own
+   *  per-coarse-level maps/remesh/grouper, shares only the mesh pool. Driven only in Explore (cube
+   *  visibility); cleared in play. See CoarseRingStreamer. */
+  private coarseRings!: CoarseRingStreamer;
+
+  /** Scratch true-world stream centre for the coarse rings (level-local base centre × 2^baseLevel). */
+  private _coarseCenterWorld = new THREE.Vector3();
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    // The initial active maps ARE level 0's per-level entries (activateLevel swaps to another level's
+    // maps on a zoom, keeping RemeshPipeline/SeamStitcher pointed at the active level).
+    this.chunksByLevel.set(0, this.chunks);
+    this.geometriesByLevel.set(0, this.geometries);
+    this.columnInfoByLevel.set(0, this.columnInfo);
     this.meshPool = new MeshWorkerPool(meshWorkerCount());
     this.chunkGrouper = new ChunkGrouper(scene);
     this.remeshPipeline = new RemeshPipeline(
@@ -197,9 +231,12 @@ export class VoxelWorld implements ChunkProvider {
       this.pendingChunks,
       (cx, cy, cz) => this.isMarginSourceExpected(cx, cy, cz),
       (cx, cy, cz) => this.shouldMeshChunk(cx, cy, cz),
+      false,                                              // completeFromExpected (base: skipHighBoundary + P8 heal)
+      (cx, cy, cz) => this.isEmptyAir(cx, cy, cz),         // per-level open-sky predicate (no global swap)
     );
-    // Let the mesher distinguish open sky from not-yet-loaded, so terrain tops that meet a chunk
-    // boundary against sky mesh against air (capped) instead of being skipped/extrapolated → no gap.
+    // Build preview + the sync mesh paths don't inject a predicate, so keep the module default pointed
+    // at the base level's open-sky test (those paths are base-level only). The streaming pipeline uses
+    // its injected predicate above, so nothing swaps this global per frame anymore.
     setEmptyAirPredicate((cx, cy, cz) => this.isEmptyAir(cx, cy, cz));
     this.seamStitcher = new SeamStitcher(this.geometries, (ck) => {
       const gk = this.chunkGrouper.getGroupKey(ck);
@@ -214,6 +251,13 @@ export class VoxelWorld implements ChunkProvider {
       this.meshCountDirty = true;
       this.seamStitcher.enqueue(key);
     });
+
+    this.coarseRings = new CoarseRingStreamer(
+      scene,
+      this.meshPool,
+      () => this.getLocalPool(),
+      () => this.isLocal,
+    );
   }
 
   /** Cached count of chunks with visible geometry (recomputed only when dirty). */
@@ -276,6 +320,199 @@ export class VoxelWorld implements ChunkProvider {
    * Set visibility radius dynamically (quality settings).
    * Invalidates BFS cache so chunks update next frame.
    */
+  // ---- LOD zoom (Explore) ----
+  /** Current LOD zoom level (0 = full detail / play). Coarse levels sample the same world at a 2^L
+   *  step; every chunk/tile/column request carries it, and the grouper root is scaled by 2^L. */
+  private currentLevel = 0;
+  /** Consecutive update() passes the new level has been fully quiet (nothing loading/meshing) since the
+   *  last transition. Once it crosses the threshold, reconcileRetiring force-drops any still-unresolved
+   *  retiring chunks (they'll never be covered). Reset on every level change. */
+  private retireSettledPasses = 0;
+  /**
+   * Generation epoch, bumped on every LOD level change and world switch. Terrain generation is async
+   * (worker pool + IndexedDB), and chunk/column coords are level-LOCAL, so a request in flight when the
+   * level changes would otherwise be ingested into the NEW level at reinterpreted coords with wrong-
+   * scale content (the flat-slab / hole artifacts). Every generation request captures the epoch (via
+   * guardEpoch); a result whose epoch no longer matches is dropped. */
+  private genEpoch = 0;
+  /** Use a Chebyshev (cube) visibility volume instead of the L1 diamond — set in Explore so every
+   *  level always has a full shell of chunks to swap in/out on a level change. */
+  private cubeVisibility = false;
+  /** Scratch stream centre: horizontal from the caller, vertical pinned to the surface in Explore. */
+  private _streamPos = new THREE.Vector3();
+  /** Base cube's OUTER border in level-local cell indices (half-open), snapped to the level ABOVE's grid
+   *  (2 base cells) so the cube's edge lines up exactly with ring1's inner edge (== levelOuterBounds).
+   *  Only meaningful/applied in Explore (cube). Recomputed each update() from the stream centre. */
+  private _baseBorderLoX = 0; private _baseBorderHiX = 0;
+  private _baseBorderLoZ = 0; private _baseBorderHiZ = 0;
+
+  get lodLevel(): number { return this.currentLevel; }
+
+  /** True while a level swap is still retiring old-level geometry (not yet fully replaced). The Explore
+   *  driver gates single-level LOD stepping on this: it steps the level toward the camera's target one
+   *  at a time, only once the previous swap has fully retired — so a multi-level flick loads each
+   *  intermediate level in turn instead of one all-or-nothing swap of huge coarse chunks. */
+  get retireActive(): boolean { return this.chunkGrouper.hasRetiring(); }
+
+  /**
+   * Wrap an async generation-result callback so it's dropped if the generation epoch changed between
+   * request and result (a level change / world switch happened in flight). Prevents stale, wrong-level
+   * chunk/column data from being ingested into the new level.
+   */
+  private guardEpoch<T>(cb: (data: T) => void): (data: T) => void {
+    const epoch = this.genEpoch;
+    return (data: T) => { if (epoch === this.genEpoch) cb(data); };
+  }
+
+  /** Toggle the cube (square) visibility volume — Explore uses it, play keeps the diamond. */
+  setCubeVisibility(cube: boolean): void {
+    if (cube === this.cubeVisibility) return;
+    this.cubeVisibility = cube;
+    this.lastBFSChunk = null;
+    this.visibilityDirty = true;
+  }
+
+  /** Point the active chunk/geometry/columnInfo maps at `level`'s per-level store (creating empties on
+   *  first use) and repoint the mesh pipeline + seam stitcher at them. All streaming/meshing then operates
+   *  on that level's bare-keyed maps. */
+  private activateLevel(level: number): void {
+    let ch = this.chunksByLevel.get(level);
+    if (!ch) { ch = new Map(); this.chunksByLevel.set(level, ch); }
+    let ge = this.geometriesByLevel.get(level);
+    if (!ge) { ge = new Map(); this.geometriesByLevel.set(level, ge); }
+    let ci = this.columnInfoByLevel.get(level);
+    if (!ci) { ci = new Map(); this.columnInfoByLevel.set(level, ci); }
+    this.chunks = ch;
+    this.geometries = ge;
+    this.columnInfo = ci;
+    this.remeshPipeline.setMaps(ch, ge);
+    this.seamStitcher.setGeometries(ge);
+  }
+
+  /**
+   * Change the Explore LOD zoom level (per-chunk hold-then-swap). Retires the current level's visible
+   * chunks into the grouper's retiring holder (kept fully visible at the old scale), installs a fresh
+   * terrain root scaled by 2^level, and clears the live chunk state so the world re-streams at the new
+   * level (all requests now carry it). The retiring chunks are disposed INDIVIDUALLY as the new level
+   * resolves their world regions (reconcileRetiring in update) — never a blank frame. `center` is the
+   * level-LOCAL stream centre.
+   */
+  setExploreLevel(level: number, center?: THREE.Vector3): void {
+    if (level === this.currentLevel) return;
+    // Invalidate any in-flight generation for the old level (async worker/IDB results ingested after
+    // this point would land at reinterpreted coords with wrong-scale content — the flat-slab artifacts).
+    this.genEpoch++;
+    this.retireSettledPasses = 0;   // new transition — the quiescence net must re-arm from scratch
+    // Clone the currently-visible chunks into the retiring holder (each at its own level scale) BEFORE
+    // disposing the per-chunk geometries below — the holder owns independent clones, so disposal is safe.
+    // New chunks arrive tagged with the new currentLevel (chunk.level → grouper root at 2^level).
+    this.chunkGrouper.retireAndReset();
+
+    // Dispose the OLD level's geometries and drop its per-level maps, then activate fresh maps for the new
+    // level (repoints RemeshPipeline + SeamStitcher). The grouper's retiring clones keep the old level
+    // visible until covered. (Phase B commit 2 keeps outer-ring levels resident instead of dropping them.)
+    for (const geo of this.geometries.values()) geo.dispose();
+    this.chunksByLevel.delete(this.currentLevel);
+    this.geometriesByLevel.delete(this.currentLevel);
+    this.columnInfoByLevel.delete(this.currentLevel);
+    this.currentLevel = level;
+    this.activateLevel(level);
+
+    this.pendingChunks.clear(); this.pendingColumns.clear(); this.pendingTiles.clear();
+    this.pendingChunkTimes.clear(); this.pendingColumnTimes.clear(); this.pendingTileTimes.clear();
+    this.remeshPipeline.clear();
+    this.deferredBuildOps.length = 0;
+    this.previewChunks.clear();
+    this.lastPlayerChunk = null;
+    this.lastBFSChunk = null;
+    this.initialColumnRequested = false;
+    this.visibilityDirty = true;
+    this.initialized = true;
+    if (center) this.update(center);
+  }
+
+  /**
+   * Per-COLUMN coverage predicate for the atomic sub-chunk LOD swap. Given a NEW-level column (cx,cz),
+   * return true once it's safe to drop the old (retiring) geometry in that column and reveal the new one
+   * — STRICTLY, only when the new content is actually DRAWABLE (or genuinely empty / out of view), never
+   * merely "expected". A column is resolved when:
+   *   - it's out of the new view's XZ cube (you zoomed away → nothing to draw here), OR
+   *   - the new level has landed DRAWN geometry somewhere in the column's surface band, OR
+   *   - the whole band is settled-empty: every cell is air or has a completed-but-empty mesh (nothing to
+   *     draw — the correct strict-empty state).
+   * A band cell that is non-air with NO completed mesh yet keeps the column held (its old geometry stays
+   * as backfill — never a blank). Liveness for a column the new level never draws (occluded / deferred)
+   * is provided OUTSIDE this predicate by force-cover (VoxelWorld.forceCoverRetiring) + the quiescence
+   * net, not by relaxing the draw requirement here — that relaxation is exactly what caused blanks.
+   */
+  private retiringBoxResolved(box: THREE.Box3): boolean {
+    const span = CHUNK_WORLD_SIZE * (1 << this.currentLevel);    // true-world size of a new-level chunk
+    const cxMin = Math.floor(box.min.x / span), cxMax = Math.floor((box.max.x - 1e-3) / span);
+    const czMin = Math.floor(box.min.z / span), czMax = Math.floor((box.max.z - 1e-3) / span);
+    const pc = this.lastPlayerChunk;
+    const r = this._visibilityRadius + 1;                        // +1 buffer, Chebyshev (cube view)
+    // Every column the old chunk covers must be resolved. Out-of-view columns are auto-covered; only
+    // IN-view columns are actually checked, so a huge coarse box (multi-level zoom-in) costs at most the
+    // ~(2r+1)² in-view columns, not its full footprint. A column is resolved when its surface band is
+    // drawn or settled-empty (strict — never merely "expected"; liveness comes from force-cover).
+    for (let cx = cxMin; cx <= cxMax; cx++) {
+      if (pc && Math.abs(cx - pc.cx) > r) continue;              // whole column strip out of view
+      for (let cz = czMin; cz <= czMax; cz++) {
+        if (pc && Math.abs(cz - pc.cz) > r) continue;            // out of view → covered
+        if (!this.columnSurfaceDrawn(cx, cz)) return false;      // in-view column not yet drawable → hold
+      }
+    }
+    return true;
+  }
+
+  /** True when new-level column (cx,cz) is resolved: its surface band is drawn, or fully settled-empty
+   *  (air / meshed-empty). False while columnInfo is missing or a non-air cell hasn't finished meshing. */
+  private columnSurfaceDrawn(cx: number, cz: number): boolean {
+    const info = this.columnInfo.get(`${cx},${cz}`);
+    if (!info) return false;   // extent unknown yet → not resolved (force-cover requests it)
+    let undrawn = false;
+    for (let cy = info.minCy; cy <= info.maxCy; cy++) {
+      if (this.isEmptyAir(cx, cy, cz)) continue;                 // air — nothing renders here
+      const geo = this.geometries.get(chunkKey(cx, cy, cz));
+      if (geo && geo.hasGeometry()) return true;                 // surface drawn → resolved
+      if (geo) continue;                                         // mesh complete but empty → doesn't block
+      undrawn = true;                                            // non-air, not meshed → hold
+    }
+    return !undrawn;   // no drawn cell, but nothing pending → settled-empty → resolved
+  }
+
+  /**
+   * Liveness for the atomic swap: force the new level to REQUEST the IN-VIEW columns of every retiring
+   * old chunk's box, so occlusion culling (which skips hidden columns) can't strand a column unmeshed —
+   * which would hold the old chunk indefinitely. Clamped to the view, so even a huge coarse box only
+   * requests the bounded in-view set. No-op when no transition is live.
+   */
+  private forceCoverRetiring(): void {
+    const boxes = this.chunkGrouper.getRetiringBoxes();
+    if (boxes.length === 0) return;
+    const span = CHUNK_WORLD_SIZE * (1 << this.currentLevel);
+    const pc = this.lastPlayerChunk;
+    const r = this._visibilityRadius + 1;
+    for (const box of boxes) {
+      let cxMin = Math.floor(box.min.x / span), cxMax = Math.floor((box.max.x - 1e-3) / span);
+      let czMin = Math.floor(box.min.z / span), czMax = Math.floor((box.max.z - 1e-3) / span);
+      if (pc) {   // clamp to the in-view window
+        cxMin = Math.max(cxMin, pc.cx - r); cxMax = Math.min(cxMax, pc.cx + r);
+        czMin = Math.max(czMin, pc.cz - r); czMax = Math.min(czMax, pc.cz + r);
+      }
+      for (let cx = cxMin; cx <= cxMax; cx++) {
+        for (let cz = czMin; cz <= czMax; cz++) {
+          const info = this.columnInfo.get(`${cx},${cz}`);
+          if (!info) { this.requestTileFromServer(cx, cz); continue; }
+          for (let cy = info.minCy; cy <= info.maxCy; cy++) {
+            const key = chunkKey(cx, cy, cz);
+            if (!this.chunks.has(key) && !this.pendingChunks.has(key)) this.requestChunkFromServer(cx, cy, cz);
+          }
+        }
+      }
+    }
+  }
+
   setVisibilityRadius(radius: number): void {
     if (radius === this._visibilityRadius) return;
     this._visibilityRadius = radius;
@@ -288,6 +525,29 @@ export class VoxelWorld implements ChunkProvider {
 
   get visibilityRadius(): number {
     return this._visibilityRadius;
+  }
+
+  /** Set the Explore far-view coarse-ring count (Far View quality control). 0 = off. */
+  setFarViewRings(rings: number): void {
+    this.coarseRings.setNumRings(rings);
+  }
+
+  /** True once the base level has resolved (drawn or settled-empty) the base-level column containing the
+   *  given TRUE-world (x,z). The coarse rings use this to hand a chunk off — they keep drawing a coarse
+   *  chunk that panned into the base disk until the finer base geometry actually covers it (no gap). */
+  hasDrawnColumnAtWorld(worldX: number, worldZ: number): boolean {
+    const cw = CHUNK_WORLD_SIZE * (1 << this.currentLevel);
+    return this.columnSurfaceDrawn(Math.floor(worldX / cw), Math.floor(worldZ / cw));
+  }
+
+  /** Per-level solid raycast meshes for the coarse rings, each with its 2^level scale (spawn raycast). */
+  getCoarseSolidMeshesByLevel(): { scale: number; meshes: THREE.Object3D[] }[] {
+    return this.coarseRings.getSolidMeshesByLevel();
+  }
+
+  /** Per-coarse-ring diagnostics (chunks / drawn / incomplete / quiet), finest→coarsest, for the debug panel. */
+  getCoarseLevelStats(): { level: number; chunks: number; drawn: number; incomplete: number; quiet: boolean }[] {
+    return this.coarseRings.getLevelStats();
   }
 
   // ---- Stale pending request cleanup ----
@@ -383,25 +643,102 @@ export class VoxelWorld implements ChunkProvider {
     // re-bakes normals into merged buffers (updateWithVisibility → chunkGrouper.rebuild).
     this.seamStitcher.flush();
 
-    // Get player's current chunk
-    const playerChunk = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
+    // Stream centre. In Explore, PIN THE VERTICAL to the surface of the centre column (from the loaded
+    // column range) — the orbit target's Y can sit below the surface (a fresh landform world at origin,
+    // or returning from a zoomed-out level), which would centre the BFS underground in unloaded solid
+    // where it can't traverse up to the surface, so nothing loads until the user taps the ground. The
+    // horizontal centre still follows the caller. maxCy is just above the surface (air side), so the BFS
+    // reliably floods DOWN through air onto the terrain. In Play (cubeVisibility off) the real position
+    // is used unchanged (the player may legitimately be underground/in a cave).
+    this._streamPos.copy(playerPos);
+    if (this.cubeVisibility) {
+      const pc = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
+      const ci = this.columnInfo.get(`${pc.cx},${pc.cz}`);
+      if (ci) this._streamPos.y = (ci.maxCy + 0.5) * CHUNK_WORLD_SIZE;
+      // Quantise the base cube's OUTER border to the level ABOVE (2 base cells), centred on the camera.
+      // ring1's inner border is levelOuterBounds(currentLevel, trueCentre) which equals this in true
+      // world (levelOuterBounds is scale-covariant), so the cube's edge and ring1's edge line up exactly —
+      // "level 0 renders chunks right up to the level-1 quantisation border." The border isn't the same on
+      // every side (1–2 cells); that's the price of it always meeting. shouldMeshChunk clips render to it;
+      // the base's face-ring + margin loading already reach one cell past the BFS, so the border is covered.
+      const bx = levelOuterBounds(0, this._streamPos.x, this._visibilityRadius);
+      const bz = levelOuterBounds(0, this._streamPos.z, this._visibilityRadius);
+      this._baseBorderLoX = Math.round(bx.lo / CHUNK_WORLD_SIZE); this._baseBorderHiX = Math.round(bx.hi / CHUNK_WORLD_SIZE);
+      this._baseBorderLoZ = Math.round(bz.lo / CHUNK_WORLD_SIZE); this._baseBorderHiZ = Math.round(bz.hi / CHUNK_WORLD_SIZE);
+    }
+
+    // Get player's current chunk (from the surface-pinned stream position in Explore)
+    const playerChunk = worldToChunk(this._streamPos.x, this._streamPos.y, this._streamPos.z);
     this.lastPlayerChunk = { ...playerChunk };
 
     // Expire stale pending requests so they can be re-requested
     this.cleanStalePending();
 
     // Use visibility-based loading
-    this.updateWithVisibility(playerChunk, playerPos);
+    this.updateWithVisibility(playerChunk, this._streamPos);
 
-    // Dispatch from remesh queue to workers (async meshing)
+    // Per-COLUMN atomic LOD swap: dispose each retiring column's old geometry AND reveal its new chunk
+    // the same frame the column's new content is drawable-or-empty. No-op when no transition is live.
+    //
+    // Force-cover: make the new level request every still-retiring column so occlusion can't strand one
+    // unmeshed (which would hold its old geometry forever). Quiescence net: once the new level has gone
+    // fully quiet for a few frames, force-resolve any column still held (deferred-mesh orphan). Both are
+    // state-based, no wall-clock. During an active sweep the net never fires (streaming isn't quiet); the
+    // per-column predicate does the gap-free, strict swapping.
+    this.forceCoverRetiring();
+    // Streaming is "quiet" when generation is idle AND no mesh work that would produce geometry remains
+    // (nothing in-flight or dispatchable — remeshPipeline.hasPendingMeshWork) AND no mesh landed this pass.
+    // We do NOT gate on the raw remesh QUEUE being empty: occluder-shell / underground chunks are parked in
+    // it indefinitely by design (RemeshPipeline.shouldMeshNow), so queue-empty would strand a swap forever
+    // if its last uncovered column is occluded (the coarse zoom-in freeze). But we MUST wait for in-flight /
+    // dispatchable meshes: if generation finishes fast (cache hit) while the new level's meshes are still in
+    // the worker pipeline, firing here would force-drop the retiring geometry before anything is on screen —
+    // an all-chunks-blank flash. hasPendingMeshWork covers exactly that window; the dirty flag re-arms the
+    // counter on every applied mesh so this only trips once nothing meshable remains.
+    // Only evaluate quiescence while a swap is actually live — hasPendingMeshWork scans the remesh queue,
+    // and the force flag is meaningless with no retiring entries. reconcileRetiring is still called every
+    // frame (it also reveals staged chunks and cheaply no-ops when idle).
+    let forceRetire = false;
+    if (this.chunkGrouper.hasRetiring()) {
+      const streamingQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
+        && this.pendingTiles.size === 0 && !this.visibilityDirty && !this.remeshPipeline.hasPendingMeshWork();
+      this.retireSettledPasses = streamingQuiet ? this.retireSettledPasses + 1 : 0;
+      forceRetire = this.retireSettledPasses >= 3;
+    } else {
+      this.retireSettledPasses = 0;
+    }
+    this.chunkGrouper.reconcileRetiring((box) => this.retiringBoxResolved(box), forceRetire);
+
+    // Dispatch from remesh queue to workers (async meshing). The base pipeline carries its own injected
+    // open-sky predicate, so it no longer matters that other levels have their own — no global to re-assert.
     perfStats.begin('remesh');
     const priorityKeys = this.chunkGrouper.getPriorityChunkKeys();
-    this.remeshPipeline.process(playerPos, priorityKeys.size > 0 ? priorityKeys : undefined);
+    this.remeshPipeline.process(this._streamPos, priorityKeys.size > 0 ? priorityKeys : undefined);
     perfStats.end('remesh');
 
     // Report queue stats for debug overlay
     perfStats.setVoxelQueueStats(this.remeshPipeline.size, this.pendingChunks.size);
     perfStats.setMeshDispatches(this.remeshPipeline.meshDispatches);
+
+    // Explore only: stream the concentric coarse-LOD rings BEYOND the base disk. The base centre we were
+    // fed is level-LOCAL (target ÷ 2^baseLevel); the rings live in true-world, so scale it back up. In
+    // play (no cube visibility) there are no rings — drop any that lingered from a prior Explore session.
+    if (this.cubeVisibility) {
+      this._coarseCenterWorld.copy(this._streamPos).multiplyScalar(1 << this.currentLevel);
+      // Center-out priority: coarse rings only stream once the base level's GENERATION is caught up — no
+      // chunks/columns/tiles pending and no swap in flight. This yields the shared terrain-worker pool
+      // (and the minimap tile feed) to the base's nearest-first requests so the centre fills outward
+      // first, while still letting rings stream during a slow pan (when base generation keeps up). Base
+      // meshing is NOT gated on — it already dispatches nearest-first, so it doesn't need the block.
+      const baseQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
+        && this.pendingTiles.size === 0 && !this.visibilityDirty && !this.chunkGrouper.hasRetiring();
+      this.coarseRings.update(
+        this.currentLevel, this._coarseCenterWorld, this._visibilityRadius, baseQuiet,
+        (wx, wz) => this.hasDrawnColumnAtWorld(wx, wz),
+      );
+    } else {
+      this.coarseRings.clear();
+    }
   }
 
   /**
@@ -445,7 +782,8 @@ export class VoxelWorld implements ChunkProvider {
         frustum,
         this,
         this._visibilityRadius,
-        playerPos
+        playerPos,
+        this.cubeVisibility,
       );
       this.cachedReachable = reachable;
       this.addMarginSourceRequests(reachable, toRequest);
@@ -517,24 +855,29 @@ export class VoxelWorld implements ChunkProvider {
     this.initialColumnRequested = true;
 
     if (this.isLocal) {
-      // Existing world: heights are persisted, so seed columnInfo from IDB and skip the full worker
-      // generateColumn (which would carve caves + stamps only to be discarded). The saved surface
-      // chunks then stream in via the normal per-chunk load path (loadLocalChunk prefers saved).
-      if (hasColumn(tx, tz)) {
-        loadColumn(tx, tz).then((col) => {
+      const level = this.currentLevel;
+      const onColumn = this.guardEpoch((data: SurfaceColumnResponse) => this.handleLocalColumn(data));
+      // Persisted (this LOD level): seed columnInfo from IDB and skip the full worker generateColumn
+      // (which would carve caves + stamps only to be discarded). The saved surface chunks then stream in
+      // via the normal per-chunk load path (loadLocalChunk prefers saved). Every level persists under a
+      // level-namespaced key, so this path is uniform for all levels (no coarse special-case).
+      if (hasColumn(tx, tz, level)) {
+        const epoch = this.genEpoch;
+        loadColumn(tx, tz, level).then((col) => {
+          if (epoch !== this.genEpoch) return;   // level/world changed while loading → drop
           if (col) {
             this.pendingColumns.delete(columnKey);
             this.pendingColumnTimes.delete(columnKey);
             this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
           } else {
-            this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
+            this.getLocalPool().requestColumn(tx, tz, onColumn, level);
           }
-        }).catch(() => this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data)));
-        console.log(`[VoxelWorld] Seeded initial surface column from saved heights (${tx}, ${tz})`);
+        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestColumn(tx, tz, onColumn, level); });
+        console.log(`[VoxelWorld] Seeded initial surface column from saved heights (${tx}, ${tz}) L${level}`);
         return;
       }
-      this.getLocalPool().requestColumn(tx, tz, (data) => this.handleLocalColumn(data));
-      console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz})`);
+      this.getLocalPool().requestColumn(tx, tz, onColumn, level);
+      console.log(`[VoxelWorld] Requested initial surface column locally (${tx}, ${tz}) L${level}`);
       return;
     }
 
@@ -691,8 +1034,15 @@ export class VoxelWorld implements ChunkProvider {
    */
   private isRenderable(key: string, reachable: Set<string>): boolean {
     if (!this.remeshPipeline.isMeshComplete(key)) return false;
-    if (reachable.has(key)) return true;
     const { cx, cy, cz } = parseChunkKey(key);
+    // Explore: HIDE anything past the snapped cube border (not just stop meshing it). As the border steps
+    // with a pan, cells behind it must go dark the same frame so they never overlap ring1's inner edge —
+    // ring1 (streaming its annulus continuously) covers the vacated cells. This is the base side of the
+    // atomic base↔ring1 hand-off.
+    if (this.cubeVisibility && (
+      cx < this._baseBorderLoX || cx >= this._baseBorderHiX ||
+      cz < this._baseBorderLoZ || cz >= this._baseBorderHiZ)) return false;
+    if (reachable.has(key)) return true;
     for (const [dx, dy, dz] of FACE_OFFSETS_6) {
       if (reachable.has(chunkKey(cx + dx, cy + dy, cz + dz))) return true;
     }
@@ -710,6 +1060,11 @@ export class VoxelWorld implements ChunkProvider {
    * only when it is paid.
    */
   private shouldMeshChunk(cx: number, cy: number, cz: number): boolean {
+    // Explore: clip the cube to its snapped outer border so its edge lines up with ring1's inner edge.
+    // Outside the border is ring1's territory (drawn coarser), so the base must not render there.
+    if (this.cubeVisibility && (
+      cx < this._baseBorderLoX || cx >= this._baseBorderHiX ||
+      cz < this._baseBorderLoZ || cz >= this._baseBorderHiZ)) return false;
     const reachable = this.cachedReachable;
     if (!reachable || reachable.size === 0) return true; // pre-BFS: don't block the initial mesh
     if (reachable.has(chunkKey(cx, cy, cz))) return true;
@@ -776,22 +1131,32 @@ export class VoxelWorld implements ChunkProvider {
     return this.localPool;
   }
 
+  /** Per-world IndexedDB key for a chunk/column at the current LOD level. Level 0 keeps the bare key
+   *  (back-compat with worlds saved before LOD persistence); coarse levels are prefixed `level:` so a
+   *  coarse chunk — whose level-LOCAL (cx,cy,cz) covers a 2^L-larger world region than the level-0
+   *  chunk with the same coords — never aliases level 0. This is what lets EVERY level persist to IDB
+   *  through one uniform path (no per-level branching). Mirrors WorldManager.columnStorageKey. */
+  private persistKey(base: string, level: number): string {
+    return level === 0 ? base : `${level}:${base}`;
+  }
+
   /**
-   * Local chunk source with persistence: use the saved chunk if this world has
-   * one, otherwise generate it off-thread and save it. Every explored chunk is
-   * materialized in IndexedDB so the world reloads identically.
+   * Local chunk source with persistence: use the saved chunk if this world has one (at this LOD level),
+   * otherwise generate it off-thread and save it. Every explored chunk — at every level — is
+   * materialized in IndexedDB (level-namespaced key) so revisiting reloads it instead of regenerating.
    */
   private loadLocalChunk(cx: number, cy: number, cz: number, key: string): void {
-    if (hasChunk(key)) {
-      loadChunk(key).then((saved) => {
-        if (saved) {
-          this.receiveChunkData({ chunkX: cx, chunkY: cy, chunkZ: cz, voxelData: saved, lastBuildSeq: 0 });
-        } else {
-          this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
-        }
+    const level = this.currentLevel;
+    const pKey = this.persistKey(key, level);
+    const genAndSave = this.guardEpoch((d: VoxelChunkData) => { saveChunk(pKey, d.voxelData); this.receiveChunkData(d); });
+    if (hasChunk(pKey)) {
+      const onSaved = this.guardEpoch((saved: Uint32Array | null) => {
+        if (saved) this.receiveChunkData({ chunkX: cx, chunkY: cy, chunkZ: cz, voxelData: saved, lastBuildSeq: 0 });
+        else this.getLocalPool().requestChunk(cx, cy, cz, genAndSave, level);
       });
+      loadChunk(pKey).then(onSaved);
     } else {
-      this.getLocalPool().requestChunk(cx, cy, cz, (d) => { saveChunk(key, d.voxelData); this.receiveChunkData(d); });
+      this.getLocalPool().requestChunk(cx, cy, cz, genAndSave, level);
     }
   }
 
@@ -800,13 +1165,14 @@ export class VoxelWorld implements ChunkProvider {
    * column; for each chunk, prefer the saved copy, otherwise save the generated one.
    */
   private async handleLocalColumn(columnData: SurfaceColumnResponse): Promise<void> {
+    const level = this.currentLevel;
     for (const chunk of columnData.chunks) {
-      const key = chunkKey(columnData.tx, chunk.chunkY, columnData.tz);
-      if (hasChunk(key)) {
-        const saved = await loadChunk(key);
+      const pKey = this.persistKey(chunkKey(columnData.tx, chunk.chunkY, columnData.tz), level);
+      if (hasChunk(pKey)) {
+        const saved = await loadChunk(pKey);
         if (saved) chunk.voxelData = saved;
       } else {
-        saveChunk(key, chunk.voxelData);
+        saveChunk(pKey, chunk.voxelData);
       }
     }
     this.receiveSurfaceColumnData(columnData);
@@ -855,17 +1221,21 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.set(columnKey, Date.now());
 
     if (this.isLocal) {
-      // Existing world: the column's stamp-corrected heights are persisted, so read them from IDB
-      // instead of re-running the full worker generateTile (which re-carves caves just to measure the
-      // surface). Falls back to generation if the record is somehow missing.
-      if (hasColumn(tx, tz)) {
-        loadColumn(tx, tz).then((col) => {
+      const level = this.currentLevel;
+      const onTile = this.guardEpoch((data: MapTileResponse) => this.receiveTileData(data));
+      // Persisted (this LOD level): read the stamp-corrected heights from IDB instead of re-running the
+      // full worker generateTile (which re-carves caves just to measure the surface). Falls back to
+      // generation if the record is missing. Level-namespaced keys make this uniform for all levels.
+      if (hasColumn(tx, tz, level)) {
+        const epoch = this.genEpoch;
+        loadColumn(tx, tz, level).then((col) => {
+          if (epoch !== this.genEpoch) return;   // level/world changed while loading → drop
           if (col) this.receiveTileData({ tx, tz, heights: col.heights, materials: col.materials });
-          else this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
-        }).catch(() => this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data)));
+          else this.getLocalPool().requestTile(tx, tz, onTile, level);
+        }).catch(() => { if (epoch === this.genEpoch) this.getLocalPool().requestTile(tx, tz, onTile, level); });
         return;
       }
-      this.getLocalPool().requestTile(tx, tz, (data) => this.receiveTileData(data));
+      this.getLocalPool().requestTile(tx, tz, onTile, level);
       return;
     }
 
@@ -885,11 +1255,12 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingTileTimes.delete(columnKey);
     
     // Compute and store the column's chunk range from the (stamp-corrected) tile heights.
-    this.columnInfo.set(columnKey, columnChunkRange(heights));
+    this.columnInfo.set(columnKey, columnChunkRange(heights, this.currentLevel));
 
-    // Persist the heights the first time a column is generated so a later revisit reads them from IDB
-    // instead of regenerating (no-op if they came from loadColumn — already persisted).
-    if (this.isLocal && !hasColumn(tx, tz)) saveColumn(tx, tz, heights, materials);
+    // Persist the heights the first time a column is generated (at this LOD level) so a later revisit
+    // reads them from IDB instead of regenerating. Level-namespaced so a coarse column can't overwrite
+    // or alias the level-0 column for the same (tx,tz) — that aliasing was the wrong-height-chunks bug.
+    if (this.isLocal && !hasColumn(tx, tz, this.currentLevel)) saveColumn(tx, tz, heights, materials, this.currentLevel);
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
@@ -918,6 +1289,9 @@ export class VoxelWorld implements ChunkProvider {
       chunk = new Chunk(cx, cy, cz);
       this.chunks.set(key, chunk);
     }
+    // Tag with the LOD level it was generated at so the grouper roots it correctly. Today all live
+    // chunks share currentLevel; Phase B rings will ingest several levels concurrently.
+    chunk.level = this.currentLevel;
 
     // Skip re-processing if the voxel data is identical (server re-send or no-op)
     if (!isNewChunk && arraysEqual(chunk.data, voxelData) && chunk.lastBuildSeq === lastBuildSeq) {
@@ -1305,10 +1679,11 @@ export class VoxelWorld implements ChunkProvider {
     this.pendingColumnTimes.delete(columnKey);
     
     // Store the column's chunk range from the (stamp-corrected) tile heights.
-    this.columnInfo.set(columnKey, columnChunkRange(heights));
+    this.columnInfo.set(columnKey, columnChunkRange(heights, this.currentLevel));
 
-    // Persist heights on first generation so a revisit skips regeneration (Change 3).
-    if (this.isLocal && !hasColumn(tx, tz)) saveColumn(tx, tz, heights, materials);
+    // Persist heights on first generation (at this LOD level) so a revisit skips regeneration. Level-
+    // namespaced so a coarse column never aliases the level-0 column for the same (tx,tz).
+    if (this.isLocal && !hasColumn(tx, tz, this.currentLevel)) saveColumn(tx, tz, heights, materials, this.currentLevel);
 
     // Notify external systems (map cache)
     if (this.onTileReceived) {
@@ -1480,11 +1855,16 @@ export class VoxelWorld implements ChunkProvider {
     chunksLoaded: number;
     meshesVisible: number;
     remeshQueueSize: number;
+    coarseLevels: { level: number; chunks: number; drawn: number; incomplete: number; quiet: boolean }[];
   } {
+    // Include the coarse rings so the counts match the whole rendered scene (the debug "Geometries" stat
+    // is renderer-wide), not just the base level — otherwise chunks/meshes look far smaller than reality.
+    const cr = this.coarseRings.getStats();
     return {
-      chunksLoaded: this.chunks.size,
-      meshesVisible: this.getMeshCount(),
+      chunksLoaded: this.chunks.size + cr.chunks,
+      meshesVisible: this.getMeshCount() + cr.drawn,
       remeshQueueSize: this.remeshPipeline.size,
+      coarseLevels: this.coarseRings.getLevelStats(),
     };
   }
 
@@ -1785,6 +2165,13 @@ export class VoxelWorld implements ChunkProvider {
       this.localPool = null;
     }
 
+    // Clear the remesh queue AND bump its generation so any in-flight mesh job from the old world
+    // can't apply onto a re-used chunk key after the swap (world switch mirrors the level-change guard).
+    this.remeshPipeline.clear();
+
+    // Drop all Explore coarse rings (their per-level groupers detach from the scene).
+    this.coarseRings.clear();
+
     // Dispose chunk grouper (removes merged meshes from scene)
     this.chunkGrouper.dispose();
 
@@ -1807,6 +2194,17 @@ export class VoxelWorld implements ChunkProvider {
 
     // Clear column info
     this.columnInfo.clear();
+
+    // Reset the per-level stores (dispose any NON-active levels' geometry — the active level was disposed
+    // above) and re-activate fresh empty maps for the active level, so a reused instance (clearAndReload)
+    // restarts clean. currentLevel is left unchanged.
+    for (const [lvl, g] of this.geometriesByLevel) {
+      if (lvl !== this.currentLevel) for (const geo of g.values()) geo.dispose();
+    }
+    this.chunksByLevel.clear();
+    this.geometriesByLevel.clear();
+    this.columnInfoByLevel.clear();
+    this.activateLevel(this.currentLevel);
 
     // Clear remesh queue
     this.remeshPipeline.clear();
@@ -1833,7 +2231,10 @@ export class VoxelWorld implements ChunkProvider {
    */
   clearAndReload(playerPos?: THREE.Vector3): void {
     console.log('[VoxelWorld] Clearing all chunks and reloading...');
-    
+
+    // Invalidate in-flight generation from the previous world/level so stale results can't be ingested.
+    this.genEpoch++;
+
     // Dispose chunks but keep workers alive
     this.dispose(true);
     

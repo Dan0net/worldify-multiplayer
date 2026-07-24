@@ -14,9 +14,9 @@ import { LocalTerrainSource } from './LocalTerrainSource.js';
 import type { VoxelChunkData, MapTileResponse, SurfaceColumnResponse, CaveConfig, TerrainLayerConfig } from '@worldify/shared';
 
 type InitMessage = { type: 'init'; seed: number; caveConfig?: CaveConfig; terrainConfig?: TerrainLayerConfig };
-type ChunkMessage = { type: 'chunk'; id: number; cx: number; cy: number; cz: number };
-type TileMessage = { type: 'tile'; id: number; tx: number; tz: number };
-type ColumnMessage = { type: 'column'; id: number; tx: number; tz: number };
+type ChunkMessage = { type: 'chunk'; id: number; cx: number; cy: number; cz: number; level?: number };
+type TileMessage = { type: 'tile'; id: number; tx: number; tz: number; level?: number };
+type ColumnMessage = { type: 'column'; id: number; tx: number; tz: number; level?: number };
 export type TerrainWorkerRequest = InitMessage | ChunkMessage | TileMessage | ColumnMessage;
 
 export type TerrainWorkerResponse =
@@ -38,13 +38,13 @@ self.onmessage = (e: MessageEvent<TerrainWorkerRequest>) => {
   let data: VoxelChunkData | MapTileResponse | SurfaceColumnResponse;
   switch (msg.type) {
     case 'chunk':
-      data = source.generateChunk(msg.cx, msg.cy, msg.cz);
+      data = source.generateChunk(msg.cx, msg.cy, msg.cz, msg.level ?? 0);
       break;
     case 'tile':
-      data = source.generateTile(msg.tx, msg.tz);
+      data = source.generateTile(msg.tx, msg.tz, msg.level ?? 0);
       break;
     case 'column':
-      data = source.generateColumn(msg.tx, msg.tz);
+      data = source.generateColumn(msg.tx, msg.tz, msg.level ?? 0);
       break;
   }
 

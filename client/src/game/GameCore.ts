@@ -20,10 +20,11 @@ import { initFirstPersonArm, updateFirstPersonArm, startFirstPersonArmExit, tick
 import {
   initExploreCamera, updateExploreCamera, getExploreTarget,
   advanceExploreTargetGlide, isExploreGliding, isExploreMarkerInteracting,
+  getExploreZoomLevel, getExploreZoomScale, resetCameraClipPlanes,
 } from './scene/ExploreCamera';
 import {
   initSpawnMarker, isMarkerPlaced, placeMarkerAtColumn, setMarkerVisible,
-  getMarkerBase, consumeMarkerSpawn, resetMarker,
+  getMarkerBase, consumeMarkerSpawn, resetMarker, setSpawnLodScale,
 } from './spawn/SpawnMarker';
 import { initLighting, applyEnvironmentSettings, updateShadowFollow } from './scene/Lighting';
 import { updateDayNightCycle } from './scene/DayNightCycle';
@@ -36,9 +37,10 @@ import {
   QUALITY_PRESETS,
   loadSavedQualityLevel,
   loadSavedVisibilityRadius,
+  loadSavedFarViewRings,
   detectQualityLevel,
 } from './quality/QualityPresets';
-import { setRendererRef, setVisibilityRadiusCallback, syncQualityToStore } from './quality/QualityManager';
+import { setRendererRef, setVisibilityRadiusCallback, setFarViewRingsCallback, syncQualityToStore } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
 import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, RequestNack, updateTileFromChunk, updateTileHash, createMapTile, CHUNK_SIZE, VOXEL_SCALE } from '@worldify/shared';
@@ -94,6 +96,9 @@ export class GameCore {
   // explored map tiles don't accumulate without bound (see MapTileCache.prune).
   private mapPruneTx = NaN;
   private mapPruneTz = NaN;
+  /** Explore stream centre in level-LOCAL space (true target ÷ 2^level) fed to the voxel world, which
+   *  runs its streaming/BFS in 8 m chunk units while the grouper root scales geometry to true world. */
+  private _lodScaledCenter = new THREE.Vector3();
 
   // Last (x,z) the explore center-follow placed the spawn marker at, so it only re-raycasts
   // when the camera target actually moved (NaN = force placement on the next frame).
@@ -111,7 +116,7 @@ export class GameCore {
   private renderScaleUnsub: (() => void) | null = null;
 
   // Last voxel stats written to the store (change-gate to avoid per-frame re-renders)
-  private lastVoxelStats = { chunksLoaded: -1, meshesVisible: -1, debugObjects: -1 };
+  private lastVoxelStats = { chunksLoaded: -1, meshesVisible: -1, debugObjects: -1, coarseSig: '' };
 
   // Store subscriptions that push material/water settings to the shaders
   private materialSettingsUnsub: (() => void) | null = null;
@@ -234,8 +239,12 @@ export class GameCore {
       setVisibilityRadiusCallback((radius: number) => {
         this.voxelIntegration.world.setVisibilityRadius(radius);
       });
-      // Apply the quality preset (including visibility radius) and sync to store
-      syncQualityToStore(qualityLevel, effectiveVisibility);
+      // Wire the Explore far-view (coarse ring count) callback.
+      setFarViewRingsCallback((rings: number) => {
+        this.voxelIntegration.world.setFarViewRings(rings);
+      });
+      // Apply the quality preset (including visibility radius + far-view rings) and sync to store.
+      syncQualityToStore(qualityLevel, effectiveVisibility, loadSavedFarViewRings() ?? undefined);
       
       // Initialize spawn manager + the explore-mode spawn marker gizmo
       this.spawnManager = new SpawnManager(scene);
@@ -468,6 +477,14 @@ export class GameCore {
   private introTmpPos = new THREE.Vector3();
   private introTmpQuat = new THREE.Quaternion();
   private static readonly CAMERA_INTRO_DURATION_MS = 1350;
+  // Play-from-Explore intro is GATED on level-0 terrain readiness: after clicking Play (which drops the
+  // world to LOD level 0), the camera is held at the captured explore pose while the full-detail chunks
+  // stream in under the marker; the intro glide to first-person only starts once enough are meshed (or a
+  // safety timeout), so you never drop into FP onto blocky/unloaded ground.
+  private pendingPlayIntro = false;
+  private playIntroWaitMs = 0;
+  private static readonly PLAY_INTRO_MAX_WAIT_MS = 5000;
+  private static readonly PLAY_INTRO_MESH_READY = 6;
   // Time constant (ms) for easing the explore orbit height onto the surface, so the camera
   // doesn't judder as terrain height steps between columns / streams in during a pan.
   private static readonly EXPLORE_Y_SMOOTH_MS = 140;
@@ -653,7 +670,7 @@ export class GameCore {
     // (physics, environment, shadows, etc.) are reflected this frame rather than
     // being deferred to the next one.
     // (Suppressed during the intro glide, which owns the camera orientation.)
-    if (gameMode === GameMode.Playing && camera && this.cameraIntroMs === 0) {
+    if (gameMode === GameMode.Playing && camera && this.cameraIntroMs === 0 && !this.pendingPlayIntro) {
       camera.rotation.set(controls.pitch, controls.yaw, 0);
     }
 
@@ -686,6 +703,7 @@ export class GameCore {
     if (previousMode === GameMode.Playing) {
       this.spectatorCenter.copy(localPlayer.position);
       this.savePlayerPosNow();
+      this.pendingPlayIntro = false; // cancel a not-yet-started play intro if we bailed out early
     }
 
     // Entering Explore (boot or pause) - seed the free camera on the current center and
@@ -718,6 +736,14 @@ export class GameCore {
     // (works even for a re-play after pausing); otherwise the first-time spawn logic.
     if (currentMode === GameMode.Playing) {
       useGameStore.getState().setExploreReady(false); // explore UI animates out
+      // Play is always full detail: drop back to LOD level 0 (scale 1) and the diamond visibility
+      // volume. If the user hit Play while zoomed out, the coarse view is held (frozen) while the
+      // level-0 chunks stream in under the camera-intro tween.
+      this.voxelIntegration?.setCubeVisibility(false);
+      this.voxelIntegration?.setExploreLevel(0);
+      // Restore the base near/far clip planes (explore may have widened them for a coarse LOD).
+      const playCam = getCamera();
+      if (playCam) resetCameraClipPlanes(playCam);
       const markerSpawn = consumeMarkerSpawn();
       if (markerSpawn) {
         this.playerManager.setSpawnPosition(markerSpawn);
@@ -728,15 +754,19 @@ export class GameCore {
         this.spawnPlayer();
       }
 
-      // Start a brief camera glide from the explore view to the first-person pose, so
-      // entering play reads as a smooth move rather than a hard cut. Capture the current
-      // (explore) camera pose as the start; the end is tracked live from the player.
+      // Capture the current (zoomed-wherever) explore camera pose. Rather than starting the glide
+      // immediately, enter the PENDING state: hold this pose while LOD level 0 streams in under the
+      // marker (setExploreLevel(0) above kicked that off, holding the coarse view meanwhile), then the
+      // glide to first-person fires once the ground is ready (updatePlayingMode). This is the "zoom in,
+      // load, then transition" of the plan. No glide when re-entering from a non-Explore mode.
       if (previousMode === GameMode.Explore) {
         const cam = getCamera();
         if (cam) {
           this.cameraIntroFromPos.copy(cam.position);
           this.cameraIntroFromQuat.copy(cam.quaternion);
-          this.cameraIntroMs = GameCore.CAMERA_INTRO_DURATION_MS;
+          this.cameraIntroMs = 0;
+          this.pendingPlayIntro = true;
+          this.playIntroWaitMs = 0;
         }
       }
     }
@@ -804,18 +834,26 @@ export class GameCore {
     const stats = this.voxelIntegration.getStats();
     const debugObjects = this.voxelIntegration.debug.getDebugObjectCount();
     const last = this.lastVoxelStats;
+    // Compact signature of the per-ring breakdown so we only re-publish (and re-render the panel) when a
+    // ring's counts actually move, not every frame.
+    const coarseSig = (stats.coarseLevels ?? [])
+      .map((r) => `${r.level}:${r.chunks}:${r.drawn}:${r.incomplete}:${r.quiet ? 1 : 0}`)
+      .join('|');
     if (
       stats.chunksLoaded !== last.chunksLoaded ||
       stats.meshesVisible !== last.meshesVisible ||
-      debugObjects !== last.debugObjects
+      debugObjects !== last.debugObjects ||
+      coarseSig !== last.coarseSig
     ) {
       last.chunksLoaded = stats.chunksLoaded;
       last.meshesVisible = stats.meshesVisible;
       last.debugObjects = debugObjects;
+      last.coarseSig = coarseSig;
       useGameStore.getState().setVoxelStats({
         chunksLoaded: stats.chunksLoaded,
         meshesVisible: stats.meshesVisible,
         debugObjects,
+        coarseLevels: stats.coarseLevels ?? [],
       });
     }
   }
@@ -832,18 +870,27 @@ export class GameCore {
     // center column's terrain has streamed — which also lifts a fresh world onto its surface.
     advanceExploreTargetGlide(deltaMs);
     setMarkerVisible(true);
+    // Tell the marker the current LOD scale BEFORE any raycast this frame (center-follow below and taps
+    // between frames): the raycast target meshes are level-local, so the marker transforms true-world
+    // queries by this scale to hit the coarse terrain. Must precede placeMarkerAtColumn.
+    // Use the DISPLAYED terrain level (the meshes actually on screen), not the camera's target — during a
+    // multi-level LOD walk they differ, and the marker raycasts the live meshes at their current scale.
+    setSpawnLodScale(this.voxelIntegration ? (1 << this.voxelIntegration.lodLevel) : getExploreZoomScale());
     const target = getExploreTarget();
+    // Surface-follow: keep the spawn marker under screen centre as the user pans — at ALL zoom levels
+    // (coarse terrain renders at its true world height, so the top-down column raycast still resolves
+    // the surface). The camera-height ease is kept to level 0 only, since at coarse zoom the far camera
+    // over blocky/streaming terrain would judder if its height chased the surface.
     if (!isExploreMarkerInteracting() && !isExploreGliding()) {
       const moved = target.x !== this.lastFollowX || target.z !== this.lastFollowZ;
       if ((moved || !isMarkerPlaced()) && placeMarkerAtColumn(target.x, target.z)) {
         this.lastFollowX = target.x;
         this.lastFollowZ = target.z;
       }
-      // Ease the orbit height onto the marker's surface instead of snapping, so the camera
-      // doesn't judder as the surface height changes across a pan (or as chunks stream in).
-      // Runs every frame (not gated on x/z movement) so it keeps settling after a pan stops
-      // and gives a smooth one-time rise onto the surface when a world opens.
-      if (isMarkerPlaced()) {
+      // Ease the orbit height onto the marker's surface (level 0 only — see above). Runs every frame
+      // (not gated on x/z movement) so it keeps settling after a pan stops and gives a smooth one-time
+      // rise onto the surface when a world opens.
+      if (getExploreZoomLevel() === 0 && isMarkerPlaced()) {
         const k = 1 - Math.exp(-deltaMs / GameCore.EXPLORE_Y_SMOOTH_MS);
         target.y += (getMarkerBase().y - target.y) * k;
       }
@@ -871,8 +918,26 @@ export class GameCore {
     this.spectatorCenter.copy(target);
 
     if (this.voxelIntegration) {
+      // LOD zoom: the voxel world streams in level-LOCAL 8 m chunk units and the grouper root scales
+      // geometry to true world by 2^level. Feed it the target ÷ scale; a level change (settled on the
+      // wheel) triggers hold-then-swap. Explore uses the cube (square) visibility volume.
+      const targetLevel = getExploreZoomLevel();
+      this.voxelIntegration.setCubeVisibility(true);
+      // Step the terrain LOD ONE level at a time toward the camera's target, and only once the previous
+      // swap has fully retired. A fast multi-level flick (e.g. 6→0) thus loads each intermediate level in
+      // turn — a cheap 2× refinement per step — instead of collapsing to one all-or-nothing swap of huge
+      // coarse chunks that strands the view on the larger zoom level until the entire fine level streams.
+      let level = this.voxelIntegration.lodLevel;
+      if (level !== targetLevel && !this.voxelIntegration.retireActive) {
+        level += targetLevel > level ? 1 : -1;
+        this.voxelIntegration.setExploreLevel(level);
+      }
+      // Scale the stream centre by the DISPLAYED level (the grouper root's actual scale), not the camera's
+      // target — during a multi-level walk the two differ, and the centre must match the level being streamed.
+      const scale = 1 << level;
+      this._lodScaledCenter.copy(target).multiplyScalar(1 / scale);
       perfStats.begin('voxelUpdate');
-      this.voxelIntegration.update(this.spectatorCenter);
+      this.voxelIntegration.update(this._lodScaledCenter);
       perfStats.end('voxelUpdate');
     }
   }
@@ -944,22 +1009,37 @@ export class GameCore {
 
     // Update camera and build system
     if (camera) {
-      updateCameraFromPlayer(camera, localPlayer);
-      // Brief explore→first-person glide: blend from the captured explore pose toward
-      // the live FP pose (which updateCameraFromPlayer just wrote into the camera).
-      if (this.cameraIntroMs > 0) {
-        this.cameraIntroMs = Math.max(0, this.cameraIntroMs - deltaMs);
-        const t = 1 - this.cameraIntroMs / GameCore.CAMERA_INTRO_DURATION_MS;
-        const eased = easeInOut(t);
-        this.introTmpPos.copy(camera.position);
-        this.introTmpQuat.copy(camera.quaternion);
-        camera.position.copy(this.cameraIntroFromPos).lerp(this.introTmpPos, eased);
-        camera.quaternion.copy(this.cameraIntroFromQuat).slerp(this.introTmpQuat, eased);
-      }
-      if (!menuPaused) {
-        perfStats.begin('buildPreview');
-        this.builder.update(camera, localPlayer.position);
-        perfStats.end('buildPreview');
+      if (this.pendingPlayIntro) {
+        // Hold the captured explore pose while full-detail (level 0) terrain streams in under the
+        // marker. Start the glide once enough chunks are meshed (or a safety timeout) so the drop into
+        // first-person lands on loaded ground, not blocky/empty terrain.
+        this.playIntroWaitMs += deltaMs;
+        camera.position.copy(this.cameraIntroFromPos);
+        camera.quaternion.copy(this.cameraIntroFromQuat);
+        const level0 = (this.voxelIntegration?.lodLevel ?? 0) === 0;
+        const meshed = useGameStore.getState().voxelStats.meshesVisible >= GameCore.PLAY_INTRO_MESH_READY;
+        if ((level0 && meshed) || this.playIntroWaitMs >= GameCore.PLAY_INTRO_MAX_WAIT_MS) {
+          this.pendingPlayIntro = false;
+          this.cameraIntroMs = GameCore.CAMERA_INTRO_DURATION_MS;
+        }
+      } else {
+        updateCameraFromPlayer(camera, localPlayer);
+        // Brief explore→first-person glide: blend from the captured explore pose toward
+        // the live FP pose (which updateCameraFromPlayer just wrote into the camera).
+        if (this.cameraIntroMs > 0) {
+          this.cameraIntroMs = Math.max(0, this.cameraIntroMs - deltaMs);
+          const t = 1 - this.cameraIntroMs / GameCore.CAMERA_INTRO_DURATION_MS;
+          const eased = easeInOut(t);
+          this.introTmpPos.copy(camera.position);
+          this.introTmpQuat.copy(camera.quaternion);
+          camera.position.copy(this.cameraIntroFromPos).lerp(this.introTmpPos, eased);
+          camera.quaternion.copy(this.cameraIntroFromQuat).slerp(this.introTmpQuat, eased);
+        }
+        if (!menuPaused) {
+          perfStats.begin('buildPreview');
+          this.builder.update(camera, localPlayer.position);
+          perfStats.end('buildPreview');
+        }
       }
     }
 
@@ -970,7 +1050,7 @@ export class GameCore {
     const speed = Math.hypot(move.moveX, move.moveZ);
     let headBob = 0;
     // Skip head-bob during the intro glide so it doesn't fight the tween.
-    if (camera && !menuPaused && this.cameraIntroMs === 0) {
+    if (camera && !menuPaused && this.cameraIntroMs === 0 && !this.pendingPlayIntro) {
       if (speed > 0.1) this.headBobPhase += (Math.min(deltaMs, 100) / 1000) * 9;
       headBob = Math.sin(this.headBobPhase * 2) * 0.05 * Math.min(1, speed);
       camera.position.y += headBob;
@@ -978,7 +1058,7 @@ export class GameCore {
 
     // Once the explore→FP camera glide finishes, flag first-person ready so the arm + hotbar
     // reveal together (covers no-glide re-entry too, where cameraIntroMs is already 0).
-    if (this.cameraIntroMs === 0 && !useGameStore.getState().firstPersonReady) {
+    if (this.cameraIntroMs === 0 && !this.pendingPlayIntro && !useGameStore.getState().firstPersonReady) {
       useGameStore.getState().setFirstPersonReady(true);
     }
 
@@ -988,7 +1068,7 @@ export class GameCore {
     const ts = useGameStore.getState().textureState;
     const meta = build.presetMeta[build.presetId];
     updateFirstPersonArm({
-      visible: !menuPaused && this.cameraIntroMs === 0,
+      visible: !menuPaused && this.cameraIntroMs === 0 && !this.pendingPlayIntro,
       buildMode: build.buildMode,
       rotation: meta?.baseRotation,
       parts: meta?.parts,

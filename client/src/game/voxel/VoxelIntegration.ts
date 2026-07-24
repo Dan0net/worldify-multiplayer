@@ -136,9 +136,15 @@ export class VoxelIntegration implements TerrainRaycaster {
    * 
    * @param playerPos Current player world position
    */
+  /** LOD zoom passthroughs (Explore). See VoxelWorld.setExploreLevel / setCubeVisibility. */
+  setExploreLevel(level: number, center?: THREE.Vector3): void { this.world.setExploreLevel(level, center); }
+  setCubeVisibility(cube: boolean): void { this.world.setCubeVisibility(cube); }
+  get lodLevel(): number { return this.world.lodLevel; }
+  get retireActive(): boolean { return this.world.retireActive; }
+
   update(playerPos: THREE.Vector3): void {
     if (!this.initialized) return;
-    
+
     // Update world (handles chunk loading/unloading)
     this.world.update(playerPos);
     
@@ -373,6 +379,19 @@ export class VoxelIntegration implements TerrainRaycaster {
       }
     }
     return meshes;
+  }
+
+  /**
+   * Solid raycast meshes grouped BY LOD level with each level's scale (2^level). The spawn/marker
+   * raycast needs this in Explore because the base disk and each coarse ring live at different scales
+   * (their per-chunk meshes are all in 0.25 m level-local space); a single scale can't hit them all.
+   * Entry 0 is the base level; the rest are the coarse rings.
+   */
+  getSolidMeshesByLevel(): { scale: number; meshes: THREE.Object3D[] }[] {
+    return [
+      { scale: 1 << this.world.lodLevel, meshes: this.getSolidMeshes() },
+      ...this.world.getCoarseSolidMeshesByLevel(),
+    ];
   }
 
   /**

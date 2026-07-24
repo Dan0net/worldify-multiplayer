@@ -47,6 +47,10 @@ interface ChunkSlot {
   cx: number;
   cy: number;
   cz: number;
+  /** LOD level this chunk was generated at — selects which scaled root it lives under (`rootFor`). Set
+   *  from the chunk's own level (updateChunk arg). Phase B rings make it per-region; today all live
+   *  chunks share the single streamed level, so behaviour is identical to the old single root. */
+  level: number;
   /** World-space origin of this chunk */
   wx: number;
   wy: number;
@@ -74,6 +78,14 @@ interface ChunkSlot {
    * the group re-merges or any member's geometry changes.
    */
   mergedSlices: ({ vertexOffset: number; vertexCount: number } | null)[];
+  /**
+   * True while this NEW chunk is STAGED HIDDEN during an LOD transition: its geometry exists (so the
+   * coverage predicate sees it), but it must not render yet because an old (retiring) chunk still
+   * covers its world region — drawing it now would overlap/z-fight the old one. Revealed atomically
+   * (same frame the covering old chunk is disposed) by reconcileRetiring. Renders nothing while true,
+   * regardless of `visible`.
+   */
+  staged: boolean;
 }
 
 /** Tracks pre-allocated buffer capacity per layer so we can reuse them. */
@@ -84,6 +96,9 @@ interface LayerBuffers {
 
 /** A spatial group of chunks whose geometry is merged for draw-call reduction. */
 interface ChunkGroup {
+  /** LOD level of this group's chunks (all members share it) — selects the scaled root the merged mesh
+   *  lives under. Today all groups are at the single streamed level. */
+  level: number;
   /** Per-layer merged meshes in the scene */
   meshes: (THREE.Mesh | null)[];
   /** Set of chunk keys belonging to this group */
@@ -118,6 +133,11 @@ function groupKeyFromChunk(cx: number, cy: number, cz: number): string {
   return `${gx},${gy},${gz}`;
 }
 
+/** Cap on retiring old-chunk entries held at once. Bounds geometry/draw-calls if a pathological fast
+ *  multi-level sweep retires faster than swaps resolve; oldest entries beyond this are dropped. Sized
+ *  well above a normal view's visible-chunk count so it never triggers in ordinary zooming. */
+const MAX_RETIRING_ENTRIES = 4096;
+
 function groupCenter(gx: number, gy: number, gz: number): { cx: number; cy: number; cz: number } {
   return {
     cx: gx * GROUP_GRID + (GROUP_GRID >> 1),
@@ -126,8 +146,9 @@ function groupCenter(gx: number, gy: number, gz: number): { cx: number; cy: numb
   };
 }
 
-function createEmptyGroup(centerCx: number, centerCy: number, centerCz: number): ChunkGroup {
+function createEmptyGroup(centerCx: number, centerCy: number, centerCz: number, level: number): ChunkGroup {
   return {
+    level,
     meshes: new Array<THREE.Mesh | null>(LAYER_COUNT).fill(null),
     chunkKeys: new Set(),
     dirty: true,
@@ -149,8 +170,40 @@ function createEmptyGroup(centerCx: number, centerCy: number, centerCz: number):
 
 export class ChunkGrouper {
   private scene: THREE.Scene;
+  /**
+   * One scaled root per LOD level (`rootFor`). All of a level's chunk meshes (standalone + merged) live
+   * under its root, scaled by that level's zoom factor (2^level) in one place: a level-L chunk is meshed
+   * at the usual 0.25 m voxel scale, and the root's scale turns its 8 m footprint into the true 8·2^L m.
+   * Level 0 keeps scale 1 (identity → transparent). Baked-world-space vertex positions scale about the
+   * origin, so a chunk's origin offset and its voxel size scale together — correct. Phase B keeps geometry
+   * from several levels resident at once (concentric rings); today only one is populated, so this is
+   * exactly the old single scaled root. Each chunk carries its own `level` (updateChunk arg) → its root.
+   */
+  private roots = new Map<number, THREE.Group>();
   private slots = new Map<string, ChunkSlot>();
   private groups = new Map<string, ChunkGroup>();
+
+  /**
+   * Retiring (old-level) geometry from the level currently being swapped away, bucketed by the NEW
+   * level's chunk COLUMN — the atomic unit of the swap. Each column's old meshes are disposed together
+   * the frame that column's new content is drawable-or-empty (per-column atomic swap). All meshes live
+   * in `retiringRoot` (scale 1) in TRUE-world coords: a mesh carries scale = its source level's 2^L and
+   * position = origin × that scale, so columns from different superseded levels coexist without a shared
+   * root scale. Empty while no transition is in flight.
+   */
+  private retiringRoot!: THREE.Group;
+  /** Retiring OLD chunks as WHOLE per-chunk clones (no geometry splitting — splitting a coarse chunk to
+   *  the fine grid on a multi-level zoom-in explodes into thousands of sub-meshes and hangs the frame).
+   *  Each entry is one old chunk's layer meshes + its TRUE-world AABB. The swap is per-old-chunk: the
+   *  entry is disposed when every new-level column its box covers is resolved (drawn / air / out of
+   *  view), and the new chunks over it stay staged-hidden until then — strict no-overlap, no blank. For
+   *  an adjacent-level zoom the old chunk spans a 2×2 column block (near per-column); for a big jump the
+   *  few in-view coarse chunks act as a coarse backfill that pops to fine when it streams. */
+  private retiringEntries: Array<{ meshes: THREE.Mesh[]; box: THREE.Box3 }> = [];
+
+  /** Keys of new chunks currently staged hidden (see ChunkSlot.staged). Iterated by reconcileRetiring
+   *  to reveal them the frame no retiring chunk covers their column. Empty when no transition. */
+  private stagedKeys = new Set<string>();
 
   /** Number of groups with suppressionPending === true (O(1) check). */
   private pendingSuppressionCount = 0;
@@ -163,9 +216,153 @@ export class ChunkGrouper {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    this.retiringRoot = new THREE.Group();
+    this.scene.add(this.retiringRoot);
   }
 
   // ---- Public API ----
+
+  /** Get (or lazily create) the scaled root for a LOD level. Scale = 2^level so a level-L chunk's 8 m
+   *  footprint renders at its true 8·2^L m; level 0 = identity. */
+  private rootFor(level: number): THREE.Group {
+    let root = this.roots.get(level);
+    if (!root) {
+      root = new THREE.Group();
+      root.scale.setScalar(1 << level);
+      this.scene.add(root);
+      this.roots.set(level, root);
+    }
+    return root;
+  }
+
+  /**
+   * LOD level change with WHOLE-chunk atomic retirement. Clone each currently VISIBLE chunk's geometry
+   * (per layer, no splitting) into `retiringEntries`, positioned in TRUE-world (mesh scale = oldScale,
+   * position = origin × oldScale) with its true-world AABB. The previous level stays fully visible while
+   * the new one streams; each entry is disposed the frame reconcileRetiring finds every new-level column
+   * its box covers resolved. New chunks over a retiring box are staged hidden until it's gone — strict
+   * no-overlap, no blank. Whole-chunk (not split) keeps this O(visible chunks) regardless of the level
+   * JUMP size: splitting a coarse chunk to the fine grid on a multi-level zoom-in explodes into thousands
+   * of sub-meshes and hangs the frame. Entries from a superseded level are KEPT (multi-level backfill),
+   * capped so a pathological sweep can't accumulate unbounded geometry.
+   */
+  retireAndReset(): void {
+    for (const slot of this.slots.values()) {
+      if (!slot.visible || slot.staged) continue;   // staged chunks were never shown → nothing to retire
+      const oldScale = 1 << slot.level;              // this chunk's own level scale (true-world clone)
+      const meshes: THREE.Mesh[] = [];
+      for (let layer = 0; layer < LAYER_COUNT; layer++) {
+        const geo = slot.geometries[layer];
+        if (!geo || !geo.index || geo.index.count === 0) continue;
+        const mesh = createLayerMesh(geo.clone(), layer);
+        mesh.frustumCulled = true;
+        mesh.castShadow = false;   // transient during the swap
+        mesh.scale.setScalar(oldScale);
+        mesh.position.set(slot.wx * oldScale, slot.wy * oldScale, slot.wz * oldScale);
+        this.retiringRoot.add(mesh);
+        meshes.push(mesh);
+      }
+      if (meshes.length === 0) continue;
+      const box = new THREE.Box3(
+        new THREE.Vector3(slot.wx * oldScale, slot.wy * oldScale, slot.wz * oldScale),
+        new THREE.Vector3((slot.wx + CHUNK_WORLD_SIZE) * oldScale, (slot.wy + CHUNK_WORLD_SIZE) * oldScale, (slot.wz + CHUNK_WORLD_SIZE) * oldScale),
+      );
+      this.retiringEntries.push({ meshes, box });
+    }
+    // Bound accumulation on pathological fast sweeps: drop the OLDEST entries beyond the cap (their
+    // region falls back to whatever the new level has — a rare, brief edge blank, never a hang).
+    if (this.retiringEntries.length > MAX_RETIRING_ENTRIES) {
+      const drop = this.retiringEntries.splice(0, this.retiringEntries.length - MAX_RETIRING_ENTRIES);
+      for (const e of drop) for (const m of e.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
+    }
+
+    // Tear down all live roots and re-stream; each new chunk's level (updateChunk arg) recreates its root
+    // lazily via rootFor. Behaves like the old single-root swap while only one level is ever live.
+    this.disposeLiveRoot();
+    this.slots.clear();
+    this.groups.clear();
+    this.stagedKeys.clear();   // staged chunks belonged to the (now discarded) previous live roots
+    this.pendingSuppressionCount = 0;
+  }
+
+  /** Dispose every live root's meshes (merged group copies + standalones) and detach the roots. */
+  private disposeLiveRoot(): void {
+    for (const slot of this.slots.values()) this.removeStandalone(slot);
+    for (const gk of [...this.groups.keys()]) this.disposeGroup(gk);
+    for (const root of this.roots.values()) this.scene.remove(root);
+    this.roots.clear();
+  }
+
+  /**
+   * Per-frame atomic swap. For each retiring old chunk, when `isBoxResolved(box)` (every new-level column
+   * its footprint covers is drawn / air / out of view) → dispose it. Then any staged new chunk no longer
+   * covered by a retiring box is revealed. Exactly one level draws a region before (old) and after (new)
+   * — never both (strict no-overlap), never neither (no blank). No-op when no transition is live.
+   *
+   * `force` (quiescence net): resolve EVERY remaining entry this pass — once the new level has gone fully
+   * quiet, anything still held will never be covered.
+   */
+  reconcileRetiring(isBoxResolved: (box: THREE.Box3) => boolean, force = false): void {
+    if (this.retiringEntries.length === 0 && this.stagedKeys.size === 0) return;
+
+    // Step 1 — dispose resolved retiring old chunks.
+    let write = 0;
+    for (let i = 0; i < this.retiringEntries.length; i++) {
+      const e = this.retiringEntries[i];
+      if (force || isBoxResolved(e.box)) {
+        for (const m of e.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
+      } else {
+        this.retiringEntries[write++] = e;
+      }
+    }
+    this.retiringEntries.length = write;
+
+    // Step 2 — reveal any staged new chunk no longer covered by a retiring box (same pass → atomic).
+    if (this.stagedKeys.size > 0) {
+      for (const key of [...this.stagedKeys]) {
+        const slot = this.slots.get(key);
+        if (!slot) { this.stagedKeys.delete(key); continue; }
+        if (this.overlapsRetiring(slot.wx, slot.wy, slot.wz, 1 << slot.level)) continue;   // still covered → keep hidden
+        slot.staged = false;
+        this.stagedKeys.delete(key);
+        if (!slot.coveredByMerge) this.showStandalone(slot);
+        this.markGroupDirty(slot.groupKey);
+      }
+    }
+  }
+
+  /** True-world AABBs of every retiring old chunk, for VoxelWorld's force-cover (request the in-view
+   *  columns each box covers so occlusion can't strand a swap unresolved). */
+  getRetiringBoxes(): THREE.Box3[] {
+    return this.retiringEntries.map(e => e.box);
+  }
+
+  /** True while a level swap is still in flight — old-level geometry is still retiring (not yet fully
+   *  replaced by the new level). VoxelWorld gates single-level LOD stepping on this so a multi-level
+   *  jump loads one level difference at a time instead of retiring everything at once. */
+  hasRetiring(): boolean {
+    return this.retiringEntries.length > 0;
+  }
+
+  /** Does a live-root chunk at level-local origin (wx,wy,wz) overlap ANY retiring old chunk's true-world
+   *  box? Decides staging (a new chunk over old must stay hidden until the old is gone) and reveal. */
+  private overlapsRetiring(wx: number, wy: number, wz: number, scale: number): boolean {
+    if (this.retiringEntries.length === 0) return false;
+    const s = scale;
+    const minX = wx * s, minY = wy * s, minZ = wz * s;
+    const maxX = (wx + CHUNK_WORLD_SIZE) * s, maxY = (wy + CHUNK_WORLD_SIZE) * s, maxZ = (wz + CHUNK_WORLD_SIZE) * s;
+    for (const e of this.retiringEntries) {
+      const b = e.box;
+      if (minX < b.max.x && maxX > b.min.x && minY < b.max.y && maxY > b.min.y && minZ < b.max.z && maxZ > b.min.z) return true;
+    }
+    return false;
+  }
+
+  /** Dispose all retiring geometry immediately (world switch / teardown). */
+  private disposeRetiring(): void {
+    for (const e of this.retiringEntries) for (const m of e.meshes) { this.retiringRoot.remove(m); m.geometry.dispose(); }
+    this.retiringEntries.length = 0;
+  }
 
   /**
    * Register or update a chunk's geometry references.
@@ -176,6 +373,7 @@ export class ChunkGrouper {
     cx: number,
     cy: number,
     cz: number,
+    level: number,
     geometries: (THREE.BufferGeometry | null)[],
     worldPos: { x: number; y: number; z: number },
   ): void {
@@ -195,11 +393,16 @@ export class ChunkGrouper {
         slot.wy = worldPos.y;
         slot.wz = worldPos.z;
         slot.coveredByMerge = false; // left its old merged set; new group hasn't baked it
-        this.addToGroup(key, gk, cx, cy, cz);
+        this.addToGroup(key, gk, level);
       }
     } else {
+      // Stage this NEW chunk hidden if a retiring old chunk still covers its world region — drawing it
+      // now would overlap the old (strict no-overlap). Revealed atomically when that old chunk is
+      // disposed (reconcileRetiring). Its geometry still exists, so the coverage predicate sees it.
+      const staged = this.overlapsRetiring(worldPos.x, worldPos.y, worldPos.z, 1 << level);
       slot = {
         cx, cy, cz,
+        level,
         wx: worldPos.x,
         wy: worldPos.y,
         wz: worldPos.z,
@@ -209,20 +412,19 @@ export class ChunkGrouper {
         standaloneMeshes: [null, null, null],
         coveredByMerge: false,
         mergedSlices: [null, null, null],
+        staged,
       };
       this.slots.set(key, slot);
-      this.addToGroup(key, gk, cx, cy, cz);
+      if (staged) this.stagedKeys.add(key);
+      this.addToGroup(key, gk, level);
     }
 
     this.markGroupDirty(gk);
 
-    // Show this chunk immediately via a standalone mesh — but ONLY if it isn't
-    // already baked into a live merged mesh. Overlaying a standalone on a
-    // still-visible (stale) merged mesh double-draws the chunk and flickers,
-    // worst with transparent water. A covered chunk instead shows its stale merged
-    // geometry single-drawn until rebuildGroup atomically swaps in the fresh merge.
+    // Show this chunk immediately via a standalone mesh — but ONLY if it isn't already baked into a
+    // live merged mesh (double-draw flicker) and isn't STAGED (an old chunk still covers its region).
     const group = this.groups.get(gk);
-    if (group && !slot.coveredByMerge) {
+    if (group && !slot.coveredByMerge && !slot.staged) {
       this.showStandalone(slot);
     }
   }
@@ -236,10 +438,11 @@ export class ChunkGrouper {
     if (!slot) return;
     if (slot.visible !== visible) {
       slot.visible = visible;
-      // Toggle standalone meshes immediately
+      // Toggle standalone meshes immediately (a staged chunk stays hidden regardless).
+      const vis = visible && !slot.staged;
       for (let i = 0; i < LAYER_COUNT; i++) {
         const m = slot.standaloneMeshes[i];
-        if (m) m.visible = visible;
+        if (m) m.visible = vis;
       }
       // Don't dirty the group while it's suppressed for preview —
       // the merged mesh is hidden and will be restored as-is.
@@ -259,6 +462,7 @@ export class ChunkGrouper {
     this.removeStandalone(slot);
     const gk = slot.groupKey;
     this.slots.delete(key);
+    this.stagedKeys.delete(key);
     this.removeFromGroup(key, gk);
     this.markGroupDirty(gk);
 
@@ -649,6 +853,13 @@ export class ChunkGrouper {
     }
     this.groups.clear();
     this.slots.clear();
+    this.stagedKeys.clear();
+    // Drop any in-flight LOD retirement (its clones) too, so a world switch leaves nothing behind.
+    this.disposeRetiring();
+    // Detach + drop all scaled roots so a reused grouper (clearAndReload keeps the same instance)
+    // restarts clean at level 0 — rootFor recreates lazily on the first chunk.
+    for (const root of this.roots.values()) this.scene.remove(root);
+    this.roots.clear();
   }
 
   // ---- Private: suppression helpers ----
@@ -712,7 +923,7 @@ export class ChunkGrouper {
 
   // ---- Private: group bookkeeping ----
 
-  private addToGroup(chunkKey: string, gk: string, _cx: number, _cy: number, _cz: number): void {
+  private addToGroup(chunkKey: string, gk: string, level: number): void {
     let group = this.groups.get(gk);
     if (!group) {
       const parts = gk.split(',');
@@ -721,7 +932,7 @@ export class ChunkGrouper {
         parseInt(parts[1], 10),
         parseInt(parts[2], 10),
       );
-      group = createEmptyGroup(center.cx, center.cy, center.cz);
+      group = createEmptyGroup(center.cx, center.cy, center.cz, level);
       this.groups.set(gk, group);
     }
     group.chunkKeys.add(chunkKey);
@@ -738,28 +949,30 @@ export class ChunkGrouper {
 
   /** Show individual chunk meshes in the scene (shared geometry, no copy). */
   private showStandalone(slot: ChunkSlot): void {
+    const root = this.rootFor(slot.level);
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
       const geo = slot.geometries[layer];
       const existing = slot.standaloneMeshes[layer];
 
       if (!geo || !geo.index || geo.index.count === 0) {
         if (existing) {
-          this.scene.remove(existing);
+          root.remove(existing);
           slot.standaloneMeshes[layer] = null;
         }
         continue;
       }
 
+      const vis = slot.visible && !slot.staged;   // staged chunks stay hidden during an LOD swap
       if (existing) {
         existing.geometry = geo;
         existing.position.set(slot.wx, slot.wy, slot.wz);
-        existing.visible = slot.visible;
+        existing.visible = vis;
       } else {
         const mesh = createLayerMesh(geo, layer);
         mesh.frustumCulled = true;
         mesh.position.set(slot.wx, slot.wy, slot.wz);
-        mesh.visible = slot.visible;
-        this.scene.add(mesh);
+        mesh.visible = vis;
+        root.add(mesh);
         slot.standaloneMeshes[layer] = mesh;
       }
     }
@@ -767,10 +980,11 @@ export class ChunkGrouper {
 
   /** Remove all standalone meshes for a slot from the scene. */
   private removeStandalone(slot: ChunkSlot): void {
+    const root = this.roots.get(slot.level);
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
       const m = slot.standaloneMeshes[layer];
       if (m) {
-        this.scene.remove(m);
+        root?.remove(m);
         slot.standaloneMeshes[layer] = null;
       }
     }
@@ -787,10 +1001,11 @@ export class ChunkGrouper {
   private disposeGroup(gk: string): void {
     const group = this.groups.get(gk);
     if (!group) return;
+    const root = this.roots.get(group.level);
     for (let i = 0; i < LAYER_COUNT; i++) {
       const m = group.meshes[i];
       if (m) {
-        this.scene.remove(m);
+        root?.remove(m);
         m.geometry.dispose();
         group.meshes[i] = null;
       }
@@ -814,12 +1029,12 @@ export class ChunkGrouper {
     // Tracks whether any layer produced a live merged mesh this rebuild.
     let anyLayerBuilt = false;
 
-    // Collect visible chunk slots
+    // Collect visible chunk slots (staged chunks are hidden during an LOD swap → excluded from merge)
     const visibleSlots = this.visibleSlotsBuf;
     visibleSlots.length = 0;
     for (const ck of group.chunkKeys) {
       const slot = this.slots.get(ck);
-      if (slot && slot.visible) visibleSlots.push(slot);
+      if (slot && slot.visible && !slot.staged) visibleSlots.push(slot);
     }
 
     for (let layer = 0; layer < LAYER_COUNT; layer++) {
@@ -975,7 +1190,7 @@ export class ChunkGrouper {
           const mesh = createLayerMesh(merged, layer);
           mesh.frustumCulled = true;
           mesh.position.set(0, 0, 0);
-          this.scene.add(mesh);
+          this.rootFor(group.level).add(mesh);
           group.meshes[layer] = mesh;
         }
       } else {
@@ -993,7 +1208,7 @@ export class ChunkGrouper {
     group.merged = anyLayerBuilt;
     for (const ck of group.chunkKeys) {
       const slot = this.slots.get(ck);
-      if (slot) slot.coveredByMerge = anyLayerBuilt && slot.visible;
+      if (slot) slot.coveredByMerge = anyLayerBuilt && slot.visible && !slot.staged;
     }
   }
 }

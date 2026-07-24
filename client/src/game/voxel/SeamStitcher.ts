@@ -68,9 +68,16 @@ export class SeamStitcher {
   debug = false;
 
   constructor(
-    private readonly geometries: Map<string, ChunkGeometry>,
+    private geometries: Map<string, ChunkGeometry>,
     private readonly markGroupDirty: (chunkKey: string) => void,
   ) {}
+
+  /** Repoint at the ACTIVE LOD level's geometry map (VoxelWorld.activateLevel). Seams reconcile within a
+   *  single level; the pending queue is level-scoped by the map it resolves keys against. */
+  setGeometries(geometries: Map<string, ChunkGeometry>): void {
+    this.geometries = geometries;
+    this.pending.clear();
+  }
 
   /** Queue a freshly-meshed chunk for seam reconciliation on the next flush. */
   enqueue(key: string): void {

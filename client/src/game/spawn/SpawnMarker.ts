@@ -22,6 +22,18 @@ let scene: THREE.Scene | null = null;
 let terrain: TerrainRaycaster | null = null;
 let group: THREE.Group | null = null;
 
+// Current LOD zoom scale (2^level). The raycast target meshes (getSolidMeshes) are the per-chunk
+// data meshes, which live in LEVEL-LOCAL space (0.25 m voxels, 8 m chunk) and carry NO zoom scale —
+// only the rendered ChunkGrouper root is scaled by 2^level. Camera + marker live in true-world space.
+// So a raycast built in true-world space must be transformed into level-local space (÷ scale) before
+// intersecting, and the local hit scaled back (× scale) to true world for placement. 1 = level 0 / Play.
+let lodScale = 1;
+
+/** Set the current LOD zoom scale (2^level) so the marker raycasts hit the coarse terrain. */
+export function setSpawnLodScale(scale: number): void {
+  lodScale = scale > 0 ? scale : 1;
+}
+
 let placed = false;
 let armed = false;                        // Play requested → next Playing entry uses the marker
 const spawnPos = new THREE.Vector3();     // player spawn (surface + player height)
@@ -53,23 +65,54 @@ export function initSpawnMarker(s: THREE.Scene, t: TerrainRaycaster): void {
   scene.add(group);
 }
 
-/** Raycast a screen NDC point against the terrain; returns the surface hit or null. */
+/** Per-LOD-level solid mesh sets to raycast (base disk + coarse rings), each with its 2^level scale.
+ *  Falls back to a single set at the current base scale when the terrain has no per-level accessor. */
+function levelSets(): { scale: number; meshes: THREE.Object3D[] }[] {
+  if (!terrain) return [];
+  return terrain.getSolidMeshesByLevel?.() ?? [{ scale: lodScale, meshes: terrain.getSolidMeshes() }];
+}
+
+/** Raycast a screen NDC point against the terrain; returns the nearest surface hit or null. Tests every
+ *  resident LOD level (base + rings) in its own level-local space, so taps land on ring terrain too. */
 export function raycastMarkerNDC(ndc: { x: number; y: number }, camera: THREE.Camera): THREE.Vector3 | null {
   if (!terrain) return null;
   _ndc.set(ndc.x, ndc.y);
-  raycaster.setFromCamera(_ndc, camera);
-  raycaster.far = 1000;
-  const hits = raycaster.intersectObjects(terrain.getSolidMeshes(), false);
-  return hits.length > 0 ? hits[0].point.clone() : null;
+  const camFar = (camera as THREE.PerspectiveCamera).far || 1000;
+  let best: THREE.Vector3 | null = null;
+  let bestDist = Infinity;
+  for (const { scale, meshes } of levelSets()) {
+    if (!meshes.length) continue;
+    // Meshes live in level-local space (÷ scale from true world): transform the true-world camera ray in
+    // (divide origin, keep direction), intersect, scale the hit back, and keep the nearest across levels.
+    raycaster.setFromCamera(_ndc, camera);
+    raycaster.far = camFar / scale;
+    if (scale !== 1) raycaster.ray.origin.multiplyScalar(1 / scale);
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (hits.length === 0) continue;
+    const pt = hits[0].point.clone().multiplyScalar(scale);
+    const d = pt.distanceToSquared(camera.position);
+    if (d < bestDist) { bestDist = d; best = pt; }
+  }
+  return best;
 }
 
-/** Downward raycast at an (x,z) column; returns the surface point or null. */
+/** Downward raycast at an (x,z) column; returns the topmost surface point across LOD levels, or null. */
 function raycastColumn(x: number, z: number): THREE.Vector3 | null {
   if (!terrain) return null;
-  raycaster.set(new THREE.Vector3(x, SPAWN_RAYCAST_HEIGHT, z), _down);
-  raycaster.far = SPAWN_RAYCAST_HEIGHT * 2;
-  const hits = raycaster.intersectObjects(terrain.getSolidMeshes(), false);
-  return hits.length > 0 ? hits[0].point.clone() : null;
+  let best: THREE.Vector3 | null = null;
+  let bestY = -Infinity;
+  for (const { scale, meshes } of levelSets()) {
+    if (!meshes.length) continue;
+    // (x,z) true-world → level-local (÷ scale). 200 m start stays above the local surface at every zoom.
+    const inv = 1 / scale;
+    raycaster.set(new THREE.Vector3(x * inv, SPAWN_RAYCAST_HEIGHT, z * inv), _down);
+    raycaster.far = SPAWN_RAYCAST_HEIGHT * 2;
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (hits.length === 0) continue;
+    const pt = hits[0].point.clone().multiplyScalar(scale);
+    if (pt.y > bestY) { bestY = pt.y; best = pt; }
+  }
+  return best;
 }
 
 /** Place the marker at a world surface point. */

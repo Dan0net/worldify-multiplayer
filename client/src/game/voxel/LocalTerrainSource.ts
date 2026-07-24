@@ -48,27 +48,31 @@ export class LocalTerrainSource {
     });
   }
 
-  private rawChunk(cx: number, cy: number, cz: number): Uint32Array {
-    // Pack (cx,cy,cz) into one safe-integer key (±2^16 each) — no string alloc/hash per lookup.
-    const key = ((cx + 0x10000) * 0x20000 + (cy + 0x10000)) * 0x20000 + (cz + 0x10000);
+  private rawChunk(cx: number, cy: number, cz: number, level = 0): Uint32Array {
+    // Pack (level,cx,cy,cz) into one safe-integer key. Coords ±2^15 (±262 km at level 0), level 0..15 —
+    // the whole key is < 2^53, so distinct LOD levels never collide in the cache. No string alloc/hash.
+    const key = ((level * 0x10000 + (cx + 0x8000)) * 0x10000 + (cy + 0x8000)) * 0x10000 + (cz + 0x8000);
     let data = this.cache.get(key);
     if (!data) {
-      data = this.gen.generateChunk(cx, cy, cz);
+      data = this.gen.generateChunk(cx, cy, cz, level);
       this.cache.set(key, data);
     }
     return data;
   }
 
-  /** Fill a fresh tile with terrain-baseline surface heights/materials. */
-  private baselineTile(tx: number, tz: number) {
+  /** Fill a fresh tile with terrain-baseline surface heights/materials. At LOD level L the tile covers
+   *  the same world region sampled at a 2^L step (coarse overview). */
+  private baselineTile(tx: number, tz: number, level = 0) {
+    const vs = VOXEL_SCALE * (1 << level);
     const tile = createMapTile(tx, tz);
-    const worldX0 = tx * CHUNK_SIZE * VOXEL_SCALE;
-    const worldZ0 = tz * CHUNK_SIZE * VOXEL_SCALE;
+    const worldX0 = tx * CHUNK_SIZE * vs;
+    const worldZ0 = tz * CHUNK_SIZE * vs;
     for (let lz = 0; lz < MAP_TILE_SIZE; lz++) {
       for (let lx = 0; lx < MAP_TILE_SIZE; lx++) {
         const { height, material } = this.gen.sampleSurface(
-          worldX0 + lx * VOXEL_SCALE,
-          worldZ0 + lz * VOXEL_SCALE,
+          worldX0 + lx * vs,
+          worldZ0 + lz * vs,
+          level === 0,   // coarse LOD skips path/river furniture, matching generateChunk
         );
         const i = tilePixelIndex(lx, lz);
         tile.heights[i] = height;
@@ -78,14 +82,15 @@ export class LocalTerrainSource {
     return tile;
   }
 
-  /** Generate a single chunk (equivalent of a server VOXEL_CHUNK_DATA response). */
-  generateChunk(cx: number, cy: number, cz: number): VoxelChunkData {
+  /** Generate a single chunk (equivalent of a server VOXEL_CHUNK_DATA response). `level` is the LOD
+   *  zoom level (0 = full detail); a coarse chunk samples the same field at a 2^level step. */
+  generateChunk(cx: number, cy: number, cz: number, level = 0): VoxelChunkData {
     return {
       chunkX: cx,
       chunkY: cy,
       chunkZ: cz,
       lastBuildSeq: 0,
-      voxelData: this.rawChunk(cx, cy, cz),
+      voxelData: this.rawChunk(cx, cy, cz, level),
     };
   }
 
@@ -96,8 +101,27 @@ export class LocalTerrainSource {
    * client's vertical load cap comes from these heights, so a terrain-only height would clip stamp
    * tops at the chunk boundary.
    */
-  private buildSurfaceColumn(tx: number, tz: number): { tile: ReturnType<typeof createMapTile>; chunks: SurfaceColumnChunk[] } {
-    const tile = this.baselineTile(tx, tz);
+  private buildSurfaceColumn(tx: number, tz: number, level = 0): { tile: ReturnType<typeof createMapTile>; chunks: SurfaceColumnChunk[] } {
+    const tile = this.baselineTile(tx, tz, level);
+
+    // Coarse LOD: pure base terrain (no stamps/caves), so the surface chunk range is just the height
+    // span. A level-L chunk spans CHUNK_SIZE·2^L world-voxels vertically, so divide heights by that.
+    if (level > 0) {
+      const span = CHUNK_SIZE * (1 << level);
+      let minH = Infinity, maxH = -Infinity;
+      for (let i = 0; i < tile.heights.length; i++) {
+        const h = tile.heights[i];
+        if (h < minH) minH = h;
+        if (h > maxH) maxH = h;
+      }
+      const minCy = Math.floor(minH / span);
+      const maxCy = Math.floor(maxH / span);
+      const chunks: SurfaceColumnChunk[] = [];
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        chunks.push({ chunkY: cy, lastBuildSeq: 0, voxelData: this.rawChunk(tx, cy, tz, level) });
+      }
+      return { tile, chunks };
+    }
 
     const { minCy: terrainMinCy, maxCy: terrainMaxCy } = getChunkRangeFromHeights(tile.heights);
     const minCy = terrainMinCy - CHUNKS_BELOW_SURFACE;
@@ -130,8 +154,8 @@ export class LocalTerrainSource {
   }
 
   /** Generate a tile with stamp-corrected surface heights (equivalent of a MAP_TILE_DATA response). */
-  generateTile(tx: number, tz: number): MapTileResponse {
-    const { tile } = this.buildSurfaceColumn(tx, tz);
+  generateTile(tx: number, tz: number, level = 0): MapTileResponse {
+    const { tile } = this.buildSurfaceColumn(tx, tz, level);
     return { tx, tz, heights: tile.heights, materials: tile.materials };
   }
 
@@ -139,8 +163,8 @@ export class LocalTerrainSource {
    * Generate a bootstrap surface column: tile + the chunks that intersect the
    * surface. Mirrors SurfaceColumnProvider.generateColumn.
    */
-  generateColumn(tx: number, tz: number): SurfaceColumnResponse {
-    const { tile, chunks } = this.buildSurfaceColumn(tx, tz);
+  generateColumn(tx: number, tz: number, level = 0): SurfaceColumnResponse {
+    const { tile, chunks } = this.buildSurfaceColumn(tx, tz, level);
     return { tx, tz, heights: tile.heights, materials: tile.materials, chunks };
   }
 }

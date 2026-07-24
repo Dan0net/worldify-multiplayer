@@ -74,19 +74,19 @@ export class TerrainWorkerPool {
     worker.postMessage({ ...msg, id });
   }
 
-  requestChunk(cx: number, cy: number, cz: number, cb: (data: VoxelChunkData) => void): void {
+  requestChunk(cx: number, cy: number, cz: number, cb: (data: VoxelChunkData) => void, level = 0): void {
     const worker = this.workers[this.workerForColumn(cx, cz)];
-    this.post(worker, { type: 'chunk', cx, cy, cz }, cb as (data: unknown) => void);
+    this.post(worker, { type: 'chunk', cx, cy, cz, level }, cb as (data: unknown) => void);
   }
 
-  requestTile(tx: number, tz: number, cb: (data: MapTileResponse) => void): void {
+  requestTile(tx: number, tz: number, cb: (data: MapTileResponse) => void, level = 0): void {
     const worker = this.workers[this.workerForColumn(tx, tz)];
-    this.post(worker, { type: 'tile', tx, tz }, cb as (data: unknown) => void);
+    this.post(worker, { type: 'tile', tx, tz, level }, cb as (data: unknown) => void);
   }
 
-  requestColumn(tx: number, tz: number, cb: (data: SurfaceColumnResponse) => void): void {
+  requestColumn(tx: number, tz: number, cb: (data: SurfaceColumnResponse) => void, level = 0): void {
     const worker = this.workers[this.workerForColumn(tx, tz)];
-    this.post(worker, { type: 'column', tx, tz }, cb as (data: unknown) => void);
+    this.post(worker, { type: 'column', tx, tz, level }, cb as (data: unknown) => void);
   }
 
   dispose(): void {

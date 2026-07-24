@@ -19,7 +19,7 @@ import {
 import { Chunk, ChunkPhase } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
-import { meshChunk, expandChunkToGrid, getSkipHighBoundary } from './ChunkMesher.js';
+import { meshChunk, expandChunkToGrid, getSkipHighBoundary, type EmptyAirFn } from './ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
 
 // ---- Types ----
@@ -49,8 +49,8 @@ export class RemeshPipeline {
 
 
   // ---- Dependencies (injected) ----
-  private readonly chunks: Map<string, Chunk>;
-  private readonly geometries: Map<string, ChunkGeometry>;
+  private chunks: Map<string, Chunk>;
+  private geometries: Map<string, ChunkGeometry>;
   private readonly grouper: ChunkGrouper;
   private readonly meshPool: MeshWorkerPool;
   private readonly pendingChunks: Set<string>;
@@ -73,6 +73,26 @@ export class RemeshPipeline {
    */
   private readonly shouldMeshNow: (cx: number, cy: number, cz: number) => boolean;
 
+  /**
+   * Derive mesh COMPLETENESS from "is a high FACE neighbour still expected to load" rather than from
+   * the mesher's skipHighBoundary flags. Set for the coarse rings: a chunk is only ever dispatched once
+   * marginSourcesReady (nothing inbound), so any high face the mesher still skips is a neighbour that
+   * will NEVER load — underground rock below a column's minCy, or beyond the request band — where the
+   * edge is extrapolated to the correct solid and the mesh is final. Treating those as INCOMPLETE (the
+   * skipHighBoundary default) hid legitimate ring-edge surface chunks forever, since no late arrival
+   * ever heals them. The base keeps the skipHighBoundary derivation: it meshes chunks with genuinely
+   * absent neighbours on purpose and relies on the P8 re-mesh heal when one arrives late.
+   */
+  private readonly completeFromExpected: boolean;
+
+  /**
+   * Open-sky predicate for this pipeline's level, used by the mesher to distinguish genuine open sky
+   * (mesh against air) from not-yet-loaded terrain (extrapolate/skip). Injected per level so the
+   * mesher never needs a swapped module global — each level's pipeline carries its own. `null` falls
+   * back to the ChunkMesher module default (build-preview / sync paths).
+   */
+  private readonly emptyAir: EmptyAirFn | null;
+
   constructor(
     chunks: Map<string, Chunk>,
     geometries: Map<string, ChunkGeometry>,
@@ -81,6 +101,8 @@ export class RemeshPipeline {
     pendingChunks: Set<string>,
     isMarginSourceExpected?: (cx: number, cy: number, cz: number) => boolean,
     shouldMeshNow?: (cx: number, cy: number, cz: number) => boolean,
+    completeFromExpected = false,
+    emptyAir: EmptyAirFn | null = null,
   ) {
     this.chunks = chunks;
     this.geometries = geometries;
@@ -90,6 +112,15 @@ export class RemeshPipeline {
     this.isMarginSourceExpected = isMarginSourceExpected
       ?? ((cx, cy, cz) => this.pendingChunks.has(chunkKey(cx, cy, cz)));
     this.shouldMeshNow = shouldMeshNow ?? (() => true);
+    this.completeFromExpected = completeFromExpected;
+    this.emptyAir = emptyAir;
+  }
+
+  /** Repoint at the ACTIVE LOD level's chunk/geometry maps (VoxelWorld.activateLevel). The queue is
+   *  cleared separately (clear()) on a level change, so no stale keys carry across. */
+  setMaps(chunks: Map<string, Chunk>, geometries: Map<string, ChunkGeometry>): void {
+    this.chunks = chunks;
+    this.geometries = geometries;
   }
 
   // ---- Listeners ----
@@ -101,8 +132,40 @@ export class RemeshPipeline {
 
   add(key: string): void { this.queue.add(key); }
   delete(key: string): void { this.queue.delete(key); }
-  clear(): void { this.queue.clear(); }
+  /**
+   * Clear the queue AND bump the generation. Called on an LOD level change / world switch, when the
+   * chunk map is cleared and re-populated. Mesh jobs are async: one dispatched from OLD voxel data
+   * (its grid captured at dispatch) could return after the swap and apply onto the RE-USED chunk key,
+   * writing wrong-scale geometry onto the new chunk (the flat-slab artifacts). Dispatch captures the
+   * generation and applyResult drops results whose generation no longer matches.
+   */
+  clear(): void { this.queue.clear(); this.generation++; }
   get size(): number { return this.queue.size; }
+
+  /**
+   * True while mesh work that will actually PRODUCE geometry is still outstanding — i.e. a chunk is
+   * dispatched to a worker (in-flight, result not yet applied) OR a queued chunk is dispatchable right now
+   * (loaded, drawable per shouldMeshNow, margins ready). Crucially this is NOT `size > 0`: occluder-shell /
+   * underground chunks are parked in the queue indefinitely by design (shouldMeshNow=false) and never
+   * produce geometry, so counting them would make a resting coarse view look perpetually "busy". Used by
+   * the LOD quiescence net so it won't force-drop retiring geometry while the new level's meshes are still
+   * being produced (the fast-cache blank: generation finishes instantly, meshes are still in the pipeline).
+   */
+  hasPendingMeshWork(): boolean {
+    if (this.meshPool.hasInFlight()) return true;   // dispatched → result pending → will draw
+    for (const key of this.queue) {
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue;
+      if (this.meshPool.isInFlight(key) || this.meshPool.isPreviewChunk(key)) continue;
+      if (!this.shouldMeshNow(chunk.cx, chunk.cy, chunk.cz)) continue;      // occluded → never draws
+      if (!this.marginSourcesReady(chunk.cx, chunk.cy, chunk.cz)) continue; // waiting on a neighbour
+      return true;   // a chunk that can mesh THIS frame → real work remains
+    }
+    return false;
+  }
+
+  /** Monotonic generation; bumped by clear() so stale async mesh results can be dropped on apply. */
+  private generation = 0;
 
   // ---- Processing ----
 
@@ -154,10 +217,18 @@ export class RemeshPipeline {
       if (!this.marginSourcesReady(chunk.cx, chunk.cy, chunk.cz)) continue;
 
       const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
-      const complete = !(skipHighBoundary[0] || skipHighBoundary[1] || skipHighBoundary[2]);
+      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid, false, this.emptyAir);
+      // Coarse rings: complete unless a high FACE neighbour is still inbound (see completeFromExpected).
+      // Base: complete unless the mesher had to skip a high face (absent neighbour), healed later by P8.
+      const complete = this.completeFromExpected
+        ? !(this.isMarginSourceExpected(chunk.cx + 1, chunk.cy, chunk.cz)
+            || this.isMarginSourceExpected(chunk.cx, chunk.cy + 1, chunk.cz)
+            || this.isMarginSourceExpected(chunk.cx, chunk.cy, chunk.cz + 1))
+        : !(skipHighBoundary[0] || skipHighBoundary[1] || skipHighBoundary[2]);
 
+      const gen = this.generation;
       this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {
+        if (gen !== this.generation) return;   // level/world changed since dispatch → stale, drop
         this.setComplete(key, complete);
         this.applyResult(result);
       });
@@ -180,9 +251,9 @@ export class RemeshPipeline {
       this.geometries.set(key, geo);
     }
 
-    const skip = getSkipHighBoundary(chunk, this.chunks);
+    const skip = getSkipHighBoundary(chunk, this.chunks, this.emptyAir);
     this.setComplete(key, !(skip[0] || skip[1] || skip[2]));
-    const output = meshChunk(chunk, this.chunks);
+    const output = meshChunk(chunk, this.chunks, false, this.emptyAir);
     geo.updateFromSurfaceNet(output);
     this.registerWithGrouper(key, chunk, geo);
     chunk.clearDirty();
@@ -214,13 +285,15 @@ export class RemeshPipeline {
       if (!chunk) continue;
       this.queue.delete(key);
       const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
+      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid, false, this.emptyAir);
       batchItems.push({ chunkKey: key, grid, skipHighBoundary });
     }
 
     if (batchItems.length === 0) return;
 
+    const gen = this.generation;
     this.meshPool.dispatchBatch(batchItems, (results) => {
+      if (gen !== this.generation) return;   // level/world changed since dispatch → stale, drop
       for (const result of results) {
         const item = batchItems.find((b) => b.chunkKey === result.chunkKey);
         if (item) {
@@ -278,7 +351,7 @@ export class RemeshPipeline {
   /** Register chunk geometry with the grouper for merged rendering. */
   private registerWithGrouper(key: string, chunk: Chunk, geo: ChunkGeometry): void {
     const worldPos = chunk.getWorldPosition();
-    this.grouper.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, geo.getGeometries(), worldPos);
+    this.grouper.updateChunk(key, chunk.cx, chunk.cy, chunk.cz, chunk.level, geo.getGeometries(), worldPos);
   }
 
   /**
