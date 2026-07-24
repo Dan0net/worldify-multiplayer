@@ -31,8 +31,16 @@ import { meshVoxelsSplit, SurfaceNetInput, SplitSurfaceNetOutput } from './Surfa
  * "open sky" (fill the margin with AIR and MESH the face, so a terrain top that meets a chunk
  * boundary against sky isn't left as a gap). Main-thread only (expansion runs on the main thread).
  */
-let isEmptyAirFn: ((cx: number, cy: number, cz: number) => boolean) | null = null;
-export function setEmptyAirPredicate(fn: (cx: number, cy: number, cz: number) => boolean): void {
+export type EmptyAirFn = (cx: number, cy: number, cz: number) => boolean;
+
+/**
+ * Fallback open-sky predicate, used ONLY when a caller does not pass one explicitly (build preview and
+ * the sync mesh paths, which are base-level only). The streaming paths (RemeshPipeline) inject a
+ * per-level predicate directly, so they never depend on this global — which is why the old per-frame
+ * "swap the global, re-assert it next frame" dance between base and coarse rings is gone.
+ */
+let isEmptyAirFn: EmptyAirFn | null = null;
+export function setEmptyAirPredicate(fn: EmptyAirFn): void {
   isEmptyAirFn = fn;
 }
 
@@ -71,7 +79,8 @@ function expandChunkData(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
   useTemp: boolean,
-  grid: Uint32Array
+  grid: Uint32Array,
+  emptyAir: EmptyAirFn | null,
 ): void {
   const dataArray = (useTemp && chunk.tempData) ? chunk.tempData : chunk.data;
   
@@ -93,7 +102,7 @@ function expandChunkData(
     if (n) return (useTemp && n.tempData) ? n.tempData : n.data;
     // Not loaded: if it's genuine open sky, mesh against AIR (so a terrain top at this boundary caps
     // correctly); otherwise return null → the caller extrapolates the edge (avoids inventing surface).
-    return isEmptyAirFn?.(ncx, ncy, ncz) ? AIR_CHUNK : null;
+    return emptyAir?.(ncx, ncy, ncz) ? AIR_CHUNK : null;
   };
 
   // Face neighbors
@@ -225,20 +234,21 @@ function expandChunkData(
 export function getSkipHighBoundary(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
+  emptyAir: EmptyAirFn | null,
 ): [boolean, boolean, boolean] {
   // Skip a high face only when its neighbour is truly absent (not loaded yet) — NOT when it's open
   // sky. Open sky is meshed against air (see getNeighborData), so skipping it would re-open the gap.
   return [
-    highFaceAbsent(chunk.cx + 1, chunk.cy, chunk.cz, neighbors),
-    highFaceAbsent(chunk.cx, chunk.cy + 1, chunk.cz, neighbors),
-    highFaceAbsent(chunk.cx, chunk.cy, chunk.cz + 1, neighbors),
+    highFaceAbsent(chunk.cx + 1, chunk.cy, chunk.cz, neighbors, emptyAir),
+    highFaceAbsent(chunk.cx, chunk.cy + 1, chunk.cz, neighbors, emptyAir),
+    highFaceAbsent(chunk.cx, chunk.cy, chunk.cz + 1, neighbors, emptyAir),
   ];
 }
 
 /** A high-side neighbour is "absent" for boundary-skipping if it's neither loaded nor open sky. */
-function highFaceAbsent(cx: number, cy: number, cz: number, neighbors: Map<string, Chunk>): boolean {
+function highFaceAbsent(cx: number, cy: number, cz: number, neighbors: Map<string, Chunk>, emptyAir: EmptyAirFn | null): boolean {
   if (neighbors.has(chunkKey(cx, cy, cz))) return false;   // loaded
-  if (isEmptyAirFn?.(cx, cy, cz)) return false;            // open sky → meshed against air, not skipped
+  if (emptyAir?.(cx, cy, cz)) return false;                // open sky → meshed against air, not skipped
   return true;                                             // genuinely not loaded yet
 }
 
@@ -257,9 +267,10 @@ export function expandChunkToGrid(
   neighbors: Map<string, Chunk>,
   grid: Uint32Array,
   useTemp: boolean = false,
+  emptyAir: EmptyAirFn | null = isEmptyAirFn,
 ): [boolean, boolean, boolean] {
-  expandChunkData(chunk, neighbors, useTemp, grid);
-  return getSkipHighBoundary(chunk, neighbors);
+  expandChunkData(chunk, neighbors, useTemp, grid, emptyAir);
+  return getSkipHighBoundary(chunk, neighbors, emptyAir);
 }
 
 /**
@@ -274,11 +285,12 @@ export function expandChunkToGrid(
 export function meshChunk(
   chunk: Chunk,
   neighbors: Map<string, Chunk>,
-  useTemp: boolean = false
+  useTemp: boolean = false,
+  emptyAir: EmptyAirFn | null = isEmptyAirFn,
 ): SplitSurfaceNetOutput {
   const grid = getSyncGrid();
-  expandChunkData(chunk, neighbors, useTemp, grid);
-  const skipHighBoundary = getSkipHighBoundary(chunk, neighbors);
+  expandChunkData(chunk, neighbors, useTemp, grid, emptyAir);
+  const skipHighBoundary = getSkipHighBoundary(chunk, neighbors, emptyAir);
 
   const input: SurfaceNetInput = { 
     dims: [GRID_SIZE, GRID_SIZE, GRID_SIZE], 

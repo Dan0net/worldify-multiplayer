@@ -19,7 +19,7 @@ import {
 import { Chunk, ChunkPhase } from './Chunk.js';
 import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
-import { meshChunk, expandChunkToGrid, getSkipHighBoundary } from './ChunkMesher.js';
+import { meshChunk, expandChunkToGrid, getSkipHighBoundary, type EmptyAirFn } from './ChunkMesher.js';
 import { MeshWorkerPool, type MeshResult } from './MeshWorkerPool.js';
 
 // ---- Types ----
@@ -85,6 +85,14 @@ export class RemeshPipeline {
    */
   private readonly completeFromExpected: boolean;
 
+  /**
+   * Open-sky predicate for this pipeline's level, used by the mesher to distinguish genuine open sky
+   * (mesh against air) from not-yet-loaded terrain (extrapolate/skip). Injected per level so the
+   * mesher never needs a swapped module global — each level's pipeline carries its own. `null` falls
+   * back to the ChunkMesher module default (build-preview / sync paths).
+   */
+  private readonly emptyAir: EmptyAirFn | null;
+
   constructor(
     chunks: Map<string, Chunk>,
     geometries: Map<string, ChunkGeometry>,
@@ -94,6 +102,7 @@ export class RemeshPipeline {
     isMarginSourceExpected?: (cx: number, cy: number, cz: number) => boolean,
     shouldMeshNow?: (cx: number, cy: number, cz: number) => boolean,
     completeFromExpected = false,
+    emptyAir: EmptyAirFn | null = null,
   ) {
     this.chunks = chunks;
     this.geometries = geometries;
@@ -104,6 +113,7 @@ export class RemeshPipeline {
       ?? ((cx, cy, cz) => this.pendingChunks.has(chunkKey(cx, cy, cz)));
     this.shouldMeshNow = shouldMeshNow ?? (() => true);
     this.completeFromExpected = completeFromExpected;
+    this.emptyAir = emptyAir;
   }
 
   /** Repoint at the ACTIVE LOD level's chunk/geometry maps (VoxelWorld.activateLevel). The queue is
@@ -207,7 +217,7 @@ export class RemeshPipeline {
       if (!this.marginSourcesReady(chunk.cx, chunk.cy, chunk.cz)) continue;
 
       const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
+      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid, false, this.emptyAir);
       // Coarse rings: complete unless a high FACE neighbour is still inbound (see completeFromExpected).
       // Base: complete unless the mesher had to skip a high face (absent neighbour), healed later by P8.
       const complete = this.completeFromExpected
@@ -241,9 +251,9 @@ export class RemeshPipeline {
       this.geometries.set(key, geo);
     }
 
-    const skip = getSkipHighBoundary(chunk, this.chunks);
+    const skip = getSkipHighBoundary(chunk, this.chunks, this.emptyAir);
     this.setComplete(key, !(skip[0] || skip[1] || skip[2]));
-    const output = meshChunk(chunk, this.chunks);
+    const output = meshChunk(chunk, this.chunks, false, this.emptyAir);
     geo.updateFromSurfaceNet(output);
     this.registerWithGrouper(key, chunk, geo);
     chunk.clearDirty();
@@ -275,7 +285,7 @@ export class RemeshPipeline {
       if (!chunk) continue;
       this.queue.delete(key);
       const grid = this.meshPool.takeGrid();
-      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
+      const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid, false, this.emptyAir);
       batchItems.push({ chunkKey: key, grid, skipHighBoundary });
     }
 

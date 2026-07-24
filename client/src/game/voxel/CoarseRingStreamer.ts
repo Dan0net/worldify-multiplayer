@@ -40,7 +40,6 @@ import { ChunkGeometry } from './ChunkGeometry.js';
 import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
-import { setEmptyAirPredicate } from './ChunkMesher.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
 import { ringOuterRadius } from './ringLevel.js';
 import { hasChunk, loadChunk, saveChunk, hasColumn, loadColumn, saveColumn } from '../world/WorldManager.js';
@@ -227,6 +226,11 @@ export class CoarseRingStreamer {
       // dispatched once nothing is inbound, so a skipped high face is a never-loading solid/out-of-band
       // neighbour (final mesh), not a gap. Prevents ring-edge surface chunks staying hidden forever.
       true,
+      // This level's open-sky predicate, injected so the mesher never needs a swapped module global.
+      (cx, cy, cz) => {
+        const info = columnInfo.get(`${cx},${cz}`);
+        return info ? cy > info.maxCy : false;
+      },
     );
     rig = {
       level, chunks, geometries, columnInfo,
@@ -356,11 +360,7 @@ export class CoarseRingStreamer {
       }
     }
 
-    // --- Mesh + merge (predicate must reflect THIS level's columnInfo) ---
-    setEmptyAirPredicate((cx, cy, cz) => {
-      const info = rig.columnInfo.get(`${cx},${cz}`);
-      return info ? cy > info.maxCy : false;
-    });
+    // --- Mesh + merge (this rig's RemeshPipeline carries its own injected open-sky predicate) ---
     const ccy = this._center.y / cw;
     this._localCenter.set(ccx * CHUNK_WORLD_SIZE, ccy * CHUNK_WORLD_SIZE, ccz * CHUNK_WORLD_SIZE);
     rig.remesh.process(this._localCenter);

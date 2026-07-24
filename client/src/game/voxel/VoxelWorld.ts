@@ -210,9 +210,6 @@ export class VoxelWorld implements ChunkProvider {
    *  visibility); cleared in play. See CoarseRingStreamer. */
   private coarseRings!: CoarseRingStreamer;
 
-  /** Base-level open-sky predicate for the mesher, re-applied before base meshing each frame because the
-   *  coarse-ring streamer overwrites the global predicate with its own level's columnInfo during meshing. */
-  private readonly _baseEmptyAir = (cx: number, cy: number, cz: number): boolean => this.isEmptyAir(cx, cy, cz);
   /** Scratch true-world stream centre for the coarse rings (level-local base centre × 2^baseLevel). */
   private _coarseCenterWorld = new THREE.Vector3();
 
@@ -233,9 +230,12 @@ export class VoxelWorld implements ChunkProvider {
       this.pendingChunks,
       (cx, cy, cz) => this.isMarginSourceExpected(cx, cy, cz),
       (cx, cy, cz) => this.shouldMeshChunk(cx, cy, cz),
+      false,                                              // completeFromExpected (base: skipHighBoundary + P8 heal)
+      (cx, cy, cz) => this.isEmptyAir(cx, cy, cz),         // per-level open-sky predicate (no global swap)
     );
-    // Let the mesher distinguish open sky from not-yet-loaded, so terrain tops that meet a chunk
-    // boundary against sky mesh against air (capped) instead of being skipped/extrapolated → no gap.
+    // Build preview + the sync mesh paths don't inject a predicate, so keep the module default pointed
+    // at the base level's open-sky test (those paths are base-level only). The streaming pipeline uses
+    // its injected predicate above, so nothing swaps this global per frame anymore.
     setEmptyAirPredicate((cx, cy, cz) => this.isEmptyAir(cx, cy, cz));
     this.seamStitcher = new SeamStitcher(this.geometries, (ck) => {
       const gk = this.chunkGrouper.getGroupKey(ck);
@@ -693,10 +693,8 @@ export class VoxelWorld implements ChunkProvider {
     }
     this.chunkGrouper.reconcileRetiring((box) => this.retiringBoxResolved(box), forceRetire);
 
-    // Dispatch from remesh queue to workers (async meshing). Re-assert the BASE level's open-sky
-    // predicate first: the coarse-ring streamer (below) overwrites the global mesher predicate with each
-    // coarse level's columnInfo, so without this the base level would mesh against a coarse ring's extent.
-    setEmptyAirPredicate(this._baseEmptyAir);
+    // Dispatch from remesh queue to workers (async meshing). The base pipeline carries its own injected
+    // open-sky predicate, so it no longer matters that other levels have their own — no global to re-assert.
     perfStats.begin('remesh');
     const priorityKeys = this.chunkGrouper.getPriorityChunkKeys();
     this.remeshPipeline.process(this._streamPos, priorityKeys.size > 0 ? priorityKeys : undefined);
