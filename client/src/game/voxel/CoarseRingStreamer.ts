@@ -79,6 +79,28 @@ function columnBand(heights: ArrayLike<number>, level: number): { minCy: number;
   return { minCy: Math.floor(minHeight / span), maxCy: Math.floor((maxHeight + 1) / span) };
 }
 
+/**
+ * Lowest chunk-Y to LOAD (and mesh) for a column: its own minCy, extended DOWN to the lowest minCy among
+ * its 4 face-neighbours. A column beside a LOWER neighbour has an exposed vertical CLIFF WALL running from
+ * the neighbour's surface up to its own — chunks that sit BELOW this column's own minCy yet face the
+ * neighbour's open sky. `[minCy,maxCy]` alone never loads them, so the wall was missing (the "gaps in the
+ * outer rings"). The base level loads them implicitly: its visibility BFS floods the neighbour's open sky
+ * and reaches the exposed wall. This mirrors that for the annulus without a full BFS — bounded by terrain
+ * relief, self-correcting as neighbour tiles arrive (an absent neighbour doesn't lower the floor yet).
+ * Returns Infinity when the column's own tile isn't loaded (nothing to load until it is).
+ */
+function columnLoadFloor(columnInfo: Map<string, { minCy: number; maxCy: number }>, cx: number, cz: number): number {
+  const self = columnInfo.get(`${cx},${cz}`);
+  if (!self) return Infinity;
+  let floor = self.minCy;
+  const n = (dx: number, dz: number): void => {
+    const c = columnInfo.get(`${cx + dx},${cz + dz}`);
+    if (c && c.minCy < floor) floor = c.minCy;
+  };
+  n(1, 0); n(-1, 0); n(0, 1); n(0, -1);
+  return floor;
+}
+
 /** Current per-frame band geometry for a rig, in that level's chunk units. Set each streamRing; read by
  *  the rig's `shouldMeshNow` / `isMarginSourceExpected` closures (which are created once at rig birth). */
 interface RigBand {
@@ -224,7 +246,9 @@ export class CoarseRingStreamer {
         if (d < band.innerBound - BAND_EPS || d > band.requestOuter + 0.5 + BAND_EPS) return false; // out of band → never requested
         const info = columnInfo.get(`${cx},${cz}`);
         if (!info) return true;                      // column tile not in yet, but in-band → it will be requested
-        return cy >= info.minCy && cy <= info.maxCy; // only chunks in the loadable span are ever coming
+        // Loadable span is [exposure floor, maxCy] — the floor is extended down for cliff walls facing a
+        // lower neighbour, so a consumer of such a wall chunk correctly waits for it.
+        return cy >= columnLoadFloor(columnInfo, cx, cz) && cy <= info.maxCy;
       },
       // Mesh only the RENDER band; the margin ring is loaded for neighbour voxels but never meshed/drawn.
       (cx, _cy, cz) => inRenderBand(cx, cz),
@@ -344,7 +368,9 @@ export class CoarseRingStreamer {
         if (!rig.pendingColumns.has(colKey)) { this.requestTile(rig, cx, cz); pending++; anyMissing = true; }
         continue;
       }
-      for (let cy = info.minCy; cy <= info.maxCy && pending < MAX_PENDING_PER_LEVEL; cy++) {
+      // Load from the exposure floor (extended down for cliff walls facing a lower neighbour) to maxCy.
+      const floor = columnLoadFloor(rig.columnInfo, cx, cz);
+      for (let cy = floor; cy <= info.maxCy && pending < MAX_PENDING_PER_LEVEL; cy++) {
         const key = chunkKey(cx, cy, cz);
         if (rig.chunks.has(key) || rig.pendingChunks.has(key)) continue;
         this.requestChunk(rig, cx, cy, cz);
