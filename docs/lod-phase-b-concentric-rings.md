@@ -105,9 +105,30 @@ single pure function so it's tunable without touching the swap machinery.
 
 1. **Key geometry/columnInfo by level** (data-model change; grouper `roots: Map<level,Group>`). Behaves
    identically to today when only one level is active — no visual change, pure refactor. Verify level 0
-   byte-identical + existing zoom still works.
+   byte-identical + existing zoom still works. **DONE** — commits: Step 1 (multi-root grouper), Step 2a
+   (per-chunk `level` threaded end-to-end), Step 2b-1 (per-level chunk/geometry/columnInfo stores in
+   `VoxelWorld`, active-level refs swapped by `activateLevel`).
 2. **Distance→level ring function + per-region reconcile** reusing the coverage predicate + staged
    reveal at region scope. Rings visible; seams cracked (accept temporarily). Retire-and-swap deleted.
+   Split into:
+   - **2a — ring schedule (pure fn).** `client/.../ringLevel.ts`: `ringLevel(distanceMeters, baseLevel)`
+     + `ringOuterRadius(level, baseLevel)`, radii in true-world metres, unit-tested. Isolated from the
+     swap machinery (§5d) so it's tunable without touching streaming. **DONE.**
+   - **2b — streaming flip (the visible change).** Stream each active level over its ring annulus into
+     that level's per-level maps concurrently; per-region reconcile; wave-from-centre (outer ring waits
+     for the inner); keep outer-ring levels resident; delete whole-world retire + `forceCoverRetiring`.
+     **NOT YET DONE.** Central correctness hazard to handle: async generation callbacks
+     (`loadLocalChunk`'s `loadChunk().then`, `requestChunk` worker callback, and the tile/column paths)
+     ingest into the *active-level* maps via `this.chunks` / `receiveChunkData` / `ingestChunkData`.
+     Today only one level is ever active and `genEpoch` (bumped only on a level *change*) guards it; with
+     several levels streaming at once a level-L result can land while another level is active and be
+     ingested at L's coords into the wrong level's maps. 2b must make ingest **level-addressed** (thread
+     the request's level through the receive/ingest/remesh path, or capture the per-level maps in the
+     callback) rather than "whatever level is active now". Also: single-valued BFS/visibility state
+     (`lastBFSChunk`, `cachedReachable`, `visibilityDirty`) and the `pending*` sets/times are shared —
+     they must become per-level (or the loop must run per level with per-level state) so two rings don't
+     thrash one BFS or collide on a bare chunk key. This is the piece that needs the on-device glance
+     (swiftshader in-container is ~1–2 FPS — not verifiable here); land it as its own revertible commit.
 3. **Skirts** at ring boundaries → cracks hidden.
 4. **Edge-locking** (extend the margin/seam contract with neighbour level) → true crack-free seams;
    drop skirts if fully covered.
