@@ -27,6 +27,7 @@ import {
   CHUNK_WORLD_SIZE,
   MAX_ZOOM_LEVEL,
   FACE_OFFSETS_6,
+  NEGATIVE_MARGIN_OFFSETS_7,
   chunkKey,
   getChunkRangeFromHeights,
   getSunlitAbove,
@@ -50,9 +51,16 @@ const DEFAULT_COARSE_RINGS = 2;
 /** Extra chunks kept loaded beyond a ring's band before unloading (hysteresis, avoids edge thrash). */
 const RING_UNLOAD_HYSTERESIS = 1;
 
-/** Margin ring loaded beyond the RENDER band so render-band chunks have real +neighbour voxels to mesh
- *  their high borders once, complete (mirrors the base's margin shell). Loaded but not meshed/drawn. */
-const MARGIN_RING = 1;
+/** Margin shell loaded beyond the RENDER band so render-band chunks have real +neighbour voxels to mesh
+ *  their high borders once, complete (mirrors the base's margin shell). Loaded but not meshed/drawn. Two
+ *  chunks thick so the outer render row's diagonal (edge/corner) +margins sit comfortably inside the
+ *  request band rather than on its exact boundary. */
+const MARGIN_RING = 2;
+
+/** Slack on band-boundary comparisons. The outer render row's chunk centres can land exactly on a band
+ *  edge (d == renderOuter + 0.5); without slack, float rounding intermittently pushes them just outside,
+ *  so that whole row never meshes → the "last row missing" gaps. */
+const BAND_EPS = 1e-3;
 
 /** Cap on in-flight requests per coarse level per frame (keeps a ring from starving the base). */
 const MAX_PENDING_PER_LEVEL = 12;
@@ -150,11 +158,15 @@ export class CoarseRingStreamer {
 
     const maxLevel = Math.min(MAX_ZOOM_LEVEL, baseLevel + this.numRings);
 
-    // Drop rings no longer in the resident band (finer than base+1, or beyond maxLevel). This is the only
-    // work done while the base is still streaming — existing rings keep their geometry (base-independent
-    // bands mean they don't need repositioning), so a zoom retains them instead of wiping them.
+    // Resident-band housekeeping. Existing rings keep their geometry (base-independent bands mean they
+    // don't need repositioning), so a zoom retains them instead of wiping them.
+    //  - Beyond the band (finer than the base, or past maxLevel) → dispose outright.
+    //  - EXACTLY at the base level → this ring was just ABSORBED by the base on a zoom-out. Don't wipe it:
+    //    the base is re-streaming the same region at the same level, so hold this ring as backfill and
+    //    drop it per-column only once the base has drawn over it (no blank/reset of the inner cube).
     for (const [lvl, rig] of [...this.rigs]) {
-      if (lvl <= baseLevel || lvl > maxLevel) this.disposeRig(rig);
+      if (lvl < baseLevel || lvl > maxLevel) this.disposeRig(rig);
+      else if (lvl === baseLevel) this.holdAbsorbedRig(rig);
     }
 
     // Center-out priority: don't touch ring streaming until the base is quiescent.
@@ -184,7 +196,7 @@ export class CoarseRingStreamer {
     const dist = (cx: number, cz: number) => Math.max(Math.abs(cx + 0.5 - band.ccx), Math.abs(cz + 0.5 - band.ccz));
     const inRenderBand = (cx: number, cz: number) => {
       const d = dist(cx, cz);
-      return d >= band.innerBound && d <= band.renderOuter + 0.5;
+      return d >= band.innerBound - BAND_EPS && d <= band.renderOuter + 0.5 + BAND_EPS;
     };
     const remesh = new RemeshPipeline(
       chunks,
@@ -199,7 +211,7 @@ export class CoarseRingStreamer {
       (cx, cy, cz) => {
         if (chunks.has(chunkKey(cx, cy, cz))) return false;
         const d = dist(cx, cz);
-        if (d < band.innerBound || d > band.requestOuter + 0.5) return false;
+        if (d < band.innerBound - BAND_EPS || d > band.requestOuter + 0.5 + BAND_EPS) return false;
         const info = columnInfo.get(`${cx},${cz}`);
         if (info && cy > info.maxCy) return false;   // open sky above the surface → won't load
         return true;
@@ -226,6 +238,28 @@ export class CoarseRingStreamer {
     });
     this.rigs.set(level, rig);
     return rig;
+  }
+
+  /**
+   * A ring whose level just became the base level (zoom-out): the base is re-streaming that region at the
+   * same level, so keep this ring's geometry visible and hand it off per-column — drop each chunk only
+   * once the base has drawn its column (same finer-covers test as the inward pan hand-off). No new
+   * streaming for it. Dispose the rig once the base has taken over everything. This is what keeps the
+   * inner cube from blanking and re-rendering when it grows on a zoom-out.
+   */
+  private holdAbsorbedRig(rig: CoarseLevelRig): void {
+    const cw = levelChunkWorld(rig.level);
+    let removed = false;
+    for (const [key, chunk] of [...rig.chunks]) {
+      if (this.finerCovers((chunk.cx + 0.5) * cw, (chunk.cz + 0.5) * cw)) { this.unloadChunk(rig, key); removed = true; }
+    }
+    if (rig.chunks.size === 0) { this.disposeRig(rig); return; }
+    if (removed) {
+      rig.grouper.rebuild(
+        Math.floor(this._center.x / cw), Math.floor(this._center.y / cw), Math.floor(this._center.z / cw),
+        (k) => rig.remesh.isBusy(k),
+      );
+    }
   }
 
   private disposeRig(rig: CoarseLevelRig): void {
@@ -271,7 +305,7 @@ export class CoarseRingStreamer {
     for (let cx = cx0 - rReq; cx <= cx0 + rReq; cx++) {
       for (let cz = cz0 - rReq; cz <= cz0 + rReq; cz++) {
         const d = dist(cx, cz);
-        if (d < innerBound || d > b.requestOuter + 0.5) continue;
+        if (d < innerBound - BAND_EPS || d > b.requestOuter + 0.5 + BAND_EPS) continue;
         cols.push({ cx, cz, d2: (cx + 0.5 - ccx) ** 2 + (cz + 0.5 - ccz) ** 2 });
       }
     }
@@ -380,9 +414,12 @@ export class CoarseRingStreamer {
     chunk.dirty = true;
     this.computeSunlight(rig, cx, cy, cz, chunk.data);
     rig.remesh.add(key);
-    // Re-mesh loaded −neighbours that consume this chunk as a +margin source, so their high borders build
-    // with real data once it arrives (mirrors the base). shouldMeshNow keeps margin-only chunks unmeshed.
-    for (const [dx, dy, dz] of FACE_OFFSETS_6) {
+    // Re-mesh EVERY loaded −neighbour that consumes this chunk as a +margin source — its 7 negative
+    // faces/edges/corner (NEGATIVE_MARGIN_OFFSETS_7), not just the 6 faces. A chunk that meshed while this
+    // (edge/corner) margin was still absent was tagged incomplete and hidden; re-meshing it now that the
+    // margin is present heals it to complete → the visibility gate reveals it. Without the edge/corner
+    // directions those consumers never re-meshed → the "last row missing" gaps at ring edges.
+    for (const [dx, dy, dz] of NEGATIVE_MARGIN_OFFSETS_7) {
       const nKey = chunkKey(cx + dx, cy + dy, cz + dz);
       if (rig.chunks.has(nKey)) rig.remesh.add(nKey);
     }
