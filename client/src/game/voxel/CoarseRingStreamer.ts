@@ -311,6 +311,49 @@ export class CoarseRingStreamer {
     this.rigs.delete(rig.level);
   }
 
+  /** Has this rig DRAWN surface geometry in its (level-local) column (cx,cz)? The atomic hand-off unit. */
+  private rigColumnDrawn(rig: CoarseLevelRig, cx: number, cz: number): boolean {
+    const info = rig.columnInfo.get(`${cx},${cz}`);
+    if (!info) return false;
+    for (let cy = info.minCy; cy <= info.maxCy; cy++) {
+      const geo = rig.geometries.get(chunkKey(cx, cy, cz));
+      if (geo && geo.hasGeometry()) return true;
+    }
+    return false;
+  }
+
+  /** Is TRUE-world column (wx,wz) already DRAWN by a FINER level — the base disk or any finer resident
+   *  ring? Used to hand a chunk inward: when a region pans/zooms into a finer level, this ring keeps
+   *  drawing it until the finer level has actually put geometry there, then drops it (no gap, and no
+   *  at-rest overlap because at rest the finer level already covers what left this ring's band). */
+  private coveredByFiner(rig: CoarseLevelRig, wx: number, wz: number): boolean {
+    if (this.finerCovers(wx, wz)) return true;               // base disk drew it
+    for (const [lvl, other] of this.rigs) {
+      if (lvl >= rig.level) continue;
+      const cwF = levelChunkWorld(lvl);
+      if (this.rigColumnDrawn(other, Math.floor(wx / cwF), Math.floor(wz / cwF))) return true;
+    }
+    return false;
+  }
+
+  /** Is TRUE-world column (wx,wz) already DRAWN by a COARSER resident ring? Used to hand a chunk outward:
+   *  when a region pans/zooms out to a coarser level, this ring keeps drawing it until the coarser ring
+   *  has geometry there, then drops it (atomic — never a gap at the outward seam). */
+  private coveredByCoarser(rig: CoarseLevelRig, wx: number, wz: number): boolean {
+    for (const [lvl, other] of this.rigs) {
+      if (lvl <= rig.level) continue;
+      const cwC = levelChunkWorld(lvl);
+      if (this.rigColumnDrawn(other, Math.floor(wx / cwC), Math.floor(wz / cwC))) return true;
+    }
+    return false;
+  }
+
+  /** Is there a resident ring COARSER than `level` (so an outward hand-off has somewhere to go)? */
+  private hasCoarserRig(level: number): boolean {
+    for (const lvl of this.rigs.keys()) if (lvl > level) return true;
+    return false;
+  }
+
   /**
    * Stream one coarse ring as a SQUARE ANNULUS whose borders are snapped to the neighbouring levels' grids
    * so they line up exactly. The ring is centred on the camera (no whole-view snapping); only its BORDERS
@@ -382,9 +425,27 @@ export class CoarseRingStreamer {
       }
     }
 
-    // --- Unload chunks outside the load square (including any that crossed into the finer level's hole) ---
+    // --- Unload with an ATOMIC bidirectional hand-off: a chunk that left this ring's band is kept drawn
+    //     until the level TAKING OVER has actually drawn the covering column, then dropped. So a region is
+    //     handed off only once its replacement is on screen — no gap during the swap, and no at-rest
+    //     overlap (at rest the neighbour already covers whatever left the band, so it drops immediately).
+    //     Inward (into the finer hole) → wait for a finer level; outward → wait for a coarser ring; if no
+    //     neighbour exists that way (outermost ring's outer edge, or a far teleport) → drop. A hysteresis
+    //     cap force-drops anything that strayed far beyond the band so a lost hand-off can't leak. ---
+    const capX = (b.oHiX - b.oLoX);   // ~ring span; generous cap beyond the load square
+    const capZ = (b.oHiZ - b.oLoZ);
     for (const [key, chunk] of [...rig.chunks]) {
-      if (!inLoad(chunk.cx, chunk.cz)) this.unloadChunk(rig, key);
+      if (inLoad(chunk.cx, chunk.cz)) continue;   // still ours → keep
+      const far = chunk.cx < b.lLoX - capX || chunk.cx >= b.lHiX + capX
+        || chunk.cz < b.lLoZ - capZ || chunk.cz >= b.lHiZ + capZ;
+      if (far) { this.unloadChunk(rig, key); continue; }   // strayed far → drop (safety)
+      const wx = (chunk.cx + 0.5) * cw, wz = (chunk.cz + 0.5) * cw;
+      const inHole = inSq(chunk.cx, chunk.cz, b.iLoX, b.iHiX, b.iLoZ, b.iHiZ);
+      if (inHole) {
+        if (this.coveredByFiner(rig, wx, wz)) this.unloadChunk(rig, key);       // finer took over → drop
+      } else if (this.coveredByCoarser(rig, wx, wz) || !this.hasCoarserRig(L)) {
+        this.unloadChunk(rig, key);   // coarser took over, or we're the outermost ring (view edge) → drop
+      }
     }
 
     // --- Mesh + merge (this rig's RemeshPipeline carries its own injected open-sky predicate) ---
