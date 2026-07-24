@@ -345,9 +345,10 @@ export class VoxelWorld implements ChunkProvider {
     // this point would land at reinterpreted coords with wrong-scale content — the flat-slab artifacts).
     this.genEpoch++;
     this.retireSettledPasses = 0;   // new transition — the quiescence net must re-arm from scratch
-    // Clone the currently-visible chunks into the retiring holder (old scale) BEFORE disposing the
-    // per-chunk geometries below — the holder owns independent clones, so the disposal is safe.
-    this.chunkGrouper.retireAndReset(1 << level, 1 << this.currentLevel);
+    // Clone the currently-visible chunks into the retiring holder (each at its own level scale) BEFORE
+    // disposing the per-chunk geometries below — the holder owns independent clones, so disposal is safe.
+    // The grouper tags new chunks with this level (its `liveLevel`) and roots them at 2^level.
+    this.chunkGrouper.retireAndReset(level);
     this.currentLevel = level;
 
     // Clear live chunk state. The grouper's live root was already reset by retireAndReset; the retiring
