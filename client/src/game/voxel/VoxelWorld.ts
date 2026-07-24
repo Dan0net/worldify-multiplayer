@@ -56,6 +56,7 @@ import {
 } from './VisibilityBFS.js';
 import { TerrainWorkerPool, terrainWorkerCount } from './TerrainWorkerPool.js';
 import { SeamStitcher } from './SeamStitcher.js';
+import { CoarseRingStreamer } from './CoarseRingStreamer.js';
 import { getActiveWorldSeed, getActiveWorldCaveConfig, getActiveWorldTerrainConfig, hasChunk, loadChunk, saveChunk, hasColumn, loadColumn, saveColumn, pushUndo, popUndo, type ChunkSnapshot } from '../world/WorldManager.js';
 
 /** Callback type for requesting chunk data from server */
@@ -204,6 +205,17 @@ export class VoxelWorld implements ChunkProvider {
   /** Reconciles vertex normals across chunk-mesh seams. */
   readonly seamStitcher: SeamStitcher;
 
+  /** Explore concentric coarse-LOD rings BEYOND the base disk (Phase B). Additive + isolated: owns its own
+   *  per-coarse-level maps/remesh/grouper, shares only the mesh pool. Driven only in Explore (cube
+   *  visibility); cleared in play. See CoarseRingStreamer. */
+  private coarseRings!: CoarseRingStreamer;
+
+  /** Base-level open-sky predicate for the mesher, re-applied before base meshing each frame because the
+   *  coarse-ring streamer overwrites the global predicate with its own level's columnInfo during meshing. */
+  private readonly _baseEmptyAir = (cx: number, cy: number, cz: number): boolean => this.isEmptyAir(cx, cy, cz);
+  /** Scratch true-world stream centre for the coarse rings (level-local base centre × 2^baseLevel). */
+  private _coarseCenterWorld = new THREE.Vector3();
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     // The initial active maps ARE level 0's per-level entries (activateLevel swaps to another level's
@@ -238,6 +250,13 @@ export class VoxelWorld implements ChunkProvider {
       this.meshCountDirty = true;
       this.seamStitcher.enqueue(key);
     });
+
+    this.coarseRings = new CoarseRingStreamer(
+      scene,
+      this.meshPool,
+      () => this.getLocalPool(),
+      () => this.isLocal,
+    );
   }
 
   /** Cached count of chunks with visible geometry (recomputed only when dirty). */
@@ -651,7 +670,10 @@ export class VoxelWorld implements ChunkProvider {
     }
     this.chunkGrouper.reconcileRetiring((box) => this.retiringBoxResolved(box), forceRetire);
 
-    // Dispatch from remesh queue to workers (async meshing)
+    // Dispatch from remesh queue to workers (async meshing). Re-assert the BASE level's open-sky
+    // predicate first: the coarse-ring streamer (below) overwrites the global mesher predicate with each
+    // coarse level's columnInfo, so without this the base level would mesh against a coarse ring's extent.
+    setEmptyAirPredicate(this._baseEmptyAir);
     perfStats.begin('remesh');
     const priorityKeys = this.chunkGrouper.getPriorityChunkKeys();
     this.remeshPipeline.process(this._streamPos, priorityKeys.size > 0 ? priorityKeys : undefined);
@@ -660,6 +682,16 @@ export class VoxelWorld implements ChunkProvider {
     // Report queue stats for debug overlay
     perfStats.setVoxelQueueStats(this.remeshPipeline.size, this.pendingChunks.size);
     perfStats.setMeshDispatches(this.remeshPipeline.meshDispatches);
+
+    // Explore only: stream the concentric coarse-LOD rings BEYOND the base disk. The base centre we were
+    // fed is level-LOCAL (target ÷ 2^baseLevel); the rings live in true-world, so scale it back up. In
+    // play (no cube visibility) there are no rings — drop any that lingered from a prior Explore session.
+    if (this.cubeVisibility) {
+      this._coarseCenterWorld.copy(this._streamPos).multiplyScalar(1 << this.currentLevel);
+      this.coarseRings.update(this.currentLevel, this._coarseCenterWorld);
+    } else {
+      this.coarseRings.clear();
+    }
   }
 
   /**
@@ -2072,6 +2104,9 @@ export class VoxelWorld implements ChunkProvider {
     // Clear the remesh queue AND bump its generation so any in-flight mesh job from the old world
     // can't apply onto a re-used chunk key after the swap (world switch mirrors the level-change guard).
     this.remeshPipeline.clear();
+
+    // Drop all Explore coarse rings (their per-level groupers detach from the scene).
+    this.coarseRings.clear();
 
     // Dispose chunk grouper (removes merged meshes from scene)
     this.chunkGrouper.dispose();

@@ -114,21 +114,29 @@ single pure function so it's tunable without touching the swap machinery.
    - **2a — ring schedule (pure fn).** `client/.../ringLevel.ts`: `ringLevel(distanceMeters, baseLevel)`
      + `ringOuterRadius(level, baseLevel)`, radii in true-world metres, unit-tested. Isolated from the
      swap machinery (§5d) so it's tunable without touching streaming. **DONE.**
-   - **2b — streaming flip (the visible change).** Stream each active level over its ring annulus into
-     that level's per-level maps concurrently; per-region reconcile; wave-from-centre (outer ring waits
-     for the inner); keep outer-ring levels resident; delete whole-world retire + `forceCoverRetiring`.
-     **NOT YET DONE.** Central correctness hazard to handle: async generation callbacks
-     (`loadLocalChunk`'s `loadChunk().then`, `requestChunk` worker callback, and the tile/column paths)
-     ingest into the *active-level* maps via `this.chunks` / `receiveChunkData` / `ingestChunkData`.
-     Today only one level is ever active and `genEpoch` (bumped only on a level *change*) guards it; with
-     several levels streaming at once a level-L result can land while another level is active and be
-     ingested at L's coords into the wrong level's maps. 2b must make ingest **level-addressed** (thread
-     the request's level through the receive/ingest/remesh path, or capture the per-level maps in the
-     callback) rather than "whatever level is active now". Also: single-valued BFS/visibility state
-     (`lastBFSChunk`, `cachedReachable`, `visibilityDirty`) and the `pending*` sets/times are shared —
-     they must become per-level (or the loop must run per level with per-level state) so two rings don't
-     thrash one BFS or collide on a bare chunk key. This is the piece that needs the on-device glance
-     (swiftshader in-container is ~1–2 FPS — not verifiable here); land it as its own revertible commit.
+   - **2b — streaming flip (the visible change). DONE** — `client/.../CoarseRingStreamer.ts`, wired into
+     `VoxelWorld.update` (Explore only). Realized as an **additive, isolated** design rather than the
+     pure per-level rewrite, to keep the change low-blast-radius and revertible on a blind commit:
+       - The **base (finest) level is untouched** — VoxelWorld still streams it with the full occlusion
+         BFS + retire-and-swap over its own disk. Play mode and level-0 output are unaffected.
+       - Coarser rings (base+1 .. base+`NUM_COARSE_RINGS`) are streamed BEYOND the base disk by
+         `CoarseRingStreamer` as simple always-visible surface-shell **annuli**. Each coarse level owns
+         its OWN chunk/geometry/columnInfo maps + `RemeshPipeline` + `ChunkGrouper` (a `CoarseLevelRig`),
+         so the base level's bare-keyed structures never collide with a coarse level's overlapping coords.
+       - The **collision + async hazards dissolve** under isolation: the mesh-worker pool is shared but
+         routes results by unique dispatch id (closure-bound to the right rig), so a same-bare-key clash
+         only serialises a dispatch; generation callbacks are guarded by a per-rig epoch bumped on
+         teardown; the global mesher open-sky predicate is re-asserted per level immediately before that
+         level meshes (base predicate re-applied before base `process`).
+       - "Wave from centre out": a coarse ring only begins once the next-finer resident ring is quiet.
+       - Ring radii come from `ringLevel.ts`. Boundaries are left as a thin **gap/crack** (coarse chunks
+         sit fully outside the inner radius) rather than z-fighting overlap — the accepted artifact.
+       - **Deviations from the original plan, still open:** whole-world retire is NOT deleted (kept for
+         the base level's own transitions); rings are **local-worlds only** (server Explore = base only);
+         coarse chunks get no cross-chunk seam normal reconciliation (distant, cosmetic). Revisit if the
+         additive design proves insufficient — the pure per-level-streaming rewrite (per-level BFS +
+         level-addressed ingest, deleting whole-world retire) remains the long-term target.
+       - Needs the on-device glance (swiftshader in-container ~1–2 FPS — not verifiable here).
 3. **Skirts** at ring boundaries → cracks hidden.
 4. **Edge-locking** (extend the margin/seam contract with neighbour level) → true crack-free seams;
    drop skirts if fully covered.
