@@ -179,7 +179,7 @@ export class CoarseRingStreamer {
         const inner = this.rigs.get(level - 1);
         if (inner && !inner.quiet) break;
       }
-      this.streamRing(this.rigForLevel(level), baseLevel);
+      this.streamRing(this.rigForLevel(level));
     }
   }
 
@@ -194,9 +194,15 @@ export class CoarseRingStreamer {
     const band: RigBand = { ccx: 0, ccz: 0, innerBound: 0, renderOuter: 0, requestOuter: 0 };
     // Chebyshev chunk-centre distance from the current level-local centre.
     const dist = (cx: number, cz: number) => Math.max(Math.abs(cx + 0.5 - band.ccx), Math.abs(cz + 0.5 - band.ccz));
+    // Discrete tiling: a level-L chunk renders iff its CENTRE Chebyshev distance is in
+    // [innerBound, renderOuter − 0.5]. The half-cell insets (innerBound = inner + 0.5, and the −0.5 here)
+    // make the band's innermost cell's INNER edge land exactly on the ring boundary B_{L-1} = inner·cw_L
+    // and its outermost cell's OUTER edge on B_L = outer·cw_L. Because the doubling radii grid-align for
+    // an even visibilityRadius (inner = vr/2, outer = vr), ring L's outer edge == ring L+1's inner edge in
+    // world space — adjacent rings ABUT with no overlap and no gap (discrete quantised borders).
     const inRenderBand = (cx: number, cz: number) => {
       const d = dist(cx, cz);
-      return d >= band.innerBound - BAND_EPS && d <= band.renderOuter + 0.5 + BAND_EPS;
+      return d >= band.innerBound - BAND_EPS && d <= band.renderOuter - 0.5 + BAND_EPS;
     };
     const remesh = new RemeshPipeline(
       chunks,
@@ -293,7 +299,7 @@ export class CoarseRingStreamer {
    * outside, then mesh + merge. Ring radii are base-independent (ringLevel), so the annulus is the same
    * regardless of `baseLevel` — the ring is retained across a zoom.
    */
-  private streamRing(rig: CoarseLevelRig, baseLevel: number): void {
+  private streamRing(rig: CoarseLevelRig): void {
     const L = rig.level;
     const cw = levelChunkWorld(L);
     // Base-independent band, in this level's chunk units: inner = vr/2, render outer = vr (the doubling
@@ -302,13 +308,12 @@ export class CoarseRingStreamer {
     const outer = ringOuterRadius(L, this._visibilityRadius) / cw;
     const ccx = this._center.x / cw;
     const ccz = this._center.z / cw;
-    // Innermost coarse ring OVERLAPS the base disk (inner − 1.5): the base disk can render a chunk-row
-    // short of its nominal edge (occlusion BFS + retire-and-swap settle), so a mere abut (inner − 0.5)
-    // left a one-row trench at the base↔ring1 seam. Overlapping inward by ~1.5 chunks guarantees the ring
-    // covers that seam; the inward hand-off (finerCovers) still drops the overlap once the base draws it,
-    // so it's covered, not double-drawn, at rest. Coarser rings keep a thin gap (inner + 0.5) to avoid
-    // z-fighting their inner coarse neighbour (both are coarse, both settle to the same nominal edge).
-    const innerBound = (L === baseLevel + 1) ? inner - 1.5 : inner + 0.5;
+    // Discrete tiling for EVERY ring (no inward overlap): innerBound = inner + 0.5 so the innermost cell's
+    // inner edge lands exactly on B_{L-1} = inner·cw_L. Adjacent rings then abut edge-to-edge (see
+    // inRenderBand). The base↔ring1 seam is handled the same way — ring1 starts exactly at the base disk's
+    // nominal edge; the finerCovers hand-off drops any residual base overshoot so it's covered, not
+    // double-drawn.
+    const innerBound = inner + 0.5;
     const b = rig.band;
     b.ccx = ccx; b.ccz = ccz; b.innerBound = innerBound; b.renderOuter = outer; b.requestOuter = outer + MARGIN_RING;
 
