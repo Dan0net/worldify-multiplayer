@@ -67,10 +67,21 @@ export interface VoxelDebugToggles {
 }
 
 /** Voxel world statistics */
+/** Per-coarse-ring diagnostics (one entry per resident coarse LOD level, finest→coarsest). */
+export interface CoarseLevelStat {
+  level: number;
+  chunks: number;
+  drawn: number;
+  incomplete: number;
+  quiet: boolean;
+}
+
 export interface VoxelStats {
   chunksLoaded: number;
   meshesVisible: number;
   debugObjects: number;
+  /** Per-coarse-ring breakdown for the debug panel; empty when no rings are resident. */
+  coarseLevels: CoarseLevelStat[];
 }
 
 /** Performance timing snapshot (updated from game loop) */
@@ -535,6 +546,7 @@ export const useGameStore: UseBoundStore<StoreApi<GameState>> = window[storeKey]
     chunksLoaded: 0,
     meshesVisible: 0,
     debugObjects: 0,
+    coarseLevels: [],
   },
   
   // Terrain debug initial state

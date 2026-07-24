@@ -539,6 +539,11 @@ export class VoxelWorld implements ChunkProvider {
     return this.coarseRings.getSolidMeshesByLevel();
   }
 
+  /** Per-coarse-ring diagnostics (chunks / drawn / incomplete / quiet), finest→coarsest, for the debug panel. */
+  getCoarseLevelStats(): { level: number; chunks: number; drawn: number; incomplete: number; quiet: boolean }[] {
+    return this.coarseRings.getLevelStats();
+  }
+
   // ---- Stale pending request cleanup ----
 
   /**
@@ -1824,6 +1829,7 @@ export class VoxelWorld implements ChunkProvider {
     chunksLoaded: number;
     meshesVisible: number;
     remeshQueueSize: number;
+    coarseLevels: { level: number; chunks: number; drawn: number; incomplete: number; quiet: boolean }[];
   } {
     // Include the coarse rings so the counts match the whole rendered scene (the debug "Geometries" stat
     // is renderer-wide), not just the base level — otherwise chunks/meshes look far smaller than reality.
@@ -1832,6 +1838,7 @@ export class VoxelWorld implements ChunkProvider {
       chunksLoaded: this.chunks.size + cr.chunks,
       meshesVisible: this.getMeshCount() + cr.drawn,
       remeshQueueSize: this.remeshPipeline.size,
+      coarseLevels: this.coarseRings.getLevelStats(),
     };
   }
 

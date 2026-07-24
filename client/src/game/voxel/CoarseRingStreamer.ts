@@ -52,10 +52,11 @@ const DEFAULT_COARSE_RINGS = 2;
 const RING_UNLOAD_HYSTERESIS = 1;
 
 /** Margin shell loaded beyond the RENDER band so render-band chunks have real +neighbour voxels to mesh
- *  their high borders once, complete (mirrors the base's margin shell). Loaded but not meshed/drawn. Two
- *  chunks thick so the outer render row's diagonal (edge/corner) +margins sit comfortably inside the
- *  request band rather than on its exact boundary. */
-const MARGIN_RING = 2;
+ *  their high borders once, complete (mirrors the base's margin shell). Loaded but not meshed/drawn. One
+ *  chunk thick — the base uses a 1-chunk shell too, and the edge/corner heal (NEGATIVE_MARGIN_OFFSETS_7 on
+ *  ingest) already re-meshes consumers when a late diagonal margin lands, so a 2-thick shell only doubled
+ *  the settle work per ring (slower to reach quiescence) without closing gaps. */
+const MARGIN_RING = 1;
 
 /** Slack on band-boundary comparisons. The outer render row's chunk centres can land exactly on a band
  *  edge (d == renderOuter + 0.5); without slack, float rounding intermittently pushes them just outside,
@@ -289,9 +290,13 @@ export class CoarseRingStreamer {
     const outer = ringOuterRadius(L, this._visibilityRadius) / cw;
     const ccx = this._center.x / cw;
     const ccz = this._center.z / cw;
-    // Innermost coarse ring ABUTS the base disk (inner − 0.5, no gap); coarser rings keep a thin gap
-    // (inner + 0.5) to avoid z-fighting their inner coarse neighbour.
-    const innerBound = (L === baseLevel + 1) ? inner - 0.5 : inner + 0.5;
+    // Innermost coarse ring OVERLAPS the base disk (inner − 1.5): the base disk can render a chunk-row
+    // short of its nominal edge (occlusion BFS + retire-and-swap settle), so a mere abut (inner − 0.5)
+    // left a one-row trench at the base↔ring1 seam. Overlapping inward by ~1.5 chunks guarantees the ring
+    // covers that seam; the inward hand-off (finerCovers) still drops the overlap once the base draws it,
+    // so it's covered, not double-drawn, at rest. Coarser rings keep a thin gap (inner + 0.5) to avoid
+    // z-fighting their inner coarse neighbour (both are coarse, both settle to the same nominal edge).
+    const innerBound = (L === baseLevel + 1) ? inner - 1.5 : inner + 0.5;
     const b = rig.band;
     b.ccx = ccx; b.ccz = ccz; b.innerBound = innerBound; b.renderOuter = outer; b.requestOuter = outer + MARGIN_RING;
 
@@ -459,6 +464,24 @@ export class CoarseRingStreamer {
       for (const g of rig.geometries.values()) if (g.hasGeometry()) drawn++;
     }
     return { chunks, drawn };
+  }
+
+  /** Per-ring diagnostics for the debug overlay: for each resident coarse level, how many chunks are
+   *  loaded, how many are meshed complete (drawn) vs meshed-but-incomplete (hidden, awaiting a +margin
+   *  heal), and whether the ring has settled (quiet). Ordered finest→coarsest. Incomplete counts that
+   *  never drain point at a stuck band edge (the "last row missing" gaps). */
+  getLevelStats(): { level: number; chunks: number; drawn: number; incomplete: number; quiet: boolean }[] {
+    const out: { level: number; chunks: number; drawn: number; incomplete: number; quiet: boolean }[] = [];
+    for (const rig of [...this.rigs.values()].sort((a, b) => a.level - b.level)) {
+      let drawn = 0, incomplete = 0;
+      for (const [key, geo] of rig.geometries) {
+        if (!geo.hasGeometry()) continue;
+        if (rig.remesh.isMeshComplete(key)) drawn++;
+        else incomplete++;
+      }
+      out.push({ level: rig.level, chunks: rig.chunks.size, drawn, incomplete, quiet: rig.quiet });
+    }
+    return out;
   }
 
   /** Per-level solid raycast meshes, each with its LOD scale (2^level), so the spawn raycast can hit ring

@@ -116,7 +116,7 @@ export class GameCore {
   private renderScaleUnsub: (() => void) | null = null;
 
   // Last voxel stats written to the store (change-gate to avoid per-frame re-renders)
-  private lastVoxelStats = { chunksLoaded: -1, meshesVisible: -1, debugObjects: -1 };
+  private lastVoxelStats = { chunksLoaded: -1, meshesVisible: -1, debugObjects: -1, coarseSig: '' };
 
   // Store subscriptions that push material/water settings to the shaders
   private materialSettingsUnsub: (() => void) | null = null;
@@ -834,18 +834,26 @@ export class GameCore {
     const stats = this.voxelIntegration.getStats();
     const debugObjects = this.voxelIntegration.debug.getDebugObjectCount();
     const last = this.lastVoxelStats;
+    // Compact signature of the per-ring breakdown so we only re-publish (and re-render the panel) when a
+    // ring's counts actually move, not every frame.
+    const coarseSig = (stats.coarseLevels ?? [])
+      .map((r) => `${r.level}:${r.chunks}:${r.drawn}:${r.incomplete}:${r.quiet ? 1 : 0}`)
+      .join('|');
     if (
       stats.chunksLoaded !== last.chunksLoaded ||
       stats.meshesVisible !== last.meshesVisible ||
-      debugObjects !== last.debugObjects
+      debugObjects !== last.debugObjects ||
+      coarseSig !== last.coarseSig
     ) {
       last.chunksLoaded = stats.chunksLoaded;
       last.meshesVisible = stats.meshesVisible;
       last.debugObjects = debugObjects;
+      last.coarseSig = coarseSig;
       useGameStore.getState().setVoxelStats({
         chunksLoaded: stats.chunksLoaded,
         meshesVisible: stats.meshesVisible,
         debugObjects,
+        coarseLevels: stats.coarseLevels ?? [],
       });
     }
   }

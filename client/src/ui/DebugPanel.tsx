@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, ReactNode } from 'react';
+import { useEffect, useRef, useState, Fragment, ReactNode } from 'react';
 import { hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '@worldify/shared';
 import {
   ChevronDown, ChevronRight, Zap, Wrench, Search, Sliders, Palette, Droplet, Waves,
@@ -586,6 +586,22 @@ export function DebugPanel() {
               <div>Collider Q:</div><div className={perfStats.colliderQueueSize > 10 ? 'text-yellow-400' : ''}>{perfStats.colliderQueueSize}</div>
             </div>
           </div>
+
+          {voxelStats.coarseLevels.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-cyan-500/30">
+              <div className="mb-1 text-cyan-300 text-xs">Coarse rings (L: chunks / drawn / incomplete):</div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-3">
+                {voxelStats.coarseLevels.map((r) => (
+                  <Fragment key={r.level}>
+                    <div>L{r.level} ×{1 << r.level}{r.quiet ? '' : ' …'}</div>
+                    <div className={r.incomplete > 0 ? 'text-yellow-400' : ''}>
+                      {r.chunks} / {r.drawn} / {r.incomplete}
+                    </div>
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="mt-2 pt-2 border-t border-cyan-500/30">
             {perfStats.jsHeapMB > 0 && <div>JS Heap: {perfStats.jsHeapMB} MB</div>}
