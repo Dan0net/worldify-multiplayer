@@ -55,8 +55,8 @@ const NUM_COARSE_RINGS = 3;
 /** Extra chunks kept loaded beyond a ring's annulus before unloading (hysteresis, avoids edge thrash). */
 const RING_UNLOAD_HYSTERESIS = 1;
 
-/** Cap on in-flight chunk requests per coarse level per frame (keeps a coarse ring from starving base). */
-const MAX_PENDING_PER_LEVEL = 8;
+/** Cap on in-flight chunk requests per coarse level (keeps a coarse ring from starving base). */
+const MAX_PENDING_PER_LEVEL = 16;
 
 const DARK_ABOVE = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
 
@@ -86,6 +86,8 @@ interface CoarseLevelRig {
   epoch: number;
   /** True once this ring has streamed everything in its annulus and no mesh work remains (wave gate). */
   quiet: boolean;
+  /** Previous frame's `quiet`, so the settle diagnostic logs once per false→true transition. */
+  wasQuiet: boolean;
 }
 
 export class CoarseRingStreamer {
@@ -130,15 +132,18 @@ export class CoarseRingStreamer {
       if (lvl <= baseLevel || lvl > maxLevel) this.disposeRig(rig);
     }
 
-    // Stream finest→coarsest. Each ring waits for the next-finer resident ring to go quiet (wave from
-    // centre out); the innermost coarse ring only waits on the base level, which VoxelWorld streams
-    // independently — we don't gate on it (it's the always-present foreground), so ring base+1 starts
-    // immediately and coarser rings follow as each inner ring settles.
+    // Stream finest→coarsest. The wave gate defers only CREATING a brand-new deeper ring until the
+    // next-finer resident ring has gone quiet (refinement from centre out). Rings that ALREADY exist are
+    // always re-streamed, so after a zoom (which changes every ring's radii) they reposition to the new
+    // base's annuli instead of freezing at stale radii. The innermost coarse ring (base+1) has no coarse
+    // inner neighbour — the base level is its always-present foreground, streamed independently by
+    // VoxelWorld — so it starts immediately.
     for (let level = baseLevel + 1; level <= maxLevel; level++) {
-      const inner = this.rigs.get(level - 1);
-      if (inner && !inner.quiet) break;   // wave gate: hold this ring until the inner one settles
-      const rig = this.rigForLevel(level);
-      this.streamRing(rig, baseLevel);
+      if (!this.rigs.has(level)) {
+        const inner = this.rigs.get(level - 1);
+        if (inner && !inner.quiet) break;   // hold a NEW deeper ring until its inner neighbour settles
+      }
+      this.streamRing(this.rigForLevel(level), baseLevel);
     }
   }
 
@@ -171,6 +176,7 @@ export class CoarseRingStreamer {
       remesh,
       epoch: 0,
       quiet: false,
+      wasQuiet: false,
     };
     // Seam reconciliation across coarse chunks reuses the grouper dirty-mark path (same as the base level).
     remesh.addListener((key) => {
@@ -210,14 +216,18 @@ export class CoarseRingStreamer {
     const cxMin = Math.floor(ccx) - rOut, cxMax = Math.floor(ccx) + rOut;
     const czMin = Math.floor(ccz) - rOut, czMax = Math.floor(ccz) + rOut;
 
-    // In-annulus predicate for a column centre (chunk-centre distance, Chebyshev). The inner bound uses
-    // `inner + 0.5` so the innermost coarse chunk sits FULLY outside the base disk (its inner edge is at
-    // `inner`), leaving a thin gap at the boundary rather than overlapping/z-fighting the base level — a
-    // crack, the accepted Phase B artifact (skirts close it in the next step). The outer bound includes
-    // chunks straddling the ring's far edge (they crack against the next coarser ring, likewise accepted).
+    // In-annulus predicate for a column centre (chunk-centre distance, Chebyshev).
+    // Inner bound: the INNERMOST coarse ring (base+1) meets the base DISK, whose real rendered extent can
+    // fall a little short of the nominal radius — so it ABUTS (inner − 0.5), including the chunk that
+    // straddles the boundary, to guarantee no empty band between the base and the first ring (the "1st
+    // ring missing" report). Coarser rings meet another coarse ring exactly at the shared radius, so they
+    // keep a thin gap (inner + 0.5) to avoid z-fighting their inner neighbour — the accepted crack.
+    // Outer bound always includes chunks straddling the far edge (they crack against the next ring).
+    const isInnermost = L === baseLevel + 1;
+    const innerBound = isInnermost ? inner - 0.5 : inner + 0.5;
     const inAnnulus = (cx: number, cz: number): boolean => {
       const d = Math.max(Math.abs(cx + 0.5 - ccx), Math.abs(cz + 0.5 - ccz));
-      return d >= inner + 0.5 && d <= outer + 0.5;
+      return d >= innerBound && d <= outer + 0.5;
     };
 
     // --- Request pass (throttled): tiles for unknown columns, then their surface chunks ---
@@ -268,6 +278,14 @@ export class CoarseRingStreamer {
     // coarser ring may then begin.
     rig.quiet = !anyMissing && rig.pendingChunks.size === 0 && rig.pendingColumns.size === 0
       && !rig.remesh.hasPendingMeshWork();
+    // One-shot settle diagnostic: chunks streamed vs geometry produced tells us, if a ring looks
+    // missing, whether it never streamed (0 chunks) or streamed-but-didn't-render (chunks but 0 geo).
+    if (rig.quiet && !rig.wasQuiet) {
+      let withGeo = 0;
+      for (const g of rig.geometries.values()) if (g.hasGeometry()) withGeo++;
+      console.log(`[CoarseRing] L${L} settled: ${rig.chunks.size} chunks, ${withGeo} drawn (annulus ${inner.toFixed(1)}..${outer.toFixed(1)} chunks)`);
+    }
+    rig.wasQuiet = rig.quiet;
   }
 
   // ---- Generation + ingest (local pool + level-namespaced IDB; mirrors VoxelWorld's local path) ----
