@@ -30,6 +30,32 @@ export function ringOuterRadius(level: number, visibilityRadius = VISIBILITY_RAD
 }
 
 /**
+ * The world-space OUTER border (one axis, {lo, hi} in metres) of LOD `level`, centred on the camera and
+ * QUANTISED TO THE LEVEL ABOVE (the level-`level+1` grid, cell size `CHUNK_WORLD_SIZE·2^(level+1)`).
+ *
+ * This is the seam between level `level` (inside) and level `level+1` (outside). Snapping it to the
+ * COARSER level's grid means BOTH levels' cells land on it exactly (the coarse grid is a subset of the
+ * fine grid), so the border always lines up with no gap or overlap — while each level stays centred on
+ * the camera (no clipmap "whole view jumps in coarse steps"). Because it's snapped, the ring is not the
+ * same width on every side — it's 1–2 of its own cells depending where the snap falls — which is exactly
+ * the price of borders that always meet. Level `level`'s outer border == level `level+1`'s inner border,
+ * both computed from this one function with the same args, so they are identical by construction.
+ */
+export function levelOuterBounds(
+  level: number,
+  center1D: number,
+  visibilityRadius = VISIBILITY_RADIUS,
+): { lo: number; hi: number } {
+  const cw = CHUNK_WORLD_SIZE * (1 << Math.max(0, level));   // this level's chunk size (m)
+  const up = cw * 2;                                          // the level-above grid we snap to
+  const half = visibilityRadius * cw;                         // nominal half-extent (= ringOuterRadius(level))
+  return {
+    lo: Math.round((center1D - half) / up) * up,
+    hi: Math.round((center1D + half) / up) * up,
+  };
+}
+
+/**
  * LOD level for a region whose centre sits `distanceMeters` from the stream centre, given the finest
  * level `baseLevel` and the live `visibilityRadius`. Returns the finest band whose outer radius still
  * exceeds `distanceMeters`, floored at `baseLevel` and clamped to `[baseLevel, MAX_ZOOM_LEVEL]`. Because

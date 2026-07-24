@@ -41,26 +41,15 @@ import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
-import { ringOuterRadius } from './ringLevel.js';
+import { levelOuterBounds } from './ringLevel.js';
 import { hasChunk, loadChunk, saveChunk, hasColumn, loadColumn, saveColumn } from '../world/WorldManager.js';
 
 /** Default coarse ring count until the quality system sets it (Far View control). */
 const DEFAULT_COARSE_RINGS = 2;
 
-/** Extra chunks kept loaded beyond a ring's band before unloading (hysteresis, avoids edge thrash). */
-const RING_UNLOAD_HYSTERESIS = 1;
-
-/** Margin shell loaded beyond the RENDER band so render-band chunks have real +neighbour voxels to mesh
- *  their high borders once, complete (mirrors the base's margin shell). Loaded but not meshed/drawn. One
- *  chunk thick — the base uses a 1-chunk shell too, and the edge/corner heal (NEGATIVE_MARGIN_OFFSETS_7 on
- *  ingest) already re-meshes consumers when a late diagonal margin lands, so a 2-thick shell only doubled
- *  the settle work per ring (slower to reach quiescence) without closing gaps. */
+/** Margin shell (cells) loaded beyond the RENDER annulus so render cells have real +neighbour voxels to
+ *  mesh their high borders once, complete. Loaded but not meshed/drawn. */
 const MARGIN_RING = 1;
-
-/** Slack on band-boundary comparisons. The outer render row's chunk centres can land exactly on a band
- *  edge (d == renderOuter + 0.5); without slack, float rounding intermittently pushes them just outside,
- *  so that whole row never meshes → the "last row missing" gaps. */
-const BAND_EPS = 1e-3;
 
 /** Cap on in-flight requests per coarse level per frame (keeps a ring from starving the base). */
 const MAX_PENDING_PER_LEVEL = 12;
@@ -101,13 +90,18 @@ function columnLoadFloor(columnInfo: Map<string, { minCy: number; maxCy: number 
   return floor;
 }
 
-/** Current per-frame band geometry for a rig, in that level's chunk units. Set each streamRing; read by
- *  the rig's `shouldMeshNow` / `isMarginSourceExpected` closures (which are created once at rig birth). */
+/**
+ * Per-frame square-annulus bounds for a rig, in THIS level's cell indices (half-open [lo, hi)). Set each
+ * streamRing; read by the rig's `shouldMeshNow` / `isMarginSourceExpected` closures (created once at rig
+ * birth). The ring is the OUTER square minus the INNER square (the finer level's hole). Both squares'
+ * edges are snapped so borders line up across levels (see levelOuterBounds); the annulus is therefore not
+ * the same width on every side. `load` = outer expanded by a 1-cell margin so render cells have +neighbour
+ * voxels to mesh their high faces.
+ */
 interface RigBand {
-  ccx: number; ccz: number;   // level-local fractional chunk centre
-  innerBound: number;         // render band inner (chunk-centre Chebyshev)
-  renderOuter: number;        // render band outer
-  requestOuter: number;       // render outer + MARGIN_RING (band we load for neighbour data)
+  oLoX: number; oHiX: number; oLoZ: number; oHiZ: number;   // outer square (this level fills to here)
+  iLoX: number; iHiX: number; iLoZ: number; iHiZ: number;   // inner square (finer level's hole — excluded)
+  lLoX: number; lHiX: number; lLoZ: number; lHiZ: number;   // load square (outer + margin, hole still excluded)
 }
 
 /** Everything one coarse LOD level needs to stream + render its ring, isolated from every other level. */
@@ -213,19 +207,22 @@ export class CoarseRingStreamer {
     const columnInfo = new Map<string, { minCy: number; maxCy: number }>();
     const pendingChunks = new Set<string>();
     const grouper = new ChunkGrouper(this.scene);
-    const band: RigBand = { ccx: 0, ccz: 0, innerBound: 0, renderOuter: 0, requestOuter: 0 };
-    // Chebyshev chunk-centre distance from the current level-local centre.
-    const dist = (cx: number, cz: number) => Math.max(Math.abs(cx + 0.5 - band.ccx), Math.abs(cz + 0.5 - band.ccz));
-    // Discrete tiling: a level-L chunk renders iff its CENTRE Chebyshev distance is in
-    // [innerBound, renderOuter − 0.5]. The half-cell insets (innerBound = inner + 0.5, and the −0.5 here)
-    // make the band's innermost cell's INNER edge land exactly on the ring boundary B_{L-1} = inner·cw_L
-    // and its outermost cell's OUTER edge on B_L = outer·cw_L. Because the doubling radii grid-align for
-    // an even visibilityRadius (inner = vr/2, outer = vr), ring L's outer edge == ring L+1's inner edge in
-    // world space — adjacent rings ABUT with no overlap and no gap (discrete quantised borders).
-    const inRenderBand = (cx: number, cz: number) => {
-      const d = dist(cx, cz);
-      return d >= band.innerBound - BAND_EPS && d <= band.renderOuter - 0.5 + BAND_EPS;
+    const band: RigBand = {
+      oLoX: 0, oHiX: 0, oLoZ: 0, oHiZ: 0,
+      iLoX: 0, iHiX: 0, iLoZ: 0, iHiZ: 0,
+      lLoX: 0, lHiX: 0, lLoZ: 0, lHiZ: 0,
     };
+    // Square-annulus membership (this level's cell indices). A cell renders iff it's inside the OUTER
+    // square and NOT inside the INNER (finer-level) square. Load = the same, using the margin-expanded
+    // outer square. Both squares are snapped so borders line up with the neighbouring levels.
+    const inSq = (cx: number, cz: number, loX: number, hiX: number, loZ: number, hiZ: number) =>
+      cx >= loX && cx < hiX && cz >= loZ && cz < hiZ;
+    const inRenderBand = (cx: number, cz: number) =>
+      inSq(cx, cz, band.oLoX, band.oHiX, band.oLoZ, band.oHiZ) &&
+      !inSq(cx, cz, band.iLoX, band.iHiX, band.iLoZ, band.iHiZ);
+    const inLoadBand = (cx: number, cz: number) =>
+      inSq(cx, cz, band.lLoX, band.lHiX, band.lLoZ, band.lHiZ) &&
+      !inSq(cx, cz, band.iLoX, band.iHiX, band.iLoZ, band.iHiZ);
     const remesh = new RemeshPipeline(
       chunks,
       geometries,
@@ -233,24 +230,20 @@ export class CoarseRingStreamer {
       this.meshPool,
       pendingChunks,
       // A +margin neighbour is EXPECTED (defer meshing) only if it will ACTUALLY be requested — mirrors
-      // the base's pending/reachable discipline. The streamer only ever requests cy ∈ [minCy, maxCy]
-      // per column, so a neighbour above maxCy (open sky) OR below minCy (underground rock beneath the
-      // column's lowest surface) is NEVER loaded; a consumer must not wait on either. Missing the
-      // below-minCy floor was the permanent ring-edge trench: a surface chunk beside a TALLER column
-      // deferred forever on its never-loading underground +X/+Z neighbour and stayed hidden.
+      // the base's pending/reachable discipline. In-band means inside this ring's LOAD square (annulus +
+      // margin). The loadable vertical span is [exposure floor, maxCy]: above maxCy is open sky and the
+      // floor is extended down for cliff walls facing a lower neighbour — neither below-floor nor
+      // above-maxCy ever loads, so a consumer must not wait on those.
       (cx, cy, cz) => {
         const key = chunkKey(cx, cy, cz);
         if (chunks.has(key)) return false;          // already loaded → ready
         if (pendingChunks.has(key)) return true;    // in flight → wait for it
-        const d = dist(cx, cz);
-        if (d < band.innerBound - BAND_EPS || d > band.requestOuter + 0.5 + BAND_EPS) return false; // out of band → never requested
+        if (!inLoadBand(cx, cz)) return false;       // out of band → never requested
         const info = columnInfo.get(`${cx},${cz}`);
         if (!info) return true;                      // column tile not in yet, but in-band → it will be requested
-        // Loadable span is [exposure floor, maxCy] — the floor is extended down for cliff walls facing a
-        // lower neighbour, so a consumer of such a wall chunk correctly waits for it.
         return cy >= columnLoadFloor(columnInfo, cx, cz) && cy <= info.maxCy;
       },
-      // Mesh only the RENDER band; the margin ring is loaded for neighbour voxels but never meshed/drawn.
+      // Mesh only the RENDER annulus; the margin shell is loaded for neighbour voxels but never drawn.
       (cx, _cy, cz) => inRenderBand(cx, cz),
       // Derive completeness from "high face still inbound", not skipHighBoundary — a coarse chunk is only
       // dispatched once nothing is inbound, so a skipped high face is a never-loading solid/out-of-band
@@ -319,46 +312,50 @@ export class CoarseRingStreamer {
   }
 
   /**
-   * Stream one coarse ring: request its band (render + margin) NEAREST-FIRST, hand off / unload what fell
-   * outside, then mesh + merge. Ring radii are base-independent (ringLevel), so the annulus is the same
-   * regardless of `baseLevel` — the ring is retained across a zoom.
+   * Stream one coarse ring as a SQUARE ANNULUS whose borders are snapped to the neighbouring levels' grids
+   * so they line up exactly. The ring is centred on the camera (no whole-view snapping); only its BORDERS
+   * quantise: the OUTER border to the level ABOVE (this ring's outer == the next ring's inner), the INNER
+   * border to THIS level (== the finer level's outer). The annulus is thus not the same width on each side
+   * — 1–2 cells depending where the snap falls — the price of borders that always meet. Requests go out
+   * nearest-first; anything outside the load square is unloaded.
    */
   private streamRing(rig: CoarseLevelRig): void {
     const L = rig.level;
-    const cw = levelChunkWorld(L);
-    // Base-independent band, in this level's chunk units: inner = vr/2, render outer = vr (the doubling
-    // in ringOuterRadius makes both constant across levels), so the ring is flush with the base disk edge.
-    const inner = ringOuterRadius(L - 1, this._visibilityRadius) / cw;
-    const outer = ringOuterRadius(L, this._visibilityRadius) / cw;
-    // GRID-SNAP the ring centre to THIS level's chunk grid (nearest integer cell to the camera). The old
-    // fractional centre made the band edges land at fractional positions, so which cells fell in the
-    // annulus flipped as the camera moved by sub-chunk amounts — that shimmer dropped the outer row and
-    // opened offset-dependent gaps at the borders. With an integer centre the annulus is a fixed,
-    // cell-aligned square that only shifts when the camera crosses a whole level-L cell: stable, discrete,
-    // quantised edges. Vertical (y) needs no snap — the band is horizontal.
-    const ccx = Math.round(this._center.x / cw);
-    const ccz = Math.round(this._center.z / cw);
-    // Discrete tiling for EVERY ring (no inward overlap): innerBound = inner + 0.5 so the innermost cell's
-    // inner edge lands exactly on B_{L-1} = inner·cw_L. Adjacent rings then abut edge-to-edge (see
-    // inRenderBand). The base↔ring1 seam is handled the same way — ring1 starts exactly at the base disk's
-    // nominal edge; the finerCovers hand-off drops any residual base overshoot so it's covered, not
-    // double-drawn.
-    const innerBound = inner + 0.5;
+    const cw = levelChunkWorld(L);   // true-world size of one level-L cell
+    const vr = this._visibilityRadius;
     const b = rig.band;
-    b.ccx = ccx; b.ccz = ccz; b.innerBound = innerBound; b.renderOuter = outer; b.requestOuter = outer + MARGIN_RING;
 
-    const rReq = Math.ceil(b.requestOuter + 0.5);
-    const cx0 = Math.floor(ccx), cz0 = Math.floor(ccz);
-    const dist = (cx: number, cz: number) => Math.max(Math.abs(cx + 0.5 - ccx), Math.abs(cz + 0.5 - ccz));
+    // Shared, snapped borders (true-world → this level's cell indices; exact integers because the snaps are
+    // multiples of cw). OUTER = levelOuterBounds(L) snapped to cw·2 (the level above); INNER =
+    // levelOuterBounds(L−1) snapped to cw (this level) == the finer level's outer border, identical by
+    // construction, so ring L's inner edge == ring L−1's outer edge with no gap/overlap.
+    const oX = levelOuterBounds(L, this._center.x, vr);
+    const oZ = levelOuterBounds(L, this._center.z, vr);
+    const iX = levelOuterBounds(L - 1, this._center.x, vr);
+    const iZ = levelOuterBounds(L - 1, this._center.z, vr);
+    b.oLoX = Math.round(oX.lo / cw); b.oHiX = Math.round(oX.hi / cw);
+    b.oLoZ = Math.round(oZ.lo / cw); b.oHiZ = Math.round(oZ.hi / cw);
+    b.iLoX = Math.round(iX.lo / cw); b.iHiX = Math.round(iX.hi / cw);
+    b.iLoZ = Math.round(iZ.lo / cw); b.iHiZ = Math.round(iZ.hi / cw);
+    b.lLoX = b.oLoX - MARGIN_RING; b.lHiX = b.oHiX + MARGIN_RING;
+    b.lLoZ = b.oLoZ - MARGIN_RING; b.lHiZ = b.oHiZ + MARGIN_RING;
 
-    // --- Collect the request-band columns NEAREST-FIRST (center-out fill) ---
+    const inSq = (cx: number, cz: number, loX: number, hiX: number, loZ: number, hiZ: number) =>
+      cx >= loX && cx < hiX && cz >= loZ && cz < hiZ;
+    const inLoad = (cx: number, cz: number) =>
+      inSq(cx, cz, b.lLoX, b.lHiX, b.lLoZ, b.lHiZ) && !inSq(cx, cz, b.iLoX, b.iHiX, b.iLoZ, b.iHiZ);
+
+    // Camera cell (for nearest-first ordering + grouper rebuild centre).
+    const fcx = this._center.x / cw, fcz = this._center.z / cw;
+    const cx0 = Math.round(fcx), cz0 = Math.round(fcz);
+
+    // --- Collect the LOAD-square columns NEAREST-FIRST (centre-out fill) ---
     const cols = this._colBuf;
     cols.length = 0;
-    for (let cx = cx0 - rReq; cx <= cx0 + rReq; cx++) {
-      for (let cz = cz0 - rReq; cz <= cz0 + rReq; cz++) {
-        const d = dist(cx, cz);
-        if (d < innerBound - BAND_EPS || d > b.requestOuter + 0.5 + BAND_EPS) continue;
-        cols.push({ cx, cz, d2: (cx + 0.5 - ccx) ** 2 + (cz + 0.5 - ccz) ** 2 });
+    for (let cx = b.lLoX; cx < b.lHiX; cx++) {
+      for (let cz = b.lLoZ; cz < b.lHiZ; cz++) {
+        if (!inLoad(cx, cz)) continue;
+        cols.push({ cx, cz, d2: (cx + 0.5 - fcx) ** 2 + (cz + 0.5 - fcz) ** 2 });
       }
     }
     cols.sort((p, q) => p.d2 - q.d2);
@@ -385,21 +382,14 @@ export class CoarseRingStreamer {
       }
     }
 
-    // --- Unload / hand off chunks that fell outside the band ---
+    // --- Unload chunks outside the load square (including any that crossed into the finer level's hole) ---
     for (const [key, chunk] of [...rig.chunks]) {
-      const d = dist(chunk.cx, chunk.cz);
-      if (d > b.requestOuter + RING_UNLOAD_HYSTERESIS) {
-        this.unloadChunk(rig, key);                            // beyond the ring → gone
-      } else if (d < innerBound - RING_UNLOAD_HYSTERESIS) {
-        // Crossed inward into the base-disk region: keep drawing this coarse chunk until the base has
-        // actually drawn the finer replacement there — then hand off (no vanishing gap while panning).
-        if (this.finerCovers((chunk.cx + 0.5) * cw, (chunk.cz + 0.5) * cw)) this.unloadChunk(rig, key);
-      }
+      if (!inLoad(chunk.cx, chunk.cz)) this.unloadChunk(rig, key);
     }
 
     // --- Mesh + merge (this rig's RemeshPipeline carries its own injected open-sky predicate) ---
     const ccy = this._center.y / cw;
-    this._localCenter.set(ccx * CHUNK_WORLD_SIZE, ccy * CHUNK_WORLD_SIZE, ccz * CHUNK_WORLD_SIZE);
+    this._localCenter.set(fcx * CHUNK_WORLD_SIZE, ccy * CHUNK_WORLD_SIZE, fcz * CHUNK_WORLD_SIZE);
     rig.remesh.process(this._localCenter);
     rig.grouper.rebuild(cx0, Math.floor(ccy), cz0, (k) => rig.remesh.isBusy(k));
 

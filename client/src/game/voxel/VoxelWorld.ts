@@ -6,7 +6,6 @@ import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
   VISIBILITY_UNLOAD_BUFFER,
-  MAX_ZOOM_LEVEL,
   CHUNK_SIZE,
   CHUNK_WORLD_SIZE,
   FACE_OFFSETS_6,
@@ -45,6 +44,7 @@ import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool, meshWorkerCount } from './MeshWorkerPool.js';
 import { expandChunkToGrid, setEmptyAirPredicate } from './ChunkMesher.js';
+import { levelOuterBounds } from './ringLevel.js';
 import { resampleLightAttributes } from './MeshGeometry.js';
 import { sendBinary } from '../../net/netClient.js';
 import { useGameStore } from '../../state/store.js';
@@ -340,6 +340,11 @@ export class VoxelWorld implements ChunkProvider {
   private cubeVisibility = false;
   /** Scratch stream centre: horizontal from the caller, vertical pinned to the surface in Explore. */
   private _streamPos = new THREE.Vector3();
+  /** Base cube's OUTER border in level-local cell indices (half-open), snapped to the level ABOVE's grid
+   *  (2 base cells) so the cube's edge lines up exactly with ring1's inner edge (== levelOuterBounds).
+   *  Only meaningful/applied in Explore (cube). Recomputed each update() from the stream centre. */
+  private _baseBorderLoX = 0; private _baseBorderHiX = 0;
+  private _baseBorderLoZ = 0; private _baseBorderHiZ = 0;
 
   get lodLevel(): number { return this.currentLevel; }
 
@@ -650,15 +655,16 @@ export class VoxelWorld implements ChunkProvider {
       const pc = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
       const ci = this.columnInfo.get(`${pc.cx},${pc.cz}`);
       if (ci) this._streamPos.y = (ci.maxCy + 0.5) * CHUNK_WORLD_SIZE;
-      // SHARED grid-snap (Explore): quantise the base cube AND the coarse rings to the COARSEST resident
-      // level's grid, so every level's cell edges land on one common set of world grid lines. Adjacent
-      // levels then abut EXACTLY (no 1-cell seam gap on the far side of a lower level). The snap unit in
-      // this level's LOCAL metres is CHUNK_WORLD_SIZE·2^(maxLevel−baseLevel); the base cube recentres in
-      // whole coarsest-cell steps as the camera pans (standard clipmap behaviour). Horizontal only.
-      const maxLevel = Math.min(MAX_ZOOM_LEVEL, this.currentLevel + this.coarseRings.getNumRings());
-      const snapLocal = CHUNK_WORLD_SIZE * (1 << (maxLevel - this.currentLevel));
-      this._streamPos.x = Math.round(this._streamPos.x / snapLocal) * snapLocal;
-      this._streamPos.z = Math.round(this._streamPos.z / snapLocal) * snapLocal;
+      // Quantise the base cube's OUTER border to the level ABOVE (2 base cells), centred on the camera.
+      // ring1's inner border is levelOuterBounds(currentLevel, trueCentre) which equals this in true
+      // world (levelOuterBounds is scale-covariant), so the cube's edge and ring1's edge line up exactly —
+      // "level 0 renders chunks right up to the level-1 quantisation border." The border isn't the same on
+      // every side (1–2 cells); that's the price of it always meeting. shouldMeshChunk clips render to it;
+      // the base's face-ring + margin loading already reach one cell past the BFS, so the border is covered.
+      const bx = levelOuterBounds(0, this._streamPos.x, this._visibilityRadius);
+      const bz = levelOuterBounds(0, this._streamPos.z, this._visibilityRadius);
+      this._baseBorderLoX = Math.round(bx.lo / CHUNK_WORLD_SIZE); this._baseBorderHiX = Math.round(bx.hi / CHUNK_WORLD_SIZE);
+      this._baseBorderLoZ = Math.round(bz.lo / CHUNK_WORLD_SIZE); this._baseBorderHiZ = Math.round(bz.hi / CHUNK_WORLD_SIZE);
     }
 
     // Get player's current chunk (from the surface-pinned stream position in Explore)
@@ -1047,6 +1053,11 @@ export class VoxelWorld implements ChunkProvider {
    * only when it is paid.
    */
   private shouldMeshChunk(cx: number, cy: number, cz: number): boolean {
+    // Explore: clip the cube to its snapped outer border so its edge lines up with ring1's inner edge.
+    // Outside the border is ring1's territory (drawn coarser), so the base must not render there.
+    if (this.cubeVisibility && (
+      cx < this._baseBorderLoX || cx >= this._baseBorderHiX ||
+      cz < this._baseBorderLoZ || cz >= this._baseBorderHiZ)) return false;
     const reachable = this.cachedReachable;
     if (!reachable || reachable.size === 0) return true; // pre-BFS: don't block the initial mesh
     if (reachable.has(chunkKey(cx, cy, cz))) return true;
