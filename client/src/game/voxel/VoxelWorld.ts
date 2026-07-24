@@ -1034,8 +1034,15 @@ export class VoxelWorld implements ChunkProvider {
    */
   private isRenderable(key: string, reachable: Set<string>): boolean {
     if (!this.remeshPipeline.isMeshComplete(key)) return false;
-    if (reachable.has(key)) return true;
     const { cx, cy, cz } = parseChunkKey(key);
+    // Explore: HIDE anything past the snapped cube border (not just stop meshing it). As the border steps
+    // with a pan, cells behind it must go dark the same frame so they never overlap ring1's inner edge —
+    // ring1 (streaming its annulus continuously) covers the vacated cells. This is the base side of the
+    // atomic base↔ring1 hand-off.
+    if (this.cubeVisibility && (
+      cx < this._baseBorderLoX || cx >= this._baseBorderHiX ||
+      cz < this._baseBorderLoZ || cz >= this._baseBorderHiZ)) return false;
+    if (reachable.has(key)) return true;
     for (const [dx, dy, dz] of FACE_OFFSETS_6) {
       if (reachable.has(chunkKey(cx + dx, cy + dy, cz + dz))) return true;
     }
