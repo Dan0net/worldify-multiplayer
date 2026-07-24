@@ -49,8 +49,8 @@ import { TerrainWorkerPool } from './TerrainWorkerPool.js';
 import { ringOuterRadius } from './ringLevel.js';
 import { hasChunk, loadChunk, saveChunk, hasColumn, loadColumn, saveColumn } from '../world/WorldManager.js';
 
-/** How many coarse rings to keep resident beyond the base disk. Bounds memory/streaming (docs §5c). */
-const NUM_COARSE_RINGS = 3;
+/** Default coarse ring count until the quality system sets it (Far View control). */
+const DEFAULT_COARSE_RINGS = 2;
 
 /** Extra chunks kept loaded beyond a ring's annulus before unloading (hysteresis, avoids edge thrash). */
 const RING_UNLOAD_HYSTERESIS = 1;
@@ -101,6 +101,9 @@ export class CoarseRingStreamer {
   /** Live base-level visibility radius (quality-dependent) — drives the ring radii so ring 1 abuts the
    *  base disk regardless of quality. Set each frame by update(). */
   private _visibilityRadius = 11;
+  /** Number of coarse rings to keep resident beyond the base disk (Far View quality control).
+   *  0 = off. Set by VoxelWorld.setFarViewRings from the quality system. */
+  private numRings = DEFAULT_COARSE_RINGS;
 
   constructor(
     scene: THREE.Scene,
@@ -129,7 +132,7 @@ export class CoarseRingStreamer {
     this._center.copy(centerWorld);
     this._visibilityRadius = visibilityRadius;
 
-    const maxLevel = Math.min(MAX_ZOOM_LEVEL, baseLevel + NUM_COARSE_RINGS);
+    const maxLevel = Math.min(MAX_ZOOM_LEVEL, baseLevel + this.numRings);
 
     // Drop rings no longer in the resident band (finer than base+1, or beyond maxLevel).
     for (const [lvl, rig] of [...this.rigs]) {
@@ -378,6 +381,12 @@ export class CoarseRingStreamer {
     rig.remesh.delete(key);
     rig.pendingChunks.delete(key);
     rig.chunks.delete(key);
+  }
+
+  /** Set the resident coarse-ring count (Far View quality control). 0 = off; the next update() disposes
+   *  any rings now outside the band. Clamped to a sane range. */
+  setNumRings(n: number): void {
+    this.numRings = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.floor(n)));
   }
 
   /** Drop all rings (world switch / leaving Explore). */

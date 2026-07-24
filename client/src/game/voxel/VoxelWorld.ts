@@ -521,6 +521,11 @@ export class VoxelWorld implements ChunkProvider {
     return this._visibilityRadius;
   }
 
+  /** Set the Explore far-view coarse-ring count (Far View quality control). 0 = off. */
+  setFarViewRings(rings: number): void {
+    this.coarseRings.setNumRings(rings);
+  }
+
   // ---- Stale pending request cleanup ----
 
   /**

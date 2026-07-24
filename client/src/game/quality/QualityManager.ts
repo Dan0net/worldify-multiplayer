@@ -20,6 +20,7 @@ import {
   snapViewDistance,
   saveQualityLevel,
   saveVisibilityRadius,
+  saveFarViewRings,
 } from './QualityPresets.js';
 import { getActiveShadowLight, setMoonShadowsAllowed, updateShadowFrustumSize, applyEnvironmentSettings } from '../scene/Lighting.js';
 import {
@@ -38,6 +39,9 @@ let rendererRef: THREE.WebGLRenderer | null = null;
 /** Callback set by VoxelWorld or GameCore to update visibility radius at runtime */
 let visibilityRadiusCallback: ((radius: number) => void) | null = null;
 
+/** Callback set by GameCore to update the Explore far-view ring count at runtime */
+let farViewRingsCallback: ((rings: number) => void) | null = null;
+
 // ============== Public API ==============
 
 export function setRendererRef(r: THREE.WebGLRenderer): void {
@@ -50,6 +54,10 @@ export function getRendererRef(): THREE.WebGLRenderer | null {
 
 export function setVisibilityRadiusCallback(cb: (radius: number) => void): void {
   visibilityRadiusCallback = cb;
+}
+
+export function setFarViewRingsCallback(cb: (rings: number) => void): void {
+  farViewRingsCallback = cb;
 }
 
 // ============== Internal imperative appliers (no store writes) ==============
@@ -74,13 +82,17 @@ function visibilityImpl(radius: number): void {
   if (visibilityRadiusCallback) visibilityRadiusCallback(radius);
 }
 
+function farViewImpl(rings: number): void {
+  if (farViewRingsCallback) farViewRingsCallback(rings);
+}
+
 // ============== Preset application ==============
 
 /**
  * Apply a full quality preset.
  * `customVisibility` overrides the preset's visibility radius (separate slider).
  */
-export function applyQuality(level: QualityLevel, customVisibility?: number): void {
+export function applyQuality(level: QualityLevel, customVisibility?: number, customFarView?: number): void {
   const preset = QUALITY_PRESETS[level];
   const settings: QualitySettings = {
     ...preset,
@@ -88,6 +100,8 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
     visibilityRadius: customVisibility !== undefined
       ? snapViewDistance(customVisibility)
       : preset.visibilityRadius,
+    // Far-view rings are a per-device view pref, preserved across preset changes like visibilityRadius.
+    farViewRings: customFarView !== undefined ? customFarView : preset.farViewRings,
   };
 
   // Single source of truth — this also drives the effects.ts / SkyDome
@@ -108,11 +122,15 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
   setWaterQualityLow(!settings.waterHighQuality);
   setGodRaysSamples(settings.godRaysSamples);
   visibilityImpl(settings.visibilityRadius);
+  farViewImpl(settings.farViewRings);
 
   // Persist
   saveQualityLevel(level);
   if (customVisibility !== undefined) {
     saveVisibilityRadius(customVisibility);
+  }
+  if (customFarView !== undefined) {
+    saveFarViewRings(customFarView);
   }
 
   console.log(`[Quality] Applied preset: ${level}`, {
@@ -132,8 +150,8 @@ export function applyQuality(level: QualityLevel, customVisibility?: number): vo
  * Apply a quality preset and record the selected level. Single entry-point that
  * UI buttons and GameCore.init should call.
  */
-export function syncQualityToStore(level: QualityLevel, customVisibility?: number): void {
-  applyQuality(level, customVisibility);
+export function syncQualityToStore(level: QualityLevel, customVisibility?: number, customFarView?: number): void {
+  applyQuality(level, customVisibility, customFarView);
   useGameStore.getState().setQualityLevel(level);
 }
 
@@ -174,11 +192,20 @@ export function applyQualityPatch(patch: Partial<QualitySettings>): void {
     visibilityImpl(patch.visibilityRadius);
     saveVisibilityRadius(patch.visibilityRadius);
   }
+  if (patch.farViewRings !== undefined) {
+    farViewImpl(patch.farViewRings);
+    saveFarViewRings(patch.farViewRings);
+  }
 }
 
 /** Apply just the visibility radius (thin wrapper — home screen View control). */
 export function applyVisibilityRadius(radius: number): void {
   applyQualityPatch({ visibilityRadius: snapViewDistance(radius) });
+}
+
+/** Apply just the far-view ring count (thin wrapper — Explore settings Far View control). */
+export function applyFarViewRings(rings: number): void {
+  applyQualityPatch({ farViewRings: rings });
 }
 
 /** Current shadow radius in chunks. Used by VoxelWorld for castShadow culling. */

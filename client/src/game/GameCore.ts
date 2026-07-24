@@ -37,9 +37,10 @@ import {
   QUALITY_PRESETS,
   loadSavedQualityLevel,
   loadSavedVisibilityRadius,
+  loadSavedFarViewRings,
   detectQualityLevel,
 } from './quality/QualityPresets';
-import { setRendererRef, setVisibilityRadiusCallback, syncQualityToStore } from './quality/QualityManager';
+import { setRendererRef, setVisibilityRadiusCallback, setFarViewRingsCallback, syncQualityToStore } from './quality/QualityManager';
 import { controls } from './player/controls';
 import { on } from '../net/decode';
 import { RoomSnapshot, GameMode, VoxelBuildCommit, VoxelChunkData, BuildResult, MapTileResponse, SurfaceColumnResponse, RequestNack, updateTileFromChunk, updateTileHash, createMapTile, CHUNK_SIZE, VOXEL_SCALE } from '@worldify/shared';
@@ -238,8 +239,12 @@ export class GameCore {
       setVisibilityRadiusCallback((radius: number) => {
         this.voxelIntegration.world.setVisibilityRadius(radius);
       });
-      // Apply the quality preset (including visibility radius) and sync to store
-      syncQualityToStore(qualityLevel, effectiveVisibility);
+      // Wire the Explore far-view (coarse ring count) callback.
+      setFarViewRingsCallback((rings: number) => {
+        this.voxelIntegration.world.setFarViewRings(rings);
+      });
+      // Apply the quality preset (including visibility radius + far-view rings) and sync to store.
+      syncQualityToStore(qualityLevel, effectiveVisibility, loadSavedFarViewRings() ?? undefined);
       
       // Initialize spawn manager + the explore-mode spawn marker gizmo
       this.spawnManager = new SpawnManager(scene);

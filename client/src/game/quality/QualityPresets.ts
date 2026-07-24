@@ -52,7 +52,14 @@ export interface QualitySettings {
 
   // Water: full 4-layer normals + second normal sample (ultra/high) vs cheap 2-layer (medium/low)
   waterHighQuality: boolean;
+
+  // Explore far view: number of concentric coarse-LOD rings streamed beyond the base disk (Phase B).
+  // 0 = off (base level only). Higher = more distant terrain visible, more memory/streaming.
+  farViewRings: number;
 }
+
+/** Selectable far-view ring counts (Explore concentric coarse LOD). 0 = off. */
+export const FAR_VIEW_RINGS = [0, 1, 2, 4] as const;
 
 /** Selectable view distances, in chunks (also the View Distance slider segments). */
 export const VIEW_DISTANCES = [5, 7, 9, 11] as const;
@@ -84,6 +91,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderAoMaps: true,
     shaderMetalnessMaps: true,
     waterHighQuality: true,
+    farViewRings: 4,
   },
   high: {
     ssaoEnabled: true,
@@ -99,6 +107,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderAoMaps: true,
     shaderMetalnessMaps: true,
     waterHighQuality: true,
+    farViewRings: 2,
   },
   medium: {
     ssaoEnabled: false,
@@ -114,6 +123,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderAoMaps: false,
     shaderMetalnessMaps: false,
     waterHighQuality: false,
+    farViewRings: 1,
   },
   low: {
     ssaoEnabled: false,
@@ -129,6 +139,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shaderAoMaps: false,
     shaderMetalnessMaps: false,
     waterHighQuality: false,
+    farViewRings: 0,
   },
 };
 
@@ -208,6 +219,17 @@ export const QUALITY_ROWS: QualityRow[] = [
     match: (q) => [5, 7, 9, 11].indexOf(q.visibilityRadius),
   },
   {
+    key: 'farView',
+    label: 'Far View',
+    segments: [
+      { label: 'Off', patch: { farViewRings: 0 } },
+      { label: '1', patch: { farViewRings: 1 } },
+      { label: '2', patch: { farViewRings: 2 } },
+      { label: '4', patch: { farViewRings: 4 } },
+    ],
+    match: (q) => FAR_VIEW_RINGS.indexOf(q.farViewRings as typeof FAR_VIEW_RINGS[number]),
+  },
+  {
     key: 'anisotropy',
     label: 'Texture Filtering',
     segments: [1, 2, 4, 16].map((n) => ({ label: String(n), patch: { anisotropy: n } })),
@@ -243,7 +265,9 @@ export const QUALITY_ROWS: QualityRow[] = [
 export function qualityMatchesPreset(q: QualitySettings, level: QualityLevel): boolean {
   const p = QUALITY_PRESETS[level];
   const keys = Object.keys(p) as (keyof QualitySettings)[];
-  return keys.every((k) => k === 'visibilityRadius' || q[k] === p[k]);
+  // visibilityRadius and farViewRings are per-device view prefs commonly overridden without counting
+  // as "Custom".
+  return keys.every((k) => k === 'visibilityRadius' || k === 'farViewRings' || q[k] === p[k]);
 }
 
 /** MSAA is a standalone user setting (not preset-driven); shown as a Quality row for grouping. */
@@ -295,6 +319,28 @@ export function loadSavedVisibilityRadius(): number | null {
     if (saved) {
       const val = parseInt(saved, 10);
       if (!isNaN(val) && val >= 2 && val <= 12) return val;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/** localStorage key for the persisted far-view ring count override. */
+const FAR_VIEW_STORAGE_KEY = 'worldify-far-view-rings';
+
+/** Save far-view ring count override to localStorage. */
+export function saveFarViewRings(rings: number): void {
+  try {
+    localStorage.setItem(FAR_VIEW_STORAGE_KEY, String(rings));
+  } catch { /* ignore */ }
+}
+
+/** Load far-view ring count override from localStorage (one of FAR_VIEW_RINGS), or null. */
+export function loadSavedFarViewRings(): number | null {
+  try {
+    const saved = localStorage.getItem(FAR_VIEW_STORAGE_KEY);
+    if (saved) {
+      const val = parseInt(saved, 10);
+      if (FAR_VIEW_RINGS.includes(val as typeof FAR_VIEW_RINGS[number])) return val;
     }
   } catch { /* ignore */ }
   return null;

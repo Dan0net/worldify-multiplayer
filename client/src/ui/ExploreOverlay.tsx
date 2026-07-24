@@ -12,8 +12,8 @@ import { Globe, Settings, Play, Plus, X, Maximize, Check } from 'lucide-react';
 import { useGameStore } from '../state/store';
 import { GameMode, type CaveConfig, type TerrainLayerConfig } from '@worldify/shared';
 import { materialManager } from '../game/material';
-import { QUALITY_LABELS, QUALITY_LEVELS, MSAA_OPTIONS, VIEW_DISTANCES } from '../game/quality/QualityPresets';
-import { applyVisibilityRadius, syncQualityToStore } from '../game/quality/QualityManager';
+import { QUALITY_LABELS, QUALITY_LEVELS, MSAA_OPTIONS, VIEW_DISTANCES, FAR_VIEW_RINGS } from '../game/quality/QualityPresets';
+import { applyVisibilityRadius, applyFarViewRings, syncQualityToStore } from '../game/quality/QualityManager';
 import { getCamera } from '../game/scene/camera';
 import { formatTimeOfDay } from '../game/scene/DayNightCycle';
 import { isTouch } from '../game/deviceMode';
@@ -118,6 +118,7 @@ export function ExploreOverlay() {
   const textureProgress = useGameStore((s) => s.textureProgress);
   const qualityLevel = useGameStore((s) => s.qualityLevel);
   const visibilityRadius = useGameStore((s) => s.quality.visibilityRadius);
+  const farViewRings = useGameStore((s) => s.quality.farViewRings);
   const fov = useGameStore((s) => s.fov);
   const renderScale = useGameStore((s) => s.renderScale);
   const setRenderScale = useGameStore((s) => s.setRenderScale);
@@ -256,7 +257,7 @@ export function ExploreOverlay() {
                 <span className="text-white/70 text-sm">Quality</span>
                 <div className="flex gap-1 flex-1">
                   {QUALITY_LEVELS.map((level) => (
-                    <button key={level} onClick={() => syncQualityToStore(level, visibilityRadius)} className={pill(qualityLevel === level)}>
+                    <button key={level} onClick={() => syncQualityToStore(level, visibilityRadius, farViewRings)} className={pill(qualityLevel === level)}>
                       {QUALITY_LABELS[level]}
                     </button>
                   ))}
@@ -273,6 +274,16 @@ export function ExploreOverlay() {
                       </button>
                     );
                   })}
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-white/70 text-sm whitespace-nowrap">Far View</span>
+                <div className="flex gap-1 flex-1">
+                  {FAR_VIEW_RINGS.map((value) => (
+                    <button key={value} onClick={() => applyFarViewRings(value)} className={pill(farViewRings === value)}>
+                      {value === 0 ? 'Off' : value}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="flex items-center justify-between gap-3">
