@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import {
   VISIBILITY_RADIUS,
   VISIBILITY_UNLOAD_BUFFER,
+  MAX_ZOOM_LEVEL,
   CHUNK_SIZE,
   CHUNK_WORLD_SIZE,
   FACE_OFFSETS_6,
@@ -649,6 +650,15 @@ export class VoxelWorld implements ChunkProvider {
       const pc = worldToChunk(playerPos.x, playerPos.y, playerPos.z);
       const ci = this.columnInfo.get(`${pc.cx},${pc.cz}`);
       if (ci) this._streamPos.y = (ci.maxCy + 0.5) * CHUNK_WORLD_SIZE;
+      // SHARED grid-snap (Explore): quantise the base cube AND the coarse rings to the COARSEST resident
+      // level's grid, so every level's cell edges land on one common set of world grid lines. Adjacent
+      // levels then abut EXACTLY (no 1-cell seam gap on the far side of a lower level). The snap unit in
+      // this level's LOCAL metres is CHUNK_WORLD_SIZE·2^(maxLevel−baseLevel); the base cube recentres in
+      // whole coarsest-cell steps as the camera pans (standard clipmap behaviour). Horizontal only.
+      const maxLevel = Math.min(MAX_ZOOM_LEVEL, this.currentLevel + this.coarseRings.getNumRings());
+      const snapLocal = CHUNK_WORLD_SIZE * (1 << (maxLevel - this.currentLevel));
+      this._streamPos.x = Math.round(this._streamPos.x / snapLocal) * snapLocal;
+      this._streamPos.z = Math.round(this._streamPos.z / snapLocal) * snapLocal;
     }
 
     // Get player's current chunk (from the surface-pinned stream position in Explore)

@@ -501,6 +501,11 @@ export class CoarseRingStreamer {
     this.numRings = Math.max(0, Math.min(MAX_ZOOM_LEVEL, Math.floor(n)));
   }
 
+  /** Current resident coarse-ring count (so VoxelWorld can compute the shared grid-snap unit). */
+  getNumRings(): number {
+    return this.numRings;
+  }
+
   /** Aggregate loaded-chunk / drawn-mesh counts across all rings (for the debug overlay). */
   getStats(): { chunks: number; drawn: number } {
     let chunks = 0, drawn = 0;
