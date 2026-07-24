@@ -688,7 +688,7 @@ export class VoxelWorld implements ChunkProvider {
     // play (no cube visibility) there are no rings — drop any that lingered from a prior Explore session.
     if (this.cubeVisibility) {
       this._coarseCenterWorld.copy(this._streamPos).multiplyScalar(1 << this.currentLevel);
-      this.coarseRings.update(this.currentLevel, this._coarseCenterWorld);
+      this.coarseRings.update(this.currentLevel, this._coarseCenterWorld, this._visibilityRadius);
     } else {
       this.coarseRings.clear();
     }

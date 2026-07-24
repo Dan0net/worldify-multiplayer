@@ -26,22 +26,24 @@ export const RING_WIDTH_CHUNKS = 6;
 
 /**
  * True-world radius (metres) of the innermost ring — the full-detail disk around the centre. Sized to the
- * normal visibility radius in level-`base` chunks so the near field is exactly as detailed as today's
- * single-level view before any coarser ring begins.
+ * base level's ACTUAL visibility radius in level-`base` chunks so the first coarse ring begins exactly
+ * where the base disk ends. `visibilityRadius` is the live value (quality settings change it, e.g. 7 on
+ * low, 11 on high) — using it, not a constant, is what keeps ring 1 flush against the base disk instead
+ * of leaving a gap where the disk is smaller than the nominal radius.
  */
-function innerRingRadius(baseLevel: number): number {
-  return VISIBILITY_RADIUS * (CHUNK_WORLD_SIZE * (1 << baseLevel));
+function innerRingRadius(baseLevel: number, visibilityRadius: number): number {
+  return visibilityRadius * (CHUNK_WORLD_SIZE * (1 << baseLevel));
 }
 
 /**
- * Outer radius (metres, exclusive) of the ring that renders at `level`, given the current `baseLevel`.
- * The innermost ring (level === base) spans `[0, innerRingRadius)`; each coarser ring adds
- * `RING_WIDTH_CHUNKS` chunks of its own (larger) level on top. Accumulating in metres keeps the boundary
- * a pure function of world position. `level` below `baseLevel` returns 0 (no ring finer than base exists).
+ * Outer radius (metres, exclusive) of the ring that renders at `level`, given the current `baseLevel` and
+ * the live `visibilityRadius`. The innermost ring (level === base) spans `[0, innerRingRadius)`; each
+ * coarser ring adds `RING_WIDTH_CHUNKS` chunks of its own (larger) level on top. Accumulating in metres
+ * keeps the boundary a pure function of world position. `level` below `baseLevel` returns 0.
  */
-export function ringOuterRadius(level: number, baseLevel: number): number {
+export function ringOuterRadius(level: number, baseLevel: number, visibilityRadius = VISIBILITY_RADIUS): number {
   if (level < baseLevel) return 0;
-  let radius = innerRingRadius(baseLevel);
+  let radius = innerRingRadius(baseLevel, visibilityRadius);
   for (let L = baseLevel + 1; L <= level; L++) {
     radius += RING_WIDTH_CHUNKS * (CHUNK_WORLD_SIZE * (1 << L));
   }
@@ -50,14 +52,14 @@ export function ringOuterRadius(level: number, baseLevel: number): number {
 
 /**
  * LOD level for a region whose centre sits `distanceMeters` (true-world metres) from the stream centre,
- * with the current finest level `baseLevel`. Ring 0 = base within `innerRingRadius`; steps +1 per ring
- * outward; clamped to `[baseLevel, MAX_ZOOM_LEVEL]`. Beyond the last ring's outer radius everything is the
- * coarsest level (the far backdrop never goes un-levelled).
+ * with the current finest level `baseLevel` and the live `visibilityRadius`. Ring 0 = base within
+ * `innerRingRadius`; steps +1 per ring outward; clamped to `[baseLevel, MAX_ZOOM_LEVEL]`. Beyond the last
+ * ring's outer radius everything is the coarsest level (the far backdrop never goes un-levelled).
  */
-export function ringLevel(distanceMeters: number, baseLevel: number): number {
+export function ringLevel(distanceMeters: number, baseLevel: number, visibilityRadius = VISIBILITY_RADIUS): number {
   const base = Math.max(0, Math.min(MAX_ZOOM_LEVEL, baseLevel));
   for (let level = base; level < MAX_ZOOM_LEVEL; level++) {
-    if (distanceMeters < ringOuterRadius(level, base)) return level;
+    if (distanceMeters < ringOuterRadius(level, base, visibilityRadius)) return level;
   }
   return MAX_ZOOM_LEVEL;
 }

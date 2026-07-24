@@ -98,6 +98,9 @@ export class CoarseRingStreamer {
   private readonly isLocal: () => boolean;
   private _center = new THREE.Vector3();
   private _localCenter = new THREE.Vector3();
+  /** Live base-level visibility radius (quality-dependent) — drives the ring radii so ring 1 abuts the
+   *  base disk regardless of quality. Set each frame by update(). */
+  private _visibilityRadius = 11;
 
   constructor(
     scene: THREE.Scene,
@@ -121,9 +124,10 @@ export class CoarseRingStreamer {
    * Rings resident: base+1 .. min(MAX_ZOOM_LEVEL, base+NUM_COARSE_RINGS). Levels outside that (e.g. after a
    * zoom) are disposed. No-op when not local (server Explore has no rings).
    */
-  update(baseLevel: number, centerWorld: THREE.Vector3): void {
+  update(baseLevel: number, centerWorld: THREE.Vector3, visibilityRadius: number): void {
     if (!this.isLocal()) { this.clear(); return; }
     this._center.copy(centerWorld);
+    this._visibilityRadius = visibilityRadius;
 
     const maxLevel = Math.min(MAX_ZOOM_LEVEL, baseLevel + NUM_COARSE_RINGS);
 
@@ -150,6 +154,7 @@ export class CoarseRingStreamer {
   private rigForLevel(level: number): CoarseLevelRig {
     let rig = this.rigs.get(level);
     if (rig) return rig;
+    console.log(`[CoarseRing] create L${level}`);
     const chunks = new Map<string, Chunk>();
     const geometries = new Map<string, ChunkGeometry>();
     const pendingChunks = new Set<string>();
@@ -208,8 +213,8 @@ export class CoarseRingStreamer {
     const L = rig.level;
     const cw = levelChunkWorld(L);                          // true-world metres per level-L chunk
     // Annulus in level-L chunk radii (Chebyshev): [inner, outer] around the level-local centre.
-    const inner = ringOuterRadius(L - 1, baseLevel) / cw;
-    const outer = ringOuterRadius(L, baseLevel) / cw;
+    const inner = ringOuterRadius(L - 1, baseLevel, this._visibilityRadius) / cw;
+    const outer = ringOuterRadius(L, baseLevel, this._visibilityRadius) / cw;
     const ccx = this._center.x / cw;                        // level-local fractional chunk centre
     const ccz = this._center.z / cw;
     const rOut = Math.ceil(outer);
