@@ -28,7 +28,11 @@ import {
   MAX_ZOOM_LEVEL,
   FACE_OFFSETS_6,
   NEGATIVE_MARGIN_OFFSETS_7,
+  POSITIVE_MARGIN_OFFSETS_7,
+  VISIBILITY_UNLOAD_BUFFER,
   chunkKey,
+  parseChunkKey,
+  worldToChunk,
   getChunkRangeFromHeights,
   getSunlitAbove,
   computeAndPropagateLight,
@@ -41,29 +45,19 @@ import { ChunkGrouper } from './ChunkGrouper.js';
 import { RemeshPipeline } from './RemeshPipeline.js';
 import { MeshWorkerPool } from './MeshWorkerPool.js';
 import { TerrainWorkerPool } from './TerrainWorkerPool.js';
-import { ringOuterRadius } from './ringLevel.js';
+import { getVisibleChunks, type ChunkProvider } from './VisibilityBFS.js';
 import { hasChunk, loadChunk, saveChunk, hasColumn, loadColumn, saveColumn } from '../world/WorldManager.js';
 
 /** Default coarse ring count until the quality system sets it (Far View control). */
 const DEFAULT_COARSE_RINGS = 2;
 
-/** Extra chunks kept loaded beyond a ring's band before unloading (hysteresis, avoids edge thrash). */
-const RING_UNLOAD_HYSTERESIS = 1;
-
-/** Margin shell loaded beyond the RENDER band so render-band chunks have real +neighbour voxels to mesh
- *  their high borders once, complete (mirrors the base's margin shell). Loaded but not meshed/drawn. One
- *  chunk thick — the base uses a 1-chunk shell too, and the edge/corner heal (NEGATIVE_MARGIN_OFFSETS_7 on
- *  ingest) already re-meshes consumers when a late diagonal margin lands, so a 2-thick shell only doubled
- *  the settle work per ring (slower to reach quiescence) without closing gaps. */
-const MARGIN_RING = 1;
-
-/** Slack on band-boundary comparisons. The outer render row's chunk centres can land exactly on a band
- *  edge (d == renderOuter + 0.5); without slack, float rounding intermittently pushes them just outside,
- *  so that whole row never meshes → the "last row missing" gaps. */
-const BAND_EPS = 1e-3;
-
 /** Cap on in-flight requests per coarse level per frame (keeps a ring from starving the base). */
 const MAX_PENDING_PER_LEVEL = 12;
+
+/** Shared dummy args for getVisibleChunks: the BFS's cameraDir/frustum are unused (frustum cull disabled
+ *  inside it), so every rig passes these module-level constants rather than allocating per frame. */
+const DUMMY_DIR = new THREE.Vector3();
+const DUMMY_FRUSTUM = new THREE.Frustum();
 
 const DARK_ABOVE = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
 
@@ -79,15 +73,6 @@ function columnBand(heights: ArrayLike<number>, level: number): { minCy: number;
   return { minCy: Math.floor(minHeight / span), maxCy: Math.floor((maxHeight + 1) / span) };
 }
 
-/** Current per-frame band geometry for a rig, in that level's chunk units. Set each streamRing; read by
- *  the rig's `shouldMeshNow` / `isMarginSourceExpected` closures (which are created once at rig birth). */
-interface RigBand {
-  ccx: number; ccz: number;   // level-local fractional chunk centre
-  innerBound: number;         // render band inner (chunk-centre Chebyshev)
-  renderOuter: number;        // render band outer
-  requestOuter: number;       // render outer + MARGIN_RING (band we load for neighbour data)
-}
-
 /** Everything one coarse LOD level needs to stream + render its ring, isolated from every other level. */
 interface CoarseLevelRig {
   level: number;
@@ -98,10 +83,13 @@ interface CoarseLevelRig {
   pendingColumns: Set<string>;
   grouper: ChunkGrouper;
   remesh: RemeshPipeline;
-  band: RigBand;
+  /** Chunks the visibility BFS reached this pass (the render set). Populated each streamRing, read by the
+   *  rig's `shouldMeshNow` / `isMarginSourceExpected` closures (created once at rig birth). Mirrors the
+   *  base's `cachedReachable`. */
+  reachable: Set<string>;
   /** Bumped when this rig is torn down, so a late async generation result for the old incarnation drops. */
   epoch: number;
-  /** True once this ring has streamed everything in its band and no mesh work remains (wave gate). */
+  /** True once this ring has streamed everything reachable and no mesh work remains (wave gate). */
   quiet: boolean;
 }
 
@@ -118,7 +106,6 @@ export class CoarseRingStreamer {
   /** Does the base (finer) level have a drawn surface chunk at this true-world column? Set per update();
    *  gates the inward hand-off so a ring chunk isn't unloaded until the base has covered its footprint. */
   private finerCovers: (worldX: number, worldZ: number) => boolean = () => true;
-  private readonly _colBuf: { cx: number; cz: number; d2: number }[] = [];
 
   constructor(
     scene: THREE.Scene,
@@ -179,7 +166,7 @@ export class CoarseRingStreamer {
         const inner = this.rigs.get(level - 1);
         if (inner && !inner.quiet) break;
       }
-      this.streamRing(this.rigForLevel(level), baseLevel);
+      this.streamRing(this.rigForLevel(level));
     }
   }
 
@@ -190,38 +177,31 @@ export class CoarseRingStreamer {
     const geometries = new Map<string, ChunkGeometry>();
     const columnInfo = new Map<string, { minCy: number; maxCy: number }>();
     const pendingChunks = new Set<string>();
+    const reachable = new Set<string>();
     const grouper = new ChunkGrouper(this.scene);
-    const band: RigBand = { ccx: 0, ccz: 0, innerBound: 0, renderOuter: 0, requestOuter: 0 };
-    // Chebyshev chunk-centre distance from the current level-local centre.
-    const dist = (cx: number, cz: number) => Math.max(Math.abs(cx + 0.5 - band.ccx), Math.abs(cz + 0.5 - band.ccz));
-    const inRenderBand = (cx: number, cz: number) => {
-      const d = dist(cx, cz);
-      return d >= band.innerBound - BAND_EPS && d <= band.renderOuter + 0.5 + BAND_EPS;
-    };
     const remesh = new RemeshPipeline(
       chunks,
       geometries,
       grouper,
       this.meshPool,
       pendingChunks,
-      // A +margin neighbour is EXPECTED (defer meshing) only if it will ACTUALLY be requested — mirrors
-      // the base's pending/reachable discipline. The streamer only ever requests cy ∈ [minCy, maxCy]
-      // per column, so a neighbour above maxCy (open sky) OR below minCy (underground rock beneath the
-      // column's lowest surface) is NEVER loaded; a consumer must not wait on either. Missing the
-      // below-minCy floor was the permanent ring-edge trench: a surface chunk beside a TALLER column
-      // deferred forever on its never-loading underground +X/+Z neighbour and stayed hidden.
+      // A +margin neighbour is EXPECTED (defer meshing) only if it will ACTUALLY load — mirrors the base's
+      // isMarginSourceExpected (pending or reachable-but-unloaded). A neighbour above the column's maxCy is
+      // genuine open sky (never loads → not expected); everything else that the BFS reached or that's in
+      // flight will arrive, so a consumer must wait for it before meshing its shared boundary.
       (cx, cy, cz) => {
         const key = chunkKey(cx, cy, cz);
         if (chunks.has(key)) return false;          // already loaded → ready
-        if (pendingChunks.has(key)) return true;    // in flight → wait for it
-        const d = dist(cx, cz);
-        if (d < band.innerBound - BAND_EPS || d > band.requestOuter + 0.5 + BAND_EPS) return false; // out of band → never requested
-        const info = columnInfo.get(`${cx},${cz}`);
-        if (!info) return true;                      // column tile not in yet, but in-band → it will be requested
-        return cy >= info.minCy && cy <= info.maxCy; // only chunks in the loadable span are ever coming
+        {
+          const info = columnInfo.get(`${cx},${cz}`);
+          if (info ? cy > info.maxCy : false) return false; // open sky → never loads → not expected
+        }
+        return pendingChunks.has(key) || reachable.has(key);
       },
-      // Mesh only the RENDER band; the margin ring is loaded for neighbour voxels but never meshed/drawn.
-      (cx, _cy, cz) => inRenderBand(cx, cz),
+      // Mesh only what the BFS reached (the render set) — mirrors the base's shouldMeshChunk. Full 3D key
+      // now (cy matters), not a column test: margin-source neighbours are loaded but not reachable, so
+      // they're never meshed/drawn.
+      (cx, cy, cz) => reachable.has(chunkKey(cx, cy, cz)),
       // Derive completeness from "high face still inbound", not skipHighBoundary — a coarse chunk is only
       // dispatched once nothing is inbound, so a skipped high face is a never-loading solid/out-of-band
       // neighbour (final mesh), not a gap. Prevents ring-edge surface chunks staying hidden forever.
@@ -236,7 +216,7 @@ export class CoarseRingStreamer {
       level, chunks, geometries, columnInfo,
       pendingChunks,
       pendingColumns: new Set(),
-      grouper, remesh, band,
+      grouper, remesh, reachable,
       epoch: 0,
       quiet: false,
     };
@@ -275,6 +255,33 @@ export class CoarseRingStreamer {
     }
   }
 
+  /** Has this rig DRAWN surface geometry in its (level-local) column (cx,cz)? Used by the coarse↔coarse
+   *  hand-off: a coarser ring drops a chunk once a FINER resident ring has actually drawn over it. */
+  private rigColumnDrawn(rig: CoarseLevelRig, cx: number, cz: number): boolean {
+    const info = rig.columnInfo.get(`${cx},${cz}`);
+    if (!info) return false;
+    for (let cy = info.minCy; cy <= info.maxCy; cy++) {
+      const geo = rig.geometries.get(chunkKey(cx, cy, cz));
+      if (geo && geo.hasGeometry()) return true;
+    }
+    return false;
+  }
+
+  /** Is TRUE-world column (worldX,worldZ) already drawn by a level FINER than `rig` — the base disk OR any
+   *  finer resident ring? Each ring floods a full cube at its level, so ring L+1 fully overlaps ring L; the
+   *  overlap is dropped here (per-column, once the finer level draws it) so exactly one level draws a
+   *  column — no double-draw / z-fight between concentric rings. Rings stream finest→coarsest each frame,
+   *  so a finer ring's geometry is already current when a coarser one tests it. */
+  private coveredByFiner(rig: CoarseLevelRig, worldX: number, worldZ: number): boolean {
+    if (this.finerCovers(worldX, worldZ)) return true;   // base disk drew it
+    for (const [lvl, other] of this.rigs) {
+      if (lvl >= rig.level) continue;                    // only strictly-finer rings hand off inward
+      const cwF = levelChunkWorld(lvl);
+      if (this.rigColumnDrawn(other, Math.floor(worldX / cwF), Math.floor(worldZ / cwF))) return true;
+    }
+    return false;
+  }
+
   private disposeRig(rig: CoarseLevelRig): void {
     rig.epoch++;
     rig.remesh.clear();
@@ -289,82 +296,102 @@ export class CoarseRingStreamer {
   }
 
   /**
-   * Stream one coarse ring: request its band (render + margin) NEAREST-FIRST, hand off / unload what fell
-   * outside, then mesh + merge. Ring radii are base-independent (ringLevel), so the annulus is the same
-   * regardless of `baseLevel` — the ring is retained across a zoom.
+   * Stream one coarse ring driven by the SAME occlusion visibility BFS the base uses (getVisibleChunks),
+   * so a ring inherits the base's load / render / exposed-wall behaviour instead of a bespoke annulus
+   * band. Runs the BFS in this level's LOCAL space (one chunk = CHUNK_WORLD_SIZE), requests its frontier
+   * NEAREST-FIRST, hands off / unloads what fell outside, then meshes + merges.
    */
-  private streamRing(rig: CoarseLevelRig, baseLevel: number): void {
+  private streamRing(rig: CoarseLevelRig): void {
     const L = rig.level;
-    const cw = levelChunkWorld(L);
-    // Base-independent band, in this level's chunk units: inner = vr/2, render outer = vr (the doubling
-    // in ringOuterRadius makes both constant across levels), so the ring is flush with the base disk edge.
-    const inner = ringOuterRadius(L - 1, this._visibilityRadius) / cw;
-    const outer = ringOuterRadius(L, this._visibilityRadius) / cw;
-    const ccx = this._center.x / cw;
-    const ccz = this._center.z / cw;
-    // Innermost coarse ring OVERLAPS the base disk (inner − 1.5): the base disk can render a chunk-row
-    // short of its nominal edge (occlusion BFS + retire-and-swap settle), so a mere abut (inner − 0.5)
-    // left a one-row trench at the base↔ring1 seam. Overlapping inward by ~1.5 chunks guarantees the ring
-    // covers that seam; the inward hand-off (finerCovers) still drops the overlap once the base draws it,
-    // so it's covered, not double-drawn, at rest. Coarser rings keep a thin gap (inner + 0.5) to avoid
-    // z-fighting their inner coarse neighbour (both are coarse, both settle to the same nominal edge).
-    const innerBound = (L === baseLevel + 1) ? inner - 1.5 : inner + 0.5;
-    const b = rig.band;
-    b.ccx = ccx; b.ccz = ccz; b.innerBound = innerBound; b.renderOuter = outer; b.requestOuter = outer + MARGIN_RING;
+    const cw = levelChunkWorld(L);                 // true-world size of one level-L chunk (m)
+    // Level-LOCAL centre: the rig renders at one chunk = CHUNK_WORLD_SIZE, so the true-world centre scales
+    // down by 2^L. localCenter is the centre in this level's metres; cameraChunk its chunk.
+    this._localCenter.copy(this._center).multiplyScalar(1 / (1 << L));
+    const localCenter = this._localCenter;
+    const cameraChunk = worldToChunk(localCenter.x, localCenter.y, localCenter.z);
 
-    const rReq = Math.ceil(b.requestOuter + 0.5);
-    const cx0 = Math.floor(ccx), cz0 = Math.floor(ccz);
-    const dist = (cx: number, cz: number) => Math.max(Math.abs(cx + 0.5 - ccx), Math.abs(cz + 0.5 - ccz));
+    // --- Visibility BFS (the SAME traversal the base runs, per rig). reachable = render set, toRequest =
+    //     load frontier. cube=true — Explore always uses the cube volume so every level has a complete
+    //     shell to swap. cameraDir/frustum are unused inside the BFS → shared dummies. ---
+    const provider: ChunkProvider = {
+      getChunkByKey: (key) => rig.chunks.get(key),
+      isPending: (key) => rig.pendingChunks.has(key),
+      isEmptyAir: (cx, cy, cz) => {
+        const info = rig.columnInfo.get(`${cx},${cz}`);
+        return info ? cy > info.maxCy : false;
+      },
+    };
+    rig.reachable.clear();
+    const { reachable, toRequest } = getVisibleChunks(
+      cameraChunk, DUMMY_DIR, DUMMY_FRUSTUM, provider, this._visibilityRadius, localCenter, true,
+    );
+    for (const key of reachable) rig.reachable.add(key);
 
-    // --- Collect the request-band columns NEAREST-FIRST (center-out fill) ---
-    const cols = this._colBuf;
-    cols.length = 0;
-    for (let cx = cx0 - rReq; cx <= cx0 + rReq; cx++) {
-      for (let cz = cz0 - rReq; cz <= cz0 + rReq; cz++) {
-        const d = dist(cx, cz);
-        if (d < innerBound - BAND_EPS || d > b.requestOuter + 0.5 + BAND_EPS) continue;
-        cols.push({ cx, cz, d2: (cx + 0.5 - ccx) ** 2 + (cz + 0.5 - ccz) ** 2 });
-      }
+    // --- Load set = BFS frontier ∪ margin-source neighbours of every reachable chunk (mirrors
+    //     VoxelWorld.addMarginSourceRequests): a rendered chunk needs its +margin neighbours' voxels to
+    //     mesh its own high faces (READ dep) and its −face owners to draw the shared low boundary. Skip
+    //     loaded / pending / open-sky. Bounded: one ring around reachable, no cascade. ---
+    const load = new Set<string>(toRequest);
+    const addMargin = (nx: number, ny: number, nz: number): void => {
+      const nKey = chunkKey(nx, ny, nz);
+      if (rig.chunks.has(nKey) || rig.pendingChunks.has(nKey)) return; // already have / coming
+      if (provider.isEmptyAir(nx, ny, nz)) return;                     // open sky, won't load
+      load.add(nKey);
+    };
+    for (const key of rig.reachable) {
+      const { cx, cy, cz } = parseChunkKey(key);
+      for (const [dx, dy, dz] of POSITIVE_MARGIN_OFFSETS_7) addMargin(cx + dx, cy + dy, cz + dz);
+      for (const [dx, dy, dz] of FACE_OFFSETS_6) addMargin(cx + dx, cy + dy, cz + dz);
     }
-    cols.sort((p, q) => p.d2 - q.d2);
 
     // --- Request pass (throttled, nearest-first): tiles for unknown columns, then their surface chunks ---
+    const lcx = localCenter.x / CHUNK_WORLD_SIZE;
+    const lcy = localCenter.y / CHUNK_WORLD_SIZE;
+    const lcz = localCenter.z / CHUNK_WORLD_SIZE;
+    const d2 = new Map<string, number>();
+    const sorted = [...load];
+    for (const key of sorted) {
+      const { cx, cy, cz } = parseChunkKey(key);
+      d2.set(key, (cx + 0.5 - lcx) ** 2 + (cy + 0.5 - lcy) ** 2 + (cz + 0.5 - lcz) ** 2);
+    }
+    sorted.sort((a, b) => d2.get(a)! - d2.get(b)!);
+
     let pending = rig.pendingChunks.size + rig.pendingColumns.size;
     let anyMissing = false;
-    for (let i = 0; i < cols.length && pending < MAX_PENDING_PER_LEVEL; i++) {
-      const { cx, cz } = cols[i];
+    for (let i = 0; i < sorted.length && pending < MAX_PENDING_PER_LEVEL; i++) {
+      const key = sorted[i];
+      const { cx, cy, cz } = parseChunkKey(key);
       const colKey = `${cx},${cz}`;
       const info = rig.columnInfo.get(colKey);
       if (!info) {
+        // Column tile not in yet → request it (once per column; requestTile adds to pendingColumns).
         if (!rig.pendingColumns.has(colKey)) { this.requestTile(rig, cx, cz); pending++; anyMissing = true; }
         continue;
       }
-      for (let cy = info.minCy; cy <= info.maxCy && pending < MAX_PENDING_PER_LEVEL; cy++) {
-        const key = chunkKey(cx, cy, cz);
-        if (rig.chunks.has(key) || rig.pendingChunks.has(key)) continue;
-        this.requestChunk(rig, cx, cy, cz);
-        pending++;
-        anyMissing = true;
-      }
+      if (cy < info.minCy || cy > info.maxCy) continue;         // outside the loadable span (open sky/below)
+      if (rig.chunks.has(key) || rig.pendingChunks.has(key)) continue;
+      this.requestChunk(rig, cx, cy, cz);
+      pending++;
+      anyMissing = true;
     }
 
-    // --- Unload / hand off chunks that fell outside the band ---
+    // --- Unload / hand off. Keep a loaded chunk if the BFS reached it, it's in the load set, or it's in
+    //     flight; else unload once its (level-local) Chebyshev distance from the camera exceeds the
+    //     unload radius (hysteresis). Inward hand-off preserved: a chunk whose TRUE-WORLD column is
+    //     already drawn by the finer level is handed off (unloaded) so it's covered, never double-drawn. ---
+    const unloadRadius = this._visibilityRadius + VISIBILITY_UNLOAD_BUFFER;
     for (const [key, chunk] of [...rig.chunks]) {
-      const d = dist(chunk.cx, chunk.cz);
-      if (d > b.requestOuter + RING_UNLOAD_HYSTERESIS) {
-        this.unloadChunk(rig, key);                            // beyond the ring → gone
-      } else if (d < innerBound - RING_UNLOAD_HYSTERESIS) {
-        // Crossed inward into the base-disk region: keep drawing this coarse chunk until the base has
-        // actually drawn the finer replacement there — then hand off (no vanishing gap while panning).
-        if (this.finerCovers((chunk.cx + 0.5) * cw, (chunk.cz + 0.5) * cw)) this.unloadChunk(rig, key);
-      }
+      if (this.coveredByFiner(rig, (chunk.cx + 0.5) * cw, (chunk.cz + 0.5) * cw)) { this.unloadChunk(rig, key); continue; }
+      if (rig.reachable.has(key) || load.has(key) || rig.pendingChunks.has(key)) continue;
+      const dcx = Math.abs(chunk.cx - cameraChunk.cx);
+      const dcy = Math.abs(chunk.cy - cameraChunk.cy);
+      const dcz = Math.abs(chunk.cz - cameraChunk.cz);
+      if (Math.max(dcx, dcy, dcz) > unloadRadius) this.unloadChunk(rig, key);
     }
 
     // --- Mesh + merge (this rig's RemeshPipeline carries its own injected open-sky predicate) ---
-    const ccy = this._center.y / cw;
-    this._localCenter.set(ccx * CHUNK_WORLD_SIZE, ccy * CHUNK_WORLD_SIZE, ccz * CHUNK_WORLD_SIZE);
     rig.remesh.process(this._localCenter);
-    rig.grouper.rebuild(cx0, Math.floor(ccy), cz0, (k) => rig.remesh.isBusy(k));
+    rig.grouper.rebuild(cameraChunk.cx, cameraChunk.cy, cameraChunk.cz, (k) => rig.remesh.isBusy(k));
 
     rig.quiet = !anyMissing && rig.pendingChunks.size === 0 && rig.pendingColumns.size === 0
       && !rig.remesh.hasPendingMeshWork();
