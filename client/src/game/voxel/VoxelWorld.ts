@@ -526,6 +526,19 @@ export class VoxelWorld implements ChunkProvider {
     this.coarseRings.setNumRings(rings);
   }
 
+  /** True once the base level has resolved (drawn or settled-empty) the base-level column containing the
+   *  given TRUE-world (x,z). The coarse rings use this to hand a chunk off — they keep drawing a coarse
+   *  chunk that panned into the base disk until the finer base geometry actually covers it (no gap). */
+  hasDrawnColumnAtWorld(worldX: number, worldZ: number): boolean {
+    const cw = CHUNK_WORLD_SIZE * (1 << this.currentLevel);
+    return this.columnSurfaceDrawn(Math.floor(worldX / cw), Math.floor(worldZ / cw));
+  }
+
+  /** Per-level solid raycast meshes for the coarse rings, each with its 2^level scale (spawn raycast). */
+  getCoarseSolidMeshesByLevel(): { scale: number; meshes: THREE.Object3D[] }[] {
+    return this.coarseRings.getSolidMeshesByLevel();
+  }
+
   // ---- Stale pending request cleanup ----
 
   /**
@@ -693,7 +706,17 @@ export class VoxelWorld implements ChunkProvider {
     // play (no cube visibility) there are no rings — drop any that lingered from a prior Explore session.
     if (this.cubeVisibility) {
       this._coarseCenterWorld.copy(this._streamPos).multiplyScalar(1 << this.currentLevel);
-      this.coarseRings.update(this.currentLevel, this._coarseCenterWorld, this._visibilityRadius);
+      // Center-out priority: coarse rings only stream once the base level's GENERATION is caught up — no
+      // chunks/columns/tiles pending and no swap in flight. This yields the shared terrain-worker pool
+      // (and the minimap tile feed) to the base's nearest-first requests so the centre fills outward
+      // first, while still letting rings stream during a slow pan (when base generation keeps up). Base
+      // meshing is NOT gated on — it already dispatches nearest-first, so it doesn't need the block.
+      const baseQuiet = this.pendingChunks.size === 0 && this.pendingColumns.size === 0
+        && this.pendingTiles.size === 0 && !this.visibilityDirty && !this.chunkGrouper.hasRetiring();
+      this.coarseRings.update(
+        this.currentLevel, this._coarseCenterWorld, this._visibilityRadius, baseQuiet,
+        (wx, wz) => this.hasDrawnColumnAtWorld(wx, wz),
+      );
     } else {
       this.coarseRings.clear();
     }
@@ -1802,9 +1825,12 @@ export class VoxelWorld implements ChunkProvider {
     meshesVisible: number;
     remeshQueueSize: number;
   } {
+    // Include the coarse rings so the counts match the whole rendered scene (the debug "Geometries" stat
+    // is renderer-wide), not just the base level — otherwise chunks/meshes look far smaller than reality.
+    const cr = this.coarseRings.getStats();
     return {
-      chunksLoaded: this.chunks.size,
-      meshesVisible: this.getMeshCount(),
+      chunksLoaded: this.chunks.size + cr.chunks,
+      meshesVisible: this.getMeshCount() + cr.drawn,
       remeshQueueSize: this.remeshPipeline.size,
     };
   }

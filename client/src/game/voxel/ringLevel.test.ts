@@ -1,19 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { CHUNK_WORLD_SIZE, MAX_ZOOM_LEVEL, VISIBILITY_RADIUS } from '@worldify/shared';
-import { ringLevel, ringOuterRadius, RING_WIDTH_CHUNKS } from './ringLevel.js';
+import { ringLevel, ringOuterRadius } from './ringLevel.js';
 
-/** Recompute the expected inner-ring radius from first principles (independent of the impl). */
-const innerRadius = (base: number) => VISIBILITY_RADIUS * (CHUNK_WORLD_SIZE * (1 << base));
+const R = VISIBILITY_RADIUS * CHUNK_WORLD_SIZE; // band unit (m); band L outer radius = R·2^L
 
-describe('ringLevel — distance→LOD schedule (Phase B rings)', () => {
-  it('returns the base level at the centre (ring 0 is the finest)', () => {
+describe('ringLevel — base-independent doubling bands (Phase B rings)', () => {
+  it('returns the base level at the centre (inside the base disk)', () => {
     for (let base = 0; base <= MAX_ZOOM_LEVEL; base++) {
       expect(ringLevel(0, base)).toBe(base);
     }
   });
 
   it('never returns a level finer than base', () => {
-    // At base 2, even distance 0 stays at 2 — there is no ring below the base.
     for (let d = 0; d < 10_000; d += 137) {
       expect(ringLevel(d, 2)).toBeGreaterThanOrEqual(2);
     }
@@ -21,7 +19,7 @@ describe('ringLevel — distance→LOD schedule (Phase B rings)', () => {
 
   it('is monotonically non-decreasing with distance', () => {
     let prev = ringLevel(0, 0);
-    for (let d = 0; d <= 5000; d += 7) {
+    for (let d = 0; d <= 8000; d += 7) {
       const lvl = ringLevel(d, 0);
       expect(lvl).toBeGreaterThanOrEqual(prev);
       prev = lvl;
@@ -33,28 +31,29 @@ describe('ringLevel — distance→LOD schedule (Phase B rings)', () => {
     expect(ringLevel(1e9, 4)).toBe(MAX_ZOOM_LEVEL);
   });
 
-  it('places the base→base+1 boundary at the inner-ring radius (half-open)', () => {
-    const r = innerRadius(0); // 88 m
-    expect(ringOuterRadius(0, 0)).toBe(r);
-    expect(ringLevel(r - 0.001, 0)).toBe(0);
-    expect(ringLevel(r, 0)).toBe(1); // boundary belongs to the OUTER (coarser) ring
+  it('bands double, anchored to the visibility radius (base disk edge = R·2^base)', () => {
+    expect(ringOuterRadius(0)).toBe(R);       // 88
+    expect(ringOuterRadius(1)).toBe(R * 2);   // 176
+    expect(ringOuterRadius(2)).toBe(R * 4);   // 352
+    // Boundary is half-open: the outer radius belongs to the next (coarser) band.
+    expect(ringLevel(R - 0.001, 0)).toBe(0);
+    expect(ringLevel(R, 0)).toBe(1);
+    expect(ringLevel(R * 2 - 0.001, 0)).toBe(1);
+    expect(ringLevel(R * 2, 0)).toBe(2);
   });
 
-  it('accumulates each coarse ring at RING_WIDTH_CHUNKS of its own level', () => {
-    // base 0: inner=88, then +6·8·2^L per ring.
-    expect(ringOuterRadius(1, 0)).toBe(88 + RING_WIDTH_CHUNKS * 8 * 2);   // 184
-    expect(ringOuterRadius(2, 0)).toBe(184 + RING_WIDTH_CHUNKS * 8 * 4);  // 376
-    expect(ringLevel(90, 0)).toBe(1);
-    expect(ringLevel(184, 0)).toBe(2);
-    expect(ringLevel(375, 0)).toBe(2);
-    expect(ringLevel(376, 0)).toBe(3);
-  });
-
-  it('scales the whole schedule with base (radii are true-world metres)', () => {
-    // base 2: inner ring is 4× the base-0 inner radius (level-2 chunks are 4× wider).
-    expect(ringOuterRadius(2, 2)).toBe(innerRadius(2)); // 352
-    expect(ringLevel(innerRadius(2) - 1, 2)).toBe(2);
-    expect(ringLevel(innerRadius(2), 2)).toBe(3);
+  it('is base-independent above the base disk (rings keep their level as base changes)', () => {
+    // A point at ~1.5·R sits in band 1. Its level is 1 for any base ≤ 1, and only rises once the base
+    // floor exceeds the band — this stability is what lets outer rings persist across a zoom.
+    const d = R * 1.5;
+    expect(ringLevel(d, 0)).toBe(1);
+    expect(ringLevel(d, 1)).toBe(1);
+    expect(ringLevel(d, 2)).toBe(2); // floored to base
+    // A point at ~5·R sits in band 3 (4R..8R); stable for base 0..3.
+    const far = R * 5;
+    expect(ringLevel(far, 0)).toBe(3);
+    expect(ringLevel(far, 3)).toBe(3);
+    expect(ringLevel(far, 4)).toBe(4); // floored to base
   });
 
   it('handles out-of-range base by clamping', () => {

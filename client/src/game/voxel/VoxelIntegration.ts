@@ -382,6 +382,19 @@ export class VoxelIntegration implements TerrainRaycaster {
   }
 
   /**
+   * Solid raycast meshes grouped BY LOD level with each level's scale (2^level). The spawn/marker
+   * raycast needs this in Explore because the base disk and each coarse ring live at different scales
+   * (their per-chunk meshes are all in 0.25 m level-local space); a single scale can't hit them all.
+   * Entry 0 is the base level; the rest are the coarse rings.
+   */
+  getSolidMeshesByLevel(): { scale: number; meshes: THREE.Object3D[] }[] {
+    return [
+      { scale: 1 << this.world.lodLevel, meshes: this.getSolidMeshes() },
+      ...this.world.getCoarseSolidMeshesByLevel(),
+    ];
+  }
+
+  /**
    * Get statistics about the voxel system.
    */
   getStats() {

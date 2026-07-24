@@ -23,4 +23,11 @@ export interface TerrainRaycaster {
    * @returns Array of Three.js meshes
    */
   getSolidMeshes(): THREE.Object3D[];
+
+  /**
+   * Solid raycast meshes grouped by LOD level, each with its scale (2^level). Explore renders the base
+   * disk and coarse rings at different scales, so a marker/spawn raycast must test each level in its own
+   * scaled space. Entry 0 is the base level. Optional — implementations without LOD may omit it.
+   */
+  getSolidMeshesByLevel?(): { scale: number; meshes: THREE.Object3D[] }[];
 }

@@ -61,8 +61,10 @@ export interface QualitySettings {
 /** Selectable far-view ring counts (Explore concentric coarse LOD). 0 = off. */
 export const FAR_VIEW_RINGS = [0, 1, 2, 4] as const;
 
-/** Selectable view distances, in chunks (also the View Distance slider segments). */
-export const VIEW_DISTANCES = [5, 7, 9, 11] as const;
+/** Selectable base-disk view distances, in chunks (also the View Distance slider segments). Reduced now
+ *  that Explore renders the full cube around the player plus concentric coarse rings beyond it, so the
+ *  fine base disk no longer needs to carry the whole view. */
+export const VIEW_DISTANCES = [4, 6, 8, 10] as const;
 
 /**
  * Snap an arbitrary view distance to the nearest selectable value. Used to migrate a persisted radius
@@ -85,7 +87,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 4096,
     shadowsEnabled: true,
     shadowRadius: 8,
-    visibilityRadius: 11,
+    visibilityRadius: 10,
     anisotropy: 16,
     shaderNormalMaps: true,
     shaderAoMaps: true,
@@ -101,7 +103,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 2048,
     shadowsEnabled: true,
     shadowRadius: 6,
-    visibilityRadius: 9,
+    visibilityRadius: 8,
     anisotropy: 4,
     shaderNormalMaps: true,
     shaderAoMaps: true,
@@ -117,7 +119,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 1024,
     shadowsEnabled: true,
     shadowRadius: 4,
-    visibilityRadius: 7,
+    visibilityRadius: 6,
     anisotropy: 2,
     shaderNormalMaps: true,    // Normal maps on from medium
     shaderAoMaps: false,
@@ -133,7 +135,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadowMapSize: 1024,
     shadowsEnabled: false,
     shadowRadius: 2,
-    visibilityRadius: 5,
+    visibilityRadius: 4,
     anisotropy: 1,
     shaderNormalMaps: false,   // no detail maps on low
     shaderAoMaps: false,
@@ -215,8 +217,8 @@ export const QUALITY_ROWS: QualityRow[] = [
   {
     key: 'viewDistance',
     label: 'View Distance',
-    segments: [5, 7, 9, 11].map((n) => ({ label: String(n), patch: { visibilityRadius: n } })),
-    match: (q) => [5, 7, 9, 11].indexOf(q.visibilityRadius),
+    segments: VIEW_DISTANCES.map((n) => ({ label: String(n), patch: { visibilityRadius: n } })),
+    match: (q) => VIEW_DISTANCES.indexOf(q.visibilityRadius as typeof VIEW_DISTANCES[number]),
   },
   {
     key: 'farView',
