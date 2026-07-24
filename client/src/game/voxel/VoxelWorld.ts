@@ -102,11 +102,22 @@ function arraysEqual(a: Uint32Array, b: Uint32Array): boolean {
  * Manages the voxel world - chunk loading, unloading, and streaming.
  */
 export class VoxelWorld implements ChunkProvider {
-  /** All loaded chunks, keyed by "cx,cy,cz" */
-  readonly chunks: Map<string, Chunk> = new Map();
+  /**
+   * Per-LOD-level chunk / geometry / column stores (Phase B concentric rings). Each level's inner map is
+   * bare-keyed "cx,cy,cz" in that level's own local coords, so the existing streaming/mesher/BFS operate
+   * on one level's map unchanged. `chunks`/`geometries`/`columnInfo` below always point at the ACTIVE
+   * level's inner map (activateLevel) — today only one level is ever active, so this is identical to the
+   * old single map; Phase B keeps several populated at once and streams each over its ring annulus.
+   */
+  private chunksByLevel = new Map<number, Map<string, Chunk>>();
+  private geometriesByLevel = new Map<number, Map<string, ChunkGeometry>>();
+  private columnInfoByLevel = new Map<number, Map<string, { maxCy: number; minCy: number }>>();
 
-  /** All chunk geometries, keyed by "cx,cy,cz" */
-  readonly geometries: Map<string, ChunkGeometry> = new Map();
+  /** Loaded chunks of the ACTIVE level, keyed by "cx,cy,cz" (an entry of chunksByLevel). */
+  chunks: Map<string, Chunk> = new Map();
+
+  /** Chunk geometries of the ACTIVE level, keyed by "cx,cy,cz" (an entry of geometriesByLevel). */
+  geometries: Map<string, ChunkGeometry> = new Map();
 
   /** Chunk keys currently in build preview (set by BuildPreview, read by visibility) */
   readonly previewChunks: Set<string> = new Set();
@@ -195,6 +206,11 @@ export class VoxelWorld implements ChunkProvider {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    // The initial active maps ARE level 0's per-level entries (activateLevel swaps to another level's
+    // maps on a zoom, keeping RemeshPipeline/SeamStitcher pointed at the active level).
+    this.chunksByLevel.set(0, this.chunks);
+    this.geometriesByLevel.set(0, this.geometries);
+    this.columnInfoByLevel.set(0, this.columnInfo);
     this.meshPool = new MeshWorkerPool(meshWorkerCount());
     this.chunkGrouper = new ChunkGrouper(scene);
     this.remeshPipeline = new RemeshPipeline(
@@ -331,6 +347,23 @@ export class VoxelWorld implements ChunkProvider {
     this.visibilityDirty = true;
   }
 
+  /** Point the active chunk/geometry/columnInfo maps at `level`'s per-level store (creating empties on
+   *  first use) and repoint the mesh pipeline + seam stitcher at them. All streaming/meshing then operates
+   *  on that level's bare-keyed maps. */
+  private activateLevel(level: number): void {
+    let ch = this.chunksByLevel.get(level);
+    if (!ch) { ch = new Map(); this.chunksByLevel.set(level, ch); }
+    let ge = this.geometriesByLevel.get(level);
+    if (!ge) { ge = new Map(); this.geometriesByLevel.set(level, ge); }
+    let ci = this.columnInfoByLevel.get(level);
+    if (!ci) { ci = new Map(); this.columnInfoByLevel.set(level, ci); }
+    this.chunks = ch;
+    this.geometries = ge;
+    this.columnInfo = ci;
+    this.remeshPipeline.setMaps(ch, ge);
+    this.seamStitcher.setGeometries(ge);
+  }
+
   /**
    * Change the Explore LOD zoom level (per-chunk hold-then-swap). Retires the current level's visible
    * chunks into the grouper's retiring holder (kept fully visible at the old scale), installs a fresh
@@ -349,16 +382,19 @@ export class VoxelWorld implements ChunkProvider {
     // disposing the per-chunk geometries below — the holder owns independent clones, so disposal is safe.
     // New chunks arrive tagged with the new currentLevel (chunk.level → grouper root at 2^level).
     this.chunkGrouper.retireAndReset();
-    this.currentLevel = level;
 
-    // Clear live chunk state. The grouper's live root was already reset by retireAndReset; the retiring
-    // holder keeps the old level visible until its per-chunk clones are swapped out.
+    // Dispose the OLD level's geometries and drop its per-level maps, then activate fresh maps for the new
+    // level (repoints RemeshPipeline + SeamStitcher). The grouper's retiring clones keep the old level
+    // visible until covered. (Phase B commit 2 keeps outer-ring levels resident instead of dropping them.)
     for (const geo of this.geometries.values()) geo.dispose();
-    this.geometries.clear();
-    this.chunks.clear();
+    this.chunksByLevel.delete(this.currentLevel);
+    this.geometriesByLevel.delete(this.currentLevel);
+    this.columnInfoByLevel.delete(this.currentLevel);
+    this.currentLevel = level;
+    this.activateLevel(level);
+
     this.pendingChunks.clear(); this.pendingColumns.clear(); this.pendingTiles.clear();
     this.pendingChunkTimes.clear(); this.pendingColumnTimes.clear(); this.pendingTileTimes.clear();
-    this.columnInfo.clear();
     this.remeshPipeline.clear();
     this.deferredBuildOps.length = 0;
     this.previewChunks.clear();
@@ -2059,6 +2095,17 @@ export class VoxelWorld implements ChunkProvider {
 
     // Clear column info
     this.columnInfo.clear();
+
+    // Reset the per-level stores (dispose any NON-active levels' geometry — the active level was disposed
+    // above) and re-activate fresh empty maps for the active level, so a reused instance (clearAndReload)
+    // restarts clean. currentLevel is left unchanged.
+    for (const [lvl, g] of this.geometriesByLevel) {
+      if (lvl !== this.currentLevel) for (const geo of g.values()) geo.dispose();
+    }
+    this.chunksByLevel.clear();
+    this.geometriesByLevel.clear();
+    this.columnInfoByLevel.clear();
+    this.activateLevel(this.currentLevel);
 
     // Clear remesh queue
     this.remeshPipeline.clear();

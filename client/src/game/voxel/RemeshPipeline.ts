@@ -49,8 +49,8 @@ export class RemeshPipeline {
 
 
   // ---- Dependencies (injected) ----
-  private readonly chunks: Map<string, Chunk>;
-  private readonly geometries: Map<string, ChunkGeometry>;
+  private chunks: Map<string, Chunk>;
+  private geometries: Map<string, ChunkGeometry>;
   private readonly grouper: ChunkGrouper;
   private readonly meshPool: MeshWorkerPool;
   private readonly pendingChunks: Set<string>;
@@ -90,6 +90,13 @@ export class RemeshPipeline {
     this.isMarginSourceExpected = isMarginSourceExpected
       ?? ((cx, cy, cz) => this.pendingChunks.has(chunkKey(cx, cy, cz)));
     this.shouldMeshNow = shouldMeshNow ?? (() => true);
+  }
+
+  /** Repoint at the ACTIVE LOD level's chunk/geometry maps (VoxelWorld.activateLevel). The queue is
+   *  cleared separately (clear()) on a level change, so no stale keys carry across. */
+  setMaps(chunks: Map<string, Chunk>, geometries: Map<string, ChunkGeometry>): void {
+    this.chunks = chunks;
+    this.geometries = geometries;
   }
 
   // ---- Listeners ----
