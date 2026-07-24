@@ -73,6 +73,18 @@ export class RemeshPipeline {
    */
   private readonly shouldMeshNow: (cx: number, cy: number, cz: number) => boolean;
 
+  /**
+   * Derive mesh COMPLETENESS from "is a high FACE neighbour still expected to load" rather than from
+   * the mesher's skipHighBoundary flags. Set for the coarse rings: a chunk is only ever dispatched once
+   * marginSourcesReady (nothing inbound), so any high face the mesher still skips is a neighbour that
+   * will NEVER load — underground rock below a column's minCy, or beyond the request band — where the
+   * edge is extrapolated to the correct solid and the mesh is final. Treating those as INCOMPLETE (the
+   * skipHighBoundary default) hid legitimate ring-edge surface chunks forever, since no late arrival
+   * ever heals them. The base keeps the skipHighBoundary derivation: it meshes chunks with genuinely
+   * absent neighbours on purpose and relies on the P8 re-mesh heal when one arrives late.
+   */
+  private readonly completeFromExpected: boolean;
+
   constructor(
     chunks: Map<string, Chunk>,
     geometries: Map<string, ChunkGeometry>,
@@ -81,6 +93,7 @@ export class RemeshPipeline {
     pendingChunks: Set<string>,
     isMarginSourceExpected?: (cx: number, cy: number, cz: number) => boolean,
     shouldMeshNow?: (cx: number, cy: number, cz: number) => boolean,
+    completeFromExpected = false,
   ) {
     this.chunks = chunks;
     this.geometries = geometries;
@@ -90,6 +103,7 @@ export class RemeshPipeline {
     this.isMarginSourceExpected = isMarginSourceExpected
       ?? ((cx, cy, cz) => this.pendingChunks.has(chunkKey(cx, cy, cz)));
     this.shouldMeshNow = shouldMeshNow ?? (() => true);
+    this.completeFromExpected = completeFromExpected;
   }
 
   /** Repoint at the ACTIVE LOD level's chunk/geometry maps (VoxelWorld.activateLevel). The queue is
@@ -194,7 +208,13 @@ export class RemeshPipeline {
 
       const grid = this.meshPool.takeGrid();
       const skipHighBoundary = expandChunkToGrid(chunk, this.chunks, grid);
-      const complete = !(skipHighBoundary[0] || skipHighBoundary[1] || skipHighBoundary[2]);
+      // Coarse rings: complete unless a high FACE neighbour is still inbound (see completeFromExpected).
+      // Base: complete unless the mesher had to skip a high face (absent neighbour), healed later by P8.
+      const complete = this.completeFromExpected
+        ? !(this.isMarginSourceExpected(chunk.cx + 1, chunk.cy, chunk.cz)
+            || this.isMarginSourceExpected(chunk.cx, chunk.cy + 1, chunk.cz)
+            || this.isMarginSourceExpected(chunk.cx, chunk.cy, chunk.cz + 1))
+        : !(skipHighBoundary[0] || skipHighBoundary[1] || skipHighBoundary[2]);
 
       const gen = this.generation;
       this.meshPool.dispatch(key, grid, skipHighBoundary, (result) => {

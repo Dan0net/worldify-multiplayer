@@ -205,20 +205,28 @@ export class CoarseRingStreamer {
       grouper,
       this.meshPool,
       pendingChunks,
-      // A +margin neighbour is EXPECTED (defer meshing) if it's inside the request band and not yet
-      // loaded and not open sky — so a render-band chunk meshes once, complete, with real neighbours.
-      // The margin ring's own outward neighbours fall outside the band → not expected → meshing
-      // terminates at the frontier (mirrors the base's marginSourcesReady).
+      // A +margin neighbour is EXPECTED (defer meshing) only if it will ACTUALLY be requested — mirrors
+      // the base's pending/reachable discipline. The streamer only ever requests cy ∈ [minCy, maxCy]
+      // per column, so a neighbour above maxCy (open sky) OR below minCy (underground rock beneath the
+      // column's lowest surface) is NEVER loaded; a consumer must not wait on either. Missing the
+      // below-minCy floor was the permanent ring-edge trench: a surface chunk beside a TALLER column
+      // deferred forever on its never-loading underground +X/+Z neighbour and stayed hidden.
       (cx, cy, cz) => {
-        if (chunks.has(chunkKey(cx, cy, cz))) return false;
+        const key = chunkKey(cx, cy, cz);
+        if (chunks.has(key)) return false;          // already loaded → ready
+        if (pendingChunks.has(key)) return true;    // in flight → wait for it
         const d = dist(cx, cz);
-        if (d < band.innerBound - BAND_EPS || d > band.requestOuter + 0.5 + BAND_EPS) return false;
+        if (d < band.innerBound - BAND_EPS || d > band.requestOuter + 0.5 + BAND_EPS) return false; // out of band → never requested
         const info = columnInfo.get(`${cx},${cz}`);
-        if (info && cy > info.maxCy) return false;   // open sky above the surface → won't load
-        return true;
+        if (!info) return true;                      // column tile not in yet, but in-band → it will be requested
+        return cy >= info.minCy && cy <= info.maxCy; // only chunks in the loadable span are ever coming
       },
       // Mesh only the RENDER band; the margin ring is loaded for neighbour voxels but never meshed/drawn.
       (cx, _cy, cz) => inRenderBand(cx, cz),
+      // Derive completeness from "high face still inbound", not skipHighBoundary — a coarse chunk is only
+      // dispatched once nothing is inbound, so a skipped high face is a never-loading solid/out-of-band
+      // neighbour (final mesh), not a gap. Prevents ring-edge surface chunks staying hidden forever.
+      true,
     );
     rig = {
       level, chunks, geometries, columnInfo,
