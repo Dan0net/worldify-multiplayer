@@ -330,8 +330,14 @@ export class CoarseRingStreamer {
     // in ringOuterRadius makes both constant across levels), so the ring is flush with the base disk edge.
     const inner = ringOuterRadius(L - 1, this._visibilityRadius) / cw;
     const outer = ringOuterRadius(L, this._visibilityRadius) / cw;
-    const ccx = this._center.x / cw;
-    const ccz = this._center.z / cw;
+    // GRID-SNAP the ring centre to THIS level's chunk grid (nearest integer cell to the camera). The old
+    // fractional centre made the band edges land at fractional positions, so which cells fell in the
+    // annulus flipped as the camera moved by sub-chunk amounts — that shimmer dropped the outer row and
+    // opened offset-dependent gaps at the borders. With an integer centre the annulus is a fixed,
+    // cell-aligned square that only shifts when the camera crosses a whole level-L cell: stable, discrete,
+    // quantised edges. Vertical (y) needs no snap — the band is horizontal.
+    const ccx = Math.round(this._center.x / cw);
+    const ccz = Math.round(this._center.z / cw);
     // Discrete tiling for EVERY ring (no inward overlap): innerBound = inner + 0.5 so the innermost cell's
     // inner edge lands exactly on B_{L-1} = inner·cw_L. Adjacent rings then abut edge-to-edge (see
     // inRenderBand). The base↔ring1 seam is handled the same way — ring1 starts exactly at the base disk's
