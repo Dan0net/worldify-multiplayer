@@ -32,8 +32,13 @@ const MAX_PITCH = -0.12;
 
 const ROTATE_SPEED = 0.009;   // radians per pixel
 const PAN_SPEED = 0.0016;     // world units per pixel, per unit distance
-const ZOOM_EXP_SPEED = 0.0025;   // zoomExp change per wheel delta unit
-const PINCH_ZOOM = 0.006;        // per pixel of pinch distance change (→ zoomExp via ZOOM_EXP_SPEED)
+// Zoom sensitivity, deliberately gentle: it takes ~3× the scroll/pinch of the old feel to cross one LOD
+// level (and to traverse the full range to base MAX_ZOOM_LEVEL). The camera still reaches the same
+// distance range — BASE_DISTANCE·2^zoomExp, zoomExp 0…MAX — just 3× less eagerly, so the terrain base
+// level (round(zoomExp)) no longer flips on small wheel movements.
+const ZOOM_SENSITIVITY = 1 / 3;                  // 3× less sensitive than the original 1:1 feel
+const ZOOM_EXP_SPEED = 0.0025 * ZOOM_SENSITIVITY;   // zoomExp change per wheel delta unit
+const PINCH_ZOOM = 0.006 * ZOOM_SENSITIVITY;        // per pixel of pinch distance change
 
 // Discrete level state (hysteresis + settle debounce).
 let committedLevel = 0;
